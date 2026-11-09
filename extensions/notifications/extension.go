@@ -4,10 +4,13 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
+	"github.com/xraph/forge/extensions/dashboard/contract"
+	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 	"github.com/xraph/grove"
 
 	"github.com/xraph/loomplane/extensions/identity"
@@ -41,7 +44,14 @@ func (e *DeliveryExtension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	return forge.ProvideValue(app.Container(), e.svc)
+	return errors.Join(
+		forge.ProvideValue(app.Container(), e.svc),
+		// For readers such as Hallproof's witness. The raw endpoint store
+		// lets them list endpoints without decrypting a signing secret. It
+		// refuses writes, which would store a secret unencrypted.
+		forge.ProvideValue(app.Container(), e.svc.Relay()),
+		forge.ProvideValue(app.Container(), e.svc.RawEndpoints()),
+	)
 }
 func (e *DeliveryExtension) Start(ctx context.Context) error {
 	if err := e.svc.Prepare(ctx); err != nil {
@@ -88,7 +98,10 @@ func (e *Extension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	return e.routes(app.Router(), guard)
+	if err := e.routes(app.Router(), guard); err != nil {
+		return err
+	}
+	return e.pushRoutes(app.Router(), guard)
 }
 func (e *Extension) Start(ctx context.Context) error {
 	if err := e.svc.Run(ctx); err != nil {
@@ -99,3 +112,9 @@ func (e *Extension) Start(ctx context.Context) error {
 }
 func (e *Extension) Stop(ctx context.Context) error   { return e.svc.Shutdown(ctx) }
 func (e *Extension) Health(ctx context.Context) error { return e.svc.Health(ctx) }
+
+// RegisterContractContributor implements dashboard.ContractContributorAware:
+// Herald and Relay in the instance console.
+func (e *Extension) RegisterContractContributor(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry) error {
+	return e.svc.RegisterContract(disp, reg, wreg, e.Logger())
+}

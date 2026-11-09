@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/xraph/confy"
+
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 const (
@@ -59,10 +61,13 @@ type Config struct {
 
 	Database      DatabaseConfig
 	Identity      IdentityConfig
+	Console       ConsoleConfig
 	Notifications NotificationsConfig
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
 	GitHub        GitHubConfig
+	Bitbucket     BitbucketConfig
+	GitLab        GitLabConfig
 	Analysis      AnalysisConfig
 	Planning      PlanningConfig
 	Clouds        CloudsConfig
@@ -70,8 +75,14 @@ type Config struct {
 	Drift         DriftConfig
 	Worker        WorkerConfig
 	Federation    FederationConfig
+	AI            AIConfig
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
+	Push          PushConfig
+	Nodes         NodesConfig
+	Chronicle     ChronicleConfig
+	Hallproof     HallproofConfig
+	Mobile        MobileConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -164,6 +175,102 @@ func (g GitHubConfig) appSettingsSet() int {
 	return n
 }
 
+// BitbucketConfig is how Loomplane reaches Bitbucket Cloud. Public
+// repositories need none of it.
+type BitbucketConfig struct {
+	// APIURL is Bitbucket Cloud's REST API: https://api.bitbucket.org/2.0.
+	APIURL string
+	// WebURL is Bitbucket itself, where repository archives are served:
+	// https://bitbucket.org.
+	WebURL string
+
+	// ClientID and ClientSecret are an OAuth consumer's key and secret,
+	// which connect an organization to its private repositories. Leave
+	// both empty to read public repositories only; set both otherwise.
+	ClientID     string
+	ClientSecret string
+}
+
+// GitLabConfig is how Loomplane reaches GitLab.
+type GitLabConfig struct {
+	// APIURL is the address Loomplane reads gitlab.com from:
+	// https://gitlab.com.
+	APIURL string
+	// ClientID and ClientSecret are gitlab.com's OAuth application. Set
+	// both to let people connect a gitlab.com account, or neither.
+	ClientID     string
+	ClientSecret string
+	// Hosts are the self-managed GitLabs this Loomplane reads for every
+	// organization. They are yours, so they may be plain http and on a
+	// private network.
+	Hosts []GitLabHostConfig
+	// AllowOrganizationHosts lets organizations register a GitLab of their
+	// own. Loomplane connects to those only at public addresses.
+	AllowOrganizationHosts bool
+	// WebhookURL is where GitLab reaches this Loomplane's webhook, when
+	// PublicURL isn't an address GitLab can reach. Empty means PublicURL's.
+	WebhookURL string
+}
+
+// GitLabHostConfig is one self-managed GitLab.
+type GitLabHostConfig struct {
+	// WebURL is the GitLab's address with no path: https://git.example.com.
+	WebURL string
+	// ClientID and ClientSecret are the OAuth application registered in
+	// that GitLab. Set both, or neither to read public projects only.
+	ClientID     string
+	ClientSecret string
+}
+
+// Configured reports whether an OAuth consumer is set up.
+func (b BitbucketConfig) Configured() bool {
+	return b.ClientID != "" && b.ClientSecret != ""
+}
+
+// Validate reports GitLab settings Loomplane can't run with.
+func (g GitLabConfig) Validate() error {
+	var errs []error
+	if u, err := url.Parse(g.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("gitlab.api_url must be an absolute URL, got %q", g.APIURL))
+	}
+	if g.WebhookURL != "" {
+		if u, err := url.Parse(g.WebhookURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("gitlab.webhook_url must be an absolute URL, got %q", g.WebhookURL))
+		}
+	}
+	if (g.ClientID == "") != (g.ClientSecret == "") {
+		missing := "gitlab.client_secret"
+		if g.ClientID == "" {
+			missing = "gitlab.client_id"
+		}
+		errs = append(errs, fmt.Errorf("%s is required when the other of gitlab.client_id and gitlab.client_secret is set", missing))
+	}
+	seen := map[string]bool{}
+	for i, h := range g.Hosts {
+		key := fmt.Sprintf("gitlab.hosts[%d]", i)
+		_, host, err := repositories.NormalizeGitLabURL(h.WebURL, true)
+		switch {
+		case err != nil || h.WebURL == "":
+			if err == nil {
+				err = errors.New("it is required")
+			}
+			errs = append(errs, fmt.Errorf("%s.web_url must be the address of a GitLab with no path, such as https://git.example.com: %w", key, err))
+		case seen[host]:
+			errs = append(errs, fmt.Errorf("%s.web_url lists %s twice", key, host))
+		default:
+			seen[host] = true
+		}
+		if (h.ClientID == "") != (h.ClientSecret == "") {
+			missing := "client_secret"
+			if h.ClientID == "" {
+				missing = "client_id"
+			}
+			errs = append(errs, fmt.Errorf("%s.%s is required when the other of client_id and client_secret is set", key, missing))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // AnalysisConfig tunes repository analysis, which loomplane-worker runs.
 type AnalysisConfig struct {
 	// WorkDir is where checkouts are extracted while they're analyzed.
@@ -190,12 +297,27 @@ type IdentityConfig struct {
 	AppID string
 	// PublishableKey is the authsome app's public key.
 	PublishableKey string
-	// RequireEmailVerification makes sign-in wait for a verified email.
+	// EmailVerification is identity.require_email_verification as set.
+	// Nil, the default, means on wherever the instance can send mail.
+	EmailVerification *bool
+	// RequireEmailVerification is the setting resolved: whether an account
+	// must verify its email before it can sign in or use the API.
 	RequireEmailVerification bool
 	// SessionCookie names the HttpOnly cookie the dashboard's session is
 	// kept in. Cookies are shared by every port on a host, so two authsome
 	// apps on one host need different names, or each replaces the other's.
 	SessionCookie string
+	// Waitlist turns the sign-up waitlist on or off. Nil leaves it to the
+	// instance's stored setting.
+	Waitlist *bool
+}
+
+// ConsoleConfig configures the hidden Forge console.
+type ConsoleConfig struct {
+	// Path is where the console is mounted. It's one segment that starts
+	// with __, so it can't collide with the dashboard's routes, /api/,
+	// /authsome/, /_/, /.well-known/ or /catalog-admin/.
+	Path string
 }
 
 // DashboardConfig is the web dashboard Loomplane serves.
@@ -251,6 +373,11 @@ type StorageConfig struct {
 // CloudsConfig configures enrollment callbacks and provider API test overrides.
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
+	MultiLocationDelivery bool
+	ManagedClusters       ManagedClustersConfig
+	ClusterCapacity       ClusterCapacityConfig
+	AutomaticCapacity     AutomaticCapacityConfig
+
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
 	EnrollmentURL string
@@ -273,8 +400,14 @@ type CloudsConfig struct {
 	// sandbox, which never registers or charges for a real domain.
 	CloudflareRegistrarSandbox bool
 	// ACMEDirectory replaces the ACME directory certificates are ordered
-	// from. Empty means Let's Encrypt's production directory.
+	// from, for server and Kubernetes routes. Empty means Let's Encrypt's
+	// production directory.
 	ACMEDirectory string
+	// ACMERootsFile is a PEM file of the CA certificates ACMEDirectory's
+	// own TLS certificate chains to, for a directory the proxies' system
+	// roots don't trust, such as a test CA. Server proxies get a copy.
+	// Kubernetes routes don't use it. Empty uses the system roots.
+	ACMERootsFile string
 	// KubernetesInCluster lets organizations connect the Kubernetes cluster
 	// Loomplane runs in, as Loomplane's own service account. Every
 	// organization on the instance shares that account, so it's off unless
@@ -296,7 +429,7 @@ type OAuthApp struct {
 }
 
 // oauthClouds are the clouds that can connect by signing in.
-var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure"}
+var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure", "cloudflare"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
@@ -305,6 +438,10 @@ const (
 	maxApprovalWindow = 90 * 24 * time.Hour
 	approvalWindow    = 7 * 24 * time.Hour
 )
+
+// consolePath is a console mount path (see ConsoleConfig.Path for why it
+// starts with __).
+var consolePath = regexp.MustCompile(`^/__[a-z0-9][a-z0-9-]{2,62}$`)
 
 // cookieName is a cookie name as RFC 6265 allows it: a token.
 var cookieName = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
@@ -323,17 +460,37 @@ func Defaults() Config {
 			PublishableKey: "pk_test_loomplane_dev",
 			SessionCookie:  "loomplane_session",
 		},
+		Console:       ConsoleConfig{Path: "/__console"},
 		Notifications: NotificationsConfig{SMTPPort: 1025},
 		Dashboard:     DashboardConfig{Dir: "apps/dashboard/dist"},
 		Orchestration: OrchestrationConfig{
 			Concurrency:  4,
 			PollInterval: time.Second,
 		},
-		GitHub:   GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
-		Analysis: AnalysisConfig{Concurrency: 2},
-		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
-		Drift:    DriftConfig{Interval: 30 * time.Minute},
-		Worker:   WorkerConfig{HTTPAddr: ":8781"},
+		GitHub:    GitHubConfig{APIURL: "https://api.github.com", WebURL: "https://github.com"},
+		Bitbucket: BitbucketConfig{APIURL: "https://api.bitbucket.org/2.0", WebURL: "https://bitbucket.org"},
+		GitLab:    GitLabConfig{APIURL: "https://gitlab.com", AllowOrganizationHosts: true},
+		Analysis:  AnalysisConfig{Concurrency: 2},
+		Planning:  PlanningConfig{ApprovalWindow: approvalWindow},
+		Drift:     DriftConfig{Interval: 30 * time.Minute},
+		Worker:    WorkerConfig{HTTPAddr: ":8781"},
+		AI: AIConfig{
+			Provider:  AIProviderAnthropic,
+			Model:     DefaultAIModel,
+			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
+			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions, DocsBudgetUSD: DefaultDocsBudgetUSD},
+		},
+		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
+		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
+		Chronicle: ChronicleConfig{Checkpoints: CheckpointsConfig{
+			Enabled:       true,
+			EveryEvents:   DefaultCheckpointEveryEvents,
+			EveryInterval: DefaultCheckpointEveryInterval,
+		}},
+		Mobile: MobileConfig{
+			AndroidPackage:          DefaultAndroidPackage,
+			AndroidCertFingerprints: slices.Clone(DefaultAndroidCertFingerprints),
+		},
 	}
 }
 
@@ -394,8 +551,12 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.BasePath, "identity.base_path")
 	r.str(&c.Identity.AppID, "identity.app_id")
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
-	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
+	r.optionalBool(&c.Identity.EmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
+	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
+	r.str(&c.Console.Path, "console.path")
+	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
+	r.str(&c.Notifications.MailDir, "notifications.mail_dir")
 	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
 	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
 	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")
@@ -417,6 +578,16 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.GitHub.ClientID, "github.client_id")
 	r.str(&c.GitHub.ClientSecret, "github.client_secret")
 	r.str(&c.GitHub.WebhookSecret, "github.webhook_secret")
+	r.str(&c.Bitbucket.APIURL, "bitbucket.api_url")
+	r.str(&c.Bitbucket.WebURL, "bitbucket.web_url")
+	r.str(&c.Bitbucket.ClientID, "bitbucket.client_id")
+	r.str(&c.Bitbucket.ClientSecret, "bitbucket.client_secret")
+	r.str(&c.GitLab.APIURL, "gitlab.api_url")
+	r.str(&c.GitLab.ClientID, "gitlab.client_id")
+	r.str(&c.GitLab.ClientSecret, "gitlab.client_secret")
+	r.gitlabHosts(&c.GitLab.Hosts, "gitlab.hosts")
+	r.boolean(&c.GitLab.AllowOrganizationHosts, "gitlab.allow_organization_hosts")
+	r.str(&c.GitLab.WebhookURL, "gitlab.webhook_url")
 	r.str(&c.Analysis.WorkDir, "analysis.work_dir")
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
@@ -436,11 +607,42 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
+	r.str(&c.Clouds.ACMERootsFile, "clouds.acme_roots_file")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
+	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
+	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
+	r.boolean(&c.Clouds.AutomaticCapacity.Enabled, "clouds.automatic_capacity.enabled")
+	r.boolean(&c.Clouds.MultiLocationDelivery, "clouds.multi_location_delivery")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.URL, "clouds.managed_clusters.management_probe.url")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.SPKISHA256, "clouds.managed_clusters.management_probe.spki_sha256")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.ExpiresAt, "clouds.managed_clusters.management_probe.expires_at")
+	r.str(&c.Clouds.ManagedClusters.QualificationOrgID, "clouds.managed_clusters.qualification_org_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationOperatorID, "clouds.managed_clusters.qualification_operator_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationAccountID, "clouds.managed_clusters.qualification_account_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationRegion, "clouds.managed_clusters.qualification_region")
+	r.integer(&c.Clouds.ManagedClusters.MaxNodes, "clouds.managed_clusters.max_nodes")
+	r.int64(&c.Clouds.ManagedClusters.MaxNodeHourlyMicroUSD, "clouds.managed_clusters.max_node_hourly_micro_usd")
+	r.integer(&c.Clouds.ManagedClusters.MaxAccountCreates, "clouds.managed_clusters.max_account_creates")
 	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
+	r.boolean(&c.AI.Enabled, "ai.enabled")
+	r.str(&c.AI.Provider, "ai.provider")
+	r.str(&c.AI.APIKey, "ai.api_key")
+	r.str(&c.AI.BaseURL, "ai.base_url")
+	r.str(&c.AI.Model, "ai.model")
+	r.prices(&c.AI.Prices, "ai.prices")
+	r.str(&c.AI.Knowledge.EmbeddingProvider, "ai.knowledge.embedding_provider")
+	r.str(&c.AI.Knowledge.EmbeddingAPIKey, "ai.knowledge.embedding_api_key")
+	r.str(&c.AI.Knowledge.EmbeddingBaseURL, "ai.knowledge.embedding_base_url")
+	r.str(&c.AI.Knowledge.EmbeddingModel, "ai.knowledge.embedding_model")
+	r.integer(&c.AI.Knowledge.Dimensions, "ai.knowledge.dimensions")
+	r.str(&c.AI.Knowledge.DocsBudgetUSD, "ai.knowledge.docs_budget_usd")
+	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
 	r.str(&c.Federation.Runtime.OrganizationID, "federation.runtime.organization_id")
@@ -456,9 +658,37 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Federation.Identity.TrustDomain, "federation.identity.trust_domain")
 	r.str(&c.Federation.Identity.AdminSocket, "federation.identity.admin_socket")
 	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
+	r.boolean(&c.Push.Enabled, "push.enabled")
+	r.str(&c.Push.GatewayURL, "push.gateway_url")
+	r.str(&c.Nodes.AdvertiseURL, "nodes.advertise_url")
+	r.boolean(&c.Nodes.HopInsecure, "nodes.hop_insecure")
+	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
+	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
+	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
+	r.boolean(&c.Chronicle.Checkpoints.Enabled, "chronicle.checkpoints.enabled")
+	r.integer(&c.Chronicle.Checkpoints.EveryEvents, "chronicle.checkpoints.every_events")
+	r.duration(&c.Chronicle.Checkpoints.EveryInterval, "chronicle.checkpoints.every_interval")
+	r.str(&c.Hallproof.Endpoint, "hallproof.endpoint")
+	r.str(&c.Hallproof.IngestKey, "hallproof.ingest_key")
+	r.str(&c.Hallproof.IngestKeyFile, "hallproof.ingest_key_file")
+	r.names(&c.Hallproof.StaffOrgs, "hallproof.staff_orgs")
+	r.str(&c.Mobile.AndroidPackage, "mobile.android_package")
+	// A list read appends, so a set value replaces the store app's keys
+	// rather than joining them.
+	var fingerprints []string
+	r.names(&fingerprints, "mobile.android_cert_fingerprints")
+	if len(fingerprints) > 0 {
+		c.Mobile.AndroidCertFingerprints = fingerprints
+	}
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
+	}
+	// Unset, verification follows mail: on wherever the code can be sent,
+	// since without mail nobody after the setup owner could verify.
+	c.Identity.RequireEmailVerification = c.Notifications.MailEnabled()
+	if c.Identity.EmailVerification != nil {
+		c.Identity.RequireEmailVerification = *c.Identity.EmailVerification
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
@@ -469,7 +699,10 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Chronicle.Checkpoints.Validate(), c.Hallproof.Validate(), c.Mobile.Validate())
+	if c.AI.Enabled {
+		errs = append(errs, c.AI.Validate(c.Environment))
+	}
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:
@@ -492,6 +725,9 @@ func (c *Config) Validate() error {
 	}
 	if !cookieName.MatchString(c.Identity.SessionCookie) {
 		errs = append(errs, fmt.Errorf("identity.session_cookie must be a cookie name (letters, digits and !#$%%&'*+-.^_`|~), got %q", c.Identity.SessionCookie))
+	}
+	if !consolePath.MatchString(c.Console.Path) {
+		errs = append(errs, fmt.Errorf("console.path must be one segment starting with __ (like /__console), got %q", c.Console.Path))
 	}
 	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
 		errs = append(errs, fmt.Errorf("public_url must be an absolute URL, got %q", c.PublicURL))
@@ -526,6 +762,15 @@ func (c *Config) Validate() error {
 	if n := c.GitHub.appSettingsSet(); n != 0 && n != 5 {
 		errs = append(errs, errors.New("a GitHub App needs all of github.app_id, app_slug, private_key (or private_key_file), client_id and client_secret"))
 	}
+	if u, err := url.Parse(c.Bitbucket.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.api_url must be an absolute URL, got %q", c.Bitbucket.APIURL))
+	}
+	if u, err := url.Parse(c.Bitbucket.WebURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("bitbucket.web_url must be an absolute URL, got %q", c.Bitbucket.WebURL))
+	}
+	if (c.Bitbucket.ClientID == "") != (c.Bitbucket.ClientSecret == "") {
+		errs = append(errs, errors.New("a Bitbucket OAuth consumer needs both bitbucket.client_id and client_secret"))
+	}
 	if c.Analysis.Concurrency < 1 {
 		errs = append(errs, errors.New("analysis.concurrency must be at least 1"))
 	}
@@ -544,6 +789,9 @@ func (c *Config) productionChecks() []error {
 	var errs []error
 	if c.SecretKey == devSecretKey {
 		errs = append(errs, errors.New("production refuses the development secret_key; set LOOMPLANE_SECRET_KEY"))
+	}
+	if c.Identity.RequireEmailVerification && !c.Notifications.MailEnabled() {
+		errs = append(errs, errors.New("identity.require_email_verification is on but email is off, so nobody could get a code; set up SMTP or Resend, or set LOOMPLANE_REQUIRE_EMAIL_VERIFICATION=false"))
 	}
 	if strings.HasPrefix(c.PublicURL, "http://") {
 		errs = append(errs, errors.New("production needs an https public_url"))
@@ -601,6 +849,64 @@ func (r *reader) plugins(dst *[]PluginConfig, key string) {
 			return ""
 		}
 		*dst = append(*dst, PluginConfig{URL: get("url"), Token: get("token")})
+	}
+}
+
+// gitlabHosts reads a list of {web_url, client_id, client_secret}.
+func (r *reader) gitlabHosts(dst *[]GitLabHostConfig, key string) {
+	v, ok := r.raw(key)
+	if !ok {
+		return
+	}
+	list, ok := v.([]any)
+	if !ok {
+		r.fail(key, "a list of {web_url, client_id, client_secret}", v)
+		return
+	}
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			r.fail(fmt.Sprintf("%s[%d]", key, i), "{web_url, client_id, client_secret}", item)
+			continue
+		}
+		get := func(k string) string {
+			if s, ok := m[k]; ok && s != nil {
+				return strings.TrimSpace(fmt.Sprint(s))
+			}
+			return ""
+		}
+		*dst = append(*dst, GitLabHostConfig{WebURL: get("web_url"), ClientID: get("client_id"), ClientSecret: get("client_secret")})
+	}
+}
+
+// prices reads a list of {provider, model, input_per_million,
+// output_per_million}.
+func (r *reader) prices(dst *[]AIPrice, key string) {
+	v, ok := r.raw(key)
+	if !ok {
+		return
+	}
+	list, ok := v.([]any)
+	if !ok {
+		r.fail(key, "a list of {provider, model, input_per_million, output_per_million}", v)
+		return
+	}
+	for i, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			r.fail(fmt.Sprintf("%s[%d]", key, i), "{provider, model, input_per_million, output_per_million}", item)
+			continue
+		}
+		get := func(k string) string {
+			if s, ok := m[k]; ok && s != nil {
+				return strings.TrimSpace(fmt.Sprint(s))
+			}
+			return ""
+		}
+		*dst = append(*dst, AIPrice{
+			Provider: get("provider"), Model: get("model"),
+			InputPerMillion: get("input_per_million"), OutputPerMillion: get("output_per_million"),
+		})
 	}
 }
 
@@ -700,6 +1006,9 @@ func (r *reader) integer(dst *int, key string) {
 		*dst = t
 	case int64:
 		*dst = int(t)
+	case bool:
+		// confy turns "1" and "0" variables into bools, so read them as numbers.
+		*dst = map[bool]int{true: 1, false: 0}[t]
 	case float64:
 		if t != float64(int(t)) {
 			r.fail(key, "a whole number", v)
@@ -748,6 +1057,20 @@ func (r *reader) boolean(dst *bool, key string) {
 	}
 }
 
+// optionalBool reads a bool that stays nil when it isn't set, so "off" and
+// "not set" differ.
+func (r *reader) optionalBool(dst **bool, key string) {
+	if _, ok := r.raw(key); !ok {
+		return
+	}
+	var b bool
+	n := len(r.errs)
+	r.boolean(&b, key)
+	if len(r.errs) == n {
+		*dst = &b
+	}
+}
+
 func (r *reader) duration(dst *time.Duration, key string) {
 	v, ok := r.raw(key)
 	if !ok {
@@ -760,3 +1083,38 @@ func (r *reader) duration(dst *time.Duration, key string) {
 	}
 	*dst = d
 }
+
+// ManagedClustersConfig restricts purchases to explicitly scoped qualification runs.
+// General purchase rollout requires the retirement qualification in the lifecycle plan.
+type ManagedClustersConfig struct {
+	ManagementProbe         ManagedClusterManagementProbeConfig
+	MaxNodeHourlyMicroUSD   int64
+	Enabled                 bool
+	QualificationOrgID      string
+	QualificationOperatorID string
+	QualificationAccountID  string
+	QualificationRegion     string
+	MaxNodes                int
+	MaxAccountCreates       int
+}
+
+// ManagedClusterManagementProbeConfig identifies an operator-qualified existing
+// management path. Its material does not belong in API reviews or logs.
+type ManagedClusterManagementProbeConfig struct {
+	Provider   string `json:"-"`
+	NetworkID  string `json:"-"`
+	EvidenceID string `json:"-"`
+	URL        string `json:"-"`
+	SPKISHA256 string `json:"-"`
+	ExpiresAt  string `json:"-"`
+}
+
+func (ManagedClusterManagementProbeConfig) String() string     { return "[management path qualification]" }
+func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String() }
+
+// ClusterCapacityConfig gates reviewed cluster scaling independently of server automation.
+type ClusterCapacityConfig struct{ Enabled bool }
+
+// AutomaticCapacityConfig lets server pools grow on their own from saved
+// capacity policies. It stays off until integrated qualification.
+type AutomaticCapacityConfig struct{ Enabled bool }

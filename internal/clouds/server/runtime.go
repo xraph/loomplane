@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/ctrlplane/id"
 	cpprovider "github.com/xraph/ctrlplane/provider"
 
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
@@ -32,6 +33,8 @@ import (
 var ErrOwned = errors.New("the matching Docker resource is not owned by this service")
 var ErrMissing = errors.New("the Docker resource is absent")
 
+var errDuckRecoveryStoppedApply = errors.New("this recovery copy is stopped; use Start to resume the same container")
+
 type Session func(context.Context, map[string]string) (*Client, error)
 
 type Runtime struct {
@@ -41,6 +44,8 @@ type Runtime struct {
 	Probe     func(context.Context, *Client, int, string) error
 	ProbeRESP func(context.Context, *Client, int) error
 	Wait      time.Duration
+	// Now is the clock readiness waits are measured with; nil is time.Now.
+	Now func() time.Time
 	// GPUReader reads the server's GPUs for device assignment; nil is
 	// (*Client).GPUs.
 	GPUReader func(context.Context, *Client) (provider.GPUInventory, error)
@@ -65,14 +70,28 @@ func NetworkName(org, environment string) string {
 	return fmt.Sprintf("lp-env-%x", sum[:12])
 }
 
+type containerMount struct {
+	Type, Name, Destination string
+	RW                      *bool
+}
+
 type containerInfo struct {
+	Name       string
+	HostConfig struct {
+		NetworkMode                string
+		ReadonlyRootfs, Privileged bool
+		CapAdd, Binds, VolumesFrom []string
+		Mounts                     []volumeMount
+		RestartPolicy              struct{ Name string }
+	}
 	ID     string `json:"Id"`
 	Image  string
-	Mounts []struct{ Type, Name, Destination string }
+	Mounts []containerMount
 	Config struct {
-		Labels map[string]string
-		Env    []string
-		Image  string
+		Labels          map[string]string
+		Env             []string
+		Image           string
+		Entrypoint, Cmd []string
 	}
 	State struct {
 		Running  bool
@@ -151,11 +170,64 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if labels[LabelRecovery] != "" && labels[owned.LabelPublic] == "true" {
 		return nil, errors.New("recovery instances cannot publish ports")
 	}
+	if duckRecovery(labels) {
+		if checkErr := validateDuckRecoverySpec(iid, spec, labels); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
+	if duckRecovery(labels) {
+		current, inspectErr := r.inspect(ctx, c, ContainerName(iid), iid, labels)
+		if inspectErr != nil && !errors.Is(inspectErr, ErrMissing) {
+			return nil, inspectErr
+		}
+		if current != nil {
+			if current.Config.Image != spec.Image || current.Config.Labels[owned.LabelRevision] != labels[owned.LabelRevision] {
+				return nil, errors.New("recovery copies cannot be replaced; recreate the copy with its reviewed runtime")
+			}
+			if checkErr := validateDuckRecoveryServingMount(iid, current, labels); checkErr != nil {
+				return nil, checkErr
+			}
+			if !current.State.Running {
+				return nil, errDuckRecoveryStoppedApply
+			}
+		}
+		for _, suffix := range []string{"-previous", "-previous-stopped"} {
+			if _, inspectErr := r.inspect(ctx, c, ContainerName(iid)+suffix, iid, labels); !errors.Is(inspectErr, ErrMissing) {
+				return nil, errors.Join(inspectErr, errors.New("recovery replacement requires reconciliation; recreate the copy after cleanup"))
+			}
+		}
+	}
+	values := owned.RuntimeValues{}
+	imagePrepared := false
+	prepareImage := func(ctx context.Context) error {
+		if imagePrepared {
+			return nil
+		}
+		if r.Values != nil {
+			resolved, valuesErr := r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "server", Namespace: ""}), owned.InstanceLabels(labels, iid))
+			if valuesErr != nil {
+				return valuesErr
+			}
+			values = resolved
+		}
+		if !strings.HasPrefix(spec.Image, "sha256:") {
+			if pullErr := r.pull(ctx, c, spec.Image, values.PullAuth); pullErr != nil {
+				return pullErr
+			}
+		}
+		imagePrepared = true
+		return nil
+	}
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "apply", Image: spec.Image, Revision: labels[owned.LabelRevision], PrepareImage: prepareImage})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
 	name := ContainerName(iid)
 	backup := name + "-previous"
 	old, err := r.inspect(ctx, c, name, iid, labels)
@@ -182,6 +254,11 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	for _, existing := range []*containerInfo{old, previous, stopped} {
 		if existing != nil {
+			if duckRecovery(labels) {
+				if checkErr := validateDuckRecoveryServingMount(iid, existing, labels); checkErr != nil {
+					return nil, checkErr
+				}
+			}
 			if checkErr := checkVolumeLayout(existing, iid, spec.Volumes); checkErr != nil {
 				return nil, checkErr
 			}
@@ -235,7 +312,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		backup = stoppedBackup
 	}
 	defer func() {
-		if err == nil || committed {
+		if err == nil || committed || (guard != nil && guard.stageHold) {
 			return
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
@@ -286,17 +363,8 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
-	values := owned.RuntimeValues{}
-	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if !strings.HasPrefix(spec.Image, "sha256:") {
-		if checkErr := r.pull(ctx, c, spec.Image, values.PullAuth); checkErr != nil {
-			return nil, checkErr
-		}
+	if checkErr := prepareImage(ctx); checkErr != nil {
+		return nil, checkErr
 	}
 	env := maps.Clone(spec.Env)
 	if env == nil {
@@ -310,7 +378,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
 	// The declared readiness stays on the container, as it does on a
 	// Kubernetes workload's readiness probe.
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelGPU, owned.LabelShmMB} {
+	for _, key := range []string{owned.LabelService, owned.LabelImage, owned.LabelArchitecture, owned.LabelCatalogKind, enginebackup.LabelEngine, enginebackup.LabelRevision, enginebackup.LabelSource, owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelHealthChecker, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -338,6 +406,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			return nil, errors.New("invalid server shared memory size")
 		}
 		hostConfig["ShmSize"] = int64(shm) << 20
+	}
+	if _, timeoutErr := owned.StartTimeout(labels); timeoutErr != nil {
+		return nil, errors.New("invalid server start timeout")
 	}
 	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": hostConfig, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
@@ -402,6 +473,19 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
 		return nil, checkErr
 	}
+	if duckRecovery(labels) {
+		if guard == nil {
+			return nil, ErrOwned
+		}
+		if guard.record.SourceID == "" && guard.record.VolumeCreated == "" {
+			if checkErr := guard.initializeRecovery(ctx, result.ID); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+		if checkErr := r.recoveryServing(ctx, c, result.ID, iid, labels); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if checkErr := dockerSetRunning(ctx, c, result.ID, true); checkErr != nil {
 		return nil, checkErr
 	}
@@ -452,31 +536,59 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 		if labels[nativecache.LabelEngine] != "" {
 			protocol = "redis"
 		}
-		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value)), Port: value, Protocol: protocol, Public: public})
+		address := protocol + "://" + net.JoinHostPort(host, strconv.Itoa(value))
+		if host == "" {
+			// A node without a confirmed address has no advertise_host, so
+			// the port has no public URL yet.
+			address = ""
+		}
+		out = append(out, cpprovider.Endpoint{ServiceName: spec.Name, URL: address, Port: value, Protocol: protocol, Public: public})
 	}
 	return out
 }
 
+// wait waits for a container to pass its readiness check, for as long as
+// its LabelStartTimeout says, else Wait, else three minutes.
 func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, labels map[string]string) error {
-	wait := r.Wait
+	wait, err := owned.StartTimeout(labels)
+	if err != nil {
+		return err
+	}
+	if wait == 0 {
+		wait = r.Wait
+	}
 	if wait <= 0 {
 		wait = 3 * time.Minute
 	}
-	deadline := time.Now().Add(wait)
+	now := r.Now
+	if now == nil {
+		now = time.Now
+	}
+	deadline := now().Add(wait)
 	for {
 		info, err := r.inspect(ctx, c, name, iid, labels)
 		if err != nil {
 			return err
 		}
 		if info.State.Running {
-			if isDatabase(labels) {
+			if duckRecovery(labels) {
+				if checkErr := r.recoveryServing(ctx, c, info.ID, iid, labels); checkErr != nil {
+					return checkErr
+				}
+			}
+			switch {
+			case labels[owned.LabelHealthChecker] != "":
+				if probeErr := catalogReady(ctx, c, name, labels); probeErr == nil {
+					return nil
+				}
+			case isDatabase(labels):
 				if probeErr := databaseReady(ctx, c, name, labels); probeErr == nil {
 					return nil
 				}
-			} else if !probed(labels) {
+			case !probed(labels):
 				return nil
 			}
-			if !isDatabase(labels) {
+			if !isDatabase(labels) && labels[owned.LabelHealthChecker] == "" {
 				probe, probeErr := r.healthProbe(labels)
 				if probeErr != nil {
 					return probeErr
@@ -490,7 +602,7 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 		} else if info.State.Status == "exited" || info.State.Status == "dead" {
 			return fmt.Errorf("the server container exited before readiness with code %d", info.State.ExitCode)
 		}
-		if time.Now().After(deadline) {
+		if now().After(deadline) {
 			return errors.New("the server container did not pass its readiness check")
 		}
 		select {
@@ -521,7 +633,7 @@ func healthPorts(info *containerInfo, labels map[string]string) []int {
 
 func probeServer(ctx context.Context, c *Client, port int, path string) error {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return c.ssh.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		return c.access.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -550,12 +662,22 @@ func (r *Runtime) removeContainer(ctx context.Context, c *Client, name string, i
 	}
 	return dockerJSON(ctx, c, http.MethodDelete, "/containers/"+url.PathEscape(info.ID)+"?force=1&v=0", nil, nil)
 }
-func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) error {
+func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) (err error) {
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "remove"})
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
+	return r.removeRuntime(ctx, c, iid, labels)
+}
+
+func (r *Runtime) removeRuntime(ctx context.Context, c *Client, iid id.ID, labels map[string]string) error {
+	var err error
 	if checkErr := r.removeContainer(ctx, c, ContainerName(iid), iid, labels); checkErr != nil {
 		return checkErr
 	}
@@ -602,6 +724,11 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 	if err != nil {
 		return nil, err
 	}
+	if info.State.Running && duckRecovery(labels) {
+		if checkErr := r.recoveryServing(ctx, c, info.ID, iid, labels); checkErr != nil {
+			return &cpprovider.InstanceStatus{State: cpprovider.StateStarting, Ready: false, Metadata: map[string]string{"exists": "true", "revision": info.Config.Image}}, nil
+		}
+	}
 	state, ready := cpprovider.StateStopped, false
 	if info.State.Running {
 		state, ready = cpprovider.StateRunning, true
@@ -611,7 +738,12 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 				state = cpprovider.StateStarting
 			}
 		}
-		if probed(labels) {
+		if labels[owned.LabelHealthChecker] != "" {
+			ready = catalogReady(ctx, c, ContainerName(iid), labels) == nil
+			if !ready {
+				state = cpprovider.StateStarting
+			}
+		} else if probed(labels) {
 			ready = false
 			probe, probeErr := r.healthProbe(labels)
 			for _, value := range healthPorts(info, labels) {
@@ -668,15 +800,25 @@ func (r *Runtime) pull(ctx context.Context, c *Client, image, auth string) error
 		}
 	}
 }
-func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]string, running bool) error {
+func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]string, running bool) (err error) {
 	c, err := r.Session(ctx, labels)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	guard, err := r.acquireDuckMutation(ctx, c, iid, labels, duckMutationIntent{Action: "set-running", Running: &running})
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, guard.finish(ctx, err)) }()
 	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
 	if err != nil {
 		return err
+	}
+	if running && duckRecovery(labels) {
+		if checkErr := r.recoveryServing(ctx, c, info.ID, iid, labels); checkErr != nil {
+			return checkErr
+		}
 	}
 	return dockerSetRunning(ctx, c, info.ID, running)
 }

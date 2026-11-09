@@ -12,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -20,8 +21,10 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -110,6 +113,16 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	gate                metering.Gate
+	approvalAdmitter    approvaladmission.Admitter
+	approvalVerifier    approvaladmission.Verification
+	approvalAppID       string
+	memberPrerequisites *MemberPrerequisiteService
+	instanceRuntime     InstanceRuntimeQualifier
+	instances           InstanceVerifier
+	managedRuntime      interface {
+		QualifyClusterWorkload(context.Context, *Plan, Action) error
+	}
 	capacityTemplates CapacityTemplateValidator
 	capacity          CapacityProvisioner
 	capacityPrincipal CapacityPrincipalVerifier
@@ -136,11 +149,21 @@ type Service struct {
 	dbTrust           func() ([]plane.TrustKey, error)
 	kinds             *recipes.Registry
 	endpoints         EndpointChecker
+	existingResources ExistingResourceResolver
 	dialer            TargetDialer
+	features          map[string]bool
+	inputs            CatalogInputMap
+	platform          platformPlacer
+	nativeFallbacks   NativeFallbacks
 }
 
 // Deps are what a Service needs.
 type Deps struct {
+	ApprovalAdmitter  approvaladmission.Admitter
+	ApprovalVerifier  approvaladmission.Verification
+	ApprovalAppID     string
+	InstanceRuntime   InstanceRuntimeQualifier
+	Instances         InstanceVerifier
 	CapacityTemplates CapacityTemplateValidator
 	Capacity          CapacityProvisioner
 	CapacityPrincipal CapacityPrincipalVerifier
@@ -181,8 +204,29 @@ type Deps struct {
 	Kinds *recipes.Registry
 	// Endpoints checks the external endpoints composed resources connect,
 	// through Dialer. Without either, no external endpoint can be used.
-	Endpoints EndpointChecker
-	Dialer    TargetDialer
+	Endpoints         EndpointChecker
+	ExistingResources ExistingResourceResolver
+	Dialer            TargetDialer
+	// Features are the server features that are on, by name, such as
+	// {"ai": true}. Nil has every feature off. A plan refuses a kind of a
+	// feature that's off.
+	Features map[string]bool
+	// CatalogInputs digest what kinds render from outside the manifest,
+	// by kind. The map may gain entries after NewService, during Register.
+	CatalogInputs CatalogInputMap
+	// Platform previews room on Loomplane Cloud for services planned onto
+	// its targets. Nil means this instance has no Loomplane Cloud, so a
+	// plan that names one of its targets is refused.
+	Platform platformPlacer
+	// Gate refuses an approval the workspace may not run yet. Nil means
+	// metering.AllowAll.
+	Gate metering.Gate
+	// NativeFallbacks reads the provider environment records, so a Vercel
+	// service on a project of its own with no fallback record is planned as
+	// a move into its shared project, and Render resources standing alone
+	// with no record at all as an update that moves them into the
+	// environment's Render environment. Nil plans no such move.
+	NativeFallbacks NativeFallbacks
 }
 
 // NewService returns a Service.
@@ -196,13 +240,20 @@ func NewService(d Deps) *Service {
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	return &Service{
+	gate := d.Gate
+	if gate == nil {
+		gate = metering.AllowAll
+	}
+	return &Service{gate: gate, instanceRuntime: d.InstanceRuntime,
+		approvalAdmitter: d.ApprovalAdmitter, approvalVerifier: d.ApprovalVerifier, approvalAppID: d.ApprovalAppID,
+		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, history: d.History, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
-		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
+		kinds: d.Kinds, endpoints: d.Endpoints, existingResources: d.ExistingResources, dialer: d.Dialer,
+		features: d.Features, inputs: d.CatalogInputs, platform: d.Platform, nativeFallbacks: d.NativeFallbacks,
 	}
 }
 
@@ -222,6 +273,11 @@ type CreatePlanInput struct {
 	// successful deployment of it recorded, and the plan uses the manifest
 	// revision that environment last deployed with; the rest are held.
 	From string `json:"from,omitempty"`
+	// Services names the manifest services the plan moves. Empty means all
+	// of them. One it doesn't name stays as it runs, and one that doesn't
+	// run yet isn't created, so a deploy of one service never touches the
+	// others.
+	Services []string `json:"services,omitempty"`
 }
 
 // DecideInput approves or rejects a plan.
@@ -259,6 +315,9 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
+	if env.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
+	}
 	if from := strings.TrimSpace(in.From); from != "" {
 		return s.createFrom(ctx, p, projectID, env, from, in)
 	}
@@ -271,7 +330,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	}
 	var pinned []PlanSource
 	if in.Catalog {
-		if len(in.Scope) > 0 || !catalogOnly(rev.Manifest) {
+		if len(in.Scope) > 0 || len(in.Services) > 0 || !catalogOnly(rev.Manifest) {
 			return nil, fmt.Errorf("%w: standalone catalog plans contain resources only", ErrInvalid)
 		}
 	} else {
@@ -280,9 +339,14 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 			return nil, err
 		}
 	}
+	services, err := pickServices(rev.Manifest, in.Services)
+	if err != nil {
+		return nil, err
+	}
 	return s.start(ctx, p, &Plan{
 		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
 		Sources: pinned, Catalog: in.Catalog, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+		Services: services,
 	})
 }
 
@@ -298,6 +362,9 @@ func (s *Service) createFrom(ctx context.Context, p security.Principal, projectI
 	source, err := s.environment(ctx, p.OrgID, projectID, from)
 	if err != nil {
 		return nil, err
+	}
+	if source.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
 	}
 	pinned, deployed, err := s.pinFrom(ctx, p, projectID, env, source, in.Scope)
 	if err != nil {
@@ -320,11 +387,37 @@ func (s *Service) createFrom(ctx context.Context, p security.Principal, projectI
 			return nil, err
 		}
 	}
+	// The names are checked against the manifest the promotion deploys
+	// with, which may be older than the latest.
+	services, err := pickServices(rev.Manifest, in.Services)
+	if err != nil {
+		return nil, err
+	}
 	return s.start(ctx, p, &Plan{
 		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
 		Kind: KindPromotion, From: source.Name, FromEnvironmentID: source.ID,
-		Sources: pinned, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+		Sources: pinned, ManifestID: rev.ID, ManifestRevision: rev.Revision, Services: services,
 	})
+}
+
+// pickServices checks the services a plan names against the manifest it
+// plans from, and returns them sorted and without repeats, so the same
+// choice always gives the same revision. Naming none means every service,
+// which is nil.
+func pickServices(m *manifest.Manifest, names []string) ([]string, error) {
+	var out []string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || slices.Contains(out, name) {
+			continue
+		}
+		if _, ok := m.Services[name]; !ok {
+			return nil, fmt.Errorf("%w: the manifest has no service called %q", ErrInvalid, name)
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // start stores a new plan, superseding the environment's open plan, and
@@ -355,14 +448,23 @@ func (s *Service) start(ctx context.Context, p security.Principal, plan *Plan) (
 		return nil, fmt.Errorf("start planning: %w", err)
 	}
 	if s.audit != nil {
-		s.audit.Record(ctx, projects.AuditEvent{
+		event := projects.AuditEvent{
 			Action: "plan.create", Severity: "info", ProjectID: plan.ProjectID, Principal: p,
 			Attributes: map[string]any{
 				"plan_id": plan.ID, "environment": plan.Environment, "sources": lockDescription(plan.Sources),
 				"manifest_revision": plan.ManifestRevision, "superseded": superseded,
-				"kind": plan.Kind, "from": plan.From,
+				"kind": plan.Kind, "from": plan.From, "services": plan.Services,
 			},
-		})
+		}
+		if rb := plan.Rollback; rb != nil {
+			event.Action, event.Severity = "plan.rollback.create", "warning"
+			event.Attributes["reason"], event.Attributes["trigger"], event.Attributes["automatic"] = rb.Reason, rb.Trigger, automaticTrigger(rb.Trigger)
+			event.Attributes["target_deployment_id"], event.Attributes["restore_deployment_id"] = rb.TargetDeploymentID, rb.RestoreDeploymentID
+			if rb.WatchID != "" {
+				event.Attributes["watch_id"] = rb.WatchID
+			}
+		}
+		s.audit.Record(ctx, event)
 	}
 	return s.settle(ctx, plan), nil
 }
@@ -479,10 +581,14 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID, env
 
 // Get returns one plan.
 func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Plan, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	plan, err := s.store.GetPlan(ctx, p.OrgID, id)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.GetPlan(ctx, p.OrgID, id)
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, plan.ProjectID); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // Approve approves a ready plan, as of the revision the caller reviewed.
@@ -499,12 +605,16 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	if err := refuseAutomation(p); err != nil {
 		return nil, err
 	}
-	if err := s.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
-		return nil, err
-	}
 	plan, err := s.store.GetPlan(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	// On the plan's project, so a team's approver there may decide it.
+	if aerr := s.authz.Require(ctx, p, security.DeploymentApprove, plan.ProjectID); aerr != nil {
+		return nil, aerr
+	}
+	if plan.ManagedInstanceID != "" || plan.Kind == KindInstance {
+		return nil, projects.ErrFleetManaged
 	}
 	switch {
 	case plan.Status == StatusSuperseded:
@@ -522,6 +632,13 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
 			return nil, checkErr
 		}
+		// Teardowns run nothing, so a workspace without a card can still
+		// remove what it has.
+		if !plan.TeardownOnly() {
+			if gateErr := s.gate.CanRun(ctx, plan.OrgID, metering.KindDeploy, false); gateErr != nil {
+				return nil, gateErr
+			}
+		}
 	}
 	reqID, err := typeid.Generate("dec")
 	if err != nil {
@@ -530,6 +647,18 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	dec := orchestration.Decision{Actor: &p, Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
 	if !approve {
 		dec.Revision = plan.Revision
+	}
+	if approve && len(plan.PlacementGroups) > 0 {
+		request, admitErr := groupApprovalRequest(plan, p, reqID.String(), dec.Note)
+		if admitErr != nil || s.approvalAdmitter == nil {
+			return nil, ErrUnavailable
+		}
+		envelope, admitErr := s.approvalAdmitter.AdmitPlanApproval(ctx, request)
+		if admitErr != nil {
+			return nil, ErrUnavailable
+		}
+		dec.RequestID = reqID.String()
+		dec.GroupAdmission = string(envelope)
 	}
 	err = s.workflow.Decide(ctx, plan.ID, reqID.String(), dec)
 	if errors.Is(err, orchestration.ErrNotRunning) {
@@ -557,14 +686,22 @@ func (s *Service) Bindings(ctx context.Context, p security.Principal, projectID,
 	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
 		return nil, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+	project, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
 	if err != nil {
 		return nil, err
 	}
-	return s.store.ListBindings(ctx, p.OrgID, env.ID)
+	bindings, err := s.store.ListBindings(ctx, p.OrgID, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range bindings {
+		b.SuggestedAlias = SuggestAlias(project.Slug, env.Name, b.Subject, b.Name)
+	}
+	return bindings, nil
 }
 
 // Deployed returns what's deployed of each of a project's live
@@ -626,6 +763,10 @@ type revisionInput struct {
 	// excluding or including one makes a plan stale. Omitted when empty,
 	// so plans from before exclusions keep their revision.
 	Exclusions []string `json:"exclusions,omitempty"`
+	// Services are the services the plan names, so moving a different set
+	// is a different plan. Omitted when it names none, so a plan of every
+	// service keeps the revision it had before plans could name them.
+	Services []string `json:"services,omitempty"`
 }
 
 type deployedRef struct {
@@ -674,38 +815,11 @@ func (s *Service) excluded(ctx context.Context, plan *Plan, g *graph.Graph) (kee
 }
 
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
-	// An older plan the backfill couldn't pin would plan from an empty
-	// graph, so it fails instead of proposing to tear down what's deployed.
-	if len(plan.Sources) == 0 && !plan.Catalog {
-		return nil, "", fmt.Errorf("%w: this plan pins no repositories; plan again", ErrInvalid)
-	}
-	parts := make([]graph.Part, 0, len(plan.Sources))
-	held := map[string]bool{}
-	for _, ps := range plan.Sources {
-		g, err := s.analyses.Graph(ctx, plan.OrgID, ps.AnalysisID)
-		if err != nil {
-			return nil, "", fmt.Errorf("load the analysis of %s: %w", ps.Alias, err)
-		}
-		parts = append(parts, graph.Part{
-			Source: graph.SourceRef{Alias: ps.Alias, Repository: ps.Repository, Root: ps.Root, CommitSHA: ps.CommitSHA, AnalysisID: ps.AnalysisID},
-			Graph:  g,
-		})
-		if !ps.InScope {
-			held[ps.Alias] = true
-		}
-	}
-	g := graph.Compose(parts)
-	excluded, exclusions, err := s.excluded(ctx, plan, g)
+	loaded, err := s.loadPlanInputs(ctx, plan)
 	if err != nil {
 		return nil, "", err
 	}
-	rev, err := s.manifests.Get(ctx, plan.OrgID, plan.ManifestID)
-	if err != nil {
-		return nil, "", fmt.Errorf("load the manifest: %w", err)
-	}
-	if rev.Manifest == nil {
-		return nil, "", fmt.Errorf("%w: manifest revision %d no longer parses", ErrInvalid, rev.Revision)
-	}
+	g, held, excluded, exclusions, rev := loaded.graph, loaded.held, loaded.excluded, loaded.exclusions, loaded.revision
 	bindings, err := s.store.ListBindings(ctx, plan.OrgID, plan.EnvironmentID)
 	if err != nil {
 		return nil, "", err
@@ -728,7 +842,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	federation, err := s.federationInput(ctx, plan, rev.Manifest)
+	federation, err := s.federationInput(ctx, plan, rev.Manifest, g, bindings)
 	if err != nil {
 		return nil, "", err
 	}
@@ -736,7 +850,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held, Only: loaded.only})
 	// A composed resource on one of the Cloud's targets is placed there too.
 	composed := composedResources(rev.Manifest, plan.Environment, s.kinds)
 	var assignment *cloudprofiles.Assignment
@@ -754,14 +868,44 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 	}
 	intents := map[string]*CapacityIntent{}
+	locationSelections := map[string]locationSelection{}
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
 	if resolutionErr == nil {
-		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
+		var pools map[string]*cloudinfra.Placement
+		var poolErr error
+		constrained := false
+		for _, svc := range resolutionManifest.Services {
+			constrained = constrained || svc.For(plan.Environment, resolutionManifest.Defaults).Placement != nil
+		}
+		if constrained {
+			pools, poolErr = s.resolvePoolsWithLocationInput(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, locationSelections, Input{Graph: g, Chosen: chosen}, intents)
+		} else {
+			pools, poolErr = s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
+		}
+		var platform map[string]*platformcloud.Ref
+		if poolErr == nil {
+			platform, poolErr = s.resolvePlatform(ctx, plan, resolutionManifest, assignment, needs.Held)
+		}
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, platform, needs.Held, intents)
+		}
+	}
+	for name, selection := range locationSelections {
+		if pin, ok := placements[name]; ok {
+			pin.LocationReview = selection.Review
+			placements[name] = pin
+		}
+		if intent := intents[name]; intent != nil {
+			intent.Demand.LocationReview = selection.Review
+			intent.Demand.IntentHash = ""
+			hash, hashErr := Digest(intent)
+			if hashErr != nil {
+				return nil, "", hashErr
+			}
+			intent.Demand.IntentHash = hash
 		}
 	}
 	routes, routeErr := s.releaseRoutes(ctx, plan)
@@ -776,6 +920,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 		trust = s.databaseGatewayTrust()
 	}
+	inputs, err := s.catalogInputs(ctx, plan, rev.Manifest, composed)
+	if err != nil {
+		return nil, "", err
+	}
 	var result *Result
 	if resolutionErr != nil {
 		finding := Finding{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}
@@ -787,25 +935,63 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 				finding.Name = dbGatewayName
 			}
 		case composedLookup:
-			finding = Finding{Code: "cloud-target", Subject: ResourceSubject, Name: composed[0], Path: "resources." + composed[0] + ".target", Message: resolutionErr.Error()}
+			finding = Finding{Code: "cloud-target", Subject: ResourceSubject, Name: composed[0], Path: overridePath(rev.Manifest.Resources[composed[0]], composed[0], plan.Environment, "target"), Message: resolutionErr.Error()}
 		}
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
 		placed := map[string]CloudPlacement{}
 		maps.Copy(placed, placements)
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
+		existing, existingChecks := s.checkExistingResources(ctx, plan, resolved, options, chosen, placed, g, bindings)
+		endpointChecks := s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved)
+		if endpointChecks == nil {
+			endpointChecks = map[string]EndpointCheck{}
+		}
+		maps.Copy(endpointChecks, existingChecks)
+		var moves map[string]Action
+		var moveProblems []Finding
+		if len(locationSelections) > 0 {
+			moves, moveProblems = appliedPoolMoves(bindings, assignment, options, s.providers, placements, routes, locationSelections)
+		}
+		native, nativeErr := nativeMoves(ctx, s.nativeFallbacks, plan.OrgID, plan.EnvironmentID, bindings)
+		if nativeErr != nil {
+			return nil, "", nativeErr
+		}
+		renderNative, renderErr := renderMoves(ctx, s.nativeFallbacks, plan.OrgID, plan.EnvironmentID, bindings)
+		if renderErr != nil {
+			return nil, "", renderErr
+		}
 		result = Compute(Input{
+			appliedMoves: moves, appliedMoveProblems: moveProblems,
+			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
+			ProjectID:         plan.ProjectID,
+			ExistingResources: existing, ExistingResourceChecks: existingChecks,
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
-			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,
-			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
-			FabriqPostgres: fabriqPostgres,
+			Connections: options, Chosen: chosen, Held: held, Excluded: excluded, Only: loaded.only,
+			Kinds: s.kinds, Endpoints: endpointChecks,
+			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
+			NativeMoves: native, RenderMoves: renderNative,
 		})
 	}
-	if resolutionErr == nil && poolRelocation(bindings, placements) {
+	if resolutionErr == nil && len(locationSelections) == 0 && poolRelocation(bindings, placements) {
 		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
 		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
+	}
+	// A rollback changes only services' code and settings, before anything
+	// below reserves capacity or checks permissions for the rest.
+	if plan.Kind == KindRollback {
+		result.Leftovers = rollbackFilter(result, bindings)
+	}
+	if runtimeErr := s.qualifyInstanceRuntime(ctx, plan); runtimeErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "instance-isolation", Message: runtimeErr.Error()})
+		result.Executable = false
+		revision, hashErr := Digest(struct {
+			Snapshot string
+			Result   *Result
+		}{rev.Digest, result})
+		return result, revision, hashErr
 	}
 	// Asked before anything is reserved, so a store that can't tell fails
 	// the plan with nothing to undo.
@@ -820,24 +1006,39 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Problems = append(result.Problems, Finding{Code: "frontend-governance", Message: frontendErr.Error()})
 		result.Executable = false
 	}
+	for name, selection := range locationSelections {
+		if result.LocationPlacements == nil {
+			result.LocationPlacements = map[string]LocationPlacementDecision{}
+		}
+		result.LocationPlacements[name] = selection.Decision
+	}
+	if workloadErr := s.PrepareClusterWorkloadDemands(ctx, plan, result); workloadErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "cluster-capacity", Message: workloadErr.Error()})
+		result.Executable = false
+	}
+	if cleanupErr := s.PrepareManagedCleanupTargets(ctx, plan, result); cleanupErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "managed-cleanup", Message: cleanupErr.Error()})
+		result.Executable = false
+	}
 	s.checkBackupPreview(ctx, plan, result)
 	warnings, err := s.promotionWarnings(ctx, plan, rev.Revision)
 	if err != nil {
 		return nil, "", err
 	}
 	result.Warnings = append(result.Warnings, warnings...)
-	released, reuse, err := s.releasedImages(ctx, plan)
+	checkGitBuilds(plan, result)
+	released, from, reuse, err := s.releasedImages(ctx, plan)
 	if err != nil {
-		return nil, "", fmt.Errorf("read what %s ran: %w", plan.From, err)
+		return nil, "", fmt.Errorf("read what %s ran: %w", from, err)
 	}
 	if reuse {
-		s.applyArtifacts(plan, result, released, plan.From)
+		s.applyArtifacts(plan, result, released, from)
 	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
 		From: plan.From, Rollback: plan.Rollback,
-		Exclusions: exclusions,
+		Exclusions: exclusions, Services: plan.Services,
 	}
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{
@@ -916,9 +1117,10 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 	}
 	uses := map[string]use{} // by endpointKey
 	for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
-		r := m.Resources[name]
+		// Each environment checks from the target its copy runs on.
+		r := m.Resources[name].In(environment, m.Defaults)
 		kind, ok := kinds.Kind(r.Kind)
-		if !ok || r.Target == "" || !manifest.On(r.For(environment, m.Defaults).Enabled) {
+		if !ok || r.Target == "" || !resourceOn(kinds, m.Resources[name], environment, m.Defaults) {
 			continue
 		}
 		for _, dep := range kind.Dependencies {
@@ -1006,8 +1208,8 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 // permanent reports whether planning can never succeed, so retrying is
 // pointless: what it was made from is gone or unreadable.
 func permanent(err error) bool {
-	return errors.Is(err, discovery.ErrNotFound) || errors.Is(err, discovery.ErrNoGraph) ||
-		errors.Is(err, manifests.ErrNotFound) || errors.Is(err, ErrInvalid)
+	return instancePlanningPermanent(err) || errors.Is(err, discovery.ErrNotFound) || errors.Is(err, discovery.ErrNoGraph) ||
+		errors.Is(err, manifests.ErrNotFound) || errors.Is(err, ErrInvalid) || failsPlanning(err)
 }
 
 // Plan implements orchestration.Planner: it computes a planning plan.
@@ -1091,6 +1293,15 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	if plan.Status != StatusReady {
 		return plan.Status, nil
 	}
+	// Fleet decisions require the operation's typed authority and transaction.
+	// A generic Dispatch decision cannot approve or reject managed work.
+	if plan.Kind == KindInstance || plan.ManagedInstanceID != "" {
+		return "", security.ErrForbidden
+	}
+	// Loomplane automation decides only the rollbacks it started.
+	if systemDecision(d) && !automaticRollback(plan) {
+		return "", security.ErrForbidden
+	}
 	now := s.now().UTC()
 	if !d.Approve {
 		return s.settleAs(ctx, plan, StatusRejected, d.By, d.Note, now)
@@ -1100,10 +1311,18 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
 	}
+	if len(plan.PlacementGroups) > 0 {
+		if verifyErr := s.verifyGroupApproval(plan, d); verifyErr != nil {
+			return "", verifyErr
+		}
+	}
 	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
 		return "", checkErr
 	}
 	result, revision, err := s.compute(ctx, plan)
+	if failsPlanning(err) {
+		return s.settleAs(ctx, plan, StatusStale, d.By, unreadableInputs(err), now)
+	}
 	if permanent(err) {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What the plan was made from is gone: "+err.Error(), now)
 	}
@@ -1127,6 +1346,10 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 			return "", security.ErrForbidden
 		}
 		ctx = security.WithPrincipal(ctx, *d.Actor)
+	}
+	if len(plan.PlacementGroups) > 0 {
+		// Source provenance alone cannot install or bypass group acceptance.
+		return "", ErrUnavailable
 	}
 	return s.settleAs(ctx, plan, StatusApproved, d.By, d.Note, now)
 }
@@ -1242,6 +1465,9 @@ func (s *Service) ChooseConnection(ctx context.Context, p security.Principal, pr
 	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
 	if err != nil {
 		return nil, err
+	}
+	if env.InstanceID != "" {
+		return nil, projects.ErrFleetManaged
 	}
 	id := strings.TrimSpace(in.ConnectionID)
 	if id != "" {

@@ -59,7 +59,14 @@ kubectl -n loomplane rollout status deploy/loomplane
 helm test loomplane -n loomplane
 ```
 
-Open your hostname and create the first account. It owns the instance.
+Setup needs a one-time token. The first API pod logs it as a `setup is waiting` warning with a `url` field, and you can print the link again from any API pod:
+
+```bash
+kubectl -n loomplane exec deploy/loomplane -- loomplane setup-token
+# Finish setup at https://loomplane.example.com/setup?token=...
+```
+
+Open that link and create the first account. It owns the instance.
 
 The proxy buffering and timeout annotations matter: the dashboard streams live events over server-sent events and a WebSocket. The chart also sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods, so the public ingress refuses them. Prefer the Gateway API? Set `httpRoute.enabled` and `httpRoute.parentRefs` instead of `ingress`.
 
@@ -89,6 +96,12 @@ helm upgrade loomplane oci://ghcr.io/xraph/charts/loomplane --version 1.2.4 \
 
 Migrations only go forward, and an older Loomplane refuses a database a newer one migrated. After an upgrade that migrated, `helm rollback` won't start the old version: restore your backup instead. When a release's notes ask for downtime, set `api.strategy.type` and `worker.strategy.type` to `Recreate` for that upgrade.
 
+## Knowledge needs pgvector
+
+The agent's [knowledge](/docs/agents/knowledge) keeps its vectors in Loomplane's own Postgres, so that database needs the pgvector extension. Use an image that ships it, such as `pgvector/pgvector:pg17` (or the same for CloudNativePG), or run `CREATE EXTENSION vector` on a managed Postgres that offers it. Set `ai.enabled` and `ai.knowledge` and Loomplane creates its vector table at start. Nothing changes without pgvector: Loomplane starts as always and the knowledge switch stays off with a reason.
+
+A backup taken with knowledge on includes its vector tables. Restoring it needs a target with `ai.enabled`, `ai.knowledge` configured, pgvector available and the same `dimensions`, or the restore refuses or fails on the dimensions. See [Backing up Loomplane](/docs/operations/backing-up-loomplane#knowledge-and-backups).
+
 ## Sizing
 
 Each API pod opens a little over 20 database connections and each worker about 16, so set PostgreSQL's `max_connections` for your replicas plus one extra of each during a rollout. Workers unpack repositories into an 8 GiB scratch volume by default (`worker.tmpSize`), because one analysis can take 2 GiB and a worker runs two at once. Turn on `api.autoscaling` and `worker.autoscaling` to scale on CPU.
@@ -115,3 +128,13 @@ Every organization on your instance shares that service account, so any of them 
 ## Without Helm
 
 Each release attaches `loomplane-VERSION-kubernetes.yaml`, the chart rendered for `kubectl apply` with an ingress-nginx Ingress. Create the Secret above, replace `loomplane.example.com`, and apply it.
+
+## Optional push gateway
+
+Set `push.gateway.enabled=true` to deploy a gateway alongside the API and
+workers. Supply its own Secret, a published gateway image version and a
+public HTTPS hostname in `push.gatewayUrl`. The chart can create an Ingress
+or HTTPRoute that publishes only the two push routes. See the
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane)
+for a configuration example, TLS and key rotation. Hosting a gateway requires
+push credentials for the mobile app you ship.

@@ -1,0 +1,232 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: gte
+entries:
+  - id: thenlper/gte-small
+    title: GTE small
+    publisher: thenlper
+    summary: A small English embedding model for search.
+    revision: 17e1f347d17fe144873b1201da91788898c639cd
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 33360512
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    embedding:
+      dimensions: 384
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 66746168
+        min_memory_gib: 1
+  - id: thenlper/gte-base
+    title: GTE base
+    publisher: thenlper
+    summary: An English embedding model for search.
+    revision: c078288308d8dee004ab72c6191778064285ec0c
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 109482752
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 218990904
+        min_memory_gib: 1
+  - id: thenlper/gte-large
+    title: GTE large
+    publisher: thenlper
+    summary: The largest of the original GTE English embedding models.
+    revision: 4bef63f39fcc5e2d6b0aae83089f307af4970164
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 335142400
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    embedding:
+      dimensions: 1024
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 670332568
+        min_memory_gib: 2
+  - id: Alibaba-NLP/gte-base-en-v1.5
+    title: GTE base en v1.5
+    publisher: Alibaba
+    summary: An English embedding model with an 8192 token input.
+    revision: a829fd0e060bb84554da0dfd354d0de0f7712b7f
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 136776192
+    context_length: 8192
+    architecture:
+      name: NewModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 547119128
+        min_memory_gib: 2
+  - id: Alibaba-NLP/gte-large-en-v1.5
+    title: GTE large en v1.5
+    publisher: Alibaba
+    summary: A larger English embedding model with an 8192 token input.
+    revision: 104333d6af6f97649377c2afbde10a7704870c7b
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 434139136
+    context_length: 8192
+    architecture:
+      name: NewModel
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    embedding:
+      dimensions: 1024
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 1736585680
+        min_memory_gib: 3
+  - id: Alibaba-NLP/gte-multilingual-base
+    title: GTE multilingual base
+    publisher: Alibaba
+    summary: An embedding model for search in over 70 languages, with an 8192 token input.
+    revision: 9bbca17d9273fd0d03d5725c7a4b0f6b45142062
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 305369089
+    context_length: 8192
+    architecture:
+      name: NewModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 8192
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 610753338
+        min_memory_gib: 2
+  - id: Alibaba-NLP/gte-Qwen2-1.5B-instruct
+    title: GTE Qwen2 1.5B instruct
+    publisher: Alibaba
+    summary: A multilingual embedding model built on Qwen2 that takes a task description with each query.
+    revision: a9af15a6372d7d6b25e9fb07c2ccb9e1fe645644
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 1776197120
+    context_length: 131072
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 12
+      kv_heads: 2
+      head_dim: 128
+    embedding:
+      dimensions: 1536
+      max_input_tokens: 32768
+      query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 7104826920
+        args:
+          - --runner=pooling
+        min_gpu_memory_gib: 10
+  - id: Alibaba-NLP/gte-Qwen2-7B-instruct
+    title: GTE Qwen2 7B instruct
+    publisher: Alibaba
+    summary: A 7B multilingual embedding model built on Qwen2, for high quality retrieval.
+    revision: a8d08b36ada9cacfe34c4d6f80957772a025daf2
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 7612620288
+    context_length: 131072
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 28
+      kv_heads: 4
+      head_dim: 128
+    embedding:
+      dimensions: 3584
+      max_input_tokens: 32768
+      query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 30450519736
+        args:
+          - --runner=pooling
+        min_gpu_memory_gib: 36

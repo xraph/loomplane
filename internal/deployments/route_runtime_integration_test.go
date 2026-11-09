@@ -91,7 +91,7 @@ func releaseRuntimeFixture(t *testing.T) (*server.Client, string, []byte) {
 		t.Fatal(err)
 	}
 	cfg.Details["docker_id"] = releaseDocker(t, "exec", name, "docker", "info", "--format", "{{.ID}}")
-	c, err := server.Dial(t.Context(), cfg)
+	c, err := server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ type releaseRuntime struct {
 }
 
 func (r *releaseRuntime) ArmEffectFence(ctx context.Context, f server.EffectFence) error {
-	c, err := server.Dial(ctx, r.config)
+	c, err := server.Connect(ctx, r.config, nil)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func testRetainedRuntime(t *testing.T, shared bool) {
 	image := releaseDocker(t, "exec", host, "docker", "image", "inspect", "nginx:alpine", "--format", "{{index .RepoDigests 0}}")
 	backend := &releaseRuntime{config: client.Config}
 	backend.Runtime = &server.Runtime{Session: func(ctx context.Context, _ map[string]string) (*server.Client, error) {
-		c, e := server.Dial(ctx, client.Config)
+		c, e := server.Connect(ctx, client.Config, nil)
 		if e == nil {
 			c.RequireFence = true
 		}

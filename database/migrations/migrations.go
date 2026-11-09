@@ -10,17 +10,29 @@
 package migrations
 
 import (
+	"fmt"
+	"slices"
+
+	"github.com/xraph/authsome/plugins/oauth2provider"
+	"github.com/xraph/authsome/plugins/waitlist"
 	authpg "github.com/xraph/authsome/store/postgres"
 	chronpg "github.com/xraph/chronicle/store/postgres"
+	cortexpg "github.com/xraph/cortex/store/postgres"
 	cppg "github.com/xraph/ctrlplane/store/postgres"
 	dispatchpg "github.com/xraph/dispatch/store/postgres"
 	"github.com/xraph/grove/migrate"
 	heraldpg "github.com/xraph/herald/store/postgres"
 	kspg "github.com/xraph/keysmith/store/postgres"
+	nexuspg "github.com/xraph/nexus/store/postgres"
 	relaypg "github.com/xraph/relay/store/postgres"
+	shieldpg "github.com/xraph/shield/store/postgres"
 	trovepg "github.com/xraph/trove/extension/store/postgres"
 	vaultpg "github.com/xraph/vault/store/postgres"
 	wardenpg "github.com/xraph/warden/store/postgres"
+	weavepg "github.com/xraph/weave/store/postgres"
+	"github.com/xraph/weave/vectorstore/pgvector"
+
+	"github.com/xraph/loomplane/internal/config"
 )
 
 // GroupName is the migration group for Loomplane's own tables.
@@ -70,19 +82,73 @@ func NativeCredentialsGroup() *migrate.Group {
 // keeps tables in Loomplane's database. Each library's own extension has
 // its self-migration turned off, so this one pass (Forge's central
 // migrations, run by the grove extension) owns the schema.
+//
+// The agent libraries (cortex, nexus, shield and weave) come last. Their
+// tables are made whether or not AI is on, so turning it on later needs no
+// migration step. Weave's pgvector group (weave_pgvector) is never here: it
+// needs the vector extension, so it runs on demand when the server boots
+// with knowledge configured and pgvector there (agentknowledge.Boot).
+// OptionalVersions names its migrations for the schema guard, and OnDemand
+// gives the group to a restore.
 func All() []*migrate.Group {
-	return []*migrate.Group{
+	// Groups only this edition runs come last.
+	return slices.Concat([]*migrate.Group{
 		Group(),
 		authpg.Migrations,
+		waitlist.PostgresMigrations,
+		oauth2provider.PostgresMigrations,
 		wardenpg.Migrations,
 		chronpg.Migrations,
 		dispatchpg.Migrations,
 		cppg.Migrations,
+		managedInstancesGroup(),
 		vaultpg.Migrations,
 		NativeCredentialsGroup(),
 		kspg.Migrations,
 		trovepg.Migrations,
 		heraldpg.Migrations,
 		relaypg.Migrations,
+		cortexpg.Migrations,
+		nexuspg.Migrations,
+		shieldpg.Migrations,
+		weavepg.Migrations,
+	}, editionGroups())
+}
+
+// optionalDimensions is any size pgvector accepts. A migration's version
+// doesn't depend on it, and OptionalVersions only reads versions.
+const optionalDimensions = 1536
+
+// OptionalVersions are the migrations a database may have that All()
+// never runs, as group:version: weave's pgvector group, which runs on
+// demand. The schema guard counts them as known rather than as a newer
+// Loomplane's.
+func OptionalVersions() []string {
+	g, err := pgvector.Migrations(optionalDimensions)
+	if err != nil {
+		// A pinned library refusing a valid size is a programming error.
+		panic("migrations: weave pgvector migrations: " + err.Error())
 	}
+	out := make([]string, 0, len(g.Migrations()))
+	for _, m := range g.Migrations() {
+		out = append(out, g.Name()+":"+m.Version)
+	}
+	return out
+}
+
+// OnDemand are the on-demand groups a server with these AI settings runs:
+// weave's pgvector group at ai.knowledge.dimensions when AI is on and
+// knowledge is configured, and none otherwise. With AI off it reads no
+// knowledge setting at all, since those are validated only when AI is on.
+// Restoring a backup that applied the group runs it, so the vector table
+// comes back with its rows.
+func OnDemand(ai config.AIConfig) ([]*migrate.Group, error) {
+	if !ai.Enabled || !ai.Knowledge.Configured() {
+		return nil, nil
+	}
+	g, err := pgvector.Migrations(ai.Knowledge.Dimensions)
+	if err != nil {
+		return nil, fmt.Errorf("ai.knowledge.dimensions: %w", err)
+	}
+	return []*migrate.Group{g}, nil
 }

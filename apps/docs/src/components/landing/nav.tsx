@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { installGuideHref } from "./install-commands";
-import { githubUrl, links } from "./site";
+import { cloudWaitlistUrl, githubUrl, links } from "./site";
 import { Wordmark } from "./wordmark";
 
 export function Nav() {
@@ -51,9 +51,13 @@ export function Nav() {
           <Link className="btn" href="/docs">
             Docs
           </Link>
-          <Link className="btn btn-blue" href={installGuideHref}>
-            Get started
-          </Link>
+          <a
+            className="btn btn-blue"
+            href={cloudWaitlistUrl}
+            aria-label="Join the Loomplane Cloud waitlist"
+          >
+            Join waitlist
+          </a>
           <button
             className="menu-btn"
             type="button"
@@ -76,6 +80,7 @@ export function Nav() {
             </Link>
           ))}
           <Link href="/docs">Docs</Link>
+          <Link href={installGuideHref}>Self-host it</Link>
         </div>
       </div>
     </header>

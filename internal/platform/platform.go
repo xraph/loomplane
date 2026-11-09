@@ -18,10 +18,12 @@ import (
 	"os"
 	"time"
 
+	witnessforge "github.com/hallproof/witness/forge"
 	cpext "github.com/xraph/ctrlplane/extension"
 	drt "github.com/xraph/dispatch/durable/runtime"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
+	"github.com/xraph/forge/extensions/dashboard"
 	"github.com/xraph/grove"
 	groveDriver "github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -29,19 +31,26 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/extensions/agentwatch"
+	aiext "github.com/xraph/loomplane/extensions/ai"
+	"github.com/xraph/loomplane/extensions/aiagent"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	dbgatewayext "github.com/xraph/loomplane/extensions/dbgateway"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	federationext "github.com/xraph/loomplane/extensions/federation"
+	fleetext "github.com/xraph/loomplane/extensions/fleets"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
+	nodesext "github.com/xraph/loomplane/extensions/nodes"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	octopusext "github.com/xraph/loomplane/extensions/octopus"
 	planningext "github.com/xraph/loomplane/extensions/planning"
+	platformcloudext "github.com/xraph/loomplane/extensions/platformcloud"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
+	releaseprepext "github.com/xraph/loomplane/extensions/releaseprep"
 	"github.com/xraph/loomplane/extensions/web"
 	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
@@ -63,9 +72,10 @@ const (
 )
 
 // New builds the app. It does no I/O: Forge registers and starts the
-// extensions when the app starts.
-func New(cfg config.Config) (forge.App, error) {
-	app := forge.New(
+// extensions when the app starts. opts go after Loomplane's own, so a test
+// can swap one, such as the logger.
+func New(cfg config.Config, opts ...forge.AppOption) (forge.App, error) {
+	app := forge.New(append([]forge.AppOption{
 		forge.WithAppName("loomplane"),
 		forge.WithAppVersion(buildinfo.Version),
 		forge.WithAppEnvironment(cfg.Environment),
@@ -74,7 +84,7 @@ func New(cfg config.Config) (forge.App, error) {
 		forge.WithEnvPrefix(forgeEnvPrefix),
 		forge.WithCentralMigrations(),
 		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg)), forge.WithAsyncAPI(forge.AsyncAPIConfig{Title: "Loomplane realtime", Version: buildinfo.Version, SpecEnabled: true, UIEnabled: cfg.IsDevelopment()})),
-	)
+	}, opts...)...)
 	for _, ext := range Extensions(cfg) {
 		if err := app.RegisterExtension(ext); err != nil {
 			return nil, fmt.Errorf("register %s: %w", ext.Name(), err)
@@ -100,10 +110,16 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// repository's code. Its handlers go to Dispatch now; the planning
 	// extension binds them to the planner when it registers.
 	deployments := orchestration.NewDeployments()
-	jobs := newJobs(deployments.Options(owner(), cfg.Orchestration.Concurrency),
+	withPoll := func(opts drt.Options) drt.Options {
+		if opts.PollInterval <= 0 {
+			opts.PollInterval = cfg.Orchestration.PollInterval
+		}
+		return opts
+	}
+	jobs := newJobs(withPoll(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
-		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
+		dispatchext.WithQueues(queues(cfg)),
 		// Followers check for a leader every half lease. A short lease
 		// means a leader that stops, a restarted replica or a stopped
 		// worker, is replaced in seconds, and the drift check keeps its
@@ -115,8 +131,16 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
-	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
-	jobs.WithBuild(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
+	jobs.WithCapacity(withPoll(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency)), deployments.BindCapacityWorker)
+	jobs.WithBuild(withPoll(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.LegacyCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.LegacyCleanupBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.ManagedCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedCleanupBuild, w) })
+
+	jobs.WithBuild(withPoll(deployments.RuntimeAccessOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.RuntimeAccessBuild, w) })
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.
@@ -135,7 +159,12 @@ func Extensions(cfg config.Config) []forge.Extension {
 		cpext.WithLeaderElection(""),
 	)
 
-	return []forge.Extension{
+	// The hub holds the node sessions this replica owns. Later extensions
+	// open streams to nodes through nodes.Hub(). The replica is named the way
+	// Dispatch names this process: host and pid.
+	nodes := nodesext.New(cfg, owner())
+
+	exts := []forge.Extension{
 		newSchemaGuard(cfg),
 		db,
 		newFiles(cfg),
@@ -147,16 +176,81 @@ func Extensions(cfg config.Config) []forge.Extension {
 		projectsext.New(cfg, jobs.Engine),
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
-		connectionsext.New(cfg, plugs),
-		cloudinfraext.New(cfg, deployments),
+		fleetext.New(cfg),
+		connectionsext.New(cfg, plugs, nodes.Hub()),
+		cloudinfraext.New(cfg, deployments, nodes.Hub()),
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
-		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
+		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs, nodes.Hub()),
 		octopusext.New(cfg, jobs.Engine),
+		platformcloudext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
-		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"),
+		nodes,
 	}
+	// The AI section exists only when ai.enabled is on: with it off, no AI
+	// route, hook or setting is registered at all.
+	if cfg.AI.Enabled {
+		exts = append(exts, aiext.New(cfg, jobs.Engine))
+		// The agent and the libraries it runs on come after the AI
+		// section, which provides the agent's settings.
+		agent := aiagent.New(cfg, jobs.Engine)
+		exts = append(exts, agent.LibraryExtensions()...)
+		// The watcher comes after the agent, whose reports, runs and binder
+		// it works through, and so does release preparation, which also
+		// installs the promotion gate in the agent's authorizer.
+		exts = append(exts, agent, agentwatch.New(cfg, jobs.Engine), releaseprepext.New(cfg, jobs.Engine))
+	} else {
+		// What AI scheduled while it was on stays in the database and keeps
+		// firing; this gives those jobs handlers that do nothing, and adds
+		// nothing else of the AI section.
+		exts = append(exts, aiext.NewOff(jobs.Engine))
+	}
+	// What only this edition adds, such as Loomplane Cloud's billing, comes
+	// after the sections it builds on and before the console, which depends
+	// on every extension before it.
+	exts = append(exts, editionExtensions(cfg, jobs.Engine)...)
+	// Hallproof's witness, only with hallproof.endpoint set. It finds each
+	// library once every extension has started, so its place only matters
+	// for the console, which depends on it like on every other.
+	if cfg.Hallproof.Enabled() {
+		exts = append(exts, witnessforge.New(witnessforge.WithConfig(witnessConfig(cfg))))
+	}
+	exts = append(exts, console(exts))
+	site := web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/").
+		WithAndroidApp(cfg.Mobile.AndroidPackage, cfg.Mobile.AndroidCertFingerprints)
+	return append(exts, site)
+}
+
+// queues are the Dispatch queues this process works: the default and
+// orchestration queues, and the agent's when AI is on. With AI off nothing
+// enqueues on the agent's queue, and nothing works it.
+func queues(cfg config.Config) []string {
+	q := []string{"default", orchestration.Queue}
+	if cfg.AI.Enabled {
+		q = append(q, aiagent.Queue)
+	}
+	return append(q, editionQueues()...)
+}
+
+// console is the Forge dashboard's API, mounted for platform admins as the
+// instance console. The identity extension signs people in to it, gates
+// every request to it and decides which intents it may call.
+//
+// While it starts, the dashboard asks every other extension for its
+// contributors, so it depends on all of them: each has registered and
+// started by then.
+func console(others []forge.Extension) forge.Extension {
+	ext, ok := dashboard.NewExtension(dashboard.WithBasePath(identity.ConsoleBasePath), dashboard.WithEnableAuth(true)).(*dashboard.Extension)
+	if !ok {
+		panic("dashboard.NewExtension no longer returns *dashboard.Extension")
+	}
+	deps := make([]string, 0, len(others))
+	for _, o := range others {
+		deps = append(deps, o.Name())
+	}
+	ext.SetDependencies(deps)
+	return ext
 }
 
 // NewWorker builds loomplane-worker: the process that analyzes

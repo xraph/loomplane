@@ -1,5 +1,6 @@
 import { ClientProvider } from "@forge-go/client-react"
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -10,6 +11,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
+import { publishLiveState } from "@/lib/realtime-state"
 
 import { CloudDetail } from "./cloud-detail"
 
@@ -23,13 +25,34 @@ vi.mock("@/lib/organization", () => ({
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/lib/router", () => ({
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
-  ),
+  Link: ({
+    children,
+    to,
+    params,
+    search,
+  }: {
+    children: React.ReactNode
+    to: string
+    params?: Record<string, string>
+    search?: Record<string, string>
+  }) => {
+    let href = to
+    for (const [key, value] of Object.entries(params ?? {}))
+      href = href.replace(`$${key}`, encodeURIComponent(value))
+    const query = new URLSearchParams(search).toString()
+    return <a href={href + (query ? `?${query}` : "")}>{children}</a>
+  },
   useNavigate: () => () => Promise.resolve(),
 }))
 afterEach(() => {
   manager = true
+  publishLiveState({
+    status: "stale",
+    transport: "ws",
+    lastSync: 0,
+    gap: false,
+  })
+  window.history.replaceState(null, "", "/")
   cleanup()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -104,6 +127,8 @@ function fixture({
   unused = false,
   profile = {} as Record<string, unknown>,
   syncs = [] as unknown[],
+  clusterOperations = [] as unknown[],
+  workspace = undefined as unknown,
 } = {}) {
   const writes: { method: string; path: string; body: unknown }[] = []
   const reads: string[] = []
@@ -149,6 +174,11 @@ function fixture({
         body = unused ? { cloud_id: "c", environments: [] } : usage
       if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
         body = { syncs }
+      if (path === "/api/v1/platform-cloud") {
+        if (workspace === 403)
+          return Response.json({ message: "forbidden" }, { status: 403 })
+        body = workspace ?? {}
+      }
       if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
       if (path === "/api/v1/clouds/c/pools")
         body = {
@@ -185,6 +215,14 @@ function fixture({
       if (path === "/api/v1/clouds/c/expansions") body = { expansions: [] }
       if (path === "/api/v1/clouds/c/capacity-usage") body = capacityUsage
       if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
+      if (path === "/api/v1/clouds/c/cluster-operations") {
+        const offset = Number(url.searchParams.get("cursor") || 0)
+        body = {
+          items: clusterOperations.slice(offset, offset + 50),
+          next_cursor:
+            offset + 50 < clusterOperations.length ? String(offset + 50) : "",
+        }
+      }
       if (path === "/api/v1/members") body = { members: [] }
       if (path.endsWith("/environments")) body = { environments: [] }
       if (path === "/api/v1/providers")
@@ -264,10 +302,26 @@ function fixture({
             },
           ],
         }
+      if (path === "/api/v1/clouds/c/cluster-operations/saved")
+        body = {
+          id: "saved",
+          cloud_id: "c",
+          status: "needs_attention",
+          digest: "review",
+          input: { spec: { name: "Saved worker" }, ref: {} },
+          steps: [],
+          unknown_costs: [],
+        }
       return Response.json(body)
     }
   )
-  return { writes, reads }
+  return {
+    writes,
+    reads,
+    publishTargets: () => {
+      noTargets = false
+    },
+  }
 }
 
 const show = (project?: string, tab?: "capacity") =>
@@ -294,6 +348,21 @@ it("shows where services go and how many run on each target", async () => {
   expect(screen.getByRole("banner")).toHaveTextContent("In sync")
   // History is asked for this Cloud only, not filtered from a page of all.
   expect(reads).toContain("/api/v1/clouds/syncs?cloud=c&limit=30")
+})
+
+it("sends environment changes to the environment's own project", async () => {
+  fixture({ granted: true })
+  show()
+  const envs = await screen.findByRole("region", {
+    name: "Environments on this Cloud",
+  })
+  await waitFor(() => expect(envs).toHaveTextContent("production"))
+  expect(
+    within(envs).getByRole("link", { name: "Open in project" })
+  ).toHaveAttribute("href", "/projects/web?tab=cloud&environment=production")
+  expect(
+    screen.queryByRole("button", { name: "Use in an environment" })
+  ).not.toBeInTheDocument()
 })
 
 it("names each change in words and shows what moved", async () => {
@@ -345,7 +414,7 @@ it("shows a project member only the project's share, read-only", async () => {
     screen.queryByRole("tab", { name: /^Projects/ })
   ).not.toBeInTheDocument()
   expect(
-    screen.queryByRole("tab", { name: /^Servers/ })
+    screen.queryByRole("tab", { name: /^Infrastructure/ })
   ).not.toBeInTheDocument()
   expect(
     screen.queryByRole("tab", { name: /^Settings/ })
@@ -369,13 +438,27 @@ it("shows an organization's Cloud with the projects allowed on each target", asy
   })
   await waitFor(() => expect(access).toHaveTextContent("Web app"))
   // Web app may use frontend and api, not worker, and production chose it.
-  expect(access).toHaveTextContent(
-    /May use\s*frontend\s*api\s*Environments\s*production/
-  )
+  expect(access).toHaveTextContent(/Web app\s*frontend\s*api\s*production/)
   expect(access).not.toHaveTextContent("worker")
   expect(
     screen.getByRole("button", { name: "Edit access" })
   ).toBeInTheDocument()
+})
+
+it("asks once before removing access from the access dialog", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture({ granted: true })
+  show()
+  await openTab("Projects")
+  await user.click(await screen.findByRole("button", { name: "Edit access" }))
+  await user.click(screen.getByRole("button", { name: "Remove access" }))
+  // The edit dialog hands off to the one confirm dialog; nothing is removed yet.
+  const confirm = await screen.findByRole("alertdialog")
+  expect(confirm).toHaveTextContent("Remove Web app's access?")
+  expect(
+    screen.queryByRole("button", { name: "Confirm remove access" })
+  ).not.toBeInTheDocument()
+  expect(writes).toEqual([])
 })
 
 it("gives a project access to only the targets you tick", async () => {
@@ -391,7 +474,9 @@ it("gives a project access to only the targets you tick", async () => {
     await screen.findByText("No project has access yet")
   ).toBeInTheDocument()
   await user.click(
-    await screen.findByRole("button", { name: "Give a project access" })
+    (
+      await screen.findAllByRole("button", { name: "Give a project access" })
+    )[0]!
   )
   await user.click(screen.getByRole("combobox", { name: "Project" }))
   await user.click(await screen.findByRole("option", { name: /Jobs/ }))
@@ -425,7 +510,9 @@ it("disables target choices for whole Cloud access and all grant choices while s
   show()
   await openTab("Projects")
   await user.click(
-    await screen.findByRole("button", { name: "Give a project access" })
+    (
+      await screen.findAllByRole("button", { name: "Give a project access" })
+    )[0]!
   )
   const wholeCloud = screen.getByRole("checkbox", { name: /Whole Cloud/ })
   const frontend = screen.getByRole("checkbox", { name: /Frontend/ })
@@ -462,7 +549,8 @@ it("sets a targetless Cloud's one provider and account", async () => {
   expect(
     await screen.findByText(/every service on it runs here/)
   ).toBeInTheDocument()
-  await user.click(screen.getByRole("button", { name: "Set default provider" }))
+  // The section head and the empty state both offer it; either opens the dialog.
+  await user.click(screen.getAllByRole("button", { name: "Set default" })[0]!)
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
   )
@@ -496,7 +584,7 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
   show()
   await openTab("Targets")
   await user.click(
-    await screen.findByRole("button", { name: "Set default provider" })
+    (await screen.findAllByRole("button", { name: "Set default" }))[0]!
   )
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
@@ -536,6 +624,13 @@ it("says pools won't grow on their own while automatic expansion is off, and sav
     await screen.findByText(
       "Automatic expansion isn't on for this Loomplane yet"
     )
+  ).toBeInTheDocument()
+  // It names the setting, so the operator knows exactly what to change.
+  expect(
+    screen.getByText("LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED=true")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText("clouds.automatic_capacity.enabled")
   ).toBeInTheDocument()
   expect(
     screen.getByText(/nothing will appear here until it's turned on/)
@@ -597,7 +692,7 @@ it("says which limits are missing before letting pools grow", async () => {
 
 // A paused deployment's "Review capacity" opens the Cloud on its Capacity
 // tab, with ?project= set. A manager lands there with usage, the growth
-// policy, the pools' rules with New scaling pool, and waiting servers.
+// policy, the pools' rules with Add pool, and waiting servers.
 it("opens on the Capacity tab with usage, the policy, pools and expansions", async () => {
   const { reads } = fixture()
   show("web", "capacity")
@@ -616,12 +711,261 @@ it("opens on the Capacity tab with usage, the policy, pools and expansions", asy
     after(usage, policy) && after(policy, pools) && after(pools, waiting)
   ).toBe(true)
   expect(
-    within(pools).getByRole("button", { name: "New scaling pool" })
+    within(pools).getByRole("button", { name: "Add pool" })
   ).toBeInTheDocument()
   await waitFor(() => expect(reads).toContain("/api/v1/clouds/c/expansions"))
   // Capacity lives on its own tab; Servers doesn't mount a second copy.
-  await openTab("Servers")
+  await openTab("Infrastructure")
   expect(
     screen.queryByRole("region", { name: "Capacity usage" })
   ).not.toBeInTheDocument()
+})
+
+it("reloads a saved cluster operation on Infrastructure without issuing creation", async () => {
+  window.history.replaceState(null, "", "/clouds/c?clusterOperation=saved")
+  const { reads, writes } = fixture()
+  show()
+  expect(await screen.findByText("Saved worker")).toBeInTheDocument()
+  // The operation is a page of its own under Infrastructure, with a way back.
+  expect(
+    screen.getByRole("button", { name: /Production · Infrastructure/ })
+  ).toBeInTheDocument()
+  expect(reads.some((path) => path.includes("cluster-operations/saved"))).toBe(
+    true
+  )
+  expect(writes).toEqual([])
+})
+
+it("refreshes published targets and account metadata on live sync without reloading", async () => {
+  const state = fixture({ noTargets: true })
+  show()
+  await openTab("Targets")
+  await screen.findByText("No targets yet")
+  state.publishTargets()
+  act(() =>
+    publishLiveState({
+      status: "live",
+      transport: "ws",
+      lastSync: 42,
+      gap: false,
+    })
+  )
+  await screen.findByText("Frontend")
+  expect(
+    state.reads.filter((path) => path === "/api/v1/connections").length
+  ).toBeGreaterThan(1)
+})
+
+it("keeps cluster operations beyond the first history page reachable", async () => {
+  const clusterOperations = Array.from({ length: 51 }, (_, i) => ({
+    id: `cluster-op-${i}`,
+    cloud_id: "c",
+    kind: "create",
+    status: i === 50 ? "needs_attention" : "succeeded",
+    input: { spec: { name: `workers-${i}` }, ref: {} },
+    created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(),
+  }))
+  fixture({ clusterOperations })
+  show()
+  await openTab("Changes")
+  await userEvent.click(await screen.findByRole("tab", { name: "Clusters" }))
+  await screen.findByRole("link", { name: "Create cluster: workers-49" })
+  expect(
+    screen.queryByRole("link", { name: "Create cluster: workers-50" })
+  ).not.toBeInTheDocument()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Older cluster changes" })
+  )
+  const saved = await screen.findByRole("link", {
+    name: "Create cluster: workers-50",
+  })
+  expect(saved).toHaveAttribute(
+    "href",
+    "/clouds/c?tab=infrastructure&clusterOperation=cluster-op-50"
+  )
+  await screen.findByText("Needs attention")
+  await userEvent.click(
+    screen.getByRole("button", { name: "Newer cluster changes" })
+  )
+  await screen.findByRole("link", { name: "Create cluster: workers-0" })
+})
+
+const view = {
+  enabled: true,
+  suspend_reasons: [] as string[],
+  limits: { vcpus: 8, memory_mib: 16384, vms: 4, concurrent_builds: 2 },
+  use: { vcpus: 3, memory_mib: 4096, vms: 1, concurrent_builds: 0 },
+  regions: [{ name: "eu", display_name: "Europe", status: "active" }],
+  // The server sends project and environment IDs, not names.
+  placements: [
+    {
+      project: "web",
+      environment: "prod",
+      service: "api",
+      region: "eu",
+      state: "running",
+      waiting_capacity: false,
+    },
+    {
+      // A replacement starting beside the running api.
+      project: "web",
+      environment: "prod",
+      service: "api",
+      region: "eu",
+      state: "reserved",
+      waiting_capacity: false,
+    },
+    {
+      project: "web",
+      environment: "prod",
+      service: "worker",
+      region: "eu",
+      state: "reserved",
+      waiting_capacity: true,
+    },
+    {
+      project: "jobs",
+      environment: "nightly",
+      service: "cron",
+      region: "eu",
+      state: "running",
+      waiting_capacity: false,
+    },
+  ],
+}
+const platform = { platform_owned: true, name: "Loomplane Cloud" }
+
+it("platform Cloud is read only", async () => {
+  fixture({ profile: platform, workspace: view })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  await screen.findByRole("heading", { name: "Loomplane Cloud" })
+  await screen.findByText("Use and limits")
+  expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull()
+  expect(screen.queryByRole("tab", { name: /^Infrastructure/ })).toBeNull()
+  expect(screen.queryByRole("tab", { name: /^Capacity/ })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Add target" })).toBeNull()
+  expect(screen.queryByText("Rename")).toBeNull()
+  expect(screen.queryByText("Delete Cloud")).toBeNull()
+  await userEvent.setup().click(screen.getByRole("tab", { name: /Projects/ }))
+  expect(
+    (await screen.findAllByRole("button", { name: "Give a project access" }))
+      .length
+  ).toBeGreaterThan(0)
+})
+
+it("shows use, regions and placements", async () => {
+  fixture({ profile: platform, workspace: view })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(await screen.findByText("3 of 8 vCPUs")).toBeInTheDocument()
+  expect(screen.getByText("4 of 16 GiB memory")).toBeInTheDocument()
+  expect(screen.getAllByText("Europe").length).toBeGreaterThan(0)
+  expect(
+    within(screen.getByLabelText("Loomplane Cloud use")).getByText("worker")
+  ).toBeInTheDocument()
+  expect(screen.getByText("Waiting for room")).toBeInTheDocument()
+})
+
+it("shows the suspension banner", async () => {
+  fixture({
+    profile: platform,
+    workspace: { ...view, suspend_reasons: ["past_due"] },
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText(
+      "Loomplane Cloud work is stopped because a payment is past due. It starts again when it is resolved."
+    )
+  ).toBeInTheDocument()
+})
+
+it("says so when the workspace is disabled", async () => {
+  fixture({ profile: platform, workspace: { ...view, enabled: false } })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText("Loomplane Cloud isn't available to this workspace")
+  ).toBeInTheDocument()
+  expect(screen.queryByText("Use and limits")).toBeNull()
+})
+
+it("platform Cloud offers no cluster, pool or policy writes on any tab", async () => {
+  fixture({ profile: platform, workspace: view })
+  for (const tab of ["capacity", "infrastructure"] as const) {
+    const { unmount } = render(
+      <ClientProvider client={forgeClient}>
+        <CloudDetail id="c" tab={tab} view="clusters" />
+      </ClientProvider>
+    )
+    await screen.findByRole("heading", { name: "Loomplane Cloud" })
+    await screen.findByText("Use and limits")
+    await screen.findByRole("tab", { name: /^Overview/, selected: true })
+    expect(screen.queryByRole("button", { name: "Create cluster" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add pool" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Save policy" })).toBeNull()
+    expect(screen.queryByText("Create cluster")).toBeNull()
+    expect(screen.queryByText("Add pool")).toBeNull()
+    expect(screen.queryByText("Save policy")).toBeNull()
+    unmount()
+  }
+})
+
+it("names each placement's project and environment", async () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined)
+  fixture({ profile: platform, workspace: view })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  const card = await screen.findByLabelText("Loomplane Cloud use")
+  const rows = (await within(card).findAllByRole("row")).slice(1)
+  expect(rows.map((r) => r.textContent)).toEqual([
+    "apiWeb appproductionEuropeRunning",
+    "apiWeb appproductionEuropeStarting",
+    "workerWeb appproductionEuropeWaiting for room",
+    "cronJobsnightlyEuropeRunning",
+  ])
+  expect(within(card).getByText("Open")).toBeInTheDocument()
+  expect(errors.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(
+    false
+  )
+  errors.mockRestore()
+})
+
+it("shows a project only its own placements", async () => {
+  manager = false
+  fixture({ profile: platform, workspace: view })
+  show("web")
+  const card = await screen.findByLabelText("Loomplane Cloud use")
+  await within(card).findAllByText("api")
+  expect(within(card).queryByText("cron")).toBeNull()
+  expect(within(card).queryByText("Jobs")).toBeNull()
+})
+
+it("says quietly when a member can't see the Cloud's use", async () => {
+  fixture({ profile: platform, workspace: 403 })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText("You can't see this Cloud's use.")
+  ).toBeInTheDocument()
+  expect(screen.queryByText("Forbidden.")).toBeNull()
 })

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 
 	authid "github.com/xraph/authsome/id"
@@ -12,6 +13,8 @@ import (
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/permission"
 	"github.com/xraph/warden/store/memory"
+
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 const (
@@ -132,6 +135,13 @@ func TestStatusFor(t *testing.T) {
 				t.Fatalf("StatusFor(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStatusForBlockedIsPaymentRequired(t *testing.T) {
+	err := fmt.Errorf("approve: %w", &metering.BlockedError{Reason: "Add a card"})
+	if got := StatusFor(err); got != http.StatusPaymentRequired {
+		t.Fatalf("StatusFor(blocked) = %d", got)
 	}
 }
 
@@ -330,5 +340,37 @@ func TestMayGrant(t *testing.T) {
 		if got := MayGrant(tt.caller, tt.granted); got != tt.want {
 			t.Errorf("MayGrant(%q, %q) = %v, want %v", tt.caller, tt.granted, got, tt.want)
 		}
+	}
+}
+
+func TestCatalogGrantsAgentPermissions(t *testing.T) {
+	for _, slug := range []string{RoleViewer, RoleDeveloper, RoleAdmin, RoleOwner} {
+		if !slices.Contains(rolePermissions(t, slug), AgentUse) {
+			t.Errorf("%s lacks %s", slug, AgentUse.Name())
+		}
+	}
+	for _, slug := range []string{RoleAdmin, RoleOwner} {
+		if !slices.Contains(rolePermissions(t, slug), AIManage) {
+			t.Errorf("%s lacks %s", slug, AIManage.Name())
+		}
+	}
+	if slices.Contains(rolePermissions(t, RoleDeveloper), AIManage) {
+		t.Errorf("developers hold %s", AIManage.Name())
+	}
+	if AgentUse.Name() != "agent:use" {
+		t.Fatalf("AgentUse is %s", AgentUse.Name())
+	}
+	for _, r := range Catalog() {
+		if r.Slug == RoleAgent {
+			t.Fatal("the member catalog has the agent's role")
+		}
+	}
+	for _, m := range []string{"owner", "admin", "member", "viewer", "", RoleAgent} {
+		if RoleForMember(m) == RoleAgent {
+			t.Fatalf("RoleForMember(%q) is the agent's role", m)
+		}
+	}
+	if _, err := MemberRoleFor(RoleAgent); err == nil {
+		t.Fatal("MemberRoleFor accepted the agent's role")
 	}
 }

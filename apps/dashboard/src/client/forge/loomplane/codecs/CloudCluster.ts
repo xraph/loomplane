@@ -1,0 +1,7 @@
+import type { Codec } from '../codec-runtime';
+import { codec_CloudCluster_lifecycle_authority } from './CloudCluster.lifecycle_authority';
+import { codec_CloudCluster_retained_resources } from './CloudCluster.retained_resources';
+import { codec_CloudCluster_scaling_policies } from './CloudCluster.scaling_policies';
+import { codec_ClusterObservation } from './ClusterObservation';
+
+export const codec_CloudCluster: Codec = {"kind": "object", "fields": {"account_id": {"ts": "accountId"}, "cloud_id": {"ts": "cloudId"}, "connection_id": {"ts": "connectionId"}, "desired_revision": {"ts": "desiredRevision"}, "external_id": {"ts": "externalId"}, "id": {"ts": "id"}, "lifecycle_authority": {"ts": "lifecycleAuthority", "codec": () => codec_CloudCluster_lifecycle_authority}, "observation": {"ts": "observation", "codec": () => codec_ClusterObservation}, "observed_revision": {"ts": "observedRevision"}, "ownership": {"ts": "ownership"}, "provider": {"ts": "provider"}, "retained_price_checked_at": {"ts": "retainedPriceCheckedAt"}, "retained_resources": {"ts": "retainedResources", "codec": () => codec_CloudCluster_retained_resources}, "revision": {"ts": "revision"}, "scaling_policies": {"ts": "scalingPolicies", "codec": () => codec_CloudCluster_scaling_policies}, "status": {"ts": "status"}, "updated_at": {"ts": "updatedAt"}}, "required": ["account_id", "cloud_id", "connection_id", "desired_revision", "external_id", "id", "lifecycle_authority", "observed_revision", "ownership", "provider", "retained_price_checked_at", "revision", "status", "updated_at"]};

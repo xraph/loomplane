@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -704,5 +705,32 @@ func TestCloudInfrastructureStaleWorkersCannotResurrectRecords(t *testing.T) {
 	staleServer.Status = "ready"
 	if err = f.store.SaveServer(t.Context(), &staleServer); !errors.Is(err, cloudinfra.ErrConflict) {
 		t.Fatalf("stale worker restored readiness: %v", err)
+	}
+}
+
+// Ruling M32: OpenServerCreates finds an approved create however many
+// operations came after it, which ListOperations' latest hundred miss,
+// and leaves out previews.
+func TestCloudInfrastructureOpenCreatesHaveNoLimit(t *testing.T) {
+	f := newInfraFixture(t)
+	open := f.create(t)
+	for i := range 101 {
+		o, err := f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: fmt.Sprintf("later-%d", i), ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu"})
+		if err != nil || o.Status != "preview" {
+			t.Fatalf("preview %d: %+v, %v", i, o, err)
+		}
+	}
+	latest, err := f.svc.ListOperations(t.Context(), f.p, "cloud")
+	if err != nil || len(latest) != 100 || slices.ContainsFunc(latest, func(o *cloudinfra.Operation) bool { return o.ID == open.ID }) {
+		t.Fatalf("the latest hundred: %d, %v", len(latest), err)
+	}
+	creates, err := f.svc.OpenServerCreates(t.Context(), f.p, "cloud")
+	if err != nil || len(creates) != 1 || creates[0].ID != open.ID || creates[0].Input.Name != "host" {
+		t.Fatalf("open creates: %+v, %v", creates, err)
+	}
+	denied := f.p
+	denied.UserID = "project-manager"
+	if _, err = f.svc.OpenServerCreates(t.Context(), denied, "cloud"); !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("without cloud management: %v", err)
 	}
 }

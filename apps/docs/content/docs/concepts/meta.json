@@ -7,9 +7,11 @@
     "plans-and-approvals",
     "deployments-and-recovery",
     "canary-releases",
+    "promotion-and-rollback",
     "drift",
     "variables-and-secrets",
     "gateways-and-networking",
-    "organizations-and-roles"
+    "organizations-and-roles",
+    "teams"
   ]
 }

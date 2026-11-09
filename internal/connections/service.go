@@ -40,22 +40,26 @@ type Auditor interface {
 
 // Service is the connection API.
 type Service struct {
-	store    Store
-	secrets  Secrets
-	checkers map[string]Checker
-	authz    Authorizer
-	audit    Auditor
-	now      func() time.Time
-	warn     func(msg string, err error)
+	ManagedCredentials ManagedCredentialResolver
+	store              Store
+	secrets            Secrets
+	checkers           map[string]Checker
+	authz              Authorizer
+	audit              Auditor
+	now                func() time.Time
+	warn               func(msg string, err error)
 	// Telemetry counts credential checks. It may be nil.
 	Telemetry *telemetry.Recorder
+	// Checked receives a detached public snapshot after a ready account is saved.
+	// It runs synchronously, so callers should enqueue bounded background work.
+	Checked func(context.Context, security.Principal, Connection)
 
 	// Signing in to a cloud. The extension sets these.
 	Providers   map[string]Provider
 	ConfigApps  map[string]oauth.App
 	CallbackURL string
-	// AppSecrets keeps sign-in app secrets, keyed by organization and cloud.
-	AppSecrets Secrets
+	// AppSecrets keeps the platform's sign-in app secrets, keyed by cloud.
+	AppSecrets AppSecrets
 	Apps       AppStore
 	// Lapsed hears about a signed-in connection the cloud stopped
 	// honoring. It may be nil.
@@ -78,9 +82,9 @@ type Service struct {
 	// connection, and then nothing is renewed.
 	grants grantStore
 	// renewals queues renewals before they take a database connection.
-	renewals *renewGate
+	renewals *oauth.Gate
 
-	// GPUReader reads a server or cluster's GPUs. Nil uses the real SSH and Kubernetes readers.
+	// GPUReader reads a server or cluster's GPUs. Nil uses the real server and Kubernetes readers.
 	GPUReader func(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error)
 }
 
@@ -91,7 +95,7 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 		warn = func(string, error) {}
 	}
 	grants, _ := store.(grantStore) //nolint:errcheck // a store that can't lock leaves grants nil, as documented
-	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: newRenewGate(maxRenewals)}
+	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: oauth.NewGate(maxRenewals)}
 }
 
 // CreateInput connects a cloud account.
@@ -192,7 +196,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken, "")
 }
 
 // newConnectionID makes the ID of a new connection.
@@ -215,9 +219,11 @@ func validName(name string) (string, error) {
 // create checks cred with its cloud and stores a new connection that got
 // its credential by method, with ID id, or a new one when id is empty.
 // checked is what the check gets instead of cred, such as a sign-in's
-// handout; nil checks cred. A keyless or in-cluster connection writes
-// nothing to Vault. The caller has checked the principal's role.
-func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
+// handout; nil checks cred. A keyless, in-cluster or node connection
+// writes nothing to Vault. A server connection must leave its Docker
+// daemon to no other that would fence it apart (see daemonFree). The
+// caller has checked the principal's role.
+func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method, oauthClientID string) (*Connection, error) {
 	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
 	if err != nil {
@@ -233,9 +239,18 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 	if checked == nil {
 		checked = cred
 	}
+	settings, err = prepareConnection(ctx, checker, checked, settings)
+	if err != nil {
+		return nil, err
+	}
 	res, err := s.check(ctx, cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
+	}
+	if method == MethodNode && cloud == Server && res.Details["docker_id"] == "" {
+		// Without the daemon's ID the one-daemon rule can't hold, and
+		// the connection could never be checked again.
+		return nil, fmt.Errorf("%w: the node's Docker didn't say which daemon it is (%s); try again once the node is online and serves Docker", ErrUnavailable, strings.Join(res.Missing, ", "))
 	}
 	if id == "" {
 		if id, err = newConnectionID(); err != nil {
@@ -243,24 +258,40 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 		}
 	}
 	now := s.now().UTC()
-	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
+	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now, OAuthClientID: oauthClientID}
 	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
-	keeps := method != MethodKeyless && method != MethodInCluster
-	// The secret first: a row without its secret would look connected and
-	// fail every deployment, where a secret without its row is unreachable
-	// and harmless.
-	if keeps {
-		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.store.CreateConnection(ctx, c); err != nil {
+	keeps := method != MethodKeyless && method != MethodInCluster && method != MethodNode
+	save := func() error {
+		// The secret first: a row without its secret would look connected
+		// and fail every deployment, where a secret without its row is
+		// unreachable and harmless.
 		if keeps {
-			if derr := s.secrets.Delete(context.WithoutCancel(ctx), p.OrgID, c.ID); derr != nil {
-				s.warn("remove the secret of a connection that wasn't saved", derr)
+			if putErr := s.secrets.Put(ctx, p.OrgID, c.ID, cred); putErr != nil {
+				return putErr
 			}
 		}
+		if createErr := s.store.CreateConnection(ctx, c); createErr != nil {
+			if keeps {
+				if derr := s.secrets.Delete(context.WithoutCancel(ctx), p.OrgID, c.ID); derr != nil {
+					s.warn("remove the secret of a connection that wasn't saved", derr)
+				}
+			}
+			return createErr
+		}
+		return nil
+	}
+	if daemon := c.Details["docker_id"]; cloud == Server && daemon != "" {
+		err = s.withDaemonLock(ctx, daemon, func() error {
+			if freeErr := s.daemonFree(ctx, p.OrgID, c.ID, daemon, method, true); freeErr != nil {
+				return freeErr
+			}
+			return save()
+		})
+	} else {
+		err = save()
+	}
+	if err != nil {
 		return nil, err
 	}
 	s.record(ctx, "cloud_connection.create", p, c)
@@ -302,6 +333,12 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
+	if c.Method == MethodManagedKubernetes {
+		if _, checkErr := s.managedCredential(ctx, c); checkErr != nil {
+			return nil, checkErr
+		}
+		return c, nil
+	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
 		return nil, err
@@ -332,6 +369,10 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	} else if c.Method == MethodInCluster {
 		// With the operator's switch off, the check fails it, and says why.
 		cred = kubernetes.InClusterCredential()
+	} else if c.Method == MethodNode {
+		if cred, err = nodeCredential(c); err != nil {
+			return nil, err
+		}
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
 	}
@@ -347,7 +388,7 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	case errors.Is(err, oauth.ErrAppRejected):
 		// Signing in again with the same app won't help, so the app
 		// shows the problem too.
-		why = s.appRejected(ctx, c.OrgID, c.Cloud)
+		why = s.appRejected(ctx, c.Cloud, c.OAuthClientID)
 	case refusedSignIn(err):
 		// Revoking Loomplane in the cloud kills the access token at once,
 		// so a refused grant asks for a new sign-in.
@@ -380,7 +421,8 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		}
 		apply(c, res, now)
 	}
-	if err := s.store.UpdateConnection(ctx, c); err != nil {
+	// A check never turns a connection ready on a daemon another holds.
+	if err := s.holdDaemon(ctx, c, func() error { return s.store.UpdateConnection(ctx, c) }); err != nil {
 		return nil, err
 	}
 	s.record(ctx, "cloud_connection.check", p, c)
@@ -395,7 +437,7 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken, "")
 }
 
 // signer is who a credential that got there by method is the sign-in of:
@@ -412,10 +454,16 @@ func signer(p security.Principal, method string) string {
 // the check gets instead of cred, as for create. A move to keyless writes
 // nothing to Vault; the caller removes the old secret. The caller has
 // checked the principal's role.
-func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
+func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method, oauthClientID string) (*Connection, error) {
 	c, err := s.store.GetConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return nil, ErrInUse
+	}
+	if c.Method == MethodNode {
+		return nil, fmt.Errorf("%w: a node connection has no credential to replace; the node's own key is what connects it", ErrInvalid)
 	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
@@ -445,16 +493,34 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if settings == nil {
 		settings = c.Details
 	}
+	if c.Cloud == Kubernetes && strings.TrimSpace(settings["ingress_address"]) != c.Details["ingress_address"] {
+		settings = maps.Clone(settings)
+		delete(settings, "registry_ingress_address")
+	}
 	if checked == nil {
 		checked = cred
 	}
-	res, err := s.check(ctx, c.Cloud, checker, checked, settings)
+	res, err := s.checkPreparationIdentity(ctx, c.Cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
 	after := AccountIdentity(c.Cloud, res.Account, res.Details)
 	if before == "" || after == "" || before != after {
 		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
+	}
+	// Verify the replacement's immutable identity before allowing setup writes.
+	if _, ok := checker.(connectionPreparer); ok {
+		settings, err = prepareConnection(ctx, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		res, err = s.check(ctx, c.Cloud, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		if AccountIdentity(c.Cloud, res.Account, res.Details) != before {
+			return nil, fmt.Errorf("%w: cluster identity changed during setup", ErrInvalid)
+		}
 	}
 	// Persistent stores serialize secret writes and invalidate old approvals first.
 	replace := func() error {
@@ -465,8 +531,10 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 		}
 		c.Method = method
 		c.SignedInBy = signer(p, method)
+		c.OAuthClientID = oauthClientID
 		apply(c, res, s.now().UTC())
-		return s.store.UpdateConnection(ctx, c)
+		// Nor does a replacement turn one ready on a daemon another holds.
+		return s.holdDaemon(ctx, c, func() error { return s.store.UpdateConnection(ctx, c) })
 	}
 	if versioned, ok := s.store.(interface {
 		WithCredentialReplacement(context.Context, *Connection, func() error) error
@@ -494,6 +562,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err != nil {
 		return err
 	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return ErrInUse
+	}
 	if err := s.store.DeleteConnection(ctx, p.OrgID, id); err != nil {
 		return err
 	}
@@ -510,12 +581,25 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 // for a plan someone was allowed to approve. A signed-in connection's
 // credential is its access token, renewed first if it expires within a
 // day, or its handout, for a cloud whose sessions renew themselves. A
-// keyless connection's is its keyless handout, and an in-cluster one's
-// the in-cluster credential, and for neither is Vault read.
+// keyless connection's is its keyless handout, an in-cluster one's the
+// in-cluster credential and a node one's its node's marker, and for none
+// of them is Vault read.
 func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection, []byte, error) {
 	c, err := s.store.GetConnection(ctx, orgID, id)
 	if err != nil {
 		return nil, nil, err
+	}
+	if IsInstanceConnection(c) {
+		return nil, nil, ErrChanged
+	}
+	if c.Cloud == Kubernetes && c.Details["registry_hostname"] != "" {
+		if registry, ok := s.store.(interface {
+			RegistryAccessAllowed(context.Context, string, string) error
+		}); ok {
+			if accessErr := registry.RegistryAccessAllowed(ctx, orgID, id); accessErr != nil {
+				return nil, nil, accessErr
+			}
+		}
 	}
 	if c.Message == replacementInProgressMessage || (c.Status != StatusReady && !RegistryPullReady(c)) {
 		return nil, nil, fmt.Errorf("%w: %s is %s", ErrNotReady, c.Name, c.Status)
@@ -537,8 +621,16 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
 			return nil, nil, err
 		}
+	} else if c.Method == MethodManagedKubernetes {
+		if cred, err = s.managedCredential(ctx, c); err != nil {
+			return nil, nil, err
+		}
 	} else if c.Method == MethodInCluster {
 		cred = kubernetes.InClusterCredential()
+	} else if c.Method == MethodNode {
+		if cred, err = nodeCredential(c); err != nil {
+			return nil, nil, err
+		}
 	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err
 	}
@@ -547,7 +639,7 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if err != nil {
 		return nil, nil, err
 	}
-	if current.Message == replacementInProgressMessage || current.Generation != c.Generation || current.Status != c.Status {
+	if IsInstanceConnection(current) || current.Message == replacementInProgressMessage || current.Generation != c.Generation || current.Status != c.Status {
 		return nil, nil, ErrChanged
 	}
 	return c, cred, nil
@@ -563,4 +655,20 @@ func (s *Service) record(ctx context.Context, action string, p security.Principa
 	if s.audit != nil {
 		s.audit.Record(ctx, action, p, c)
 	}
+	if s.Checked == nil || c == nil || c.Status != StatusReady {
+		return
+	}
+	switch action {
+	case "cloud_connection.create", "cloud_connection.check", "cloud_connection.replace":
+	default:
+		return
+	}
+	snapshot := *c
+	snapshot.Details = maps.Clone(c.Details)
+	snapshot.Missing = slices.Clone(c.Missing)
+	if c.CheckedAt != nil {
+		checkedAt := *c.CheckedAt
+		snapshot.CheckedAt = &checkedAt
+	}
+	s.Checked(ctx, p, snapshot)
 }

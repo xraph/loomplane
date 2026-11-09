@@ -721,7 +721,7 @@ func TestOutputsMayReadDependenciesAndTemplates(t *testing.T) {
 	oneFinding(t, recipes.NewRegistry(), k, `optional dependency "cache"`)
 	k = recipestest.Sample()
 	k.Outputs[1] = recipes.Output{Name: "admin", EnvKey: "SAMPLE_ADMIN_URL", Template: "x", From: &recipes.Ref{Component: "api", Field: "url:admin"}}
-	oneFinding(t, recipes.NewRegistry(), k, "exactly one of from, template and per consumer")
+	oneFinding(t, recipes.NewRegistry(), k, "exactly one of from, template, per consumer and public CA")
 }
 
 func TestEnvVarNamesAllowDots(t *testing.T) {

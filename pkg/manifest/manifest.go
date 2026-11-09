@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -172,6 +173,11 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	PodGroup  *PodGroup                        `json:"pod_group,omitempty" yaml:"pod_group,omitempty"`
+	Worker    *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
+	Placement *PlacementConstraints            `json:"placement,omitempty" yaml:"placement,omitempty"`
+	// CapacityMode chooses managed workload reservation semantics.
+	CapacityMode string `json:"capacity_mode,omitempty" yaml:"capacity_mode,omitempty"`
 	// CloudSQLNetwork is the explicit application route for PSC attachments.
 	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty" yaml:"cloud_sql_network,omitempty"`
 	// CloudTarget names a target in the environment's assigned Cloud.
@@ -274,6 +280,8 @@ const MaxGPUs = 8
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
+	// ExistingResource attaches inventory without owning its cloud lifecycle.
+	ExistingResource string `json:"existing_resource,omitempty" yaml:"existing_resource,omitempty"`
 	// CloudSQLPSC opts a PostgreSQL 17 source into a reviewed manual PSC endpoint.
 	CloudSQLPSC *providercontract.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty" yaml:"cloud_sql_psc,omitempty"`
 	// Kind is what it is: postgres, mysql, redis and so on, the names
@@ -293,6 +301,9 @@ type Resource struct {
 	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
 	// GPU asks for GPUs, for catalog resources that can use them.
 	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Settings are values a catalog kind takes, by setting name. The kind
+	// says which it has and what each must look like; the planner checks.
+	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
@@ -369,6 +380,14 @@ type ResourceSettings struct {
 	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
 	// GPU replaces the resource's GPU request. Gateways can't use it.
 	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Target replaces the resource's target in this environment. An
+	// environment that moves the resource to another provider doesn't keep
+	// the resource's own target. Gateways can't use it.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+	// Settings replace the resource's settings one by one: each key set
+	// here wins, and the rest come from the resource. Gateways can't use
+	// them.
+	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 }
 
 // Ignore lists what analysis found that the application doesn't use, so
@@ -405,14 +424,15 @@ func (h Held) WarnSameAddress() bool { return h.SameAddress == SameAddressWarn }
 var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
 
 var (
-	cloudTargetRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	farpPathRE    = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
-	farpCapRE     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	gpuKindRE     = regexp.MustCompile(`^[a-z0-9-]+$`)
-	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	inventoryResourceRE = regexp.MustCompile(`^providerresource_[a-f0-9]{64}$`)
+	cloudTargetRE       = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	nameRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	farpPathRE          = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
+	farpCapRE           = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	envRE               = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	tokenRE             = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE           = regexp.MustCompile(`^[a-z0-9-]+$`)
+	kindRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
@@ -429,6 +449,10 @@ var (
 
 // MaxOptionValue is the most characters one need option's value can have.
 const MaxOptionValue = 200
+
+// MaxSettingValue is the most characters one resource setting's value can
+// have.
+const MaxSettingValue = 1024
 
 // Problem is one thing wrong with a manifest, at a path such as
 // "services.api.scale".
@@ -587,6 +611,19 @@ func (m *Manifest) Validate() error {
 			add(path+".kind", "%q isn't a resource kind", r.Kind)
 		}
 		checkToken(add, path+".provider", "provider", r.Provider)
+		if r.ExistingResource != "" {
+			if !inventoryResourceRE.MatchString(r.ExistingResource) {
+				add(path+".existing_resource", "must name a synced provider resource")
+			}
+			if r.Provider != "" || r.Target != "" || r.Region != "" || r.Version != "" || r.Gateway != nil || r.CloudSQLPSC != nil || r.GPU != nil || len(r.Uses) > 0 || len(r.Settings) > 0 {
+				add(path, "an existing resource accepts kind and existing_resource, without creation or lifecycle settings")
+			}
+			for env, o := range r.Environments {
+				if o.Provider != "" || o.Target != "" || o.Region != "" || o.Gateway != nil || o.GPU != nil || len(o.Settings) > 0 {
+					add(path+".environments."+env, "an existing resource only accepts an enabled override")
+				}
+			}
+		}
 		checkToken(add, path+".region", "region", r.Region)
 		if r.CloudSQLPSC != nil && (r.Provider != "cloud-sql" || r.Kind != "postgres" || r.Version != "17" || !r.CloudSQLPSC.Valid(r.Region)) {
 			add(path+".cloud_sql_psc", "requires explicit cloud-sql PostgreSQL 17 placement and a manual PSC endpoint in the resource region")
@@ -606,8 +643,10 @@ func (m *Manifest) Validate() error {
 			checkToken(add, epath+".region", "region", o.Region)
 			checkGatewayKind(add, epath, r.Kind, o.Gateway)
 			checkGPU(add, epath+".gpu", o.GPU)
+			checkResourceSettings(add, epath+".settings", o.Settings)
 		}
 		checkGPU(add, path+".gpu", r.GPU)
+		checkResourceSettings(add, path+".settings", r.Settings)
 	}
 
 	for _, name := range m.ServiceNames() {
@@ -776,6 +815,14 @@ func checkFarp(add func(string, string, ...any), path string, f *Farp) {
 }
 
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	if err := providercontract.ValidatePodGroup(s.PodGroup); err != nil {
+		add(path+".pod_group", "%s", err.Error())
+	}
+	if s.Placement != nil {
+		if err := s.Placement.Validate(); err != nil {
+			add(path+".placement", "%s", err)
+		}
+	}
 	if n := s.CloudSQLNetwork; n != nil {
 		region := s.Region
 		if parts := strings.Split(n.Subnetwork, "/"); region == "" && len(parts) == 6 {
@@ -798,6 +845,9 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	checkFarp(add, path+".farp", s.Farp)
 	if s.Port < 0 || s.Port > MaxPort {
 		add(path+".port", "must be between 1 and %d", MaxPort)
+	}
+	if s.CapacityMode != "" && s.CapacityMode != "guaranteed" && s.CapacityMode != "best_effort" {
+		add(path+".capacity_mode", "must be guaranteed or best_effort")
 	}
 	if s.Scale != nil {
 		switch {
@@ -823,6 +873,19 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 			add(path+".size.shm", "can't be negative")
 		} else if s.Size.Shm >= s.Size.Memory && s.Size.Shm > 0 {
 			add(path+".size.shm", "(%d MiB) must be less than memory (%d MiB), which it counts toward", s.Size.Shm, s.Size.Memory)
+		}
+	}
+}
+
+// checkResourceSettings checks a resource's settings: names and lengths.
+// Whether the kind takes them is the planner's question.
+func checkResourceSettings(add func(string, string, ...any), path string, settings map[string]string) {
+	for _, name := range sortedKeys(settings) {
+		if !optionRE.MatchString(name) {
+			add(path+"."+name, "the name must be a lower case letter, then up to 31 lower case letters, digits and underscores")
+		}
+		if n := utf8.RuneCountInString(settings[name]); n > MaxSettingValue {
+			add(path+"."+name, "is %d characters; the most is %d", n, MaxSettingValue)
 		}
 	}
 }
@@ -996,6 +1059,7 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 			if o.GPU != nil {
 				add(epath+".gpu", "a gateway can't use GPUs")
 			}
+			checkNoTargetOrSettings(add, epath, o)
 		}
 	}
 }
@@ -1021,6 +1085,18 @@ func (m *Manifest) validateDatabaseGateway(add func(string, string, ...any)) {
 		checkToken(add, epath+".provider", "provider", o.Provider)
 		checkToken(add, epath+".region", "region", o.Region)
 		checkNoGateway(add, epath, o.Gateway)
+		checkNoTargetOrSettings(add, epath, o)
+	}
+}
+
+// checkNoTargetOrSettings refuses the overrides only a resource can use
+// on a gateway's or the database gateway's environment.
+func checkNoTargetOrSettings(add func(string, string, ...any), path string, o ResourceSettings) {
+	if o.Target != "" {
+		add(path+".target", "a gateway can't use a target")
+	}
+	if o.Settings != nil {
+		add(path+".settings", "a gateway can't use settings")
 	}
 }
 
@@ -1066,8 +1142,12 @@ func (m *Manifest) Ignored(kind string) bool { return slices.Contains(m.Ignore.R
 // doesn't take its region along.
 func (s Service) For(env string, d Defaults) Settings {
 	out := s.Settings
+	out.PodGroup = providercontract.ClonePodGroup(s.PodGroup)
 	out.Provider, out.Region = place(out.Provider, out.Region, d)
 	o, ok := s.Environments[env]
+	if o.Placement != nil {
+		out.Placement = o.Placement
+	}
 	if !ok {
 		return cloudTagDefaults(out, d)
 	}
@@ -1103,8 +1183,17 @@ func (s Service) For(env string, d Defaults) Settings {
 	if o.Build != nil {
 		out.Build = o.Build
 	}
+	if o.PodGroup != nil {
+		out.PodGroup = providercontract.ClonePodGroup(o.PodGroup)
+	}
+	if o.Worker != nil {
+		out.Worker = o.Worker
+	}
 	if o.Port != 0 {
 		out.Port = o.Port
+	}
+	if o.CapacityMode != "" {
+		out.CapacityMode = o.CapacityMode
 	}
 	if o.Scale != nil {
 		out.Scale = o.Scale
@@ -1139,20 +1228,86 @@ func cloudTagDefaults(out Settings, d Defaults) Settings {
 	return out
 }
 
-// For returns a resource's settings in an environment, the same way.
+// For returns a resource's settings in an environment, the same way. The
+// environment's target replaces the resource's, and an environment that
+// moves the resource to another provider doesn't keep the resource's
+// target. Each setting the environment sets replaces that one setting.
+// Settings is a new map, nil when there are none.
 func (r Resource) For(env string, d Defaults) ResourceSettings {
 	out := ResourceSettings{}
 	out.Provider, out.Region = place(r.Provider, r.Region, d)
 	out.GPU = r.GPU
+	out.Target = r.Target
 	o, ok := r.Environments[env]
 	if !ok {
+		out.Settings = mergeSettings(r.Settings, nil)
 		return out
 	}
 	if o.GPU != nil {
 		out.GPU = o.GPU
 	}
+	if o.Provider != "" && o.Provider != out.Provider {
+		out.Target = ""
+	}
+	if o.Target != "" {
+		out.Target = o.Target
+	}
+	out.Settings = mergeSettings(r.Settings, o.Settings)
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
 	out.Enabled = o.Enabled
+	return out
+}
+
+// In returns the resource as env runs it: the target, GPU and settings
+// For resolves, and the environment's provider and region when it sets
+// them. It doesn't fill in the defaults, so r.In(env, d).For(env, d) is
+// r.For(env, d). Environments stay, so On and GatewayIn read the same.
+// Uses and the GPU are copies, so writing to them leaves r alone.
+func (r Resource) In(env string, d Defaults) Resource {
+	s := r.For(env, d)
+	out := r
+	out.Target, out.GPU, out.Settings = s.Target, s.GPU, s.Settings
+	if out.GPU != nil {
+		gpu := *out.GPU
+		out.GPU = &gpu
+	}
+	if r.Uses != nil {
+		out.Uses = make(map[string]Use, len(r.Uses))
+		for name, u := range r.Uses {
+			if u.Enabled != nil {
+				enabled := *u.Enabled
+				u.Enabled = &enabled
+			}
+			out.Uses[name] = u
+		}
+	}
+	o, ok := r.Environments[env]
+	if !ok {
+		return out
+	}
+	if o.Provider != "" {
+		// A region belongs to a provider, so moving to another one
+		// leaves the resource's region behind, as For does.
+		if provider, _ := place(r.Provider, r.Region, d); o.Provider != provider {
+			out.Region = ""
+		}
+		out.Provider = o.Provider
+	}
+	if o.Region != "" {
+		out.Region = o.Region
+	}
+	return out
+}
+
+// mergeSettings returns a new map of base with each key in over replacing
+// it, or nil when both are empty.
+func mergeSettings(base, over map[string]string) map[string]string {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(over))
+	maps.Copy(out, base)
+	maps.Copy(out, over)
 	return out
 }
 

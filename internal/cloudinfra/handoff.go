@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -31,6 +32,14 @@ type HandoffInput struct {
 // Kubernetes routes have no retained source to hand off from or to.
 var errKubernetesHandoff = &provider.UnsupportedCapabilityError{Provider: "kubernetes", Capability: provider.IngressManagement}
 
+// Nor can a platform route move between apps yet.
+var errPlatformHandoff = fmt.Errorf("%w: %s", ErrInvalid, platformHandoff)
+
+// errPlatformCloudHandoff refuses moving a route to or from a service on
+// Loomplane Cloud, whose hosts take a name only for the service it was
+// reviewed for.
+var errPlatformCloudHandoff = fmt.Errorf("%w: a route to a Loomplane Cloud service can't be handed to another backend or from one; remove it and add it again", ErrInvalid)
+
 // PrepareRouteHandoff runs after the destination binding is committed, while
 // the deployment runner retains the previous instance in Replaced.
 func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal, project, id string, in HandoffInput) (*RouteOperation, error) {
@@ -51,7 +60,13 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if source.Binding.BackendName() == RouteBackendKubernetes {
 		return nil, errKubernetesHandoff
 	}
-	if source.Revision != in.Revision || source.Status != "ready" {
+	if source.Binding.BackendName() == RouteBackendPlatform {
+		return nil, errPlatformHandoff
+	}
+	if isPlatformCloud(source.Binding) {
+		return nil, errPlatformCloudHandoff
+	}
+	if source.Revision != in.Revision || (source.Status != "ready" && source.Status != RouteRoutingPending) {
 		return nil, ErrConflict
 	}
 	input := source.Input
@@ -62,6 +77,12 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	}
 	if binding.BackendName() == RouteBackendKubernetes {
 		return nil, errKubernetesHandoff
+	}
+	if binding.BackendName() == RouteBackendPlatform {
+		return nil, errPlatformHandoff
+	}
+	if isPlatformCloud(binding) {
+		return nil, errPlatformCloudHandoff
 	}
 	if reflect.DeepEqual(binding, source.Binding) {
 		return nil, ErrInvalid
@@ -88,6 +109,10 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 			return nil, ErrInvalid
 		}
 		desired.ID, desired.Owner = source.Receipt.ID, source.Receipt.Owner
+		desired.Proxied = source.Receipt.Proxied
+		if desired.Proxied {
+			desired.TTL = 300
+		}
 	}
 	destination := *source
 	destination.Input, destination.Binding = input, binding
@@ -176,6 +201,10 @@ func (s *Service) RollbackRoute(ctx context.Context, p security.Principal, proje
 	}
 	if receipt != nil {
 		record.ID, record.Owner = receipt.ID, receipt.Owner
+		record.Proxied = receipt.Proxied
+		if record.Proxied {
+			record.TTL = 300
+		}
 		// A failed pre-DNS cutover leaves the source record unchanged, including TTL.
 		if !cutover.DNSAttempted && receipt.Value == source.Binding.Address {
 			record = *receipt
@@ -256,7 +285,7 @@ func (s *Service) prepareSourceIngress(ctx context.Context, st DomainStore, op *
 		return err
 	}
 	if !server.SameIngressConfig(desired, actual.Config) {
-		actual, err = server.ApplyIngress(ctx, c, transition.Previous, transition.Desired)
+		actual, err = server.ApplyIngress(ctx, c, ingressExpected(transition.Previous, actual), transition.Desired)
 		if err != nil {
 			return err
 		}
@@ -295,7 +324,7 @@ func (s *Service) ReleaseRouteHandoff(ctx context.Context, p security.Principal,
 	} else if !reflect.DeepEqual(current.Binding, prepared.Route.Binding) {
 		return nil, ErrConflict
 	}
-	if current.Status != "ready" {
+	if current.Status != "ready" && current.Status != RouteRoutingPending {
 		return nil, ErrConflict
 	}
 	drainSeconds = max(drainSeconds, prepared.Source.Input.ExternalTTLSeconds, prepared.Route.Input.ExternalTTLSeconds, current.Input.ExternalTTLSeconds)
@@ -433,7 +462,7 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 			return readErr
 		}
 		if !server.SameIngressConfig(raw, actual.Config) {
-			actual, err = server.ApplyIngress(ctx, c, transition.Previous, transition.Desired)
+			actual, err = server.ApplyIngress(ctx, c, ingressExpected(transition.Previous, actual), transition.Desired)
 			if err != nil {
 				return err
 			}

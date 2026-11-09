@@ -77,8 +77,11 @@ func (a *AuthProvider) Authenticate(ctx context.Context, token string) (*cpauth.
 	if err != nil || userID == "" || orgID == "" {
 		return nil, cpauth.ErrUnauthorized
 	}
-	// No session acts as Loomplane automation.
+	// No session acts as Loomplane automation or the AI agent.
 	if _, system := security.IsSystemSubject(userID); system {
+		return nil, cpauth.ErrUnauthorized
+	}
+	if _, agent := security.IsAgentSubject(userID); agent {
 		return nil, cpauth.ErrUnauthorized
 	}
 	return ClaimsFor(security.Principal{UserID: userID, OrgID: orgID}), nil
@@ -86,12 +89,19 @@ func (a *AuthProvider) Authenticate(ctx context.Context, token string) (*cpauth.
 
 // Authorize implements cpauth.Provider by asking Warden: reading anything
 // needs infrastructure:read, any other action infrastructure:modify. Claims
-// naming the organization's Loomplane automation come only from
+// naming the organization's Loomplane automation or AI agent come only from
 // WithPrincipal (Authenticate refuses them), so they're checked as it.
+//
+// A console read (consoleRead) is allowed as it is: the console's gate
+// admitted it for a platform admin, it names no organization to check it
+// in, and it's one of the few reads about Ctrl Plane itself.
 func (a *AuthProvider) Authorize(ctx context.Context, req cpauth.AuthzRequest) (bool, error) {
 	_, authz := a.bound()
 	if authz == nil {
 		return false, nil
+	}
+	if consoleRead(ctx, req) {
+		return true, nil
 	}
 	perm := security.InfrastructureModify
 	switch strings.ToLower(req.Action) {

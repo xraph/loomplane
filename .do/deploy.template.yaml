@@ -1,0 +1,185 @@
+# Deploy to DigitalOcean App Platform.
+#
+# App Platform has no persistent disks, so artifacts and backups live in
+# DigitalOcean Spaces. Before you deploy, create two Spaces buckets and a
+# Spaces access key, then fill in the prompts:
+#
+#   LOOMPLANE_STORAGE_URL      s3://ACCESS_KEY:SECRET_KEY@us-east-1/BUCKET?endpoint=https://REGION.digitaloceanspaces.com&path_style=true
+#                              Keep us-east-1 as written: it is the signing
+#                              region Spaces expects. Put your real region
+#                              (nyc3, ams3, sgp1, ...) only in the endpoint.
+#                              The driver needs a BUCKET segment in the URL, but
+#                              Loomplane uses LOOMPLANE_ARTIFACT_BUCKET and
+#                              LOOMPLANE_BACKUP_BUCKET for the real buckets.
+#                              Make the URL's BUCKET match
+#                              LOOMPLANE_ARTIFACT_BUCKET.
+#   LOOMPLANE_ARTIFACT_BUCKET  the artifact Spaces bucket
+#   LOOMPLANE_BACKUP_BUCKET    the backup Spaces bucket
+#   LOOMPLANE_SECRET_KEY       base64 of 32 random bytes: openssl rand -base64 32
+#                              Keep a copy. Losing it makes stored
+#                              credentials unrecoverable.
+#
+#   LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY  optional: Resend API key for email
+#   LOOMPLANE_NOTIFICATIONS_FROM            a bare address such as no-reply@example.com
+#                              (no display name), on a domain verified in Resend
+#                              Leave both empty to run without email.
+#
+# Backups use the same Spaces account (LOOMPLANE_BACKUP_URL defaults to the
+# storage URL), so it is not set here. The database is a managed PostgreSQL
+# cluster (production: true). A dev database can't run Loomplane: its role
+# can't create the realtime broker schema.
+#
+# Finish setup at the URL the API logs on start (".../setup?token=..."), or
+# run `loomplane setup-token` in the API console.
+spec:
+  name: loomplane
+  envs:
+    - key: LOOMPLANE_ENVIRONMENT
+      value: production
+      scope: RUN_TIME
+    - key: LOOMPLANE_PUBLIC_URL
+      value: ${APP_URL}
+      scope: RUN_TIME
+    - key: LOOMPLANE_DATABASE_URL
+      value: ${db.DATABASE_URL}
+      scope: RUN_TIME
+    # The smallest managed cluster allows about 25 connections, shared by the
+    # API, the worker and the realtime broker.
+    - key: LOOMPLANE_DATABASE_POOL_SIZE
+      value: "5"
+      scope: RUN_TIME
+    - key: LOOMPLANE_AI_ENABLED
+      value: "true"
+      scope: RUN_TIME
+    # Optional sign-in apps so people can connect a cloud by signing in. Set
+    # the ID and secret of a cloud together, or leave both empty.
+    - key: LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_VERCEL_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_VERCEL_OAUTH_SLUG
+      scope: RUN_TIME
+    - key: LOOMPLANE_GCP_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_GCP_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_AZURE_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    # Optional. true or false forces the sign-up waitlist on or off; leave it
+    # out to use the instance's stored setting.
+    # - key: LOOMPLANE_WAITLIST_ENABLED
+    #   value: "true"
+    #   scope: RUN_TIME
+    - key: LOOMPLANE_SECRET_KEY
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_STORAGE_URL
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_NOTIFICATIONS_FROM
+      scope: RUN_TIME
+    # Optional GitHub App for private repositories (docs/github-app.md). Set
+    # all of the App ID, slug, client ID, client secret and private key, or none.
+    - key: LOOMPLANE_GITHUB_APP_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_GITHUB_APP_SLUG
+      scope: RUN_TIME
+    - key: LOOMPLANE_GITHUB_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_GITHUB_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_GITHUB_PRIVATE_KEY
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_GITHUB_WEBHOOK_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    # Optional GitLab OAuth application for private projects on gitlab.com
+    # (docs/gitlab.md). Set the client ID and client secret together, or neither.
+    - key: LOOMPLANE_GITLAB_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_GITLAB_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_ARTIFACT_BUCKET
+      scope: RUN_TIME
+    - key: LOOMPLANE_BACKUP_BUCKET
+      scope: RUN_TIME
+  databases:
+    - name: db
+      engine: PG
+      production: true
+      # App Platform can't create a production database from a template. Create
+      # a Managed PostgreSQL cluster with this name first, or change it to the
+      # name of one you already have.
+      cluster_name: loomplane-db
+  services:
+    - name: loomplane
+      image:
+        registry_type: GHCR
+        registry: xraph
+        repository: loomplane
+        tag: latest
+      http_port: 8780
+      instance_count: 1
+      instance_size_slug: apps-s-1vcpu-1gb
+      health_check:
+        http_path: /_/health
+        port: 8780
+      envs:
+        - key: LOOMPLANE_HTTP_ADDR
+          value: ":8780"
+          scope: RUN_TIME
+  workers:
+    - name: loomplane-worker
+      image:
+        registry_type: GHCR
+        registry: xraph
+        repository: loomplane
+        tag: latest
+      instance_count: 1
+      instance_size_slug: apps-s-1vcpu-2gb
+      envs:
+        - key: LOOMPLANE_PROCESS
+          value: worker
+          scope: RUN_TIME
+        - key: LOOMPLANE_ANALYSIS_CONCURRENCY
+          value: "1"
+          scope: RUN_TIME
+        - key: LOOMPLANE_ANALYSIS_WORK_DIR
+          value: /var/lib/loomplane-work
+          scope: RUN_TIME
+  ingress:
+    rules:
+      - match:
+          path:
+            prefix: /_/metrics
+        redirect:
+          uri: /
+          redirect_code: 302
+      - match:
+          path:
+            prefix: /debug
+        redirect:
+          uri: /
+          redirect_code: 302
+      - match:
+          path:
+            prefix: /
+        component:
+          name: loomplane
+          preserve_path_prefix: true

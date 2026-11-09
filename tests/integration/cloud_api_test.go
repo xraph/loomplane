@@ -42,6 +42,11 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 	for _, token := range []string{"old-token-0123456789", "new-token-0123456789", "docs-token-0123456789"} {
 		f.accounts[token] = newFakeVercelDeploys(t, token)
 	}
+	// Each account mints its own project ids, as Vercel's are unique: a
+	// project id another connection recorded is the same project, which
+	// stays while that connection still deploys to it.
+	f.accounts["new-token-0123456789"].projectID = "prj_web_replacement"
+	f.accounts["docs-token-0123456789"].projectID = "prj_web_docs"
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		account := f.accounts[token]
@@ -60,9 +65,12 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 			_ = json.NewEncoder(w).Encode(map[string]any{"user": map[string]any{"id": identity, "username": label}})
 			return
 		}
+		// A variable's row is deleted under /v9/projects/ too, but it isn't
+		// the project: only the account's own fake handles it.
+		projectDelete := r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v9/projects/") && !strings.Contains(r.URL.Path, "/env/")
 		f.mu.Lock()
 		failDeploy := f.deployFailure
-		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v9/projects/") && f.deleteFailures != 0 {
+		if projectDelete && f.deleteFailures != 0 {
 			if f.deleteFailures < 0 && f.deleteRelease != "" {
 				if _, err := os.Stat(f.deleteRelease); err == nil {
 					f.deleteFailures = 0
@@ -82,11 +90,12 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "dpl_1", "readyState": "ERROR", "errorMessage": "fixture build failed"})
 			return
 		}
-		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v9/projects/") {
+		if projectDelete {
 			account.mu.Lock()
 			for key := range account.projects {
 				delete(account.projects, key)
 			}
+			account.envRows = nil
 			account.mu.Unlock()
 			f.mu.Lock()
 			f.removed = append(f.removed, token)
@@ -94,8 +103,7 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		// Keep the same account-scoped project ID in each account. Cleanup
-		// must use the original connection even when the strings collide.
+		// Cleanup must use the original connection's account.
 		account.serve(w, r)
 	}))
 	t.Cleanup(f.srv.Close)
@@ -115,11 +123,7 @@ func cloudAPISetup(t *testing.T, configure ...func(*config.Config)) (config.Conf
 	// The fixture endpoint is set by callers before starting deployment work.
 	r := start(t, cfg)
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "clouds@example.test", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "clouds@example.test", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

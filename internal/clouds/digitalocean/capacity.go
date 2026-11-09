@@ -115,3 +115,56 @@ func capacityUnits(value *int64, multiplier int64) (*int64, error) {
 	result := *value * multiplier
 	return &result, nil
 }
+
+func (c *Client) ObserveClusterCapacity(ctx context.Context, access provider.AccountAccess, ref provider.ClusterRef) (provider.ProviderClusterCapacity, error) {
+	out := provider.ProviderClusterCapacity{Provider: "digitalocean", Ref: ref, CheckedAt: time.Now().UTC()}
+	if err := clusterRef(access, ref); err != nil {
+		return out, err
+	}
+	if err := c.clusterIdentity(ctx, access); err != nil {
+		return out, err
+	}
+	var response struct {
+		Cluster doksCluster `json:"kubernetes_cluster"`
+	}
+	if err := c.do(ctx, string(access.Credential), http.MethodGet, "/v2/kubernetes/clusters/"+url.PathEscape(ref.ID), nil, nil, &response); err != nil {
+		return out, infrastructureError(err, "kubernetes:read")
+	}
+	observation, err := response.Cluster.observation(access.AccountID)
+	if err != nil {
+		return out, err
+	}
+	if observation.Ref != ref {
+		return out, provider.ErrInfrastructureIdentity
+	}
+	inventory, err := c.CapacityInventory(ctx, provider.InfrastructureCredential{Provider: access.Provider, AccountID: access.AccountID, Token: string(access.Credential)})
+	if err != nil {
+		return out, err
+	}
+	hosts := map[string]provider.CapacityServer{}
+	for _, host := range inventory.Servers {
+		hosts[host.ID] = host
+	}
+	seen := map[string]bool{}
+	for _, pool := range response.Cluster.NodePools {
+		if pool.Count != len(pool.Nodes) {
+			return out, provider.ErrInfrastructurePagination
+		}
+		if pool.ID == "" {
+			return out, provider.ErrInfrastructureIdentity
+		}
+		for _, node := range pool.Nodes {
+			if node.ID == "" || node.DropletID == "" || seen[node.DropletID] {
+				return out, provider.ErrInfrastructureIdentity
+			}
+			seen[node.DropletID] = true
+			host, ok := hosts[node.DropletID]
+			if !ok {
+				return out, provider.ErrInfrastructureIdentity
+			}
+			out.Nodes = append(out.Nodes, provider.ClusterCapacityNode{ExternalVMID: node.DropletID, ProviderNodeID: node.ID, PoolID: pool.ID, Zone: host.Region, CPUMillis: host.CPUMillis, MemoryBytes: host.MemoryBytes, EphemeralStorageBytes: host.StorageBytes})
+		}
+	}
+	out.Complete = true
+	return out, nil
+}

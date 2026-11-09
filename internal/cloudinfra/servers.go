@@ -5,9 +5,13 @@ import (
 	"errors"
 	"time"
 
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -61,7 +65,8 @@ type Server struct {
 	HourlyPriceKnown bool                  `json:"hourly_price_known,omitempty"`
 	// PricedSize is the size the price above belongs to. A server whose size
 	// moved on, or whose price is unknown, is priced again from the catalog.
-	PricedSize string `json:"priced_size,omitempty"`
+	PricedSize     string    `json:"priced_size,omitempty"`
+	PriceCheckedAt time.Time `json:"price_checked_at,omitzero"`
 }
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
@@ -83,21 +88,24 @@ type RuntimeHealth struct {
 // ServerInput describes exactly one reviewed lifecycle change. Adoption refers
 // to an existing pinned SSH connection and never transfers provider ownership.
 type ServerInput struct {
-	Kind            string `json:"kind"`
-	ServerID        string `json:"server_id,omitempty"`
-	ConnectionID    string `json:"connection_id,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Region          string `json:"region,omitempty"`
-	Size            string `json:"size,omitempty"`
-	Image           string `json:"image,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision"`
-	ServerRevision  int64  `json:"server_revision,omitempty"`
-	ConfirmAdoption bool   `json:"confirm_adoption,omitempty"`
+	AcknowledgeUnknownCosts bool   `json:"acknowledge_unknown_costs,omitempty"`
+	Kind                    string `json:"kind"`
+	ServerID                string `json:"server_id,omitempty"`
+	ConnectionID            string `json:"connection_id,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Region                  string `json:"region,omitempty"`
+	Size                    string `json:"size,omitempty"`
+	Image                   string `json:"image,omitempty"`
+	CloudRevision           int64  `json:"cloud_revision"`
+	ServerRevision          int64  `json:"server_revision,omitempty"`
+	ConfirmAdoption         bool   `json:"confirm_adoption,omitempty"`
 }
 
 // Operation retains the immutable review and public execution checkpoints.
 // Bootstrap credentials are stored only in Vault, keyed by this operation ID.
 type Operation struct {
+	BudgetReview         *BudgetReview                   `json:"budget_review,omitempty"`
+	MoneyEstimate        *MoneyEstimate                  `json:"money_estimate,omitempty"`
 	CapacityTarget       *ResourceVector                 `json:"capacity_target,omitempty"`
 	CapacityCheckedAt    time.Time                       `json:"capacity_checked_at,omitempty,omitzero"`
 	AbsenceConfirmedAt   time.Time                       `json:"absence_confirmed_at,omitempty,omitzero"`
@@ -154,10 +162,19 @@ type Runtime interface {
 }
 
 type Deps struct {
+	InstanceAuthority       InstanceNamespaceAuthority
+	InstanceIsolation       InstanceNamespaceQualifier
+	ReplicaVerifier         *kubernetes.ControllerStore
+	RegistryFiles           *backupfiles.Store
+	ManagedClusters         config.ManagedClustersConfig
+	ClusterCapacity         config.ClusterCapacityConfig
+	ClusterWorkflow         ClusterWorkflow
+	Clusters                ClusterStore
 	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority
 	CapacityDemandWakeup    CapacityDemandWakeup
-	// EnableAutomaticCapacity stays false until integrated qualification.
+	// EnableAutomaticCapacity comes from clouds.automatic_capacity.enabled,
+	// which stays off by default until integrated qualification.
 	EnableAutomaticCapacity bool
 	Domains                 DomainStore
 	Registrations           RegistrationStore
@@ -173,20 +190,41 @@ type Deps struct {
 	Adapters                *Adapters
 	Workflow                Workflow
 	Runtime                 Runtime
-	Audit                   projects.Auditor
-	EnrollmentURL           string
-	AllowLocalEnrollment    bool
+	// NodeStreams reach joined nodes, for routes on a node's Docker. Nil
+	// reaches only SSH servers.
+	NodeStreams server.NodeStreams
+	// Nodes connects what runs on a joined node, and NodeConnections finds
+	// what it already connected, for adopting a node into its Cloud. Nil
+	// leaves joined nodes waiting.
+	Nodes           *nodes.Adopter
+	NodeConnections NodeConnectionSource
+	// NodeIngress and NodeAddresses record what a node's address check
+	// found. Nil leaves an adopted node's address unchecked.
+	NodeIngress   NodeIngress
+	NodeAddresses NodeAddressWriter
+	// NodeRecords reads a node as stored, for following a changed
+	// address. Nil follows the node the hook passed.
+	NodeRecords          NodeReader
+	Audit                projects.Auditor
+	EnrollmentURL        string
+	AllowLocalEnrollment bool
 	// Warn reports a failure the service works around, such as a price it
 	// couldn't save. Nil drops the report.
 	Warn func(string, error)
 	// ACMEDirectory is where Kubernetes routes order certificates. Empty
 	// means Let's Encrypt's production directory.
 	ACMEDirectory string
+	// PlatformRoutes opens the Loomplane Cloud hosts platform services run
+	// on. Nil refuses routes to them.
+	PlatformRoutes PlatformRouteHosts
 }
 
 type Service struct {
 	Deps
-	now               func() time.Time
+	now func() time.Time
+	// started is when this process made the service. Every verified zone's
+	// record is rechecked once after it, then daily.
+	started           time.Time
 	expansionSchedule *expansionSchedule
 	catalogs          *catalogCache
 	options           *optionsCache
@@ -200,15 +238,33 @@ type Service struct {
 	ingressNeedsUpgrade func(ctx context.Context, route Route) (bool, error)
 	// writeDNSToken puts a challenge token on a server. Tests replace it.
 	writeDNSToken func(ctx context.Context, c *server.Client, org, serverID, zoneID string, token []byte) error
+	// serveNodeNonce serves an address check's nonce through a server's
+	// proxy while check runs, and fetchNodeNonce fetches it from outside.
+	// serverReadyPoll is how often an adoption looks for its server to be
+	// ready. Tests replace them.
+	serveNodeNonce  func(ctx context.Context, t nodeNonceTarget, nonce string, check func(context.Context) error) error
+	fetchNodeNonce  func(ctx context.Context, url string) ([]byte, error)
+	serverReadyPoll time.Duration
+	// routeAddressProbe reaches an address operation's server and checks
+	// the route there. Tests replace it. nodeFollows is this process's
+	// record of address checks and reconcile passes.
+	routeAddressProbe func(ctx context.Context, op *RouteOperation, state *IngressState) (func(context.Context, Route) RouteVerification, func(), error)
+	nodeFollows       *nodeFollowState
+	// background runs work that outlasts its caller, such as settling a
+	// node adopted by hand once its server is ready. Tests run it inline.
+	background func(func())
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
-		d.Runtime = SSHRuntime{}
+		d.Runtime = HostRuntime{}
 	}
-	s := &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
+	s := &Service{Deps: d, now: time.Now, started: time.Now().UTC(), expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
 	s.kubernetesRoutes = s.openKubernetesRoute
 	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
+	s.serveNodeNonce, s.fetchNodeNonce, s.serverReadyPoll = s.serveNodeNonceThroughIngress, fetchNodeNonce, 2*time.Second
+	s.routeAddressProbe, s.nodeFollows = s.probeRouteAddress, &nodeFollowState{checked: map[string][]addressCheck{}}
+	s.background = func(f func()) { go f() }
 	return s
 }
 
@@ -227,6 +283,20 @@ func (s *Service) authorize(ctx context.Context, p security.Principal, cloud str
 	}
 	return s.Clouds.GetProfile(ctx, p.OrgID, "", cloud)
 }
+
+// authorizeChange is authorize for a path that attaches organization
+// configuration to the Cloud: servers, pools, clusters or capacity policy.
+// The platform-owned Loomplane Cloud takes none of these.
+func (s *Service) authorizeChange(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {
+	profile, err := s.authorize(ctx, p, cloud)
+	if err != nil {
+		return nil, err
+	}
+	if profile.PlatformOwned {
+		return nil, cloudprofiles.ErrPlatformOwned
+	}
+	return profile, nil
+}
 func (s *Service) ListServers(ctx context.Context, p security.Principal, cloud string) ([]*Server, error) {
 	if _, err := s.authorize(ctx, p, cloud); err != nil {
 		return nil, err
@@ -244,6 +314,16 @@ func (s *Service) ListOperations(ctx context.Context, p security.Principal, clou
 		return nil, err
 	}
 	return s.Store.ListOperations(ctx, p.OrgID, cloud)
+}
+
+// OpenServerCreates lists the cloud's create operations that were approved
+// and haven't finished, however old, so a caller naming a new server can
+// keep clear of theirs. See PgStore.OpenCreates.
+func (s *Service) OpenServerCreates(ctx context.Context, p security.Principal, cloud string) ([]*Operation, error) {
+	if _, err := s.authorize(ctx, p, cloud); err != nil {
+		return nil, err
+	}
+	return s.Store.OpenCreates(ctx, p.OrgID, cloud)
 }
 
 // CheckServer refreshes health through the recorded pinned runtime connection.

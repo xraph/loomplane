@@ -94,11 +94,15 @@ export function CatalogKind({ kind }: { kind: string }) {
   return (
     <>
       <SiteHeader
-        crumbs={[{ label: "Services", to: "/services" }, { label: title }]}
+        crumbs={[
+          { label: "Services", to: "/services" },
+          { label: "Catalog", to: "/services/catalog" },
+          { label: title },
+        ]}
       />
       <Page>
         <Link
-          to="/services"
+          to="/services/catalog"
           className="-mb-2 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
         >
           <ChevronLeftIcon className="size-3.5" />
@@ -873,7 +877,10 @@ function Missing({
         <ZeroStateDescription>{description}</ZeroStateDescription>
       </ZeroStateHeader>
       <ZeroStateContent>
-        <Link to="/services" className={buttonVariants({ variant: "outline" })}>
+        <Link
+          to="/services/catalog"
+          className={buttonVariants({ variant: "outline" })}
+        >
           Open the catalog
         </Link>
       </ZeroStateContent>

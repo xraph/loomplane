@@ -69,7 +69,7 @@ func TestFalkorDBKind(t *testing.T) {
 	if !ok {
 		t.Fatal("FalkorDB is not registered")
 	}
-	if kind.Title != "FalkorDB" || kind.Placement != recipes.PlacementDependency || !slices.Equal(kind.Targets, []string{"server", "kubernetes"}) {
+	if kind.Title != "FalkorDB" || kind.Placement != recipes.PlacementServiceProject || !slices.Equal(kind.Targets, []string{"server", "kubernetes"}) {
 		t.Fatalf("got %+v", kind)
 	}
 	if len(kind.Components) != 1 || len(kind.Dependencies) != 0 {
@@ -79,10 +79,10 @@ func TestFalkorDBKind(t *testing.T) {
 	if c.Name != "falkordb" || c.Role != recipes.RoleProcess || !slices.Equal(c.Command, []string{"sh", "-c"}) || len(c.Args) != 1 {
 		t.Fatalf("got %+v", c)
 	}
-	if !reflect.DeepEqual(c.Ports, []recipes.Port{{Name: "redis", Container: 6379, Protocol: "redis"}}) || c.Readiness == nil || *c.Readiness != (recipes.HTTPProbe{Port: "redis"}) {
+	if !reflect.DeepEqual(c.Ports, []recipes.Port{{Name: "redis", Container: 6379, Protocol: "redis"}}) || c.Readiness == nil || *c.Readiness != (recipes.HTTPProbe{Port: "redis", Checker: "falkordb-v1"}) {
 		t.Fatalf("ports %+v readiness %+v", c.Ports, c.Readiness)
 	}
-	if c.Volume == nil || *c.Volume != (recipes.Volume{MountPath: "/data", KubernetesSizeMB: 4096}) || c.Protection != recipes.ProtectionRebuildable {
+	if c.Volume == nil || *c.Volume != (recipes.Volume{MountPath: "/data", KubernetesSizeMB: 4096}) || c.Protection != recipes.ProtectionNative {
 		t.Fatalf("volume %+v protection %s", c.Volume, c.Protection)
 	}
 	if c.Resources != (recipes.Resources{CPUMillis: 500, MemoryMB: 512}) {
@@ -95,7 +95,7 @@ func TestFalkorDBKind(t *testing.T) {
 	if len(kind.Secrets) != 1 || kind.Secrets[0].Name != "password" || kind.Secrets[0].Bytes != 32 || kind.Secrets[0].Encoding != "hex" {
 		t.Fatalf("secrets %+v", kind.Secrets)
 	}
-	if len(kind.Outputs) != 1 || kind.Outputs[0].Name != "url" || kind.Outputs[0].EnvKey != "FALKORDB_ADDR" || kind.Outputs[0].From == nil || *kind.Outputs[0].From != (recipes.Ref{Component: "falkordb", Field: "address:redis"}) {
+	if len(kind.Outputs) != 7 || kind.Outputs[0].Name != "url" || kind.Outputs[0].EnvKey != "FALKORDB_ADDR" || kind.Outputs[0].From == nil || *kind.Outputs[0].From != (recipes.Ref{Component: "falkordb", Field: "address:redis"}) {
 		t.Fatalf("outputs %+v", kind.Outputs)
 	}
 
@@ -133,20 +133,20 @@ func TestElasticsearchKind(t *testing.T) {
 	if !ok {
 		t.Fatal("Elasticsearch is not registered")
 	}
-	if kind.Title != "Elasticsearch" || kind.Placement != recipes.PlacementDependency || len(kind.Components) != 1 || len(kind.Dependencies) != 0 {
+	if kind.Title != "Elasticsearch" || kind.Placement != recipes.PlacementServiceProject || len(kind.Components) != 1 || len(kind.Dependencies) != 0 {
 		t.Fatalf("got %+v", kind)
 	}
 	c := kind.Components[0]
 	if c.Name != "elasticsearch" || c.Role != recipes.RoleProcess {
 		t.Fatalf("got %+v", c)
 	}
-	if !reflect.DeepEqual(c.Ports, []recipes.Port{{Name: "http", Container: 9200, Protocol: "http"}}) || c.Readiness == nil || *c.Readiness != (recipes.HTTPProbe{Port: "http", Path: "/"}) {
+	if !reflect.DeepEqual(c.Ports, []recipes.Port{{Name: "http", Container: 9200, Protocol: "http"}}) || c.Readiness == nil || *c.Readiness != (recipes.HTTPProbe{Port: "http", Checker: "elasticsearch-v1"}) {
 		t.Fatalf("ports %+v readiness %+v", c.Ports, c.Readiness)
 	}
-	if c.Volume == nil || *c.Volume != (recipes.Volume{MountPath: "/usr/share/elasticsearch/data", KubernetesSizeMB: 10240, FSGroup: 1000}) || c.Protection != recipes.ProtectionRebuildable {
+	if c.Volume == nil || *c.Volume != (recipes.Volume{MountPath: "/usr/share/elasticsearch/data", KubernetesSizeMB: 10240, FSGroup: 1000}) || c.Protection != recipes.ProtectionNative {
 		t.Fatalf("volume %+v protection %s", c.Volume, c.Protection)
 	}
-	if !reflect.DeepEqual(c.Files, []recipes.File{{Path: "/usr/share/elasticsearch/config/roles.yml", Mode: 0o444}}) {
+	if !reflect.DeepEqual(c.Files, []recipes.File{{Path: "/usr/share/elasticsearch/config/loomplane-probe.conf", Mode: 0o444}}) {
 		t.Fatalf("files %+v", c.Files)
 	}
 	if c.Resources != (recipes.Resources{CPUMillis: 1000, MemoryMB: 1536}) {
@@ -157,11 +157,10 @@ func TestElasticsearchKind(t *testing.T) {
 		{Name: "xpack.security.enabled", Value: "true"},
 		{Name: "xpack.security.http.ssl.enabled", Value: "false"},
 		{Name: "xpack.security.transport.ssl.enabled", Value: "false"},
-		{Name: "xpack.security.authc.anonymous.roles", Value: "loomplane_probe"},
-		{Name: "xpack.security.authc.anonymous.authz_exception", Value: "false"},
 		{Name: "node.store.allow_mmap", Value: "false"},
 		{Name: "ES_JAVA_OPTS", Value: "-Xms512m -Xmx512m"},
 		{Name: "ELASTIC_PASSWORD", Secret: "password"},
+		{Name: "path.repo", Value: "/usr/share/elasticsearch/data/loomplane-snapshots"},
 	}
 	if !reflect.DeepEqual(c.Env, wantEnv) {
 		t.Fatalf("env %+v", c.Env)
@@ -169,12 +168,12 @@ func TestElasticsearchKind(t *testing.T) {
 	if len(kind.Secrets) != 1 || kind.Secrets[0].Name != "password" || kind.Secrets[0].Bytes != 32 || kind.Secrets[0].Encoding != "hex" {
 		t.Fatalf("secrets %+v", kind.Secrets)
 	}
-	if len(kind.Outputs) != 1 || kind.Outputs[0].Name != "url" || kind.Outputs[0].EnvKey != "ELASTICSEARCH_URL" || kind.Outputs[0].From == nil || *kind.Outputs[0].From != (recipes.Ref{Component: "elasticsearch", Field: "url:http"}) {
+	if len(kind.Outputs) != 6 || kind.Outputs[0].Name != "url" || kind.Outputs[0].EnvKey != "ELASTICSEARCH_URL" || kind.Outputs[0].From == nil || *kind.Outputs[0].From != (recipes.Ref{Component: "elasticsearch", Field: "url:http"}) {
 		t.Fatalf("outputs %+v", kind.Outputs)
 	}
 	release := kind.Releases[0]
 	image := release.Images["elasticsearch"]
-	if release.Version != "9.4" || release.Product != "9.4.1" || release.Revision != "2" || image.Repository != "docker.io/library/elasticsearch" {
+	if release.Version != "9.4" || release.Product != "9.4.1" || release.Revision != "4" || image.Repository != "docker.io/library/elasticsearch" {
 		t.Fatalf("release %+v", release)
 	}
 	if image.Digests["amd64"] != "sha256:8a232d1f9fa617d2b3c9478746ef7b295e15eee963b2dd5a40e0488df6ab25b4" || image.Digests["arm64"] != "sha256:d0c208251c5d06f93ae800f43ca9a8a0958959cc1d01df716a08892e009a750a" {
@@ -187,7 +186,7 @@ func TestElasticsearchKind(t *testing.T) {
 			info = &k
 		}
 	}
-	if info == nil || info.Placement != "dependency" {
+	if info == nil || info.Placement != "service-project" {
 		t.Fatalf("info %+v", info)
 	}
 }

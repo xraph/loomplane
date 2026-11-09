@@ -51,7 +51,7 @@ func (p *planner) planFarp() {
 	gateways := p.octopusResources()
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
-		if _, held := p.held[name]; held || a == nil || a.Service == nil {
+		if _, held := p.held[name]; held || a == nil || a.Service == nil || p.in.appliedMoves[name].Service != nil {
 			continue
 		}
 		set := m.Services[name].For(p.in.Environment, m.Defaults)
@@ -106,7 +106,7 @@ func (p *planner) octopusResources() []string {
 	var out []string
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
-		if r.Kind == recipes.OctopusKind && manifest.On(r.For(p.in.Environment, m.Defaults).Enabled) {
+		if r.Kind == recipes.OctopusKind && p.resourceOn(name) {
 			out = append(out, name)
 		}
 	}

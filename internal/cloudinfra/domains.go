@@ -37,6 +37,9 @@ type Zone struct {
 	ProofExpiresAt       time.Time        `json:"proof_expires_at"`
 	ProofCheckedAt       time.Time        `json:"proof_checked_at"`
 	VerifiedAt           time.Time        `json:"verified_at"`
+	// ProofMissingAt is when a check of a verified zone last found its
+	// record gone from public DNS. A check that finds it clears it.
+	ProofMissingAt time.Time `json:"proof_missing_at"`
 	// ProofRecord is the receipt for the TXT record Loomplane published for
 	// a managed zone's proof. Only that exact record is ever changed.
 	ProofRecord *provider.DNSRecord `json:"proof_record,omitempty"`
@@ -167,7 +170,18 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 	}
 	// A subdomain is verified through its domain, so it gets no proof of
 	// its own: nothing is published for it or checked in the background.
-	ownProof := nearestAncestor(name, p.OrgID, zones) == nil
+	ancestor := nearestAncestor(name, p.OrgID, zones)
+	ownProof := ancestor == nil
+	if ancestor != nil {
+		// It's verified by its domain's record, so that record has to be
+		// in public DNS now, not just when the domain was verified.
+		LinkZoneParents(zones)
+		if proof := ancestor.proofZone(); proof.ownVerified() {
+			if checkErr := s.verifyZoneProof(ctx, proof); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+	}
 	var zone *Zone
 	if in.Mode == "managed" {
 		zone, err = s.createManagedZone(ctx, p, name, in.ConnectionID, in.ProjectIDs, ownProof)
@@ -362,6 +376,23 @@ func (s *Service) verifyZoneHosting(ctx context.Context, zone *Zone) error {
 	return err
 }
 
+// ProofMissingError is a zone's TXT proof that public DNS doesn't show
+// with Loomplane's value: never added yet, or gone since.
+type ProofMissingError struct {
+	Zone, ProofName string
+	Managed         bool
+}
+
+func (e *ProofMissingError) Error() string {
+	missing := "public DNS doesn't show the TXT record " + e.ProofName + " with Loomplane's value. "
+	if e.Managed {
+		return missing + "Open " + e.Zone + " under Domains and choose Check again to publish it again"
+	}
+	return missing + "Add it at the domain's DNS host, then open " + e.Zone + " under Domains and choose Check again"
+}
+
+func (e *ProofMissingError) Unwrap() error { return ErrConflict }
+
 // verifyZoneProof looks for the zone's own TXT proof in public DNS.
 func (s *Service) verifyZoneProof(ctx context.Context, zone *Zone) error {
 	if !zone.hasControlProof() {
@@ -370,6 +401,7 @@ func (s *Service) verifyZoneProof(ctx context.Context, zone *Zone) error {
 	if zone.VerifiedAt.IsZero() && !s.now().Before(zone.ProofExpiresAt) {
 		return ErrConflict
 	}
+	missing := &ProofMissingError{Zone: zone.Name, ProofName: zone.ProofName, Managed: zone.Mode == "managed"}
 	values, err := s.domainResolver().LookupTXT(ctx, zone.ProofName)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -378,12 +410,12 @@ func (s *Service) verifyZoneProof(ctx context.Context, zone *Zone) error {
 		var dnsErr *net.DNSError
 		if errors.As(err, &dnsErr) && dnsErr.IsNotFound && !dnsErr.IsTimeout && !dnsErr.IsTemporary {
 			// Missing public TXT is an unproven claim, including during propagation.
-			return ErrConflict
+			return missing
 		}
 		return err
 	}
 	if !slices.Contains(values, zone.ProofValue) {
-		return ErrConflict
+		return missing
 	}
 	return nil
 }

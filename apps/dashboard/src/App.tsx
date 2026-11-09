@@ -5,33 +5,61 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router"
-import { useCallback, useEffect } from "react"
+import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
+import { AgentDock } from "@/components/assistant/agent-dock"
+import { AuthRedirect, FreshLoad } from "@/components/auth-redirect"
 import { AuthLayout } from "@/components/auth-layout"
-import { ShellProvider } from "@/components/shell"
 import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
+import { HeaderSlotProvider } from "@/components/header-slot"
+import { useAgentDock } from "@/components/shell"
+import { WorkspaceFrame } from "@/components/workspace-frame"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
+import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
-import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
+import { CloudSignInStep } from "@/pages/cloud-sign-in-step"
 import { Onboarding } from "@/pages/onboarding"
+import { SetupPage } from "@/pages/setup"
 import { RealtimeProvider } from "@/lib/realtime-provider"
+import { sidebarOpenAtLoad } from "@/lib/sidebar-state"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { cn } from "@/lib/utils"
 import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
+// Only the cloud edition gates the shell on a card. The comparison is inline
+// so a public build drops the import and never ships the gate.
+const CardGate =
+  import.meta.env.VITE_LOOMPLANE_EDITION === "cloud"
+    ? lazy(() =>
+        import("@/cloud/card-gate").then((m) => ({ default: m.CardGate }))
+      )
+    : null
+
+const stepPath = "/setup/cloud-sign-in"
 const authPaths = ["/sign-in", "/sign-up"]
+// Full-load callbacks that carry a code or state in their query. The step
+// must not take them over; it shows on the next ordinary navigation.
+const callbackPaths = [
+  "/integrations/oauth/callback",
+  "/integrations/github/setup",
+  "/device",
+]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
 // Every signed-out screen shares one AuthLayout, returned from the same place
 // below, so moving between them swaps the card and keeps the frame mounted.
 function authTitle(path: string) {
   switch (path) {
+    case "/setup":
+      return "Set up Loomplane"
     case "/sign-up":
       return "Create your Loomplane account"
     case "/forgot-password":
@@ -45,12 +73,39 @@ function authTitle(path: string) {
 }
 
 export function App() {
-  const { isLoading, isAuthenticated } = useAuth()
+  const { isLoading, isAuthenticated, user } = useAuth()
   const path = usePath()
 
   const invite = usePendingInvite()
+  const {
+    setupPending,
+    requireEmailVerification,
+    platformAdmin,
+    cloudSignInOffer,
+  } = useInstance()
 
   if (isLoading) return <PageLoading />
+  // A fresh instance has nobody to sign in as: every address leads to setup,
+  // in the one frame, so the card swaps without the layout remounting.
+  if (setupPending && !isAuthenticated) {
+    return (
+      <AuthLayout title={authTitle("/setup")}>
+        {path !== "/setup" && <Navigate to="/setup" replace />}
+        <SetupPage />
+      </AuthLayout>
+    )
+  }
+  // Setup is done, or you're signed in: there's nothing to set up.
+  if (!setupPending && path === "/setup") {
+    return <Navigate to="/sign-in" replace />
+  }
+  // A signed-in account whose email is already verified has no code to
+  // enter, so the verify page would only ask for one that doesn't exist.
+  // A full load: the public config was read before this account verified,
+  // so it can't yet say whether to offer cloud sign-in.
+  if (path === "/verify-email" && isAuthenticated && user?.email_verified) {
+    return <FreshLoad to="/" />
+  }
   if (recoveryPaths.includes(path)) {
     return (
       <AuthLayout title={authTitle(path)}>
@@ -58,7 +113,20 @@ export function App() {
       </AuthLayout>
     )
   }
+  // Sign-up leaves a session behind before the email is verified, so a
+  // second tab arrives signed in. The API refuses that session; send it to
+  // verify its email instead of into pages that would all fail.
+  if (isAuthenticated && requireEmailVerification && !user?.email_verified) {
+    return (
+      <Navigate
+        to="/verify-email"
+        search={{ email: user?.email ?? "" }}
+        replace
+      />
+    )
+  }
   if (!isAuthenticated) {
+    if (!authPaths.includes(path)) return <AuthRedirect />
     return (
       <AuthLayout title={authTitle(path)}>
         <AuthPage
@@ -72,16 +140,58 @@ export function App() {
       </AuthLayout>
     )
   }
-  if (authPaths.includes(path)) return <Navigate to="/" replace />
-  if (invite) return <AcceptInvitation token={invite} />
-  // An invitation link without its token: the route says so on a page of
-  // its own, since no workspace is involved yet.
+  // A new instance's first platform admin is offered cloud sign-in apps once,
+  // on a page of its own, before anything else.
+  if (
+    platformAdmin &&
+    cloudSignInOffer &&
+    path !== stepPath &&
+    !callbackPaths.includes(path)
+  ) {
+    return <Navigate to={stepPath} replace />
+  }
+  if (path === stepPath) {
+    if (!platformAdmin) return <Navigate to="/" replace />
+    // Its calls act in an organization like any other page's, and a
+    // password sign-in starts without one: the gate switches to it first.
+    return (
+      <OrganizationGate
+        fallback={(state) => {
+          switch (state.kind) {
+            case "loading":
+              return <PageLoading />
+            case "needs-organization":
+              // In place: /onboarding would only send you back here.
+              return <Onboarding activate={state.activate} />
+            case "error":
+              return (
+                <Problem
+                  title="Loomplane couldn't load your session"
+                  message={messageOf(state.error, "Reload to try again.")}
+                />
+              )
+          }
+        }}
+      >
+        <AuthLayout title="Set up cloud sign-in">
+          <CloudSignInStep />
+        </AuthLayout>
+      </OrganizationGate>
+    )
+  }
+  if (authPaths.includes(path)) return <AuthRedirect authenticated />
+  // The invitation has a page of its own, outside any workspace. Wherever
+  // signing in or verifying an email left you, a pending one goes there.
   if (path === "/invitations/accept") return <Outlet />
+  // So has approving a loomctl sign-in, which isn't tied to a workspace.
+  if (path === "/device") return <Outlet />
+  if (invite) return <Navigate to="/invitations/accept" replace />
   return <SignedIn />
 }
 
 function SignedIn() {
   const router = useRouter()
+  const path = usePath()
   const workspace = useRouterState({
     select: (state) => requestedWorkspace(state.location),
   })
@@ -97,7 +207,16 @@ function SignedIn() {
           case "loading":
             return <PageLoading />
           case "needs-organization":
-            return <Onboarding activate={state.activate} />
+            // Its own address, as setup has, rather than whichever page
+            // you asked for, which there's no workspace to show.
+            return (
+              <>
+                {path !== "/onboarding" && (
+                  <Navigate to="/onboarding" replace />
+                )}
+                <Onboarding activate={state.activate} />
+              </>
+            )
           case "error":
             return (
               <Problem
@@ -118,7 +237,10 @@ function SignedIn() {
 function Shell() {
   const { session, organizations, missing } = useOrganization()
   const path = usePath()
-  useWorkspaceAddress()
+  const addressPending = useWorkspaceAddress()
+  if (addressPending) return <PageLoading />
+  // A new workspace starts in the onboarding frame, not inside this one.
+  if (path === "/workspaces/new") return <Outlet />
   if (missing) {
     const current = organizations.find((o) => o.id === session.orgId)
     return (
@@ -130,16 +252,62 @@ function Shell() {
     )
   }
   return (
-    <ShellProvider>
-      <SidebarProvider>
-        <AppSidebar />
-        {/* Keyed on the organization, so switching remounts every page. */}
-        <SidebarInset key={session.orgId} className="min-w-0">
-          <Outlet />
-          <AppStatusBar />
-        </SidebarInset>
-      </SidebarProvider>
-    </ShellProvider>
+    <WorkspaceFrame orgId={session.orgId}>
+      <WorkspaceLayout orgId={session.orgId} />
+    </WorkspaceFrame>
+  )
+}
+
+// The sidebar, the page and the agent's panel side by side. The sidebar
+// opens as you left it; the panel docks beside the page, floats over it,
+// or takes its place at full width (the page stays mounted underneath).
+// With the panel docked, the page scrolls in a column of its own between
+// the top bar and the status bar, so its scrollbar sits under the bar and
+// beside the page, never beside the chat; the router restores that
+// column's place as it does the window's. The tree is the same either way,
+// so docking never remounts the page you're on.
+function WorkspaceLayout({ orgId }: { orgId: string }) {
+  const dock = useAgentDock()
+  const mobile = useIsMobile()
+  const focus = !!dock?.open && dock.mode === "focus"
+  const docked = !!dock?.open && dock.mode === "docked" && !mobile
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null)
+  return (
+    <SidebarProvider defaultOpen={sidebarOpenAtLoad()}>
+      <AppSidebar />
+      {/* Keyed on the organization, so switching remounts every page. */}
+      <SidebarInset
+        key={orgId}
+        className={cn(
+          "min-w-0",
+          focus && "md:hidden",
+          docked && "h-svh overflow-hidden"
+        )}
+      >
+        <div ref={setSlot} className="shrink-0 empty:hidden" />
+        <HeaderSlotProvider value={docked ? slot : null}>
+          <div
+            data-scroll-restoration-id={docked ? "page" : undefined}
+            className={cn(
+              "flex flex-1 flex-col",
+              docked && "min-h-0 overflow-y-auto"
+            )}
+          >
+            {CardGate ? (
+              <Suspense fallback={<PageLoading />}>
+                <CardGate>
+                  <Outlet />
+                </CardGate>
+              </Suspense>
+            ) : (
+              <Outlet />
+            )}
+          </div>
+        </HeaderSlotProvider>
+        <AppStatusBar />
+      </SidebarInset>
+      <AgentDock />
+    </SidebarProvider>
   )
 }
 
@@ -149,6 +317,9 @@ function Shell() {
 function useWorkspaceAddress() {
   const router = useRouter()
   const location = useRouterState({ select: (state) => state.location })
+  const routing = useRouterState({
+    select: (state) => state.status === "pending",
+  })
   const { slug } = useOrganization()
   const named = requestedWorkspace(location)
   const stale =
@@ -156,6 +327,7 @@ function useWorkspaceAddress() {
   useEffect(() => {
     if (stale) void router.navigate({ href: stale, replace: true })
   }, [router, stale, slug])
+  return !!stale || routing
 }
 
 export function Problem({

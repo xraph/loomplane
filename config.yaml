@@ -17,7 +17,9 @@ http_addr: "${LOOMPLANE_HTTP_ADDR:-}"
 # value for any key named like a URL.)
 public_url: "${LOOMPLANE_PUBLIC_URL:-http://localhost:8780}"
 # 32 random bytes, base64 (openssl rand -base64 32). Authsome's token
-# encryption key is derived from it.
+# encryption key is derived from it, and so is the key the audit checkpoint
+# signing key is encrypted with. Change it and Loomplane refuses to start
+# until you restore it or rotate the checkpoint key (see chronicle below).
 secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 
 database:
@@ -31,14 +33,29 @@ identity:
   base_path: /authsome
   app_id: "${LOOMPLANE_AUTHSOME_APP_ID:-}"
   publishable_key: "${LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY:-}"
-  require_email_verification: false
+  # Unset, accounts must verify their email wherever the instance can send
+  # mail, and needn't where it can't. true or false forces it. The account
+  # that runs first-time setup is verified by setup itself.
+  require_email_verification: "${LOOMPLANE_REQUIRE_EMAIL_VERIFICATION:-}"
   # The HttpOnly cookie the dashboard's session lives in. Cookies are shared
   # by every port on a host, so another authsome app on the same host needs
   # a different name, or each signs the other out.
   session_cookie: "${LOOMPLANE_SESSION_COOKIE:-loomplane_session}"
+  # Unset leaves it to the instance's stored setting. true or false forces it.
+  waitlist: "${LOOMPLANE_WAITLIST_ENABLED:-}"
+
+console:
+  path: "${LOOMPLANE_CONSOLE_PATH:-/__console}"
 
 notifications:
-  # Empty host disables email. For local Mailpit use 127.0.0.1:1025.
+  # Sends through Resend's HTTP API. Set this or smtp_host, not both. Needs
+  # "from" on a domain verified in Resend.
+  resend_api_key: "${LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY:-}"
+  # Writes each email to this folder as an .eml file instead of sending it, so
+  # you can read local mail without a mail server. Set this, resend_api_key or
+  # smtp_host, only one. Production refuses it. .forge/mail is gitignored.
+  mail_dir: "${LOOMPLANE_NOTIFICATIONS_MAIL_DIR:-}"
+  # Empty host (with no Resend key or mail_dir) disables email. For local Mailpit use 127.0.0.1:1025.
   smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
   smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
   smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"
@@ -46,6 +63,39 @@ notifications:
   from: "${LOOMPLANE_NOTIFICATIONS_FROM:-}"
   # Implicit TLS, commonly on port 465. Production requires this.
   smtp_tls: "${LOOMPLANE_NOTIFICATIONS_SMTP_TLS:-false}"
+
+push:
+  # Off hides push settings in the app and answers 404 on the push routes.
+  enabled: "${LOOMPLANE_PUSH_ENABLED:-true}"
+  # The gateway that hands notifications to Apple and Google. Only XRaph's
+  # gateway can reach the store app.
+  gateway_url: "${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}"
+
+# The Android app /.well-known/assetlinks.json vouches for, so links to this
+# server open in it. Empty means the store app. If you ship your own build,
+# set its package and its signing certificates' SHA-256 fingerprints
+# (comma-separated, as keytool prints them).
+mobile:
+  android_package: "${LOOMPLANE_MOBILE_ANDROID_PACKAGE:-}"
+  android_cert_fingerprints: "${LOOMPLANE_MOBILE_ANDROID_CERT_FINGERPRINTS:-}"
+
+nodes:
+  # Where the other replicas of this Loomplane reach this one, for the hop
+  # that carries a node's streams between replicas (/_/nodes/hop). Leave it
+  # empty on a single replica. With several, set each replica's own URL, and
+  # keep it on a private network or behind https.
+  advertise_url: "${LOOMPLANE_NODES_ADVERTISE_URL:-}"
+  # Allows that hop over plain http. The hop carries stream bytes, so turn
+  # this on only on a private network.
+  hop_insecure: "${LOOMPLANE_NODES_HOP_INSECURE:-false}"
+  # A PEM file of the roots that verify the other replicas' certificates on
+  # an https hop. Empty uses the system roots.
+  hop_ca_file: "${LOOMPLANE_NODES_HOP_CA_FILE:-}"
+  # How many joins one address may send a minute, and how many connect
+  # challenges it may ask for. Every node behind one NAT shares the challenge
+  # budget, and each asks once per reconnect. 0 turns a limit off.
+  join_rate_limit: "${LOOMPLANE_NODES_JOIN_RATE_LIMIT:-10}"
+  challenge_rate_limit: "${LOOMPLANE_NODES_CHALLENGE_RATE_LIMIT:-120}"
 
 dashboard:
   # The built dashboard (pnpm --dir apps/dashboard build).
@@ -76,12 +126,46 @@ github:
   # branch moves. Empty turns webhooks off.
   webhook_secret: "${LOOMPLANE_GITHUB_WEBHOOK_SECRET:-}"
 
+bitbucket:
+  # Bitbucket Cloud's REST API.
+  api_url: "${LOOMPLANE_BITBUCKET_API_URL:-https://api.bitbucket.org/2.0}"
+  # Where Bitbucket serves repository archives.
+  web_url: "${LOOMPLANE_BITBUCKET_WEB_URL:-https://bitbucket.org}"
+  # An OAuth consumer that reads private repositories. Leave both empty
+  # to read public repositories only; set both otherwise. Keep the secret
+  # in the environment.
+  client_id: "${LOOMPLANE_BITBUCKET_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_BITBUCKET_CLIENT_SECRET:-}"
+
+gitlab:
+  # Where Loomplane reads gitlab.com from. You'd change it only to point at
+  # a test double.
+  api_url: "${LOOMPLANE_GITLAB_API_URL:-https://gitlab.com}"
+  # The OAuth application that reads private projects on gitlab.com
+  # (docs/gitlab.md). Set both or neither, and keep the secret in the
+  # environment.
+  client_id: "${LOOMPLANE_GITLAB_CLIENT_ID:-}"
+  client_secret: "${LOOMPLANE_GITLAB_CLIENT_SECRET:-}"
+  # Whether organizations may add a self-managed GitLab of their own.
+  # true or false.
+  allow_organization_hosts: "${LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS:-true}"
+  # Where GitLab reaches this Loomplane's webhook, when public_url isn't an
+  # address GitLab can reach. Empty means public_url.
+  webhook_url: "${LOOMPLANE_GITLAB_WEBHOOK_URL:-}"
+  # Self-managed GitLabs you trust go here, in config.local.yaml, since a
+  # list can't come from one variable. Every organization can sign in to
+  # them, and they may be http and on a private network:
+  # hosts:
+  #   - web_url: https://git.example.com
+  #     client_id: "<the Application ID>"
+  #     client_secret: "<the Secret>"
+
 # Repository analysis, which loomplane-worker runs.
 analysis:
   # Where checkouts are extracted while they're analyzed. Empty means the
   # system's temporary directory.
   work_dir: "${LOOMPLANE_ANALYSIS_WORK_DIR:-}"
-  concurrency: 2
+  concurrency: "${LOOMPLANE_ANALYSIS_CONCURRENCY:-2}"
 
 # Deployment planning.
 planning:
@@ -126,6 +210,27 @@ clouds:
   cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
   cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
   acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
+  acme_roots_file: "${LOOMPLANE_ACME_ROOTS_FILE:-}"
+  managed_clusters:
+    management_probe:
+      provider: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_PROVIDER:-}"
+      network_id: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_NETWORK_ID:-}"
+      evidence_id: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_EVIDENCE_ID:-}"
+      url: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_URL:-}"
+      spki_sha256: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_SPKI_SHA256:-}"
+      expires_at: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_EXPIRES_AT:-}"
+    enabled: "${LOOMPLANE_MANAGED_CLUSTERS_ENABLED:-false}"
+    qualification_org_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_ORG_ID:-}"
+    qualification_operator_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_OPERATOR_ID:-}"
+    qualification_account_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_ACCOUNT_ID:-}"
+    qualification_region: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_REGION:-}"
+    max_node_hourly_micro_usd: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODE_HOURLY_MICRO_USD:-0}"
+    max_nodes: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODES:-0}"
+    max_account_creates: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_ACCOUNT_CREATES:-2}"
+  # Lets pools add servers on their own, within each Cloud's capacity policy.
+  # Off, policies are saved but nothing grows. Still being qualified.
+  automatic_capacity:
+    enabled: "${LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED:-false}"
   # Lets people connect the Kubernetes cluster Loomplane runs in without a
   # kubeconfig. Loomplane deploys there as its own service account, which
   # every organization on this instance then shares, so turn it on only
@@ -133,9 +238,14 @@ clouds:
   # account token mounted; the Helm chart's inCluster values do both.
   kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
-  # in. Leave both empty to keep token entry only. Keep the secret in the
-  # environment.
+  # in. These win over anything registered on the dashboard's Cloud sign-in
+  # page (Settings, platform owners and admins only), which is the
+  # alternative to setting them here. Leave both empty to use the page, or
+  # to keep token entry only. Keep the secret in the environment.
   oauth:
+    cloudflare:
+      client_id: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_SECRET:-}"
     digitalocean:
       client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
       client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
@@ -188,6 +298,35 @@ federation:
     workload_api: "${LOOMPLANE_FEDERATION_RUNTIME_WORKLOAD_API:-}"
     signing_keys_file: "${LOOMPLANE_FEDERATION_RUNTIME_SIGNING_KEYS_FILE:-}"
 
+# The AI section (models) is opt-in.
+ai:
+  enabled: "${LOOMPLANE_AI_ENABLED:-false}"
+  # The infra agent's server provider: anthropic, openai or openai-compatible.
+  provider: "${LOOMPLANE_AI_PROVIDER:-anthropic}"
+  # Optional even with the agent on: a workspace can bring its own key.
+  api_key: "${LOOMPLANE_AI_API_KEY:-}"
+  # Required for openai-compatible, an optional override otherwise.
+  base_url: "${LOOMPLANE_AI_BASE_URL:-}"
+  model: "${LOOMPLANE_AI_MODEL:-claude-sonnet-5-5}"
+  # Prices for models nexus's catalog doesn't know. The agent uses server
+  # prices only (these and nexus's catalog), never a workspace's per-key
+  # prices. YAML only. Each item is {provider, model, input_per_million,
+  # output_per_million}, in decimal USD, such as "3" or "0.80".
+  prices: []
+  # One embedding model for the whole server, for retrieval.
+  knowledge:
+    embedding_provider: "${LOOMPLANE_AI_EMBEDDING_PROVIDER:-}"   # openai or openai-compatible
+    embedding_api_key: "${LOOMPLANE_AI_EMBEDDING_API_KEY:-}"
+    embedding_base_url: "${LOOMPLANE_AI_EMBEDDING_BASE_URL:-}"
+    embedding_model: "${LOOMPLANE_AI_EMBEDDING_MODEL:-}"
+    dimensions: "${LOOMPLANE_AI_EMBEDDING_DIMENSIONS:-1536}"
+    # What indexing the docs may spend, in USD.
+    docs_budget_usd: "${LOOMPLANE_AI_DOCS_BUDGET_USD:-5.00}"
+  models:
+    # The Hugging Face Hub, or a mirror of it. The workspace's Hugging Face
+    # token is sent here, so it must be https (http only for localhost).
+    huggingface_url: "${LOOMPLANE_AI_MODELS_HUGGINGFACE_URL:-https://huggingface.co}"
+
 # The database gateway. Its snapshots are signed with the Ed25519 keys in
 # this file: private (0600), as an absolute path, holding one key as
 # {"version":1,"private_key":"<base64 seed>","not_before":...,"not_after":...}
@@ -196,3 +335,32 @@ federation:
 # how to rotate. Leave it empty and the gateway endpoints answer 503.
 dbgateway:
   signing_key_file: "${LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE:-}"
+
+# The audit trail. Every API replica signs each stream's new events with an
+# Ed25519 key that Loomplane keeps in Vault and creates on first start. The
+# public key and its ID are logged at start ("audit checkpoints are signed"),
+# so you can pin them in Hallproof. A stream is signed once it gains
+# every_events events, or every_interval after its last signature if it
+# gained any. The key is encrypted under secret_key; after a change of
+# secret_key, docs/forge-integration.md (Chronicle) says how to rotate it.
+chronicle:
+  checkpoints:
+    enabled: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED:-true}"
+    every_events: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_EVENTS:-1000}"
+    every_interval: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL:-15m}"
+
+# Compliance evidence. Set an endpoint and Loomplane pushes evidence about
+# its own staff, keys, roles, platform secrets and audit chain to that
+# Hallproof, never a customer's. Leave it empty and nothing of Hallproof's
+# runs. The endpoint is https, or http on this machine. Give the ingest key
+# from Hallproof as ingest_key or, for a mounted secret, ingest_key_file,
+# not both. staff_orgs lists the organization IDs (aorg_...) that are your
+# own staff's, comma-separated. Their API keys, webhooks, agents, jobs and
+# agent safety settings count as staff evidence. Every other organization
+# is a customer's, and so is every one while the list is empty, which is
+# the default.
+hallproof:
+  endpoint: "${LOOMPLANE_HALLPROOF_ENDPOINT:-}"
+  ingest_key: "${LOOMPLANE_HALLPROOF_INGEST_KEY:-}"
+  ingest_key_file: "${LOOMPLANE_HALLPROOF_INGEST_KEY_FILE:-}"
+  staff_orgs: "${LOOMPLANE_HALLPROOF_STAFF_ORGS:-}"

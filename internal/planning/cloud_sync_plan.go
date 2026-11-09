@@ -56,6 +56,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 			continue
 		}
 		var t cloudprofiles.Target
+		toDefault := false
 		if pin.Default {
 			d := assignment.DefaultPlacement
 			if d == nil {
@@ -65,11 +66,33 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 			t = cloudprofiles.Target{Runtime: "managed", Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
 		} else {
 			ti := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.Name == pin.TargetName })
-			if ti < 0 {
+			switch {
+			case ti >= 0:
+				t = assignment.Targets[ti]
+			case pin.Platform != nil && assignment.DefaultPlacement != nil:
+				// Leaving Loomplane Cloud is never blocked on a target
+				// name: a service whose region target the new Cloud lacks
+				// goes to that Cloud's default.
+				d := assignment.DefaultPlacement
+				t = cloudprofiles.Target{Runtime: "managed", Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
+				toDefault = true
+			default:
 				blocked(b.Name, "The proposed Cloud is missing target "+pin.TargetName+".")
 				continue
 			}
-			t = assignment.Targets[ti]
+		}
+		if pin.Platform != nil && t.Runtime != platformRuntime && cfg.BuildTarget != nil && cfg.BuildTarget.Builder == platformBuilder {
+			// Loomplane Cloud built the service on its own hosts; the new
+			// target builds it the way that target builds.
+			image := cfg.BuildTarget.Image
+			cfg.BuildTarget = nil
+			if image != "" {
+				cfg.BuildTarget = &BuildTarget{Image: image}
+			}
+		}
+		if t.Runtime == platformRuntime {
+			p.platformDestination(a, b, &cfg, t, pools)
+			continue
 		}
 		if intent := intents[b.Name]; intent != nil {
 			prov, err := registry.Get(t.Provider)
@@ -88,7 +111,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 			cfg.Target = ""
 			cfg.TargetSettings = nil
 			cfg.Execution = runs.Execution
-			set := manifest.Settings{Provider: cfg.Provider, Endpoint: cfg.Endpoint, Scale: cfg.Scale, Size: cfg.Size}
+			set := manifest.Settings{Placement: cfg.Placement, Provider: cfg.Provider, Endpoint: cfg.Endpoint, Scale: cfg.Scale, Size: cfg.Size, CapacityMode: cfg.CapacityMode}
 			if cfg.BuildTarget != nil {
 				set.Build = &manifest.Build{Builder: cfg.BuildTarget.Builder, Registry: cfg.BuildTarget.Registry, Image: cfg.BuildTarget.Image, Context: cfg.Context}
 			}
@@ -136,7 +159,9 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		region := t.Region
 		// Historical bindings without provenance keep their applied region.
 		// Only an explicitly recorded default follows the target's region.
-		if pin.RegionSource != "default" {
+		// A Loomplane Cloud region is the platform's, so it never follows
+		// the service to another provider.
+		if pin.RegionSource != "default" && pin.Platform == nil {
 			region = cfg.Region
 		}
 		if region == "" {
@@ -150,14 +175,14 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		}
 		cfg.Provider, cfg.Region, cfg.Execution = prov.Name, region, runs.Execution
 		placed := targetPlacement(assignment, t, c, identity, region, pin.RegionSource)
-		placed.Default = pin.Default
+		placed.Default = pin.Default || toDefault
 		cfg.CloudPlacement = &placed
 		if placement, found := pools[b.Name]; found && t.PoolID != "" {
 			cfg.CloudPlacement = &placement
 		}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
 		p.checkCloudServer(ServiceSubject, b.Name, "services."+b.Name, *cfg.CloudPlacement)
-		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
+		set := manifest.Settings{Placement: cfg.Placement, Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size, CapacityMode: cfg.CapacityMode}
 		if OwnedCloud(prov.Cloud) {
 			set.Target = t.ConnectionID
 		}
@@ -313,7 +338,10 @@ func snapshotConnections(bindings []*Binding, plan *Plan) []string {
 	for _, a := range plan.Actions {
 		refs[a.ConnectionID] = true
 		if a.Service != nil && a.Service.BuildTarget != nil {
-			refs[a.Service.BuildTarget.Builder] = true
+			// Loomplane Cloud's builder is the platform's, not a connection.
+			if a.Service.BuildTarget.BuilderCloud != platformBuilder {
+				refs[a.Service.BuildTarget.Builder] = true
+			}
 			refs[a.Service.BuildTarget.Registry] = true
 		}
 	}
@@ -349,4 +377,46 @@ func repinCloudPlacement(pin CloudPlacement, assignment *cloudprofiles.Assignmen
 	}
 	pin.CloudRevision, pin.AssignmentRevision, pin.GrantRevision = assignment.CloudRevision, assignment.Revision, assignment.GrantRevision
 	return pin, true
+}
+
+// platformDestination moves an applied service onto the Loomplane Cloud
+// target t, with the room Cloud sync previewed for it in pools. It reads no
+// connection: the target has none.
+func (p *planner) platformDestination(a *Action, b *Binding, cfg *ServiceConfig, t cloudprofiles.Target, pools map[string]CloudPlacement) {
+	blocked := func(message string) {
+		p.problem(Finding{Code: "cloud-sync-blocked", Subject: ServiceSubject, Name: b.Name, Message: message})
+	}
+	placement, found := pools[b.Name]
+	if !found || placement.Platform == nil || placement.TargetID != t.ID {
+		blocked("Moving onto Loomplane Cloud needs a reviewed capacity check.")
+		return
+	}
+	prov, err := p.in.Providers.Get(t.Provider)
+	if err != nil {
+		blocked(err.Error())
+		return
+	}
+	p.use(prov)
+	runs, ok := prov.Running(cfg.Workload)
+	if !ok || !prov.Available {
+		blocked("Loomplane Cloud can't run the applied workload.")
+		return
+	}
+	cfg.Provider, cfg.Region, cfg.Execution, cfg.Target = prov.Name, t.Region, runs.Execution, ""
+	cfg.CloudPlacement = &placement
+	p.in.CloudPlacements[b.Name] = placement
+	set := manifest.Settings{Placement: cfg.Placement, Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size, CapacityMode: cfg.CapacityMode}
+	if cfg.BuildTarget != nil && cfg.BuildTarget.Image != "" {
+		set.Build = &manifest.Build{Image: cfg.BuildTarget.Image, Context: cfg.Context}
+	}
+	p.configureTarget(b.Name, "services."+b.Name, prov, set, cfg)
+	a.Provider, a.Region, a.ConnectionID, a.Engine, a.Creates = prov.Name, cfg.Region, "", prov.Engine(runs), runs.Creates
+	if b.Provider != a.Provider || b.ConnectionID != "" || b.Region != a.Region {
+		a.Op = Replace
+		a.Reason = "Recreate the applied service on Loomplane Cloud."
+		return
+	}
+	a.AdoptCloudPlacement = true
+	a.CloudAdoption = ReviewCloudAdoption(b)
+	a.Reason = "Adopt the reviewed Cloud placement."
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 // WorkloadAttempt survives a lost locking session. Only its current generation
@@ -114,15 +115,31 @@ func GuardWorkloadWrite(ctx context.Context, tx driver.Tx) error {
 }
 
 func (s *PgStore) FinishWorkloadAttempt(ctx context.Context, a WorkloadAttempt, settled bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, a.Org); checkErr != nil {
+		return checkErr
+	}
 	var generation int64
-	err := s.db.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET active=false,settled=($8 OR NOT effects_started) WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT legacy_unfenced RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation, settled).Scan(&generation)
+	err = tx.QueryRow(ctx, `UPDATE loomplane_workload_attempts SET active=false,settled=(($8 OR NOT effects_started) AND NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances j WHERE j.org_id=$1 AND j.scope->>'Environment'=$3 AND j.scope->>'Service'=$4 AND j.scope->>'Plan'=$5 AND j.scope->>'Deployment'=$6 AND j.outcome IS NULL)) WHERE org_id=$1 AND project_id=$2 AND environment_id=$3 AND service=$4 AND plan_id=$5 AND deployment_id=$6 AND generation=$7 AND active AND NOT legacy_unfenced RETURNING generation`, a.Org, a.Project, a.Environment, a.Service, a.Plan, a.Deployment, a.Generation, settled).Scan(&generation)
 	if err != nil {
 		return errors.Join(ErrConflict, err)
 	}
-	return nil
+	if !settled {
+		if _, checkErr := tx.Exec(ctx, `SELECT loomplane_settle_unissued_demand($1,$2,$3)`, a.Org, a.Plan, a.Service); checkErr != nil {
+			return checkErr
+		}
+	}
+	return tx.Commit()
 }
 
 func guardRouteAttachment(ctx context.Context, tx driver.Tx, route *Route, kind string) error {
+	if err := projects.GuardUnmanagedEnvironment(ctx, tx, route.OrgID, route.Input.EnvironmentID); err != nil {
+		return err
+	}
 	if err := LockRouteWorkload(ctx, tx, route.OrgID, route.Input.EnvironmentID, route.Input.Service); err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/ctrlplane/id"
 
 	"github.com/xraph/loomplane/internal/backupfiles"
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	native "github.com/xraph/loomplane/internal/clouds/mysql"
 	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
@@ -24,7 +25,7 @@ func (r *Runtime) mysqlSession(ctx context.Context, iid id.ID, labels map[string
 	if err != nil {
 		return nil, err
 	}
-	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
+	info, err := r.ordinaryEngineSource(ctx, c, iid, labels)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -57,6 +58,9 @@ func (r *Runtime) ConfigureMySQL(ctx context.Context, iid id.ID, labels map[stri
 }
 
 func (r *Runtime) ConfigureDatabase(ctx context.Context, iid id.ID, labels map[string]string, password string) error {
+	if labels[enginebackup.LabelEngine] != "" {
+		return r.configureEngine(ctx, iid, labels, password)
+	}
 	if labels[nativerabbit.LabelEngine] != "" {
 		return r.withRabbitMQ(ctx, iid, labels, password, func(db nativerabbit.Database) error { return db.Configure(ctx, password) })
 	}
@@ -80,6 +84,9 @@ func (r *Runtime) ConfigureDatabase(ctx context.Context, iid id.ID, labels map[s
 	return r.ConfigurePostgres(ctx, iid, labels, password)
 }
 func (r *Runtime) BackupDatabase(ctx context.Context, iid id.ID, labels map[string]string, files *backupfiles.Store, key string) (backupfiles.Object, error) {
+	if labels[enginebackup.LabelEngine] != "" {
+		return r.backupEngine(ctx, iid, labels, files, key)
+	}
 	if labels[nativerabbit.LabelEngine] != "" {
 		var obj backupfiles.Object
 		err := r.withRabbitMQ(ctx, iid, labels, "", func(db nativerabbit.Database) error { var e error; obj, e = db.Export(ctx, files, key); return e })
@@ -102,6 +109,9 @@ func (r *Runtime) BackupDatabase(ctx context.Context, iid id.ID, labels map[stri
 	return nativeMySQL(c, ContainerName(iid), labels).Export(ctx, files, key)
 }
 func (r *Runtime) RestoreDatabase(ctx context.Context, iid id.ID, labels map[string]string, files *backupfiles.Store, object backupfiles.Object) error {
+	if labels[enginebackup.LabelEngine] != "" {
+		return r.restoreEngine(ctx, iid, labels, files, object)
+	}
 	if labels[nativerabbit.LabelEngine] != "" {
 		if labels[LabelRecovery] == "" || labels[owned.LabelPublic] != "false" {
 			return errors.New("restore requires a private RabbitMQ copy")
@@ -138,6 +148,9 @@ func (r *Runtime) RestoreDatabase(ctx context.Context, iid id.ID, labels map[str
 	return nativeMySQL(c, ContainerName(iid), labels).Restore(ctx, files, object)
 }
 func (r *Runtime) DatabaseProbe(ctx context.Context, iid id.ID, labels map[string]string) error {
+	if labels[enginebackup.LabelEngine] != "" {
+		return r.engineProbe(ctx, iid, labels)
+	}
 	if labels[nativerabbit.LabelEngine] != "" {
 		return r.withRabbitMQ(ctx, iid, labels, "", func(db nativerabbit.Database) error { return db.Probe(ctx) })
 	}

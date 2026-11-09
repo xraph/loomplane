@@ -21,6 +21,7 @@ The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Do
 | `LOOMPLANE_ARTIFACT_BUCKET` | `loomplane-artifacts` | The artifact bucket name |
 | `LOOMPLANE_BACKUP_URL` | Unset | An independent backend for recovery objects, such as an S3-compatible URL. Empty uses the artifact backend |
 | `LOOMPLANE_BACKUP_BUCKET` | `loomplane-backups` | The bucket for recovery objects |
+| `LOOMPLANE_REQUIRE_EMAIL_VERIFICATION` | On when email is set up | Whether an account must verify its email before it can sign in or use the API. Unset, it's on wherever Loomplane can send mail (SMTP, Resend or a mail directory) and off where it can't, since nobody could get a code. `true` or `false` forces it; production refuses `true` with no mail. The account that runs first-time setup is verified by setup itself |
 | `LOOMPLANE_SESSION_COOKIE` | `loomplane_session` | The HttpOnly session cookie's name. Cookies are shared by every port on a host, so another authsome app on the same host needs a different name |
 | `LOOMPLANE_AUTHSOME_APP_ID` | Built in | The authsome app (`aapp_...`) that holds Loomplane's users |
 | `LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY` | Built in | That app's public key |
@@ -35,6 +36,7 @@ The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Do
 | `LOOMPLANE_PAUSED_PROVIDERS` | Unset | Comma-separated target names whose plans are review only. A name that isn't a target stops startup |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | Where `loomplane-worker` serves its health checks |
 | `LOOMPLANE_ANALYSIS_WORK_DIR` | System temp directory | Where checkouts are extracted during analysis |
+| `LOOMPLANE_ANALYSIS_CONCURRENCY` | `2` | Analyses one worker runs at once. At least 1. Each can unpack up to 2 GiB |
 
 Loomplane's own host, its database, its API and its provider plugins are always refused by endpoint checks, as are loopback, link-local and `0.0.0.0/8` addresses, AWS's IPv6 metadata service, and the NAT64 forms of all of these. Other private ranges are dialable, since real endpoints live there.
 
@@ -54,12 +56,38 @@ Set the five App settings together, or none. Loomplane refuses to start with som
 | `LOOMPLANE_GITHUB_CLIENT_SECRET` | Unset | The App's OAuth client secret |
 | `LOOMPLANE_GITHUB_WEBHOOK_SECRET` | Unset | The secret GitHub signs deliveries with. Empty turns webhooks off |
 
-## Email
+## Bitbucket
 
-An empty host disables email. Setting a username, password or sender without a host is an error.
+Public Bitbucket Cloud repositories need none of this. To read private ones, set the client ID and secret together, or neither. Loomplane refuses to start with only one of them set.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `LOOMPLANE_BITBUCKET_API_URL` | `https://api.bitbucket.org/2.0` | Bitbucket Cloud's REST API |
+| `LOOMPLANE_BITBUCKET_WEB_URL` | `https://bitbucket.org` | Where repository archives are served |
+| `LOOMPLANE_BITBUCKET_CLIENT_ID` | Unset | The OAuth consumer's key |
+| `LOOMPLANE_BITBUCKET_CLIENT_SECRET` | Unset | The OAuth consumer's secret |
+
+## GitLab
+
+Public projects on gitlab.com need none of this. Set the client ID and client secret together, or neither. Loomplane refuses to start with only one. See [GitLab repositories](/docs/guides/gitlab-repositories).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_GITLAB_API_URL` | `https://gitlab.com` | Where Loomplane reads gitlab.com from. Change it only to point at a test double |
+| `LOOMPLANE_GITLAB_CLIENT_ID` | Unset | The Application ID of the OAuth application registered on gitlab.com |
+| `LOOMPLANE_GITLAB_CLIENT_SECRET` | Unset | That application's Secret |
+| `LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS` | `true` | Whether organizations may add a self-managed GitLab of their own. `true` or `false` |
+| `LOOMPLANE_GITLAB_WEBHOOK_URL` | Unset | Where GitLab reaches the webhook, when the public URL isn't an address GitLab can reach. Empty uses `LOOMPLANE_PUBLIC_URL` |
+
+Self-managed GitLabs that you trust are a list, so they have no variable. Put them under `gitlab.hosts` in `config.local.yaml`.
+
+## Email
+
+An empty host, with no Resend key or mail directory, disables email. Setting a username, password or sender without a host is an error.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_NOTIFICATIONS_MAIL_DIR` | Unset | Writes each email to this folder as an `.eml` file instead of sending it. Development only; production refuses it |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_HOST` | Unset | The SMTP server |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_PORT` | `1025` | Its port, 1 to 65535 |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME` | Unset | Set with the password |
@@ -67,12 +95,33 @@ An empty host disables email. Setting a username, password or sender without a h
 | `LOOMPLANE_NOTIFICATIONS_FROM` | Unset | A single sender address |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_TLS` | `false` | Implicit TLS, commonly on port 465. Production requires it |
 
+## Push notifications
+
+Loomplane can send phone notifications through a gateway that hands them to Apple and Google. A gateway address must use `https`, with no user info, query or fragment. In development, `http` works for `localhost`, `127.0.0.1` and `::1` only.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_PUSH_ENABLED` | `true` | Turn it off and the app hides push settings for this server |
+| `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` | The gateway that hands notifications to Apple and Google. Only XRaph's gateway can reach the store app |
+
+## Nodes
+
+Machines that join an organization hold one connection to a replica. When you run several replicas, a request for a node reaches the replica that holds it over a hop on `/_/nodes/hop`, signed with a secret every replica derives from `LOOMPLANE_SECRET_KEY`. With one replica you set nothing here.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_NODES_ADVERTISE_URL` (`nodes.advertise_url`) | Unset | Where the other replicas reach this one, such as `https://replica-a.internal:8780`. It must be an absolute http or https URL with no user, query or fragment, or startup stops. Set each replica's own address. Use `https`, or a private network with the setting below. With several replicas on one database and no advertise URL, each replica only reaches the nodes connected to it, and logs a warning when it meets one it can't |
+| `LOOMPLANE_NODES_HOP_INSECURE` (`nodes.hop_insecure`) | `false` | Allow the hop over plain `http`. The hop carries stream bytes, so turn it on only on a private network |
+| `LOOMPLANE_NODES_HOP_CA_FILE` (`nodes.hop_ca_file`) | Unset | A PEM file of the roots that verify the other replicas' certificates. Unset uses the system roots |
+| `LOOMPLANE_NODES_JOIN_RATE_LIMIT` (`nodes.join_rate_limit`) | `10` | How many joins one address may send a minute. Past it the address gets a 429 until the minute is up. `0` turns the limit off |
+| `LOOMPLANE_NODES_CHALLENGE_RATE_LIMIT` (`nodes.challenge_rate_limit`) | `120` | How many connect challenges one address may ask for a minute. Every node reconnects after a restart, and nodes behind one NAT share this budget, so raise it if you run more than about a hundred machines behind one address. `0` turns it off |
+
 ## Cloud sign-in
 
 | Variable | Default | What it does |
 |---|---|---|
 | `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID` | Unset | The client ID of the DigitalOcean OAuth app (`clouds.oauth.digitalocean.client_id`). Set it with the secret |
-| `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` | Unset | The app's client secret. When both are set they apply to every organization and lock the Cloud sign-in page |
+| `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` | Unset | The app's client secret. When both are set they apply to every organization and lock that cloud on the Cloud sign-in page |
 | `LOOMPLANE_VERCEL_OAUTH_CLIENT_ID` | Unset | The client ID of the Vercel Integration (`clouds.oauth.vercel.client_id`). Set it with the secret and the slug |
 | `LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET` | Unset | The Integration's client secret |
 | `LOOMPLANE_VERCEL_OAUTH_SLUG` | Unset | The Integration's slug, the last part of its address on Vercel (`clouds.oauth.vercel.slug`). Required once the ID and secret are set |
@@ -81,7 +130,7 @@ An empty host disables email. Setting a username, password or sender without a h
 | `LOOMPLANE_AZURE_OAUTH_CLIENT_ID` | Unset | The Application (client) ID of the Azure app registration (`clouds.oauth.azure.client_id`). Set it with the secret |
 | `LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET` | Unset | The app registration's client secret |
 
-Each cloud's values lock only that cloud's row on the Cloud sign-in page. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register each app, and every one of them uses `{public_url}/integrations/oauth/callback` as its callback.
+Each cloud's values lock only that cloud's row on the Cloud sign-in page, and they win over an app registered there. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register each app, and every one of them uses `{public_url}/integrations/oauth/callback` as its callback.
 
 ## Cloud API endpoints
 
@@ -90,6 +139,16 @@ These exist so tests can stand fakes in for real clouds. Leave them empty in a l
 `LOOMPLANE_GOOGLE_ENDPOINT`, `LOOMPLANE_VERCEL_ENDPOINT`, `LOOMPLANE_AWS_ENDPOINT`, `LOOMPLANE_RENDER_ENDPOINT`, `LOOMPLANE_DIGITALOCEAN_ENDPOINT` and `LOOMPLANE_AZURE_ENDPOINT` replace the matching cloud's API host.
 
 The setting `clouds.enrollment_url` (set it in `config.local.yaml`) is the reachable HTTPS callback base that managed servers use to enroll. Empty uses the public URL, and a local address can't provision remote servers.
+
+## Cloud capacity
+
+<Callout type="warn">
+  Automatic capacity is off by default and still being qualified. Turn it on only where you're ready for Loomplane to buy servers at your clouds on its own.
+</Callout>
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_AUTOMATIC_CAPACITY_ENABLED` | `false` | Lets pools add servers on their own, within each Cloud's capacity policy (`clouds.automatic_capacity.enabled`). Off, you can still save a policy on the Cloud's **Capacity** tab, but nothing grows and nothing waits for approval: a deployment that doesn't fit waits for a server you add. Pools never shrink on their own either way |
 
 ## YAML-only settings
 
@@ -100,12 +159,35 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | `database.pool_size` | `16` | Open connections. `0` keeps the driver's default |
 | `orchestration.concurrency` | `4` | Jobs one process runs at once. At least 1 |
 | `orchestration.poll_interval` | `1s` | How often idle workers look for jobs |
-| `analysis.concurrency` | `2` | Analyses one worker runs at once. At least 1 |
 | `identity.base_path` | `/authsome` | Where authsome's API is mounted |
-| `identity.require_email_verification` | `false` | Whether sign-in waits for a verified email |
 | `providers.plugins` | `[]` | A list of `{url, token}`. See [Provider plugins](/docs/extending/provider-plugins) |
 
 `providers.paused` also accepts a YAML list, in place of the variable.
+
+## AI
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_AI_ENABLED` | `false` | Turns on the [AI section](/docs/ai) (`ai.enabled`): the Models and AI settings pages, their API and the model kinds. Off, a plan with a model resource gets a `catalog-feature-off` problem, and models already running keep running |
+| `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror of it, that Loomplane reads repos, model cards and gated checks from, and that model engines download weights from (`ai.models.huggingface_url`). The workspace's Hugging Face token is sent there, so it must be https, with plain http allowed only for `localhost` or a loopback address. A user, query or fragment stops startup. vLLM and Text Embeddings Inference get a mirror as `HF_ENDPOINT`, and llama.cpp fetches its GGUF from it |
+| `LOOMPLANE_AI_PROVIDER` | `anthropic` | The provider the infra agent uses by default (`ai.provider`): `anthropic`, `openai` or `openai-compatible`. Only read when `ai.enabled` is on |
+| `LOOMPLANE_AI_API_KEY` | empty | The server's API key for that provider (`ai.api_key`). It's optional even with the agent on, because a workspace can bring its own key. Loomplane never logs it or serves it to the dashboard |
+| `LOOMPLANE_AI_BASE_URL` | empty | The provider's endpoint (`ai.base_url`). You need it for `openai-compatible`, and it overrides the default endpoint for the others. It must be http(s) without a user or password, and https in production unless it's `localhost` |
+| `LOOMPLANE_AI_MODEL` | `claude-sonnet-5-5` | The agent's default model (`ai.model`). It isn't the `ai.models` registry block below, which only says where model weights come from. The agent uses `claude-haiku-5-5` for cheap summarising steps |
+| `LOOMPLANE_AI_EMBEDDING_PROVIDER` | empty | The provider for retrieval embeddings (`ai.knowledge.embedding_provider`): `openai` or `openai-compatible`. Anthropic has no embeddings API, so it can't be used. Empty turns retrieval off |
+| `LOOMPLANE_AI_EMBEDDING_API_KEY` | empty | The key for the embedding provider (`ai.knowledge.embedding_api_key`). Never logged or served |
+| `LOOMPLANE_AI_EMBEDDING_BASE_URL` | empty | The embedding endpoint (`ai.knowledge.embedding_base_url`). Required for `openai-compatible` |
+| `LOOMPLANE_AI_EMBEDDING_MODEL` | empty | The embedding model (`ai.knowledge.embedding_model`). Required once a provider is set. Pick one whose native size is at most 2000 dimensions, such as `text-embedding-3-small` |
+| `LOOMPLANE_AI_EMBEDDING_DIMENSIONS` | `1536` | The vector size (`ai.knowledge.dimensions`), from 1 to 2000. It must match the embedding model, and every workspace shares it, because the vector column has one fixed size. `text-embedding-3-small` at 1536 is the default |
+| `LOOMPLANE_AI_DOCS_BUDGET_USD` | `5.00` | The most indexing the docs may spend, in USD (`ai.knowledge.docs_budget_usd`). A decimal above 0 and at most 1000. Checked only when an embedding provider is set |
+
+Knowledge also needs pgvector in Postgres, and the embedding model needs a price: an OpenAI model nexus lists, or an `ai.prices` entry for an `openai-compatible` one. Without either, nothing else changes. Knowledge stays off and the settings page says why. [Knowledge](/docs/agents/knowledge) has each reason and its fix. The docs are indexed once per release, billed to a `loomplane-system` tenant and capped by `LOOMPLANE_AI_DOCS_BUDGET_USD`.
+
+With `ai.enabled` on, Loomplane checks these at startup and names the key that's wrong. With it off, none of them are checked, so a stray variable can't stop a server that doesn't run the agent.
+
+`ai.prices` has no variable. Set it in `config.local.yaml` as a list of `{provider, model, input_per_million, output_per_million}`, in decimal USD such as `"3"` or `"0.80"`. The agent uses server prices only: nexus's own catalog, plus the models you list here. A price a workspace sets on its own provider key doesn't apply to the agent, so a model nexus doesn't know needs an entry here. Each provider and model pair can appear once.
+
+Embeddings are priced the same way. For `openai`, Loomplane uses nexus's own price for the embedding model, so `text-embedding-3-small` needs no entry. For `openai-compatible`, the embedding model needs an `ai.prices` entry with provider `openai-compatible` and the model name, and its `input_per_million` is the embedding price. Without one, the server refuses every embedding. Set both amounts to `"0"` for a local model that costs nothing.
 
 ## Process and container
 

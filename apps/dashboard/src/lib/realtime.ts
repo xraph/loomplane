@@ -14,6 +14,7 @@ import {
   useRealtimeSnapshot as snapshotQuery,
   useInfrastructureGet as infrastructureQuery,
 } from "@/client/forge/loomplane/hooks"
+import { op_deployments_forPlan } from "@/client/forge/loomplane/ops/deployments.forPlan"
 import { op_realtime_events } from "@/client/forge/loomplane/ops/realtime.events"
 import { op_realtime_ws } from "@/client/forge/loomplane/ops/realtime.ws"
 import { streams } from "@/client/forge/loomplane/stream-bindings"
@@ -108,6 +109,7 @@ export class LoomplaneRealtime {
   }
   private listeners = new Set<() => void>()
   private frames = new Set<(event: string, data: Log | Collection) => void>()
+  private reportListeners = new Set<() => void>()
   private stopped = true
   private generation = 0
   private syncingGeneration = -1
@@ -121,6 +123,23 @@ export class LoomplaneRealtime {
   onOutput = (fn: (event: string, data: Log | Collection) => void) => {
     this.frames.add(fn)
     return () => this.frames.delete(fn)
+  }
+  /**
+   * onReleaseReport calls fn when a release report changes or goes. The
+   * report list reads through a query that tags nothing, so the entity
+   * binding can't refresh it; the page refetches on this instead. A
+   * snapshot after a reconnect calls it too, for what was missed.
+   */
+  onReleaseReport = (fn: () => void) => {
+    this.reportListeners.add(fn)
+    return () => this.reportListeners.delete(fn)
+  }
+  private reportChanged(event: string | undefined) {
+    if (
+      event === "release_report.updated" ||
+      event === "release_report.deleted"
+    )
+      this.reportListeners.forEach((fn) => fn())
   }
   private update(patch: Partial<LiveState>) {
     this.snapshot = { ...this.snapshot, ...patch }
@@ -306,6 +325,7 @@ export class LoomplaneRealtime {
         return
       if (cursor) this.cursor = cursor
       this.output(frame.event ?? "", frame.data)
+      this.reportChanged(frame.event)
       this.refreshDeploymentLookup(frame.event, frame.data)
       if (
         frame.event === "analysis.updated" ||
@@ -330,7 +350,10 @@ export class LoomplaneRealtime {
     if (event !== "deployment.updated" || !data) return
     const deployment = data as { plan_id?: string; planId?: string }
     const plan = deployment.plan_id ?? deployment.planId
-    if (plan) this.options.cache.invalidate([`Deployment:${plan}`])
+    if (plan)
+      this.options.cache.invalidate(
+        op_deployments_forPlan.provides.map((tag) => tag.replace("{id}", plan))
+      )
   }
   private applySnapshot(
     snapshot: Snapshot,
@@ -346,6 +369,7 @@ export class LoomplaneRealtime {
       if (record.orgId !== this.options.orgId) continue
       this.refreshDeploymentLookup(record.event, record.data)
       this.output(record.event, record.data)
+      this.reportChanged(record.event)
       const frame = { event: record.event, data: record.data, channel }
       if (deliver) deliver(frame)
       else {

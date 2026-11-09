@@ -1,7 +1,9 @@
-// Package server connects to Docker through an explicitly pinned SSH server.
+// Package server connects to Docker on a host, through an explicitly pinned
+// SSH server or the streams of a joined node.
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +14,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/xraph/loomplane/internal/buildpolicy"
 )
 
 var (
@@ -22,10 +27,12 @@ var (
 )
 
 // Config retains the signer only in memory; Details may be persisted.
+// Node is set, and the SSH fields empty, for a joined node.
 type Config struct {
 	Address, User, Socket string
 	HostKey               ssh.PublicKey
 	Signer                ssh.Signer
+	Node                  *NodeTarget
 	Details               map[string]string
 }
 
@@ -41,10 +48,20 @@ func (c *Config) RecordedDetails(recorded map[string]string) map[string]string {
 	return details
 }
 
-// ParseConfig accepts a PEM key or a JSON private_key/passphrase pair.
+// ParseConfig accepts a PEM key or a JSON private_key/passphrase pair, or
+// the node marker NodeCredential makes.
 func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
+	if err := buildpolicy.ValidateWorkers(settings["build_workers"]); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if settings["build_runtime_class"] != "" {
+		return nil, fmt.Errorf("%w: Kata RuntimeClass requires Kubernetes", ErrInvalid)
+	}
 	if len(raw) == 0 || len(raw) > 256<<10 {
 		return nil, fmt.Errorf("%w: provide an SSH private key", ErrInvalid)
+	}
+	if IsNodeCredential(raw) {
+		return parseNodeConfig(raw, settings)
 	}
 	key := struct {
 		PrivateKey string `json:"private_key"`
@@ -85,21 +102,122 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	if err != nil || strings.TrimSpace(string(rest)) != "" {
 		return nil, fmt.Errorf("%w: provide the server's SSH public host key", ErrInvalid)
 	}
-	socket := settings["docker_socket"]
-	if socket == "" {
-		socket = "/var/run/docker.sock"
-	}
-	if !path.IsAbs(socket) || path.Clean(socket) != socket || len(socket) > 4096 || strings.ContainsAny(socket, "\x00\r\n") {
-		return nil, fmt.Errorf("%w: Docker socket must be an absolute Unix path", ErrInvalid)
+	socket, err := dockerSocket(settings)
+	if err != nil {
+		return nil, err
 	}
 	advertise := strings.TrimSpace(settings["advertise_host"])
 	if advertise == "" {
 		advertise = host
 	}
-	if len(advertise) > 253 || strings.ContainsAny(advertise, "/\\@?# \t\r\n") || (strings.Contains(advertise, ":") && net.ParseIP(advertise) == nil) {
-		return nil, fmt.Errorf("%w: advertised host must be a hostname or IP address", ErrInvalid)
+	if checkErr := checkAdvertiseHost(advertise); checkErr != nil {
+		return nil, checkErr
 	}
 	return &Config{Address: net.JoinHostPort(host, strconv.Itoa(port)), User: user, Socket: socket, HostKey: pub, Signer: signer, Details: map[string]string{
-		"host": host, "port": strconv.Itoa(port), "user": user, "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), "docker_socket": socket, "advertise_host": advertise,
+		"build_workers": settings["build_workers"], "host": host, "port": strconv.Itoa(port), "user": user, "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), "docker_socket": socket, "advertise_host": advertise,
+	}}, nil
+}
+
+// dockerSocket is the daemon socket settings name, by default Docker's own.
+func dockerSocket(settings map[string]string) (string, error) {
+	socket := settings["docker_socket"]
+	if socket == "" {
+		socket = "/var/run/docker.sock"
+	}
+	if !path.IsAbs(socket) || path.Clean(socket) != socket || len(socket) > 4096 || strings.ContainsAny(socket, "\x00\r\n") {
+		return "", fmt.Errorf("%w: Docker socket must be an absolute Unix path", ErrInvalid)
+	}
+	return socket, nil
+}
+
+func checkAdvertiseHost(advertise string) error {
+	if len(advertise) > 253 || strings.ContainsAny(advertise, "/\\@?# \t\r\n") || (strings.Contains(advertise, ":") && net.ParseIP(advertise) == nil) {
+		return fmt.Errorf("%w: advertised host must be a hostname or IP address", ErrInvalid)
+	}
+	return nil
+}
+
+// nodeMarker is the JSON of a node connection's credential.
+type nodeMarker struct {
+	Node *nodeRef `json:"loomplane_node"`
+}
+
+type nodeRef struct {
+	OrgID  string `json:"org_id"`
+	NodeID string `json:"node_id"`
+}
+
+// NodeCredential is a node connection's credential. It holds nothing
+// secret: Loomplane makes it on read from the connection's node, and the
+// node's own streams are what authenticate.
+func NodeCredential(orgID, nodeID string) []byte {
+	raw, err := json.Marshal(nodeMarker{Node: &nodeRef{OrgID: orgID, NodeID: nodeID}})
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// validNodeID reports whether id is a node ID as the nodes service makes
+// them: node_ and a UUID in its canonical form.
+func validNodeID(id string) bool {
+	rest, ok := strings.CutPrefix(id, "node_")
+	if !ok {
+		return false
+	}
+	parsed, err := uuid.Parse(rest)
+	return err == nil && parsed.String() == rest
+}
+
+// validOrgID reports whether id is 1 to 128 printable ASCII characters,
+// none of them a space.
+func validOrgID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for i := range len(id) {
+		if id[i] <= ' ' || id[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// IsNodeCredential reports whether raw is a node connection's credential.
+func IsNodeCredential(raw []byte) bool {
+	var marker nodeMarker
+	return json.Unmarshal(raw, &marker) == nil && marker.Node != nil
+}
+
+// parseNodeConfig is ParseConfig for the node marker. The node's identity
+// generation comes from the reviewed settings, and there is no key to hold.
+func parseNodeConfig(raw []byte, settings map[string]string) (*Config, error) {
+	var marker nodeMarker
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&marker); err != nil || marker.Node == nil {
+		return nil, fmt.Errorf("%w: malformed node credential", ErrInvalid)
+	}
+	orgID, nodeID := marker.Node.OrgID, marker.Node.NodeID
+	if !validOrgID(orgID) || !validNodeID(nodeID) {
+		return nil, fmt.Errorf("%w: the node credential names no node", ErrInvalid)
+	}
+	if settings["node_id"] != nodeID {
+		return nil, fmt.Errorf("%w: the node credential names another node", ErrInvalid)
+	}
+	generation, err := strconv.ParseInt(settings["identity_generation"], 10, 64)
+	if err != nil || generation < 1 {
+		return nil, fmt.Errorf("%w: provide the node's identity generation", ErrInvalid)
+	}
+	socket, err := dockerSocket(settings)
+	if err != nil {
+		return nil, err
+	}
+	advertise := strings.TrimSpace(settings["advertise_host"])
+	if checkErr := checkAdvertiseHost(advertise); checkErr != nil {
+		return nil, checkErr
+	}
+	return &Config{Socket: socket, Node: &NodeTarget{OrgID: orgID, NodeID: nodeID, IdentityGeneration: generation}, Details: map[string]string{
+		"node_id": nodeID, "identity_generation": strconv.FormatInt(generation, 10), "docker_socket": socket, "advertise_host": advertise, "build_workers": settings["build_workers"],
 	}}, nil
 }

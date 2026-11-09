@@ -17,7 +17,9 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var _ DomainStore = (*PgStore)(nil)
@@ -123,20 +125,28 @@ func zoneBodyTime(field string) string {
 	return "(CASE WHEN " + value + ` ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$' THEN (` + value + ")::timestamptz END)"
 }
 
-// ZoneProofsDue reads managed zones whose proof the background still checks,
+// ZoneProofsDue reads zones whose proof the background still checks,
 // across organizations. It serves the background check only. Unset times are
 // stored as Go's zero time, which sorts before any check. A row whose times
 // don't parse is left out, and one that doesn't decode is skipped, rather
 // than failing the pass.
-func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore, recheckBefore time.Time, limit int) ([]*Zone, error) {
 	zero := "'0001-01-01T00:00:00Z'::timestamptz"
+	// zoneProofDue's rule: a managed zone's pending proof until it expires,
+	// and any verified zone's own record daily, or every pass while it's
+	// missing.
 	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_dns_zones
- WHERE body->>'mode'='managed'
- AND `+zoneBodyTime("verified_at")+` <= `+zero+`
- AND `+zoneBodyTime("proof_expires_at")+` > $1
- AND `+zoneBodyTime("proof_checked_at")+` <= $2
- AND NOT (coalesce(body->>'proof_publish_attempted','false')='true' AND coalesce(`+zoneBodyTime("proof_publish_attempted_at")+`,`+zero+`) > $2)
- ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit)
+ WHERE NOT (coalesce(body->>'proof_publish_attempted','false')='true' AND coalesce(`+zoneBodyTime("proof_publish_attempted_at")+`,`+zero+`) > $2)
+ AND ((body->>'mode'='managed'
+   AND `+zoneBodyTime("verified_at")+` <= `+zero+`
+   AND `+zoneBodyTime("proof_expires_at")+` > $1
+   AND `+zoneBodyTime("proof_checked_at")+` <= $2)
+  OR (`+zoneBodyTime("verified_at")+` > `+zero+`
+   AND body->>'proof_name' = '_loomplane.'||(body->>'name')
+   AND coalesce(body->>'proof_value','') <> ''
+   AND `+zoneBodyTime("proof_expires_at")+` > `+zero+`
+   AND `+zoneBodyTime("proof_checked_at")+` <= CASE WHEN coalesce(`+zoneBodyTime("proof_missing_at")+`,`+zero+`) > `+zero+` THEN $2 ELSE $4 END))
+ ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit, recheckBefore)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +184,7 @@ func (s *PgStore) SaveZone(ctx context.Context, zone *Zone) error {
 // Initial Create persists its revision and ServiceRefs. Updated instances need
 // the ready runtime receipt and the latest exact controller deployment success.
 const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state FROM cp_deployments d WHERE d.tenant_id=i.tenant_id AND d.instance_id=i.id ORDER BY d.created_at DESC,d.id DESC LIMIT 1) deployment ON true`
-const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
+const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id WHEN i.state='running' AND i.provider_name LIKE 'kubernetes.%' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND i.labels->>'` + owned.LabelRevision + `'=nullif(i.labels->>'` + owned.LabelManagedRevisionBase + `','')||'/'||deployment.release_id THEN i.labels->>'` + owned.LabelRevision + `' ELSE '' END`
 const routedRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>routed.name ELSE i.labels->>('` + owned.LabelReceiptServicePrefix + `'||routed.name) END`
 
 // routableComponent matches a composed catalog component's process on a port
@@ -199,7 +209,19 @@ const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_arr
  WHERE (b.subject='resource' OR svc->>'name'='main') AND EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$6)
  ORDER BY svc->>'name' LIMIT 1) routed ON true`
 
-var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+// routeServerAddress is where a server binding's route sends traffic: the
+// connection's advertise_host, else its SSH host. A node's connection has
+// no SSH host, and its advertise_host counts only while it is the address
+// the node confirmed by an address check and the node is in direct
+// ingress mode; otherwise it is empty. So a connection whose
+// advertise_host someone set by hand never routes to an address that
+// didn't answer, and a node its owner took out of direct ingress takes no
+// new route.
+const routeServerAddress = `CASE WHEN coalesce(c.details->>'node_id','')='' THEN coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+ ELSE coalesce((SELECT n.public_address FROM loomplane_nodes n WHERE n.id=c.details->>'node_id' AND n.org_id=c.org_id AND n.revoked_at IS NULL
+ AND n.ingress_mode='direct' AND n.public_address_confirmed_at IS NOT NULL AND n.public_address<>'' AND n.public_address=c.details->>'advertise_host'),'') END`
+
+var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),` + routeServerAddress + `,coalesce(c.details->>'node_id','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_targets t ON t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id'
@@ -211,14 +233,22 @@ var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.exte
  AND (b.subject='service' OR (` + routableComponent + `))
  ORDER BY b.subject='service' DESC`
 
+// errUnconfirmedNodeAddress is a node binding whose connection doesn't
+// name the node's confirmed address, as while an address change settles.
+var errUnconfirmedNodeAddress = fmt.Errorf("%w: the node this service runs on has no confirmed public address on this connection yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
+
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	var out RouteBinding
 	var config []byte
-	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address)
+	var node string
+	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address, &node)
 	if err != nil {
 		return out, storeError(err)
 	}
 	out.ConfigDigest = digest(json.RawMessage(config))
+	if node != "" && out.Address == "" {
+		return out, errUnconfirmedNodeAddress
+	}
 	if out.RuntimeID == "" || out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
 		return out, fmt.Errorf("%w: no successful exact runtime receipt; redeploy this service successfully before configuring its route", ErrConflict)
 	}
@@ -264,6 +294,38 @@ func scanKubernetesRouteBinding(row pgx.Row) (RouteBinding, error) {
 	return out, nil
 }
 
+// A platform binding is a service its provider's platform runs and routes
+// itself, so it rests on its app and the ready connection it was deployed
+// with, Cloud or not. A resource, such as a database, never takes a route.
+var platformRouteBindingQuery = `SELECT b.id,b.external_id,c.id,c.generation,b.provider,coalesce(b.config->>'public',''),coalesce(b.config->>'port',''),coalesce(b.config->>'execution','')
+ FROM loomplane_bindings b
+ JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
+ JOIN loomplane_cloud_connections c ON c.org_id=b.org_id AND c.id=b.connection_id AND c.cloud=b.provider AND c.status='ready'
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.subject='service' AND b.provider=ANY($5)`
+
+// scanPlatformRouteBinding refuses a service its platform won't route to
+// on port, so preview and apply both refuse it. A static site is refused
+// first: it has no port, and no deploy gives it one.
+func scanPlatformRouteBinding(row pgx.Row, port int) (RouteBinding, error) {
+	out := RouteBinding{Backend: RouteBackendPlatform}
+	var public, servicePort, execution string
+	err := row.Scan(&out.BindingID, &out.ExternalID, &out.ConnectionID, &out.ConnectionGeneration, &out.Provider, &public, &servicePort, &execution)
+	if err != nil {
+		return out, storeError(err)
+	}
+	if execution == string(provider.Static) {
+		return out, platformRefusal(ErrInvalid, platformStaticSite)
+	}
+	if out.ExternalID == "" {
+		return out, platformRefusal(ErrConflict, platformNoApp)
+	}
+	return out, checkPlatformService(public, servicePort, port)
+}
+
+func platformRouteBindingArgs(org, project string, in RouteInput) []any {
+	return []any{org, project, in.EnvironmentID, in.Service, platformProviders}
+}
+
 // routeBindingBackend is the provider of the binding a route names. A service
 // wins over a catalog component with the same name, as in the binding queries.
 func (s *PgStore) routeBindingBackend(ctx context.Context, org, project string, in RouteInput) (string, error) {
@@ -277,13 +339,28 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 	if err != nil {
 		return RouteBinding{}, err
 	}
+	if backend == RouteBackendFirecracker {
+		return scanFirecrackerRouteBinding(s.db.QueryRow(ctx, firecrackerRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+	}
+	if backend == platformCloudService {
+		return scanPlatformCloudRouteBinding(s.db.QueryRow(ctx, platformCloudRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+	}
 	if backend == RouteBackendKubernetes {
 		return scanKubernetesRouteBinding(s.db.QueryRow(ctx, kubernetesRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+	}
+	if slices.Contains(platformProviders, backend) {
+		return scanPlatformRouteBinding(s.db.QueryRow(ctx, platformRouteBindingQuery, platformRouteBindingArgs(org, project, in)...), in.Port)
 	}
 	if in.CloudID == "" {
 		return RouteBinding{}, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
 	}
 	return scanRouteBinding(s.db.QueryRow(ctx, routeBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+}
+
+func (s *PgStore) RouteBindingCommit(ctx context.Context, org, bindingID string) (string, error) {
+	var commit string
+	err := s.db.QueryRow(ctx, `SELECT commit_sha FROM loomplane_bindings WHERE org_id=$1 AND id=$2`, org, bindingID).Scan(&commit)
+	return commit, storeError(err)
 }
 
 // A service and a catalog component may share a name. The service wins here
@@ -370,6 +447,9 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, route.OrgID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := guardEdgeRoute(ctx, tx, route, op.Kind); checkErr != nil {
+		return checkErr
+	}
 	if checkErr := guardRouteAttachment(ctx, tx, route, op.Kind); checkErr != nil {
 		return checkErr
 	}
@@ -378,9 +458,18 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		var current RouteBinding
 		var lookupErr error
 		// The organization lock already orders this with grant changes.
-		if route.Binding.BackendName() == RouteBackendKubernetes {
+		switch route.Binding.BackendName() {
+		case RouteBackendFirecracker:
+			if isPlatformCloud(route.Binding) {
+				current, lookupErr = scanPlatformCloudRouteBinding(tx.QueryRow(ctx, platformCloudRouteBindingQuery+" FOR SHARE OF b,i,pl", args...))
+				break
+			}
+			current, lookupErr = scanFirecrackerRouteBinding(tx.QueryRow(ctx, firecrackerRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
+		case RouteBackendKubernetes:
 			current, lookupErr = scanKubernetesRouteBinding(tx.QueryRow(ctx, kubernetesRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
-		} else {
+		case RouteBackendPlatform:
+			current, lookupErr = scanPlatformRouteBinding(tx.QueryRow(ctx, platformRouteBindingQuery+" FOR SHARE OF b,c", platformRouteBindingArgs(route.OrgID, route.ProjectID, route.Input)...), route.Input.Port)
+		default:
 			current, lookupErr = scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", args...))
 		}
 		if lookupErr != nil {
@@ -448,6 +537,18 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if current != route.Revision {
 			return ErrConflict
 		}
+		switch op.Kind {
+		case "address":
+			if checkErr := acceptAddressRoute(ctx, tx, op); checkErr != nil {
+				return checkErr
+			}
+		case "prepare":
+			// A handoff goes ahead of an address change still waiting; the
+			// change is made again once the handoff is done.
+			if checkErr := yieldAddressRoute(ctx, tx, op); checkErr != nil {
+				return checkErr
+			}
+		}
 		if op.Kind == "cutover" || op.Kind == "rollback" || op.Kind == "release" {
 			var released bool
 			if checkErr := tx.QueryRow(ctx, `SELECT released FROM loomplane_route_handoffs WHERE org_id=$1 AND id=$2 AND route_id=$3 FOR UPDATE`, route.OrgID, op.HandoffID, route.ID).Scan(&released); checkErr != nil {
@@ -480,6 +581,10 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 						op.Receipt = active.Receipt
 					} else if active.PreviousReceipt != nil {
 						op.Receipt = active.PreviousReceipt
+					}
+					// A platform operation keeps every record it wrote.
+					if active.Receipts != nil {
+						op.Receipts = active.Receipts
 					}
 					op.CancelledIngress = active.CancelledIngress
 					if active.DesiredConfig != nil {
@@ -559,15 +664,15 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 		return err
 	}
 	defer rollback(tx)
-	// A Kubernetes route has no server ingress config to fence on; the route
-	// lock and the revisions below order its workers.
-	if op.Route.Binding.BackendName() != RouteBackendKubernetes {
+	// A Kubernetes or platform route has no server ingress config to fence
+	// on; the route lock and the revisions below order its workers.
+	if !noServerIngress(op.Route) {
 		var generation int64
 		if checkErr := tx.QueryRow(ctx, `SELECT generation FROM loomplane_ingress_configs WHERE org_id=$1 AND server_id=$2 AND generation=$3 FOR UPDATE`, op.Route.OrgID, op.Route.Binding.ServerID, op.Generation).Scan(&generation); checkErr != nil {
 			return ErrConflict
 		}
 	}
-	op.Route.Receipt = op.Receipt
+	op.Route.Receipt, op.Route.Receipts = op.Receipt, op.Receipts
 	op.Route.OperationID = op.ID
 	prior := op.Route.Revision
 	op.Route.Revision++
@@ -594,8 +699,21 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 	return tx.Commit()
 }
 
+// GuardRouteOwnership rechecks the authoritative mapping for saved route work.
+func (s *PgStore) GuardRouteOwnership(ctx context.Context, route Route) error {
+	return projects.GuardUnmanagedEnvironment(ctx, s.db, route.OrgID, route.Input.EnvironmentID)
+}
+
 func (s *PgStore) BeginIngress(ctx context.Context, op *RouteOperation) (*IngressState, error) {
-	if op.Route.Binding.BackendName() == RouteBackendKubernetes {
+	if err := s.GuardRouteOwnership(ctx, op.Route); err != nil {
+		return nil, err
+	}
+	if op.Source != nil {
+		if err := s.GuardRouteOwnership(ctx, *op.Source); err != nil {
+			return nil, err
+		}
+	}
+	if noServerIngress(op.Route) {
 		if err := s.SaveRouteOperation(ctx, op); err != nil {
 			return nil, err
 		}

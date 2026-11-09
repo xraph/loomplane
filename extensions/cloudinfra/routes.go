@@ -12,6 +12,7 @@ import (
 	infra "github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -23,7 +24,7 @@ type ServerList struct {
 func (ServerList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "servers"} }
 
 type OperationList struct {
-	Operations []*infra.Operation `json:"operations"`
+	Operations []*Operation `json:"operations"`
 }
 
 func (OperationList) ForgeEnvelope() forge.EnvelopeDef {
@@ -38,6 +39,12 @@ type route struct {
 }
 
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
+	if err := e.registryRoutes(r, guard); err != nil {
+		return err
+	}
+	if err := e.clusterRoutes(r, guard); err != nil {
+		return err
+	}
 	if err := e.domainRoutes(r, guard); err != nil {
 		return err
 	}
@@ -56,18 +63,19 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/pools/:poolId", "cloudPools.update", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/check", "cloudServers.check", e.checkServer, nil, infra.Server{}, http.StatusOK},
 		{http.MethodGet, "/servers", "cloudServers.list", e.list, nil, ServerList{}, http.StatusOK},
+		{http.MethodGet, "/node-adoptions", "cloudNodeAdoptions.list", e.nodeAdoptions, nil, NodeAdoptionList{}, http.StatusOK},
 		{http.MethodGet, "/capacity-policy", "cloudCapacity.getPolicy", e.capacityPolicy, nil, CapacityPolicyView{}, http.StatusOK},
-		{http.MethodPost, "/capacity-policy", "cloudCapacity.savePolicy", e.saveCapacityPolicy, infra.CapacityPolicyInput{}, CapacityPolicyView{}, http.StatusOK},
+		{http.MethodPost, "/capacity-policy", "cloudCapacity.savePolicy", e.saveCapacityPolicy, CapacityPolicyInput{}, CapacityPolicyView{}, http.StatusOK},
 		{http.MethodGet, "/expansions", "cloudCapacity.listExpansions", e.expansions, nil, ExpansionList{}, http.StatusOK},
 		{http.MethodPost, "/expansions/:expansionId/approve", "cloudCapacity.approveExpansion", e.approveExpansion, ApproveExpansionInput{}, infra.Expansion{}, http.StatusOK},
 		{http.MethodGet, "/server-options/:connectionId", "cloudServers.options", e.options, nil, provider.ServerOptions{}, http.StatusOK},
-		{http.MethodPost, "/servers/preview", "cloudServers.preview", e.preview, infra.ServerInput{}, infra.Operation{}, http.StatusOK},
+		{http.MethodPost, "/servers/preview", "cloudServers.preview", e.preview, infra.ServerInput{}, Operation{}, http.StatusOK},
 		{http.MethodGet, "/infrastructure-operations", "infrastructureOperations.list", e.operations, nil, OperationList{}, http.StatusOK},
-		{http.MethodGet, "/infrastructure-operations/:operationId", "infrastructureOperations.get", e.operation, nil, infra.Operation{}, http.StatusOK},
-		{http.MethodPost, "/infrastructure-operations/:operationId/apply", "infrastructureOperations.apply", e.apply, infra.ApplyInput{}, infra.Operation{}, http.StatusAccepted},
-		{http.MethodPost, "/infrastructure-operations/:operationId/cancel", "infrastructureOperations.cancel", e.cancelOperation, nil, infra.Operation{}, http.StatusOK},
-		{http.MethodPost, "/infrastructure-operations/:operationId/retry", "infrastructureOperations.retry", e.retry, nil, infra.Operation{}, http.StatusAccepted},
-		{http.MethodPost, "/scaling-pools", "cloudCapacity.createScalingPool", e.createScalingPool, infra.ScalingPoolInput{}, infra.ScalingPool{}, http.StatusOK},
+		{http.MethodGet, "/infrastructure-operations/:operationId", "infrastructureOperations.get", e.operation, nil, Operation{}, http.StatusOK},
+		{http.MethodPost, "/infrastructure-operations/:operationId/apply", "infrastructureOperations.apply", e.apply, infra.ApplyInput{}, Operation{}, http.StatusAccepted},
+		{http.MethodPost, "/infrastructure-operations/:operationId/cancel", "infrastructureOperations.cancel", e.cancelOperation, nil, Operation{}, http.StatusOK},
+		{http.MethodPost, "/infrastructure-operations/:operationId/retry", "infrastructureOperations.retry", e.retry, nil, Operation{}, http.StatusAccepted},
+		{http.MethodPost, "/scaling-pools", "cloudCapacity.createScalingPool", e.createScalingPool, ScalingPoolInput{}, ScalingPool{}, http.StatusOK},
 		{http.MethodGet, "/capacity-usage", "cloudCapacity.usage", e.capacityUsage, nil, infra.CapacityUsage{}, http.StatusOK},
 		{http.MethodPost, "/capacity-usage/refresh", "cloudCapacity.refresh", e.refreshCapacity, nil, infra.CapacityUsage{}, http.StatusOK},
 	}
@@ -108,6 +116,9 @@ func result(c forge.Context, status int, value any, err error) error {
 	if err == nil {
 		return c.JSON(status, value)
 	}
+	if handled, result := clusterBlockResult(c, err); handled {
+		return result
+	}
 	// A capacity block is a refusal the person can act on, not a conflict to
 	// reload: it answers 422 with the block's sentence. ErrBusy and a moved
 	// revision stay 409.
@@ -121,10 +132,10 @@ func result(c forge.Context, status int, value any, err error) error {
 		code = http.StatusUnprocessableEntity
 	case errors.Is(err, infra.ErrNotFound), errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, connections.ErrNotFound):
 		code = http.StatusNotFound
-	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift):
+	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift), errors.Is(err, projects.ErrFleetManaged):
 		code = http.StatusConflict
 	// A key whose saved authority can't act for capacity is refused, not a server error.
-	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected):
+	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected), errors.Is(err, cloudprofiles.ErrPlatformOwned):
 		code = http.StatusForbidden
 	case errors.Is(err, provider.ErrInfrastructureUnsupported):
 		code = http.StatusUnprocessableEntity
@@ -154,7 +165,7 @@ func (e *Extension) operations(c forge.Context) error {
 		return result(c, 0, nil, err)
 	}
 	v, err := e.svc.ListOperations(c.Request().Context(), p, c.Param("cloudId"))
-	return result(c, http.StatusOK, OperationList{Operations: v}, err)
+	return result(c, http.StatusOK, OperationList{Operations: publicOperations(v)}, err)
 }
 func (e *Extension) preview(c forge.Context) error {
 	p, err := caller(c)
@@ -166,7 +177,7 @@ func (e *Extension) preview(c forge.Context) error {
 		return result(c, 0, nil, infra.ErrInvalid)
 	}
 	v, err := e.svc.PreviewServer(c.Request().Context(), p, c.Param("cloudId"), in)
-	return result(c, http.StatusOK, v, err)
+	return result(c, http.StatusOK, PublicOperation(v), err)
 }
 func (e *Extension) operation(c forge.Context) error {
 	p, err := caller(c)
@@ -174,7 +185,7 @@ func (e *Extension) operation(c forge.Context) error {
 		return result(c, 0, nil, err)
 	}
 	v, err := e.svc.GetOperation(c.Request().Context(), p, c.Param("cloudId"), c.Param("operationId"))
-	return result(c, http.StatusOK, v, err)
+	return result(c, http.StatusOK, PublicOperation(v), err)
 }
 func (e *Extension) apply(c forge.Context) error {
 	p, err := caller(c)
@@ -186,7 +197,7 @@ func (e *Extension) apply(c forge.Context) error {
 		return result(c, 0, nil, infra.ErrInvalid)
 	}
 	v, err := e.svc.ApplyServerOperation(c.Request().Context(), p, c.Param("cloudId"), c.Param("operationId"), in)
-	return result(c, http.StatusAccepted, v, err)
+	return result(c, http.StatusAccepted, PublicOperation(v), err)
 }
 func (e *Extension) retry(c forge.Context) error {
 	p, err := caller(c)
@@ -194,7 +205,7 @@ func (e *Extension) retry(c forge.Context) error {
 		return result(c, 0, nil, err)
 	}
 	v, err := e.svc.RetryOperation(c.Request().Context(), p, c.Param("cloudId"), c.Param("operationId"))
-	return result(c, http.StatusAccepted, v, err)
+	return result(c, http.StatusAccepted, PublicOperation(v), err)
 }
 func (e *Extension) enroll(c forge.Context) error {
 	c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, 16<<10)
@@ -224,7 +235,7 @@ func (e *Extension) cancelOperation(c forge.Context) error {
 		return result(c, 0, nil, err)
 	}
 	v, err := e.svc.CancelOperation(c.Request().Context(), p, c.Param("cloudId"), c.Param("operationId"))
-	return result(c, http.StatusOK, v, err)
+	return result(c, http.StatusOK, PublicOperation(v), err)
 }
 
 func (e *Extension) checkServer(c forge.Context) error {

@@ -1,0 +1,10 @@
+import type { Codec } from '../codec-runtime';
+import { codec_AttachmentInput } from './AttachmentInput';
+import { codec_ClusterMaintenanceInput } from './ClusterMaintenanceInput';
+import { codec_ClusterRef } from './ClusterRef';
+import { codec_ClusterRetirementInput } from './ClusterRetirementInput';
+import { codec_ClusterScalingInput } from './ClusterScalingInput';
+import { codec_ClusterSpec } from './ClusterSpec';
+import { codec_RuntimeAccessReview } from './RuntimeAccessReview';
+
+export const codec_ClusterInput: Codec = {"kind": "object", "fields": {"account_id": {"ts": "accountId"}, "acknowledge_node_costs": {"ts": "acknowledgeNodeCosts"}, "acknowledge_unknown_costs": {"ts": "acknowledgeUnknownCosts"}, "attachment": {"ts": "attachment", "codec": () => codec_AttachmentInput}, "cloud_revision": {"ts": "cloudRevision"}, "connection_generation": {"ts": "connectionGeneration"}, "connection_id": {"ts": "connectionId"}, "kind": {"ts": "kind"}, "maintenance": {"ts": "maintenance", "codec": () => codec_ClusterMaintenanceInput}, "management_reachable": {"ts": "managementReachable"}, "options_checked_at": {"ts": "optionsCheckedAt"}, "options_digest": {"ts": "optionsDigest"}, "policy_revision": {"ts": "policyRevision"}, "provider": {"ts": "provider"}, "ref": {"ts": "ref", "codec": () => codec_ClusterRef}, "resource_id": {"ts": "resourceId"}, "resource_revision": {"ts": "resourceRevision"}, "retirement": {"ts": "retirement", "codec": () => codec_ClusterRetirementInput}, "runtime_access": {"ts": "runtimeAccess", "codec": () => codec_RuntimeAccessReview}, "scaling": {"ts": "scaling", "codec": () => codec_ClusterScalingInput}, "spec": {"ts": "spec", "codec": () => codec_ClusterSpec}, "worker_image": {"ts": "workerImage"}}, "required": ["account_id", "acknowledge_node_costs", "acknowledge_unknown_costs", "cloud_revision", "connection_generation", "connection_id", "kind", "management_reachable", "options_checked_at", "options_digest", "policy_revision", "provider", "ref", "resource_revision", "spec", "worker_image"]};

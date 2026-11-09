@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/discovery"
+	domain "github.com/xraph/loomplane/pkg/federation"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -43,10 +44,16 @@ const (
 // Plan kinds. A release deploys the manifest; a promotion deploys what
 // another environment runs; a rollback restores an earlier release.
 const (
+	KindInstance  = "instance"
 	KindRelease   = "release"
 	KindPromotion = "promotion" // made with CreatePlanInput.From
 	KindRollback  = "rollback"
 )
+
+// StaleRollback is the error of a rollback's deployment that refused to
+// start because a newer release deployed after the rollback was approved.
+// It deployed nothing, so it's no release and undid nothing.
+const StaleRollback = "a newer release deployed after this rollback was approved, so it deployed nothing; roll back again only if you mean to undo that newer release"
 
 // Rollback triggers.
 const (
@@ -68,6 +75,13 @@ var (
 	ErrNoSources     = errors.New("this project has no repositories; add one first")
 	ErrNeverDeployed = errors.New("a repository this plan holds back has never been deployed here")
 	ErrNotRunning    = errors.New("the environment you promote from runs nothing yet; deploy it first")
+
+	ErrNoPreviousRelease = errors.New("this environment has no earlier successful release to roll back to")
+	ErrReleaseRunning    = errors.New("a deployment is running in this environment; wait for it to finish, or cancel it, before rolling back")
+	// ErrCanaryReverted is a rollback of a deployment whose canary already
+	// returned traffic to the baseline, or failed to settle it. The error
+	// returned says which.
+	ErrCanaryReverted = errors.New("the canary already dealt with this release")
 )
 
 // Op is what an action does.
@@ -93,6 +107,7 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	CleanupTargets []ManagedCleanupTarget `json:"cleanup_targets,omitempty"`
 	// BackupEveryHours is a reviewed default for a newly provisioned resource.
 	// It does not change the runtime recipe or overwrite an operator's policy.
 	BackupEveryHours int                `json:"backup_every_hours,omitempty"`
@@ -103,6 +118,9 @@ type Action struct {
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
 	AdoptCloudPlacement bool           `json:"adopt_cloud_placement,omitempty"`
 	CloudAdoption       *CloudAdoption `json:"cloud_adoption,omitempty"`
+	// NativeMove is a replacement that moves a Vercel service off the
+	// project of its own it runs on, into the shared project's environment.
+	NativeMove bool `json:"native_move,omitempty"`
 	// ID is stable for a subject: "service:api", "resource:db".
 	ID       string  `json:"id"`
 	Op       Op      `json:"op"`
@@ -141,20 +159,27 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
-	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
-	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`
-	CloudPlacement *CloudPlacement            `json:"cloud_placement,omitempty"`
-	Catalog        *recipes.Recipe            `json:"catalog,omitempty"`
-	Provider       string                     `json:"provider"`
-	Region         string                     `json:"region,omitempty"`
-	Target         string                     `json:"target,omitempty"`
-	TargetSettings map[string]string          `json:"target_settings,omitempty"`
-	Endpoint       *manifest.Endpoint         `json:"endpoint,omitempty"`
-	HealthPath     string                     `json:"health_path,omitempty"`
-	BuildTarget    *BuildTarget               `json:"build_target,omitempty"`
-	Workload       provider.Workload          `json:"workload"`
-	Execution      provider.Execution         `json:"execution"`
+	PodGroup                   *manifest.PodGroup             `json:"pod_group,omitempty"`
+	WorkloadCapabilityRevision string                         `json:"workload_capability_revision,omitempty"`
+	Worker                     *provider.WorkerSettings       `json:"worker,omitempty"`
+	Placement                  *manifest.PlacementConstraints `json:"placement,omitempty"`
+	CapacityMode               string                         `json:"capacity_mode,omitempty"`
+	ClusterDemand              *ClusterWorkloadDemand         `json:"cluster_demand,omitempty"`
+	FrontendDemand             *cloudinfra.FrontendDemand     `json:"frontend_demand,omitempty"`
+	CapacityIntent             *CapacityIntent                `json:"capacity_intent,omitempty"`
+	AppliedInputs              *AppliedInputs                 `json:"applied_inputs,omitempty"`
+	CloudPlacement             *CloudPlacement                `json:"cloud_placement,omitempty"`
+	Catalog                    *recipes.Recipe                `json:"catalog,omitempty"`
+	Provider                   string                         `json:"provider"`
+	Region                     string                         `json:"region,omitempty"`
+	Target                     string                         `json:"target,omitempty"`
+	TargetSettings             map[string]string              `json:"target_settings,omitempty"`
+	TargetAccountIdentity      string                         `json:"target_account_identity,omitempty"`
+	Endpoint                   *manifest.Endpoint             `json:"endpoint,omitempty"`
+	HealthPath                 string                         `json:"health_path,omitempty"`
+	BuildTarget                *BuildTarget                   `json:"build_target,omitempty"`
+	Workload                   provider.Workload              `json:"workload"`
+	Execution                  provider.Execution             `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -263,7 +288,7 @@ func DataBearing(a Action) bool {
 	case ResourceSubject:
 		return a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Protection != recipes.ProtectionNone
 	case ServiceSubject:
-		return a.Service != nil && (a.Service.Catalog != nil ||
+		return a.Service != nil && ((a.Service.Worker != nil && len(a.Service.Worker.DurableObjects) > 0) || a.Service.Catalog != nil ||
 			(a.Service.Component != nil && a.Service.Component.Protection != recipes.ProtectionNone))
 	}
 	return false
@@ -308,6 +333,7 @@ func (c *ServiceConfig) Generated() bool { return c.Gateway != nil || c.Database
 
 // BuildTarget pins the builder, registry and image reviewed in a plan.
 type BuildTarget struct {
+	BuilderCloud     string            `json:"builder_cloud,omitempty"`
 	Builder          string            `json:"builder,omitempty"`
 	Registry         string            `json:"registry,omitempty"`
 	Image            string            `json:"image,omitempty"`
@@ -369,14 +395,18 @@ type EnvLink struct {
 
 // ResourceConfig is everything a resource is provisioned from.
 type ResourceConfig struct {
-	Target         string                 `json:"target,omitempty"`
-	TargetSettings map[string]string      `json:"target_settings,omitempty"`
-	Catalog        *recipes.Recipe        `json:"catalog,omitempty"`
-	Managed        *ManagedDatabaseConfig `json:"managed,omitempty"`
-	Provider       string                 `json:"provider"`
-	Region         string                 `json:"region,omitempty"`
-	Kind           string                 `json:"kind"`
-	Version        string                 `json:"version,omitempty"`
+	EndpointPins     map[string]EndpointPin  `json:"endpoint_pins,omitempty"`
+	Settings         map[string]string       `json:"settings,omitempty"`
+	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
+	AccountIdentity  string                  `json:"account_identity,omitempty"`
+	Target           string                  `json:"target,omitempty"`
+	TargetSettings   map[string]string       `json:"target_settings,omitempty"`
+	Catalog          *recipes.Recipe         `json:"catalog,omitempty"`
+	Managed          *ManagedDatabaseConfig  `json:"managed,omitempty"`
+	Provider         string                  `json:"provider"`
+	Region           string                  `json:"region,omitempty"`
+	Kind             string                  `json:"kind"`
+	Version          string                  `json:"version,omitempty"`
 	// Composition is set on the action for a composed catalog resource
 	// itself, and Component on each of its components' actions.
 	Composition *CompositionConfig `json:"composition,omitempty"`
@@ -411,7 +441,8 @@ const (
 // DependencyChoice is where a composed catalog resource gets one
 // dependency.
 type DependencyChoice struct {
-	Mode string `json:"mode"`
+	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
+	Mode             string                  `json:"mode"`
 	// Resource is the action name: ComponentActionName(parent, dependency)
 	// for a new one, the manifest name for a connected resource.
 	Resource string `json:"resource,omitempty"`
@@ -444,6 +475,13 @@ type ComponentConfig struct {
 	Protection   recipes.Protection          `json:"protection"`
 	// GPU is the reviewed GPU placement of a component that uses GPUs.
 	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
+	// Inputs is the digest of what the kind renders into the component
+	// from outside the manifest (see CatalogInputs), or "" for nothing.
+	Inputs string `json:"inputs,omitempty"`
+	// Settings are the resource's settings, by name: every setting of the
+	// kind that has a value, with defaults filled in. They're never
+	// secret (see recipes.Setting).
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
 // Change is one setting an update changes.
@@ -477,11 +515,14 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
-	CloudSyncID string    `json:"cloud_sync_id,omitempty"`
-	Actions     []Action  `json:"actions"`
-	Problems    []Finding `json:"problems"`
-	Warnings    []Finding `json:"warnings"`
-	Summary     Summary   `json:"summary"`
+	PlacementGroups         []domain.QualifiedGroupPlan          `json:"placement_groups,omitempty"`
+	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
+	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
+	Actions                 []Action                             `json:"actions"`
+	Problems                []Finding                            `json:"problems"`
+	Warnings                []Finding                            `json:"warnings"`
+	Summary                 Summary                              `json:"summary"`
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
@@ -586,24 +627,29 @@ type DeployedRepository struct {
 	DeployedAt time.Time `json:"deployed_at"`
 }
 
-// ReleaseRecord is one succeeded deployment of an environment: a release
-// a rollback can return to. Kind is its plan's kind.
+// ReleaseRecord is one deployment of an environment. A succeeded one is a
+// release a rollback can return to. Kind is its plan's kind.
 type ReleaseRecord struct {
 	DeploymentID string
 	PlanID       string
 	Kind         string
 	Status       string
+	// CanaryStatus is the deployment's canary status, "" without a canary.
+	CanaryStatus string
 	StartedAt    time.Time
-	FinishedAt   time.Time
+	// FinishedAt is zero while the deployment runs.
+	FinishedAt time.Time
 }
 
 // ReleasedImage is what one service ran after a release: the image it
 // deployed, by digest when the executor recorded one, and where.
 type ReleasedImage struct {
-	Service      string
-	Provider     string
-	ConnectionID string
-	Region       string
+	// ExternalResources records whether the native release delivered external access.
+	ExternalResources bool
+	Service           string
+	Provider          string
+	ConnectionID      string
+	Region            string
 	// Registry is the registry connection the image was pushed through,
 	// for a server or Kubernetes service built by Loomplane.
 	Registry  string
@@ -628,6 +674,13 @@ type ReleaseHistory interface {
 	// before `before` (zero: no bound), newest first, leaving out Cloud
 	// sync and catalog plans.
 	Releases(ctx context.Context, orgID, environmentID string, before time.Time, limit int) ([]ReleaseRecord, error)
+	// Latest returns an environment's newest deployment whatever its
+	// status, leaving out Cloud sync and catalog plans and a rollback
+	// refused as stale, which deployed nothing, or ErrNotFound.
+	Latest(ctx context.Context, orgID, environmentID string) (*ReleaseRecord, error)
+	// Deployment returns one deployment whatever its status or plan, or
+	// ErrNotFound. An automatic rollback names the deployment it undoes.
+	Deployment(ctx context.Context, orgID, deploymentID string) (*ReleaseRecord, error)
 	// ReleasedImages returns, per service action name, the newest
 	// succeeded step at or before upTo.
 	ReleasedImages(ctx context.Context, orgID, environmentID string, upTo time.Time) (map[string]ReleasedImage, error)
@@ -636,8 +689,16 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
-	CloudSyncID string `json:"cloud_sync_id,omitempty"`
-	Catalog     bool   `json:"catalog"`
+	PlacementGroups []domain.QualifiedGroupPlan `json:"placement_groups,omitempty"`
+	// FleetInput is internal: ordinary APIs and realtime events never serialize it.
+	FleetInput *InstancePlanInput `json:"-"`
+	// ManagedInstanceID is derived from the environment ownership table on every read.
+	ManagedInstanceID string `json:"-"`
+
+	LocationPlacements      map[string]LocationPlacementDecision `json:"location_placements,omitempty"`
+	RequiredRuntimeProtocol string                               `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string                               `json:"cloud_sync_id,omitempty"`
+	Catalog                 bool                                 `json:"catalog"`
 	// Kind is KindRelease, KindPromotion or KindRollback. JSON tags of the
 	// fields below equal their column names: the realtime trigger
 	// serialises rows with to_jsonb.
@@ -667,6 +728,9 @@ type Plan struct {
 	Warnings         []Finding    `json:"warnings"`
 	Summary          Summary      `json:"summary"`
 	Executable       bool         `json:"executable"`
+	// Services are the manifest services the plan moves, sorted, or nil
+	// when it moves every one. The rest stay as they run.
+	Services []string `json:"services,omitempty"`
 	// Connections are the cloud connections the plan deploys with, by
 	// cloud, settled when it was planned.
 	Connections map[string]string `json:"connections"`
@@ -685,11 +749,27 @@ type Plan struct {
 	DecisionNote string     `json:"decision_note"`
 }
 
+// TeardownOnly reports whether the plan only removes things: every action
+// deletes or keeps. Removing is never gated on billing, so a workspace can
+// always clean up. It fails closed: an op it doesn't know, or an empty one,
+// counts as running something.
+func (p *Plan) TeardownOnly() bool {
+	for _, a := range p.Actions {
+		if a.Op != Delete && a.Op != Keep {
+			return false
+		}
+	}
+	return true
+}
+
 // Open reports whether the plan may still be decided or is still planning.
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 
 func (p *Plan) setResult(r *Result) {
+	p.PlacementGroups = r.PlacementGroups
+	p.LocationPlacements = r.LocationPlacements
 	p.CloudSyncID = r.CloudSyncID
+	p.RequiredRuntimeProtocol = r.RequiredRuntimeProtocol
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
 	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
 	p.Leftovers, p.Artifacts, p.Release = r.Leftovers, r.Artifacts, r.Release
@@ -698,8 +778,11 @@ func (p *Plan) setResult(r *Result) {
 // result is what planning decided for the plan, as the store keeps it.
 func (p *Plan) result() Result {
 	return Result{
-		CloudSyncID: p.CloudSyncID,
-		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+		PlacementGroups:         p.PlacementGroups,
+		LocationPlacements:      p.LocationPlacements,
+		CloudSyncID:             p.CloudSyncID,
+		RequiredRuntimeProtocol: p.RequiredRuntimeProtocol,
+		Actions:                 p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
 		Connections: p.Connections, Leftovers: p.Leftovers, Artifacts: p.Artifacts, Release: p.Release,
 	}
 }
@@ -746,15 +829,21 @@ func (p *Plan) normalize() {
 // or provider resource. Deployments write bindings; planning reads them to
 // know what exists.
 type Binding struct {
-	ID            string          `json:"id" forge:"id"`
-	OrgID         string          `json:"org_id"`
-	ProjectID     string          `json:"project_id"`
-	EnvironmentID string          `json:"environment_id"`
-	Subject       Subject         `json:"subject"`
-	Name          string          `json:"name"`
-	Provider      string          `json:"provider"`
-	Region        string          `json:"region"`
-	Engine        provider.Engine `json:"engine"`
+	ID            string  `json:"id" forge:"id"`
+	OrgID         string  `json:"org_id"`
+	ProjectID     string  `json:"project_id"`
+	EnvironmentID string  `json:"environment_id"`
+	Subject       Subject `json:"subject"`
+	Name          string  `json:"name"`
+	// Alias is the name people gave what the binding runs, or empty. It
+	// names nothing in the cloud, and a redeploy keeps it.
+	Alias string `json:"alias"`
+	// SuggestedAlias is the alias Loomplane proposes while none is set. It
+	// isn't stored.
+	SuggestedAlias string          `json:"suggested_alias,omitempty"`
+	Provider       string          `json:"provider"`
+	Region         string          `json:"region"`
+	Engine         provider.Engine `json:"engine"`
 	// ExternalID is the Ctrl Plane instance's ID, or the provider's ID for
 	// a resource Loomplane manages itself.
 	ExternalID string `json:"external_id"`
@@ -835,6 +924,11 @@ type Store interface {
 	// RecordDrift stores what a drift check found.
 	RecordDrift(ctx context.Context, orgID, id, drift, message string, at time.Time) error
 	PutBinding(ctx context.Context, b *Binding) error
+	// GetBinding returns one binding of the organization, or ErrNotFound.
+	GetBinding(ctx context.Context, orgID, id string) (*Binding, error)
+	// SetBindingAlias names what a binding runs; empty clears it. It
+	// returns ErrAliasTaken when another binding of the environment has it.
+	SetBindingAlias(ctx context.Context, orgID, id, alias string) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
 	// SetReplaced records what a binding's action ran as before it moved
 	// and still needs removing, replacing what was recorded.
@@ -853,6 +947,12 @@ type Store interface {
 	// released (nil when none is recorded) and the commit of each of its
 	// repositories, read in one snapshot.
 	DeployedState(ctx context.Context, orgID, environmentID string) (*DeployedManifest, []*DeployedSource, error)
+	// RolledBackPlans returns the plans a rollback in the environment
+	// undid: the target of each rollback plan whose deployment succeeded
+	// or failed, since a failed one still undid some of it. One refused
+	// as stale (StaleRollback) deployed nothing, but its target still
+	// counts: it was judged bad, so no later rollback restores it.
+	RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error)
 }
 
 // Digest returns a hex SHA-256 of v's JSON. Go's JSON is deterministic for

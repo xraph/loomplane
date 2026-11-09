@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/clouds/enginebackup"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -102,10 +103,15 @@ func (e *OwnedTarget) kinds() *recipes.Registry {
 
 // hooks are a kind's hooks, or NoHooks.
 func (e *OwnedTarget) hooks(kind string) CatalogHooks {
+	var hooks CatalogHooks = NoHooks{}
 	if h := e.Hooks[kind]; h != nil {
-		return h
+		hooks = h
 	}
-	return NoHooks{}
+	switch kind {
+	case "falkordb", "elasticsearch", "opensearch", "duckdb":
+		return engineHooks{CatalogHooks: hooks}
+	}
+	return hooks
 }
 
 // componentService is the service a composed resource's process component
@@ -142,7 +148,14 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 	labels[owned.LabelCatalogKind] = cfg.Kind
 	labels[owned.LabelCatalogResource] = cfg.Resource
 	labels[owned.LabelCatalogComponent] = c.Name
+	if c.Protection == recipes.ProtectionNative && enginebackup.Format(cfg.Kind) != "" {
+		labels[enginebackup.LabelEngine] = cfg.Kind
+		labels[enginebackup.LabelRevision] = cfg.Revision
+	}
 	if c.Readiness != nil {
+		if c.Readiness.Checker != "" {
+			labels[owned.LabelHealthChecker] = c.Readiness.Checker
+		}
 		if port, ok := componentPort(c.Component, c.Readiness.Port); ok {
 			labels[owned.LabelHealthPort] = strconv.Itoa(port.Container)
 			if port.Protocol != "" && port.Protocol != "http" {
@@ -161,7 +174,16 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 		rules, _ := json.Marshal(c.KubernetesRules) //nolint:errcheck // string slices always encode
 		labels[owned.LabelKubernetesRules] = string(rules)
 	}
-	gpuSpec(sp, labels, cfg.GPU, c.Resources.ShmMB, c.WeightCache, providerName)
+	if c.StartTimeout > 0 {
+		labels[owned.LabelStartTimeout] = strconv.Itoa(int(c.StartTimeout / time.Second))
+	}
+	cache := c.WeightCache
+	if cache != nil {
+		sized := *cache
+		sized.KubernetesSizeMB = cache.SizeMB(cfg.Settings)
+		cache = &sized
+	}
+	gpuSpec(sp, labels, cfg.GPU, c.Resources.ShmMB, cache, providerName)
 }
 
 func componentPort(c recipes.Component, name string) (recipes.Port, bool) {
@@ -184,15 +206,25 @@ func sameJSON(a, b any) bool {
 // checkComponent resolves the component's kind again and refuses a
 // configuration the catalog wouldn't produce now.
 func (e *OwnedTarget) checkComponent(cfg *planning.ResourceConfig) (recipes.Kind, error) {
+	kind, err := e.componentDefinition(cfg)
+	if err != nil {
+		return recipes.Kind{}, err
+	}
+	if replayErr := kind.ReplayError(); replayErr != nil {
+		return recipes.Kind{}, replayErr
+	}
+	return kind, nil
+}
+
+func (e *OwnedTarget) componentDefinition(cfg *planning.ResourceConfig) (recipes.Kind, error) {
 	if cfg == nil || cfg.Component == nil || !planning.OwnedCloud(cfg.Provider) || cfg.Target == "" {
 		return recipes.Kind{}, errors.New("a catalog component needs a reviewed connected target")
 	}
 	c := cfg.Component
-	kind, ok := e.kinds().Kind(c.Kind)
-	if !ok || cfg.Kind != c.Kind {
+	if cfg.Kind != c.Kind {
 		return recipes.Kind{}, errRecipeChanged
 	}
-	composition, err := e.kinds().Resolve(c.Kind, cfg.Version, cfg.TargetSettings["architecture"], cfg.Provider)
+	kind, composition, err := e.kinds().ResolveRevision(c.Kind, cfg.Version, c.Revision, cfg.TargetSettings["architecture"], cfg.Provider)
 	if err != nil {
 		return recipes.Kind{}, err
 	}
@@ -204,11 +236,34 @@ func (e *OwnedTarget) checkComponent(cfg *planning.ResourceConfig) (recipes.Kind
 	if !gpuFits(resolved.Resources.GPU, c.GPU) {
 		return recipes.Kind{}, errRecipeChanged
 	}
-	expected := planning.ComponentConfig{Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component), GPU: c.GPU}
-	if !sameJSON(expected, *c) {
+	resolved.Resources = planning.ComponentResources(resolved.Resources, c.GPU)
+	// The GPU placement, outside inputs and settings come from the reviewed
+	// plan, not the recipe. Settings still have to be ones the kind takes.
+	expected := planning.ComponentConfig{
+		Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component),
+		GPU: c.GPU, Inputs: c.Inputs, Settings: c.Settings,
+	}
+	if !sameJSON(expected, *c) || !settingsFit(kind.Settings, c.Settings) {
 		return recipes.Kind{}, errRecipeChanged
 	}
 	return kind, nil
+}
+
+// settingsFit reports whether a component's settings are ones the kind
+// takes, each matching its pattern, with every required one set.
+func settingsFit(kind []recipes.Setting, settings map[string]string) bool {
+	for name, value := range settings {
+		i := slices.IndexFunc(kind, func(s recipes.Setting) bool { return s.Name == name })
+		if i < 0 || !kind[i].Matches(value) {
+			return false
+		}
+	}
+	for _, s := range kind {
+		if _, ok := settings[s.Name]; s.Required && !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // gpuFits reports whether a plan's GPU placement is one planning could
@@ -242,7 +297,7 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 		return nil, errors.New("the component's target differs from the reviewed connection")
 	}
 	component := cfg.Component.Component
-	if dependencyOnly(kind) && cfg.Component.Resource != job.Action.Name {
+	if kind.DirectService() && cfg.Component.Resource != job.Action.Name {
 		return nil, errRecipeChanged
 	}
 	if component.Role == recipes.RoleJob {
@@ -281,7 +336,7 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	if keepErr := job.Keep(ctx, componentAddressField, address); keepErr != nil {
 		return nil, keepErr
 	}
-	if dependencyOnly(kind) {
+	if kind.DirectService() {
 		// It's its own composed resource, so it publishes what the kind
 		// it's part of reads, under its own name, as a parent does.
 		reads := e.reads(job, kind, cfg.Component.Resource, nil)
@@ -525,9 +580,10 @@ const runtimeFilesSuffix = "/files"
 
 // runtimeFile is one rendered file as it's kept in Vault.
 type runtimeFile struct {
-	Path string      `json:"path"`
-	Mode fs.FileMode `json:"mode"`
-	Data []byte      `json:"data"`
+	Path        string              `json:"path"`
+	Mode        fs.FileMode         `json:"mode"`
+	Data        []byte              `json:"data"`
+	Certificate *runtimeCertificate `json:"certificate,omitempty"`
 }
 
 // renderFiles asks a component's kind for the files it declares, on each
@@ -544,6 +600,17 @@ func (e *OwnedTarget) renderFiles(ctx context.Context, kind recipes.Kind, run Co
 	}
 	files := make([]runtimeFile, 0, len(declared))
 	for _, f := range declared {
+		if f.CertificateSecret != "" {
+			if _, supplied := rendered[f.Path]; supplied {
+				return nil, errors.New("catalog hooks cannot supply a deferred instance certificate")
+			}
+			certificate, certErr := deferredCertificate(run, f)
+			if certErr != nil {
+				return nil, certErr
+			}
+			files = append(files, runtimeFile{Path: f.Path, Mode: cmp.Or(f.Mode.Perm(), owned.DefaultFileMode), Certificate: certificate})
+			continue
+		}
 		data, ok := rendered[f.Path]
 		if !ok {
 			return nil, fmt.Errorf("%s did not render %s", kind.Name, f.Path)
@@ -567,14 +634,21 @@ const FilesRevisionKeyLabel = "loomplane/catalog files revision v1"
 // each one's path, mode and bytes, in path order. A file can hold a
 // secret, and the label is readable wherever the container is, so an
 // unkeyed digest would let anyone who reads it test guesses offline.
-func filesRevision(key []byte, files []runtimeFile) string {
+func filesRevision(key []byte, files []runtimeFile) (string, error) {
 	sum := hmac.New(sha256.New, key)
 	for _, f := range files {
 		// Writing to a hash never fails.
 		_, _ = fmt.Fprintf(sum, "%s\x00%o\x00%d\x00", f.Path, f.Mode, len(f.Data))
 		_, _ = sum.Write(f.Data)
+		if f.Certificate != nil {
+			raw, err := json.Marshal(f.Certificate)
+			if err != nil {
+				return "", errors.New("encode deferred certificate metadata")
+			}
+			_, _ = sum.Write(raw)
+		}
 	}
-	return hex.EncodeToString(sum.Sum(nil))[:16]
+	return hex.EncodeToString(sum.Sum(nil))[:16], nil
 }
 
 // withFiles gives a component's job its rendered files and their keyed
@@ -587,7 +661,11 @@ func (e *OwnedTarget) withFiles(job *Job, files []runtimeFile) error {
 	if len(e.FilesRevisionKey) == 0 {
 		return errors.New("a component with files needs the installation's files revision key")
 	}
-	job.filesRevision = filesRevision(e.FilesRevisionKey, files)
+	revision, err := filesRevision(e.FilesRevisionKey, files)
+	if err != nil {
+		return err
+	}
+	job.filesRevision = revision
 	return nil
 }
 
@@ -606,7 +684,7 @@ func (e *OwnedTarget) keepRuntimeFiles(ctx context.Context, ref string, files []
 
 // runtimeFiles reads the rendered files kept beside the runtime values at
 // ref into values.
-func (e *OwnedTarget) runtimeFiles(ctx context.Context, ref string, values *owned.RuntimeValues) error {
+func (e *OwnedTarget) runtimeFiles(ctx context.Context, ref string, labels map[string]string, values *owned.RuntimeValues) error {
 	raw, err := e.Secrets.Get(ctx, ref+runtimeFilesSuffix)
 	if err != nil {
 		return fmt.Errorf("read the rendered files: %w", err)
@@ -617,7 +695,21 @@ func (e *OwnedTarget) runtimeFiles(ctx context.Context, ref string, values *owne
 	}
 	values.Files, values.FileModes = map[string][]byte{}, map[string]fs.FileMode{}
 	for _, f := range files {
-		values.Files[f.Path], values.FileModes[f.Path] = f.Data, f.Mode
+		data := f.Data
+		if f.Certificate != nil {
+			if len(f.Data) != 0 {
+				return errors.New("deferred certificate contains unexpected file data")
+			}
+			var certErr error
+			data, certErr = f.Certificate.render(ctx, e.Cloud, f.Path, labels)
+			if certErr != nil {
+				return certErr
+			}
+			if data == nil {
+				continue
+			}
+		}
+		values.Files[f.Path], values.FileModes[f.Path] = data, f.Mode
 	}
 	return nil
 }
@@ -636,6 +728,18 @@ func (e *OwnedTarget) deleteRuntimeFiles(ctx context.Context, org, environment, 
 		return ErrNoCredential
 	}
 	return e.Secrets.Delete(ctx, ref+runtimeFilesSuffix)
+}
+
+// cloneGPUPlacement copies a GPU placement, so a hook can't change the
+// reviewed one.
+func cloneGPUPlacement(g *provider.GPUPlacement) *provider.GPUPlacement {
+	if g == nil {
+		return nil
+	}
+	out := *g
+	out.NodeSelector = maps.Clone(g.NodeSelector)
+	out.Tolerations = slices.Clone(g.Tolerations)
+	return &out
 }
 
 // declaresFiles reports whether a binding is a catalog component with
@@ -658,9 +762,11 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		Env: map[string]string{}, Secrets: map[string][]byte{},
 		Channel:        e.runChannel(job, nil),
 		TargetSettings: maps.Clone(cfg.TargetSettings),
+		Settings:       maps.Clone(cfg.Component.Settings),
+		GPU:            cloneGPUPlacement(cfg.Component.GPU),
 	}
 	reads := e.reads(job, kind, cfg.Component.Resource, cfg.Component.Dependencies)
-	if dependencyOnly(kind) {
+	if kind.DirectService() {
 		reads.self = run.Component.Name
 	}
 	secret := map[string]bool{}
@@ -681,7 +787,7 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 	// The component's hooks may need any of the composition's secrets, not
 	// only the ones its variables read.
 	for _, s := range kind.Secrets {
-		value, err := e.generatedSecret(ctx, job, s)
+		value, err := e.generatedSecret(ctx, job, s, run.Secrets)
 		if err != nil {
 			return run, nil, err
 		}
@@ -728,11 +834,6 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 	return run, secret, nil
 }
 
-// dependencyOnly reports whether a kind is only ever another kind's
-// dependency. Its one component runs as its own composed resource, under
-// its action's name.
-func dependencyOnly(kind recipes.Kind) bool { return kind.Placement == recipes.PlacementDependency }
-
 // compositionReads resolves what a composed resource's variables and
 // outputs read: its dependencies, its components' addresses and its
 // generated secrets.
@@ -744,7 +845,7 @@ type compositionReads struct {
 	// name and whose components run as "<resource>--<component>".
 	resource     string
 	dependencies map[string]planning.DependencyChoice
-	// self is a dependency-only kind's component, which runs under the
+	// self is a direct service's component, which runs under the
 	// action's own name; "" for any other kind.
 	self string
 	// external is each external endpoint's DSN, once it's checked again.
@@ -770,7 +871,13 @@ func (r *compositionReads) recheck(ctx context.Context, dependency string) error
 	if choice.Mode != planning.DependencyExternal || r.external[dependency] != "" {
 		return nil
 	}
-	dsn, err := r.e.recheckEndpoint(ctx, r.job, r.kind, dependency, choice.External)
+	var dsn string
+	var err error
+	if choice.ExistingResource != nil {
+		dsn, err = r.e.recheckInventoryEndpoint(ctx, r.job, r.kind, dependency, choice)
+	} else {
+		dsn, err = r.e.recheckEndpoint(ctx, r.job, r.kind, dependency, choice.External)
+	}
 	if err != nil {
 		return err
 	}
@@ -784,7 +891,7 @@ const adminUser = "postgres"
 
 // dependency reads one field of a dependency: a field of the address of
 // what it connects to, with the superuser's credentials for admin-url,
-// or what a dependency-only kind published, for output:<name> and
+// or what a direct service published, for output:<name> and
 // secret:<name>. on is false for an optional dependency that's off.
 // Nothing it returns as an error quotes an address or a secret.
 func (r *compositionReads) dependency(ctx context.Context, dependency, field string) (value string, on bool, err error) {
@@ -810,11 +917,21 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 			return address, true, nil
 		}
 	case planning.DependencyNew, planning.DependencyResource:
+		connectionURLField := ResourceURL
+		if !published {
+			if kind, found := r.e.kinds().Kind(choice.Kind); found && kind.Service != nil {
+				connectionURLField = cmp.Or(serviceConnectionField(kind, recipes.FieldURL), ResourceURL)
+				if key := serviceConnectionField(kind, field); key != "" {
+					value, err = r.kept(ctx, choice.Resource, key)
+					return value, err == nil, err
+				}
+			}
+		}
 		if published {
 			value, err = r.kept(ctx, choice.Resource, field)
 			return value, err == nil, err
 		}
-		if address, err = r.kept(ctx, choice.Resource, ResourceURL); err != nil {
+		if address, err = r.kept(ctx, choice.Resource, connectionURLField); err != nil {
 			return "", false, err
 		}
 		if field == recipes.FieldAdminURL {
@@ -836,6 +953,21 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 		return "", false, fmt.Errorf("%s's %s dependency: %w", r.resource, dependency, err)
 	}
 	return value, true, nil
+}
+
+// serviceConnectionField is the Vault field for a declared connection output.
+func serviceConnectionField(kind recipes.Kind, field string) string {
+	if kind.Service == nil {
+		return ""
+	}
+	output := kind.Service.Connection[field]
+	if output == "" {
+		return ""
+	}
+	if len(kind.Outputs) > 0 && kind.Outputs[0].Name == output {
+		return ResourceURL
+	}
+	return "output:" + output
 }
 
 // kept reads a field a dependency's action kept.
@@ -970,7 +1102,7 @@ func adminURL(address, password string) (string, error) {
 func (e *OwnedTarget) publishOutputs(ctx context.Context, job *Job, reads *compositionReads, outputs []recipes.Output) error {
 	d := job.Deployment
 	for i, output := range outputs {
-		if output.PerConsumer || (output.From == nil && output.Template == "") {
+		if output.PerConsumer || (output.From == nil && output.Template == "" && output.PublicCA == "") {
 			continue
 		}
 		field := ResourceURL
@@ -982,6 +1114,8 @@ func (e *OwnedTarget) publishOutputs(ctx context.Context, job *Job, reads *compo
 		on := !reads.off(output.Requires)
 		switch {
 		case !on:
+		case output.PublicCA != "":
+			value, err = publicEngineCA(reads, output.PublicCA)
 		case output.Template != "":
 			value, on, err = reads.expand(ctx, output.Template)
 		case output.From.Dependency != "":
@@ -1047,6 +1181,61 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	return dsn, nil
 }
 
+// recheckInventoryEndpoint probes the exact access material returned by the
+// current project grant, keeping provider identity and access revisions pinned.
+func (e *OwnedTarget) recheckInventoryEndpoint(ctx context.Context, job *Job, kind recipes.Kind, dependency string, choice planning.DependencyChoice) (string, error) {
+	pin := choice.ExistingResource
+	i := slices.IndexFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == dependency })
+	checker, checkable := e.Checker.(interface {
+		CheckDSN(context.Context, string, recipes.Requirement, catalogconnect.DialFunc) (*catalogconnect.Report, error)
+	})
+	if pin == nil || choice.Resource == "" || choice.External != pin.EndpointID || pin.ResourceID == "" || pin.Revision < 1 || pin.EndpointRevision < 1 || pin.AccountIdentity == "" || pin.ExternalID == "" || pin.Incarnation == "" || i < 0 || kind.Dependencies[i].External == nil || !checkable || e.ExistingResources == nil || job.Deployment == nil || job.Plan == nil || job.Connection == nil {
+		return "", errors.New("the inventory dependency's approved access verifier is unavailable; review the deployment again")
+	}
+	actor := job.Plan.DecidedBy
+	if actor == "" {
+		actor = job.Plan.CreatedBy
+	}
+	if actor == "" {
+		return "", errors.New("the inventory dependency has no approving principal")
+	}
+	org := job.Deployment.OrgID
+	principal := security.ActorPrincipal(org, actor)
+	record, endpoint, dsn, err := e.ExistingResources.ResolveProject(ctx, principal, job.Deployment.ProjectID, job.Deployment.EnvironmentID, pin.ResourceID, pin.Revision)
+	if err != nil || record == nil || endpoint == nil || dsn == "" || record.ID != pin.ResourceID || record.OrgID != org || record.Revision != pin.Revision || record.AccountIdentity != pin.AccountIdentity || record.ExternalID != pin.ExternalID || record.Incarnation != pin.Incarnation || record.EndpointID != pin.EndpointID || record.EndpointRevision != pin.EndpointRevision || endpoint.ID != pin.EndpointID || endpoint.OrgID != org || endpoint.Revision != pin.EndpointRevision {
+		return "", errors.New("the inventory dependency's project grant or access changed; review the deployment again")
+	}
+	requirement := *kind.Dependencies[i].External
+	engine := record.Kind
+	if engine == "valkey" {
+		engine = "redis"
+	}
+	if engine != endpoint.Engine || endpoint.Engine != requirement.Engine || (endpoint.TLS != catalogconnect.TLSRequire && endpoint.TLS != catalogconnect.TLSVerifyFull) {
+		return "", errors.New("the inventory dependency does not satisfy its engine and TLS requirements")
+	}
+	dialFrom := e.endpointDial
+	if dialFrom == nil {
+		dialFrom = e.TargetDial
+	}
+	dial, closer, err := dialFrom(ctx, org, job.Connection.ID)
+	if err != nil {
+		return "", errors.New("the deployment target could not verify the inventory dependency")
+	}
+	report, err := checker.CheckDSN(catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dependency)), dsn, requirement, dial)
+	if closer != nil {
+		if closeErr := closer.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		return "", errors.New("the inventory dependency's endpoint check failed")
+	}
+	if problem := endpointProblem(endpoint, report); problem != "" {
+		return "", errors.New(withoutDSN(problem, dsn))
+	}
+	return dsn, nil
+}
+
 // endpointProblem words what a check found wrong with an endpoint, naming
 // it by its name, or returns "".
 func endpointProblem(endpoint *catalogconnect.Endpoint, report *catalogconnect.Report) string {
@@ -1084,11 +1273,26 @@ func withoutDSN(message, dsn string) string {
 // component needs it, which for a deployed component can be a later
 // revision adding it. One the deployed component already had and that's
 // gone fails rather than get a new one its data doesn't know.
-func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, s recipes.GeneratedSecret) ([]byte, error) {
+func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, s recipes.GeneratedSecret, secrets map[string][]byte) ([]byte, error) {
+	c := job.Action.Resource.Component
+	request := SecretGeneration{OrgID: job.Deployment.OrgID, EnvironmentID: job.Deployment.EnvironmentID, Resource: c.Resource, Kind: c.Kind, Secret: s, Secrets: secrets}
+	generator, structured := e.hooks(c.Kind).(StructuredSecretGenerator)
+	if s.Generator != "" && !structured {
+		return nil, errors.New("the catalog structured secret generator is unavailable")
+	}
+	validate := func(value []byte) error {
+		if s.Generator != "" {
+			return generator.ValidateSecret(ctx, request, value)
+		}
+		return nil
+	}
 	name := s.Name
 	key := resourceKey(job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Resource.Component.Resource, "secret:"+name)
 	kept, err := e.Secrets.Get(ctx, key)
 	if err == nil && len(kept) > 0 {
+		if checkErr := validate(kept); checkErr != nil {
+			return nil, checkErr
+		}
 		return kept, nil
 	}
 	if err != nil && !errors.Is(err, ErrNoCredential) {
@@ -1097,16 +1301,31 @@ func (e *OwnedTarget) generatedSecret(ctx context.Context, job *Job, s recipes.G
 	if hadSecret(job, name) {
 		return nil, fmt.Errorf("the generated secret %s is missing; recover it before changing the service", name)
 	}
-	value, err := generateSecret(s)
+	var value []byte
+	if s.Generator != "" {
+		value, err = generator.GenerateSecret(ctx, request)
+	} else {
+		value, err = generateSecret(s)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if checkErr := validate(value); checkErr != nil {
+		return nil, checkErr
 	}
 	if putErr := e.Secrets.Put(ctx, key, value); putErr != nil {
 		return nil, putErr
 	}
 	// Steps apply one action at a time, so nothing else keeps one in
 	// between; reading it back still hands every component what's kept.
-	return e.Secrets.Get(ctx, key)
+	kept, err = e.Secrets.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := validate(kept); checkErr != nil {
+		return nil, checkErr
+	}
+	return kept, nil
 }
 
 // hadSecret reports whether the deployed component already had a
@@ -1212,10 +1431,16 @@ func addressField(addresses map[string]string, name, field string) (string, erro
 	switch kind {
 	case "url":
 		return value, nil
-	case "address":
+	case "address", "host", "port":
 		u, err := url.Parse(value)
 		if err != nil {
 			return "", fmt.Errorf("%s's %s address isn't a URL", name, port)
+		}
+		if kind == "host" {
+			return u.Hostname(), nil
+		}
+		if kind == "port" {
+			return u.Port(), nil
 		}
 		return u.Host, nil
 	}
@@ -1252,11 +1477,10 @@ func (e *OwnedTarget) checkComposition(cfg *planning.ResourceConfig) (recipes.Ki
 		return recipes.Kind{}, errors.New("a composed catalog resource needs a reviewed connected target")
 	}
 	c := cfg.Composition
-	kind, ok := e.kinds().Kind(c.Kind)
-	if !ok || cfg.Kind != c.Kind {
+	if cfg.Kind != c.Kind {
 		return recipes.Kind{}, errRecipeChanged
 	}
-	composition, err := e.kinds().Resolve(c.Kind, c.Version, cfg.TargetSettings["architecture"], cfg.Provider)
+	kind, composition, err := e.kinds().ResolveRevision(c.Kind, c.Version, c.Revision, cfg.TargetSettings["architecture"], cfg.Provider)
 	if err != nil {
 		return recipes.Kind{}, err
 	}
@@ -1337,7 +1561,7 @@ func (e *OwnedTarget) forgetComposition(ctx context.Context, b *planning.Binding
 }
 
 // forgetComponent forgets a component's address and, for a
-// dependency-only kind's, what it published under its own name.
+// direct service's, what it published under its own name.
 func (e *OwnedTarget) forgetComponent(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
 	if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
 		return err
@@ -1400,12 +1624,18 @@ func forgetsKept(job *Job) bool {
 	return job.Action.Op == planning.Delete && !job.replacing
 }
 
-// forgetPublished forgets what a dependency-only kind's component
+// forgetPublished forgets what a direct service's component
 // published under its own name once it's gone: its outputs and generated
 // secrets. Any other component published nothing.
 func (e *OwnedTarget) forgetPublished(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
-	kind, ok := e.kinds().Kind(c.Kind)
-	if !ok || !dependencyOnly(kind) || c.Resource != b.Name {
+	if c.Resource != b.Name {
+		return nil
+	}
+	kind, err := e.componentDefinition(boundResource(b))
+	if err != nil {
+		return err
+	}
+	if !kind.DirectService() {
 		return nil
 	}
 	fields := []string{ResourceURL}

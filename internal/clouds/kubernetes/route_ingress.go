@@ -82,6 +82,8 @@ type RouteIngress struct {
 	IngressClass                                       string
 	Issuer                                             string
 	BlockedPathPrefixes                                []string
+	// Registry allows large image layers through ingress-nginx.
+	Registry bool
 }
 
 type CertificateStatus struct {
@@ -415,6 +417,9 @@ func (c *Client) ApplyRouteIngress(ctx context.Context, in RouteIngress) error {
 			TLS:   []networkingv1.IngressTLS{{Hosts: []string{in.Hostname}, SecretName: name + "-tls"}},
 			Rules: []networkingv1.IngressRule{{Host: in.Hostname, IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: paths}}}},
 		},
+	}
+	if in.Registry {
+		ingress.Annotations = map[string]string{"nginx.ingress.kubernetes.io/proxy-body-size": "0", "nginx.ingress.kubernetes.io/proxy-request-buffering": "off", "nginx.ingress.kubernetes.io/proxy-read-timeout": "900", "nginx.ingress.kubernetes.io/ssl-redirect": "true"}
 	}
 	if in.IngressClass != "" {
 		class := in.IngressClass

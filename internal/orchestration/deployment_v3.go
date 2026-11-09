@@ -100,7 +100,7 @@ func retryWith(w *drt.Workflow, raw []byte, steps stepsFunc) ([]byte, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	if err := steps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps}, in.ReconcileInterval); err != nil {
+	if err := steps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}, in.ReconcileInterval); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})

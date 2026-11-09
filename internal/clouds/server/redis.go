@@ -22,7 +22,7 @@ func (r *Runtime) cacheSession(ctx context.Context, iid id.ID, labels map[string
 	if err != nil {
 		return nil, err
 	}
-	info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
+	info, err := r.ordinaryEngineSource(ctx, c, iid, labels)
 	if err != nil {
 		c.Close()
 		return nil, err

@@ -4,22 +4,46 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
+// configureCatalog pins a catalog engine resource to its target. resource
+// is the resource as the plan's environment runs it.
 func (p *planner) configureCatalog(name, base string, resource manifest.Resource, cfg *ResourceConfig, action *Action) {
 	if p.kinds().Composed(cfg.Kind) {
 		return // planComposition pins each of its components
 	}
+	targetPath := overrideField(resource, base, p.in.Environment, "target")
 	if !OwnedCloud(cfg.Provider) {
 		if resource.Target != "" {
-			p.problem(Finding{Code: "resource-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: "This resource provider does not accept a target connection."})
+			prov, err := p.in.Providers.Get(cfg.Provider)
+			if err != nil {
+				return
+			}
+			i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == resource.Target && c.Cloud == prov.Cloud })
+			if i < 0 {
+				p.problem(Finding{Code: "resource-target-unsupported", Subject: ResourceSubject, Name: name, Path: targetPath, Message: "Choose a checked account for this resource's provider."})
+				return
+			}
+			c := p.in.Connections[i]
+			if !c.Ready {
+				p.problem(Finding{Code: "resource-account-not-ready", Subject: ResourceSubject, Name: name, Path: targetPath, Message: "Check this resource's cloud account before creating it."})
+				return
+			}
+			cfg.AccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
+			if cfg.AccountIdentity == "" {
+				p.problem(Finding{Code: "resource-account-unverified", Subject: ResourceSubject, Name: name, Path: targetPath, Message: "Check this cloud account's identity before creating a resource."})
+				return
+			}
+			action.ConnectionID = c.ID
 		}
 		p.configureManagedCatalog(name, base, resource, cfg, action)
 		return
 	}
-	connection := p.targetConnection(name, base+".target", "target", cfg.Provider, resource.Target)
+	connection := p.targetConnection(name, targetPath, "target", cfg.Provider, resource.Target)
 	if connection == nil {
 		return
 	}

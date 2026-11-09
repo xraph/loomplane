@@ -1,8 +1,7 @@
-// A Cloud's shared settings dialogs and cards: the projects allowed on it,
-// and its default provider. A project gets the Cloud with a chosen set of its
+// A Cloud's shared settings dialogs and sections: the projects allowed on
+// it, and its default. A project gets the Cloud with a chosen set of its
 // targets, so one Cloud can serve many projects, each on only what it needs.
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
-import { Card } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   SelectTrigger,
@@ -17,6 +16,7 @@ import {
   FieldSet,
   FieldLegend,
 } from "@/components/ui/field"
+import { AsteriskIcon } from "lucide-react"
 import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -29,8 +29,23 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import {
+  ActionsCell,
+  Cell,
+  CloudCallout,
+  CloudConfirm,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  RowMenu,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
+  CloudSectionHead,
+} from "@/components/cloud-targets/infrastructure-ui"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import {
   Dialog,
   DialogContent,
@@ -58,6 +73,7 @@ export function GrantDialog({
   project,
   onClose,
   onSaved,
+  onRemove,
 }: {
   cloud: Profile
   targets: Target[]
@@ -68,9 +84,10 @@ export function GrantDialog({
   project?: Project
   onClose: () => void
   onSaved: () => void
+  /** Removes the grant being edited; the caller asks to confirm first. */
+  onRemove?: () => void
 }) {
   const save = useMutation(api.useOrganizationCloudsGrantProject)
-  const revoke = useMutation(api.useOrganizationCloudsRevokeProject)
   const [projectId, setProjectId] = useState(
     grant?.projectId ?? projects[0]?.id ?? ""
   )
@@ -80,9 +97,8 @@ export function GrantDialog({
   const [wholeCloud, setWholeCloud] = useState(
     grant ? grant.targetIds.length === 0 : targets.length === 0
   )
-  const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState("")
-  const busy = save.isPending || revoke.isPending
+  const busy = save.isPending
   const toggle = (id: string) =>
     setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
   const submit = async () => {
@@ -95,15 +111,6 @@ export function GrantDialog({
       onSaved()
     } catch (err) {
       setError(messageOf(err, "Access wasn't saved."))
-    }
-  }
-  const remove = async () => {
-    setError("")
-    try {
-      await revoke.mutateAsync({ path: { cloudId: cloud.id, projectId } })
-      onSaved()
-    } catch (err) {
-      setError(messageOf(err, "Access wasn't removed."))
     }
   }
   return (
@@ -157,7 +164,7 @@ export function GrantDialog({
                 disabled={busy}
                 onCheckedChange={(e) => setWholeCloud(e)}
               />
-              Whole Cloud, including its default provider and future targets
+              Whole Cloud, including its default and future targets
             </FieldLabel>
           </FormField>
           <FieldSet
@@ -195,21 +202,17 @@ export function GrantDialog({
               )
             })}
           </FieldSet>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          {error && <CloudCallout tone="error" title={error} />}
         </div>
         <DialogFooter className="flex-wrap">
-          {grant && (
+          {grant && onRemove && (
             <Button
               variant="outline"
               className="mr-auto text-destructive"
               disabled={busy}
-              onClick={() => (confirming ? void remove() : setConfirming(true))}
+              onClick={onRemove}
             >
-              {confirming ? "Confirm remove access" : "Remove access"}
+              Remove access
             </Button>
           )}
           <Button variant="outline" disabled={busy} onClick={onClose}>
@@ -224,27 +227,28 @@ export function GrantDialog({
             {grant ? "Save access" : "Give access"}
           </Button>
         </DialogFooter>
-        {confirming && (
-          <p className="text-xs text-muted-foreground">
-            Services already running keep running. The project just can&apos;t
-            place new ones on {cloud.name}.
-          </p>
-        )}
       </DialogContent>
     </Dialog>
   )
 }
 
 /**
- * DefaultPlacementCard is where a Cloud's services go when they don't name
+ * DefaultPlacementSection is where a Cloud's services go when they don't name
  * or tag a target. With no targets it's the Cloud's one provider and account.
+ * Its row shares the targets table's columns so the two line up.
  */
-export function DefaultPlacementCard({
+export function DefaultPlacementSection({
   cloud,
   targets,
+  columns,
+  services,
 }: {
   cloud: Profile
   targets: Target[]
+  /** The targets table's grid template. */
+  columns: string
+  /** Running services on the default; undefined while usage loads. */
+  services?: number
 }) {
   const { can } = useOrganization()
   const manage = can("organization_cloud:manage")
@@ -277,7 +281,6 @@ export function DefaultPlacementCard({
       })
       setSaved(out)
       setEditing(false)
-      setConfirmClear(false)
       return true
     } catch (err) {
       setError(
@@ -289,98 +292,145 @@ export function DefaultPlacementCard({
     }
   }
   return (
-    <Card
-      size="sm"
-      role="region"
-      aria-label="Default provider"
-      className="grid gap-2.5 px-4 py-3.5"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid max-w-[64ch] gap-0.5">
-          <h2 className="text-[14px] font-semibold">Default provider</h2>
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-            {targets.length === 0
-              ? "With no targets, every service on it runs here."
-              : "Services without a target use this provider."}
-          </p>
-        </div>
+    <section aria-label="Default" className="grid gap-2.5">
+      <CloudSectionHead
+        title="Default"
+        description="Where a service goes when it names no target."
+      >
         {manage && (
-          <div className="flex flex-wrap gap-2">
-            {current && (
-              <Button
-                variant="outline"
-                className="text-destructive"
-                disabled={set.isPending}
-                onClick={() =>
-                  confirmClear ? setPendingDefault(null) : setConfirmClear(true)
-                }
-              >
-                {confirmClear ? "Confirm clear default" : "Clear"}
-              </Button>
-            )}
-            <Button
-              variant={current ? "outline" : "default"}
-              disabled={set.isPending}
-              onClick={() => {
-                setError("")
-                setEditing(true)
-              }}
-            >
-              {current ? "Change" : "Set default provider"}
-            </Button>
-          </div>
-        )}
-      </div>
-      {current ? (
-        <div className="flex min-w-0 items-center gap-3 rounded-xl bg-subtle px-3 py-2.5">
-          <CloudGlyph cloud={account?.cloud ?? current.provider} size="md" />
-          <span className="grid min-w-0 gap-0.5">
-            <span className="truncate text-[13px] font-medium">
-              {account?.name ?? "An account that was removed"}
-            </span>
-            <span className="truncate text-xs text-muted-foreground">
-              {provider?.title ??
-                cloudLabel(account?.cloud ?? current.provider)}
-              {account?.account && ` · ${account.account}`}
-              {` · ${current.region || "provider default region"}`}
-            </span>
-          </span>
-        </div>
-      ) : (
-        <p className="text-[13px] text-muted-foreground">
-          No default yet.{" "}
-          {targets.length === 0
-            ? "Services on this Cloud have nowhere to run until you set one or add a target."
-            : "Services that don't name or tag a target have nowhere to run."}
-        </p>
-      )}
-
-      {confirmClear && (
-        <p className="text-xs text-muted-foreground">
-          Clearing leaves services without a target of their own with nowhere to
-          run.{" "}
           <Button
-            variant="ghost"
-            type="button"
-            className="underline underline-offset-4"
-            onClick={() => setConfirmClear(false)}
+            size="sm"
+            variant="outline"
+            disabled={set.isPending}
+            onClick={() => {
+              setError("")
+              setEditing(true)
+            }}
           >
-            Keep it
+            {current ? "Change" : "Set default"}
           </Button>
-        </p>
+        )}
+      </CloudSectionHead>
+      {current ? (
+        <CloudTable
+          label="Default"
+          columns={columns}
+          head={["Target", "Runs on", "Tags", "Services", ""]}
+        >
+          <CloudTableRow>
+            <NameCell
+              tile={<AsteriskIcon />}
+              name="Default"
+              meta={
+                targets.length === 0
+                  ? "Every service on this Cloud"
+                  : "Services with no target"
+              }
+            />
+            <Cell>
+              <span className="flex min-w-0 items-center gap-2.5">
+                <CloudGlyph
+                  cloud={account?.cloud ?? current.provider}
+                  size="sm"
+                />
+                <span className="grid min-w-0 gap-0.5">
+                  {account ? (
+                    <Link
+                      to="/clouds/accounts/$id"
+                      params={{ id: account.id }}
+                      className="truncate text-[13px] font-medium hover:underline"
+                    >
+                      {account.name}
+                    </Link>
+                  ) : (
+                    <span className="truncate text-[13px]">
+                      An account that was removed
+                    </span>
+                  )}
+                  <span className="truncate text-xs text-muted-foreground">
+                    {provider?.title ??
+                      cloudLabel(account?.cloud ?? current.provider)}
+                    {account?.account && ` · ${account.account}`}
+                    {` · ${current.region || "provider default region"}`}
+                  </span>
+                </span>
+              </span>
+            </Cell>
+            <Cell />
+            <Cell className="text-[12.5px] text-muted-foreground">
+              {services === undefined ? (
+                "…"
+              ) : (
+                <>
+                  <span className="font-mono text-foreground tabular-nums">
+                    {services}
+                  </span>{" "}
+                  running
+                </>
+              )}
+            </Cell>
+            <ActionsCell>
+              {manage && (
+                <RowMenu label="More default actions">
+                  <DropdownMenuItem
+                    variant="destructive"
+                    disabled={set.isPending}
+                    onClick={() => setConfirmClear(true)}
+                  >
+                    Clear default
+                  </DropdownMenuItem>
+                </RowMenu>
+              )}
+            </ActionsCell>
+          </CloudTableRow>
+        </CloudTable>
+      ) : (
+        <CloudEmpty
+          kind="list"
+          icon={AsteriskIcon}
+          title="No default yet"
+          action={
+            manage && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={set.isPending}
+                onClick={() => {
+                  setError("")
+                  setEditing(true)
+                }}
+              >
+                Set default
+              </Button>
+            )
+          }
+        >
+          {targets.length === 0
+            ? "With no targets, every service on it runs here. Until you set one, services on this Cloud have nowhere to run."
+            : "Services that don't name or tag a target have nowhere to run."}
+        </CloudEmpty>
       )}
-      {error && !editing && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && !editing && <CloudCallout tone="error" title={error} />}
+      <CloudConfirm
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear the default?"
+        confirmLabel="Clear default"
+        onConfirm={() => {
+          setConfirmClear(false)
+          setPendingDefault(null)
+        }}
+      >
+        Services without a target of their own will have nowhere to run. You
+        review the change before it applies.
+      </CloudConfirm>
       {pendingDefault !== undefined && (
         <ChangeReview
           projectId=""
           title={
             pendingDefault
-              ? "Review default provider switch"
-              : "Review clearing default provider"
+              ? "Review default switch"
+              : "Review clearing the default"
           }
           change={{
             cloudId: cloud.id,
@@ -395,7 +445,6 @@ export function DefaultPlacementCard({
           onClose={() => setPendingDefault(undefined)}
           onApplied={() => {
             setPendingDefault(undefined)
-            setConfirmClear(false)
             void api
               .useOrganizationCloudsGet({ path: { cloudId: cloud.id } })
               .refetch()
@@ -418,7 +467,7 @@ export function DefaultPlacementCard({
           }}
         />
       )}
-    </Card>
+    </section>
   )
 }
 
@@ -622,7 +671,7 @@ function DefaultPlacementDialog({
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Default provider for {cloud.name}</DialogTitle>
+          <DialogTitle>Default for {cloud.name}</DialogTitle>
           <DialogDescription>
             One provider and one of your accounts there. Services with no target
             of their own run on it.

@@ -25,7 +25,7 @@ func TestFailedCleanupContract(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/v1/deployments/{id}/cleanup", "/api/v1/deployments/{id}/cleanup/preview", "/api/v1/deployments/{id}/cleanup/apply", "/api/v1/deployments/{id}/cleanup/retry"} {
+	for _, path := range []string{"/api/v1/deployments/{id}/cleanup", "/api/v1/deployments/{id}/cleanup/preview", "/api/v1/deployments/{id}/cleanup/apply", "/api/v1/deployments/{id}/cleanup/retry", "/api/v1/deployments/{id}/cleanup/cancel"} {
 		if doc.Paths[path] == nil {
 			t.Fatal("missing cleanup route", path)
 		}

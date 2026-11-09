@@ -153,6 +153,24 @@ func GPUSample() recipes.Kind {
 	}
 }
 
+// Featured is kind "featured": Sample under another name, belonging to
+// the server feature recipes.FeatureAI, for tests of a feature that's off.
+func Featured() recipes.Kind {
+	k := Sample()
+	k.Name, k.Title, k.Feature = "featured", "Featured", recipes.FeatureAI
+	k.Outputs[0].EnvKey, k.Outputs[1].EnvKey = "FEATURED_URL", "FEATURED_ADMIN_URL"
+	return k
+}
+
+// OptIn is kind "optin": Sample under another name, running only in the
+// environments that enable it.
+func OptIn() recipes.Kind {
+	k := Sample()
+	k.Name, k.Title, k.EnvironmentOptIn = "optin", "Opt-in", true
+	k.Outputs[0].EnvKey, k.Outputs[1].EnvKey = "OPTIN_URL", "OPTIN_ADMIN_URL"
+	return k
+}
+
 // Registry is a fresh registry with the built-in engines, Sample and GPUSample.
 func Registry(t testing.TB) *recipes.Registry {
 	t.Helper()

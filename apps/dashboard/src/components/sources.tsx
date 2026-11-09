@@ -1,18 +1,16 @@
 // The repositories a project builds from: each one with what was last read
 // from it, the controls that analyze one or all of them, and the dialog
 // that adds another.
-import {
-  GitBranchIcon,
-  PlusIcon,
-  ScanSearchIcon,
-  Trash2Icon,
-} from "lucide-react"
-import { type FormEvent, useState } from "react"
+import { FolderGit2Icon, ScanSearchIcon } from "lucide-react"
+import { Fragment, type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
   useAnalysesCreate,
+  useBitbucketWebhookEnable,
+  useManifestsCurrent,
+  useManifestsSave,
   useProjectsGet,
   useProjectsGraph,
   useProjectsList,
@@ -20,29 +18,32 @@ import {
   useSourcesDelete,
   useSourcesList,
 } from "@/client/forge/loomplane/hooks"
-import type { Project, Source } from "@/client/forge/loomplane/types"
+import type {
+  Analysis,
+  DiscoverySource,
+  Project,
+  PushState,
+  Source,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { useAnalyses } from "@/components/architecture"
+import {
+  ActionsCell,
+  Cell,
+  CloudConfirm,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  RowMenu,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
+  CloudSectionHead,
+} from "@/components/cloud-targets/infrastructure-ui"
+import { QueryError } from "@/components/query-error"
 import { RepositoryPicker } from "@/components/repository-picker"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -51,24 +52,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { isActive, lastRead } from "@/lib/architecture"
+import { isActive, shortSHA, stepLabel } from "@/lib/architecture"
+import { relative, repositoryHost, repositoryURL } from "@/lib/format"
+import { listOf } from "@/lib/models"
 import { useOrganization } from "@/lib/organization"
+import { servicesInRepo, withoutServices } from "@/lib/placement"
+import { useProjectCan } from "@/lib/project-permissions"
+import { useNow } from "@/lib/use-runs"
 
 /**
  * refreshRepositories re-reads the project after its sources change: the
  * page, the project list and the sidebar all show the repositories it
- * builds from, and the generated client only refreshes the sources list.
+ * builds from, the graph and the deploy screen show what's in them, and
+ * the generated client only refreshes the sources list.
  */
 function refreshRepositories(
   invalidate: ReturnType<typeof useInvalidate>,
@@ -76,21 +80,40 @@ function refreshRepositories(
 ) {
   invalidate(useProjectsGet, { path: { id: projectID } })
   invalidate(useProjectsList)
+  invalidate(useProjectsGraph, { path: { id: projectID } })
 }
 
-/** sourceURL links to a source on GitHub, at its directory when it has one. */
+/**
+ * sourceURL links to a source on its host, at its directory when it has one.
+ * Each host has its own page for a directory.
+ */
 function sourceURL(s: Source): string {
-  const base = `https://github.com/${s.repository}`
-  return s.root ? `${base}/tree/${s.ref || "HEAD"}/${s.root}` : base
+  const base = repositoryURL(s.repository)
+  if (!s.root) return base
+  const ref = s.ref || "HEAD"
+  const host = repositoryHost(s.repository)
+  if (host === "github.com") return `${base}/tree/${ref}/${s.root}`
+  if (host === "bitbucket.org") return `${base}/src/${ref}/${s.root}`
+  return `${base}/-/tree/${ref}/${s.root}`
 }
 
-/** SourcesCard lists a project's repositories, with what was last read from each. */
-export function SourcesCard({ project }: { project: Project }) {
-  const { can } = useOrganization()
+/** hostLabel is what "Open on" names: GitHub, or the key's own host. */
+function hostLabel(s: Source): string {
+  const host = repositoryHost(s.repository)
+  return host === "github.com" ? "GitHub" : host
+}
+
+/**
+ * Repositories lists what a project builds from, with what was last read
+ * from each: Analyze reads one again, its menu removes it.
+ */
+export function Repositories({ project }: { project: Project }) {
+  const can = useProjectCan(project.id)
   const sources = useQuery(useSourcesList, { path: { id: project.id } })
   const analyses = useAnalyses(project.id)
   const start = useMutation(useAnalysesCreate)
   const invalidate = useInvalidate()
+  const now = useNow(30_000)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<Source | null>(null)
   // The graph view knows each source's newest analysis however old it is;
@@ -104,6 +127,9 @@ export function SourcesCard({ project }: { project: Project }) {
   const list = sources.data?.sources ?? []
   const mayEdit = can("project:update")
   const mayRun = can("analysis:run")
+  // Connecting repositories is a workspace permission, which a project's
+  // own permissions never list, and what the server checks to turn push on.
+  const mayConnect = useOrganization().can("repository:connect")
 
   const analyze = (alias?: string) =>
     start
@@ -117,103 +143,141 @@ export function SourcesCard({ project }: { project: Project }) {
       )
 
   return (
-    <Card size="sm" className="gap-0 py-0">
-      <CardHeader className="border-b px-4 pt-3">
-        <CardTitle>Repositories</CardTitle>
-        <CardDescription className="text-[12.5px]">
-          Everything this project builds from. Each one is analyzed on its own.
-        </CardDescription>
-        <CardAction className="flex items-center gap-2">
-          {mayRun && list.length > 1 && (
-            <Button
-              size="sm"
-              variant="outline"
-
-              disabled={analyses.running || start.isPending}
-              onClick={() => void analyze()}
-            >
-              <ScanSearchIcon />
-              Analyze all
-            </Button>
-          )}
-          {mayEdit && (
-            <Button
-              size="sm"
-
-              onClick={() => setAdding(true)}
-            >
-              <PlusIcon />
-              Add
-            </Button>
-          )}
-        </CardAction>
-      </CardHeader>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Alias</TableHead>
-            <TableHead>Repository</TableHead>
-            <TableHead>Last read</TableHead>
-            <TableHead>
-              <span className="sr-only">Actions</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+    <section aria-label="Repositories" className="grid gap-2.5">
+      <CloudSectionHead
+        title="Repositories"
+        count={sources.data ? list.length : undefined}
+        description="Loomplane reads these to find services. It never runs your code to do it."
+      >
+        {mayRun && list.length > 1 && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={analyses.running || start.isPending}
+            onClick={() => void analyze()}
+          >
+            <ScanSearchIcon />
+            Analyze all
+          </Button>
+        )}
+        {mayEdit && (
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            Add repository
+          </Button>
+        )}
+      </CloudSectionHead>
+      {sources.status === "error" ? (
+        <QueryError
+          error={sources.error}
+          fallback="The repositories couldn't be loaded."
+          retry={sources.refetch}
+        />
+      ) : !sources.data ? (
+        <Skeleton className="h-32 rounded-xl" />
+      ) : list.length === 0 ? (
+        <CloudEmpty
+          kind="compact"
+          icon={FolderGit2Icon}
+          title="No repositories yet"
+          action={
+            mayEdit && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setAdding(true)}
+              >
+                Add repository
+              </Button>
+            )
+          }
+        >
+          Add the repository this project builds from, and Loomplane reads it to
+          find services.
+        </CloudEmpty>
+      ) : (
+        <CloudTable
+          label="Repositories"
+          columns="120px minmax(0,1.3fr) minmax(0,1fr) 150px"
+          head={["Alias", "Repository", "Last read", ""]}
+        >
           {list.map((s) => {
             const state = states.get(s.alias)
             const running = !!state?.latest && isActive(state.latest.status)
+            const push = pushOff(s)
             return (
-              <TableRow key={s.id}>
-                <TableCell className="font-mono text-xs">{s.alias}</TableCell>
-                <TableCell>
-                  <a
-                    className="font-mono text-xs underline-offset-4 hover:underline"
-                    href={sourceURL(s)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {s.repository}
-                    {s.root ? `/${s.root}` : ""}
-                  </a>
-                  {s.ref && (
-                    <Badge variant="outline" className="ml-2 font-normal">
-                      <GitBranchIcon />
-                      {s.ref}
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {lastRead(state)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {mayRun && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={running || start.isPending}
-                      onClick={() => void analyze(s.alias)}
-                    >
-                      Analyze
-                    </Button>
-                  )}
-                  {mayEdit && (
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      className="text-muted-foreground"
-                      aria-label={`Remove ${s.alias}`}
-                      onClick={() => setRemoving(s)}
-                    >
-                      <Trash2Icon />
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
+              <Fragment key={s.id}>
+                <CloudTableRow className={push && "not-last:border-b-0"}>
+                  <Cell className="truncate font-mono text-[12.5px]">
+                    {s.alias}
+                  </Cell>
+                  <NameCell
+                    tile={<FolderGit2Icon />}
+                    name={
+                      <a
+                        className="font-mono font-medium underline-offset-2 hover:underline"
+                        href={sourceURL(s)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {s.repository}
+                        {s.root ? `/${s.root}` : ""}
+                      </a>
+                    }
+                    meta={readFrom(s, state?.shown)}
+                  />
+                  <Cell className="text-muted-foreground">
+                    {lastReadAt(state?.latest, now)}
+                  </Cell>
+                  <ActionsCell>
+                    {mayRun && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={running || start.isPending}
+                        onClick={() => void analyze(s.alias)}
+                      >
+                        Analyze
+                      </Button>
+                    )}
+                    <RowMenu label={`More actions for ${s.alias}`}>
+                      <DropdownMenuItem
+                        render={
+                          <a
+                            href={sourceURL(s)}
+                            target="_blank"
+                            rel="noreferrer"
+                          />
+                        }
+                      >
+                        Open on {hostLabel(s)}
+                      </DropdownMenuItem>
+                      {mayEdit && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => setRemoving(s)}
+                          >
+                            Remove {s.alias}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </RowMenu>
+                  </ActionsCell>
+                </CloudTableRow>
+                {push && (
+                  <PushNotice
+                    source={s}
+                    push={push}
+                    projectID={project.id}
+                    mayTurnOn={mayConnect}
+                  />
+                )}
+              </Fragment>
             )
           })}
-        </TableBody>
-      </Table>
+        </CloudTable>
+      )}
       <AddSourceDialog
         project={project}
         open={adding}
@@ -224,8 +288,99 @@ export function SourcesCard({ project }: { project: Project }) {
         source={removing}
         onDone={() => setRemoving(null)}
       />
-    </Card>
+    </section>
   )
+}
+
+/**
+ * pushOff is what a source says when a push to its repository doesn't
+ * re-analyze it. Hosts that have no say send nothing.
+ */
+function pushOff(s: DiscoverySource): PushState | undefined {
+  return s.push && !s.push.on ? s.push : undefined
+}
+
+/**
+ * PushNotice says why pushes don't re-analyze a source, with a button that
+ * tries to add the webhook again. Only Bitbucket sources carry the state, and
+ * its webhook is the one that button adds.
+ */
+function PushNotice({
+  source,
+  push,
+  projectID,
+  mayTurnOn,
+}: {
+  source: DiscoverySource
+  push: PushState
+  projectID: string
+  mayTurnOn: boolean
+}) {
+  const enable = useMutation(useBitbucketWebhookEnable)
+  const invalidate = useInvalidate()
+  const [failure, setFailure] = useState<string | null>(null)
+  const turnOn = async () => {
+    setFailure(null)
+    try {
+      await enable.mutateAsync({ body: { repository: source.repository } })
+    } catch (err) {
+      setFailure(messageOf(err, "Push re-analysis wasn't turned on."))
+    } finally {
+      // Either way the list says where it stands now.
+      invalidate(useSourcesList, { path: { id: projectID } })
+    }
+  }
+  return (
+    <div
+      role="row"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-subtle px-4 py-2 text-xs text-muted-foreground not-last:border-b"
+    >
+      <div role="cell" className="min-w-0 flex-[1_1_240px]">
+        <span className="font-medium text-weld-ink">
+          Pushes don&apos;t re-analyze {source.alias}.
+        </span>{" "}
+        {push.reason ? sentence(push.reason) : null}
+        {failure && (
+          <p role="alert" className="mt-1 text-destructive">
+            {failure}
+          </p>
+        )}
+      </div>
+      {mayTurnOn && (
+        <div role="cell">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={enable.isPending}
+            onClick={() => void turnOn()}
+          >
+            {enable.isPending && <Spinner />}
+            Turn on
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** sentence ends a reason the server wrote as a clause. */
+function sentence(s: string): string {
+  const t = s.charAt(0).toUpperCase() + s.slice(1)
+  return /[.!?]$/.test(t) ? t : `${t}.`
+}
+
+/** readFrom names the branch and commit a source's graph was read from. */
+function readFrom(source: Source, shown?: Analysis): string {
+  const branch = shown?.ref || source.ref || "Default branch"
+  return shown?.commitSha ? `${branch} @ ${shortSHA(shown.commitSha)}` : branch
+}
+
+/** lastReadAt says when a source was last analyzed, or what's happening. */
+function lastReadAt(latest: Analysis | undefined, now: number): string {
+  if (!latest) return "Not analyzed"
+  if (isActive(latest.status)) return stepLabel(latest.status)
+  if (latest.status === "failed") return "Failed"
+  return relative(Date.parse(latest.finishedAt ?? latest.createdAt), now)
 }
 
 function RemoveSource({
@@ -238,39 +393,108 @@ function RemoveSource({
   onDone: () => void
 }) {
   const remove = useMutation(useSourcesDelete)
+  const save = useMutation(useManifestsSave)
   const invalidate = useInvalidate()
+  const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
+  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
+  const [keep, setKeep] = useState(false)
+  const manifest = current.data?.manifest
+  const graph = view.data?.graph
+  // The services in this repository can't deploy once it's gone, so the
+  // dialog offers to take them out of loomplane.yaml in the same step.
+  const names =
+    source && manifest && graph
+      ? servicesInRepo(manifest, graph, source.alias)
+      : []
+  const dropped =
+    manifest && names.length ? withoutServices(manifest, names) : null
+  const drop = !!dropped && !keep
+  const them = names.length === 1 ? "it" : "them"
+  const close = () => {
+    setKeep(false)
+    onDone()
+  }
   const confirm = async () => {
     if (!source) return
     try {
       await remove.mutateAsync({
         path: { id: project.id, alias: source.alias },
       })
-      refreshRepositories(invalidate, project.id)
-      toast.success(`Removed ${source.alias}`)
-      onDone()
     } catch (err) {
       toast.error(messageOf(err, "The repository wasn't removed."))
+      return
     }
+    refreshRepositories(invalidate, project.id)
+    if (drop && current.data) {
+      try {
+        await save.mutateAsync({
+          path: { id: project.id },
+          body: {
+            manifest: dropped.manifest,
+            baseRevision: current.data.revision,
+          },
+        })
+        invalidate(useManifestsCurrent)
+        toast.success(`Removed ${source.alias}`, {
+          description: `${listOf(names)} ${names.length === 1 ? "is" : "are"} out of loomplane.yaml.`,
+        })
+      } catch (err) {
+        toast.error(
+          `Removed ${source.alias}, but loomplane.yaml wasn't changed`,
+          {
+            description: messageOf(
+              err,
+              `Take ${listOf(names)} out of it yourself.`
+            ),
+          }
+        )
+      }
+    } else {
+      toast.success(`Removed ${source.alias}`)
+    }
+    close()
   }
   return (
-    <AlertDialog open={!!source} onOpenChange={(open) => !open && onDone()}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Remove {source?.alias}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Loomplane stops analyzing it. The alias {source?.alias} stays taken,
-            so plans made with it keep meaning {source?.repository}, and you
-            can't give it to another repository later.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Keep it</AlertDialogCancel>
-          <AlertDialogAction onClick={() => void confirm()}>
-            Remove
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <CloudConfirm
+      open={!!source}
+      onOpenChange={(open) => !open && close()}
+      title={`Remove ${source?.alias ?? "repository"}?`}
+      confirmLabel="Remove"
+      pending={remove.isPending || save.isPending}
+      onConfirm={() => void confirm()}
+    >
+      Loomplane stops analyzing it. The alias {source?.alias} stays taken, so
+      plans made with it keep meaning {source?.repository}, and you can&apos;t
+      give it to another repository later.
+      {dropped && (
+        <>
+          <span className="mt-3 flex items-start gap-2.5 text-foreground">
+            <Checkbox
+              aria-label={`Also take ${listOf(names)} out of loomplane.yaml`}
+              checked={drop}
+              onCheckedChange={(on) => setKeep(!on)}
+              className="mt-0.5"
+            />
+            <span>
+              Also take <span className="font-mono">{listOf(names)}</span> out
+              of loomplane.yaml.
+            </span>
+          </span>
+          <span className="mt-1.5 block pl-6.5">
+            {drop
+              ? `Where ${names.length === 1 ? "it runs" : "they run"}, the next deploy there deletes ${them} once you approve the plan.`
+              : `${names.length === 1 ? "It stays" : "They stay"} and keep${names.length === 1 ? "s" : ""} running where deployed, but can't deploy again until you add the repository back or take ${them} out.`}
+            {drop &&
+              dropped.gateways.length > 0 &&
+              ` The ${listOf(dropped.gateways)} ${
+                dropped.gateways.length === 1
+                  ? `gateway only routes to ${them}, so it goes`
+                  : `gateways only route to ${them}, so they go`
+              } too.`}
+          </span>
+        </>
+      )}
+    </CloudConfirm>
   )
 }
 
@@ -325,8 +549,8 @@ export function AddSourceDialog({
             <DialogTitle>Add a repository</DialogTitle>
             <DialogDescription>
               Public repositories work as they are. A private one needs the
-              GitHub connection to see it, and Loomplane checks that before
-              adding it.
+              GitHub, GitLab or Bitbucket connection to see it, and Loomplane
+              checks that before adding it.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
@@ -375,6 +599,13 @@ export function AddSourceDialog({
             </Field>
           </FieldGroup>
           <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
             <Button
               type="submit"
               disabled={add.isPending || !repository.trim()}

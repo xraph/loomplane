@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/xraph/forge/cli"
 	"github.com/xraph/grove/migrate"
+
+	"github.com/xraph/loomplane/internal/buildinfo"
+	"github.com/xraph/loomplane/internal/node"
 )
 
 // Settings are what the commands need: the database, the schema this
@@ -15,13 +19,45 @@ import (
 type Settings struct {
 	DatabaseURL string
 	Groups      []*migrate.Group
-	Version     string
+	// Optional are migrations, as group:version, that Groups never runs
+	// but a database may have: the schema check counts them as known.
+	Optional []string
+	// OnDemand are the groups behind Optional that this configuration
+	// turns on (weave's pgvector group, with AI on and knowledge
+	// configured). A restore runs one for a backup that applied it.
+	OnDemand []*migrate.Group
+	// VectorDimensions is ai.knowledge.dimensions: a restore refuses a
+	// backup whose knowledge vectors are another size.
+	VectorDimensions int
+	Version          string
+	// AuthAppID is Loomplane's authsome app, where platform roles live.
+	AuthAppID string
+	// SecretKey and PublicURL give the one-time setup link.
+	SecretKey string
+	PublicURL string
 }
 
 // Commands are loomplane's operational commands. settings is called when
 // a command runs, so loading the configuration can fail there, with the
 // command's own error.
 func Commands(settings func() (Settings, error)) []cli.Command {
+	// The node commands take no settings: a machine that joins as a node has
+	// no database, and its commands must not load Loomplane's configuration.
+	return append(serverCommands(settings), node.Commands(node.Options{Version: buildinfo.Version})...)
+}
+
+// IsNodeCommand reports whether cmd is the node command or one under it. Those
+// run without the Forge app, so the binary skips building it for them.
+func IsNodeCommand(cmd cli.Command) bool {
+	for ; cmd != nil; cmd = cmd.Parent() {
+		if cmd.Name() == "node" {
+			return true
+		}
+	}
+	return false
+}
+
+func serverCommands(settings func() (Settings, error)) []cli.Command {
 	return []cli.Command{
 		cli.NewCommand("backup", "Back up Loomplane's database to a file", func(ctx cli.CommandContext) error {
 			s, err := settings()
@@ -86,7 +122,9 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 				return err
 			}
 			defer f.Close()
-			m, err := Restore(ctx.Context(), s.DatabaseURL, s.Groups, f, RestoreOptions{Force: ctx.Bool("force")})
+			m, err := Restore(ctx.Context(), s.DatabaseURL, s.Groups, f, RestoreOptions{
+				Force: ctx.Bool("force"), OnDemand: s.OnDemand, Optional: s.Optional, VectorDimensions: s.VectorDimensions,
+			})
 			if err != nil {
 				return err
 			}
@@ -101,7 +139,7 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			if err != nil {
 				return err
 			}
-			st, err := SchemaStatus(ctx.Context(), s.DatabaseURL, s.Groups)
+			st, err := SchemaStatusWith(ctx.Context(), s.DatabaseURL, s.Groups, s.Optional)
 			if err != nil {
 				return err
 			}
@@ -127,7 +165,7 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			if err != nil {
 				return err
 			}
-			if err := CheckCompatible(ctx.Context(), s.DatabaseURL, s.Groups); err != nil {
+			if err := CheckCompatibleWith(ctx.Context(), s.DatabaseURL, s.Groups, s.Optional); err != nil {
 				return err
 			}
 			if err := Migrate(ctx.Context(), s.DatabaseURL, s.Groups); err != nil {
@@ -136,5 +174,36 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			fmt.Println("The database is up to date.")
 			return nil
 		}),
+		cli.NewCommand("setup-token", "Print the link that finishes first-run setup", func(ctx cli.CommandContext) error {
+			s, err := settings()
+			if err != nil {
+				return err
+			}
+			out, err := SetupTokenOutput(ctx.Context(), s, ctx.Bool("raw"))
+			if err != nil {
+				return err
+			}
+			fmt.Println(out)
+			return nil
+		},
+			cli.WithUsage("loomplane setup-token [--raw]"),
+			cli.WithFlag(cli.NewBoolFlag("raw", "", "Print the token alone, for scripts", false)),
+		),
+		cli.NewCommand("admin", "Manage who runs this Loomplane instance", func(cli.CommandContext) error {
+			return errors.New("use a subcommand: loomplane admin grant-platform-admin <email>")
+		},
+			cli.WithUsage("loomplane admin grant-platform-admin <email>"),
+			cli.WithSubcommand(cli.NewCommand("grant-platform-admin", "Let an existing user open the instance console", func(ctx cli.CommandContext) error {
+				email := strings.TrimSpace(ctx.Arg(0))
+				if email == "" {
+					return errors.New("usage: loomplane admin grant-platform-admin <email>")
+				}
+				s, err := settings()
+				if err != nil {
+					return err
+				}
+				return grantPlatformAdmin(ctx.Context(), s, email, os.Stdout, liveGrant)
+			}, cli.WithUsage("loomplane admin grant-platform-admin <email>"))),
+		),
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // AppliedInputReader verifies access to encrypted variables and source artifacts.
@@ -45,6 +47,12 @@ func (s *Service) authorizeCloudSync(ctx context.Context, p security.Principal, 
 	if err := refuseAutomation(p); err != nil {
 		return err
 	}
+	// A Cloud sync moves production workloads. The agent holds
+	// deployment:approve, but a sync isn't a deployment it approved, so its
+	// infrastructure writes would be refused halfway.
+	if p.IsAgent() {
+		return fmt.Errorf("%w: %s doesn't change where a project runs", security.ErrForbidden, security.AgentActorName)
+	}
 	if project == "" {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
@@ -64,6 +72,11 @@ func (s *Service) PreviewCloudChange(ctx context.Context, p security.Principal, 
 func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, project string, in cloudprofiles.ChangeInput, reverts string) (*cloudprofiles.Preview, error) {
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
+	}
+	if in.EnvironmentID != "" {
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, in.EnvironmentID); guardErr != nil {
+			return nil, guardErr
+		}
 	}
 	st, err := s.syncStore()
 	if err != nil {
@@ -91,6 +104,15 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if in.Shared() {
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
+		}
+		// A shared change rewrites the Cloud's targets or default, which the
+		// platform-owned Loomplane Cloud never takes from an organization.
+		cloud, cloudErr := st.GetProfile(ctx, p.OrgID, "", in.CloudID)
+		if cloudErr != nil {
+			return nil, cloudErr
+		}
+		if cloud.PlatformOwned {
+			return nil, cloudprofiles.ErrPlatformOwned
 		}
 		snapshot.Shared = true
 	}
@@ -189,6 +211,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			continue
 		}
 		found = true
+		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, env.ID); guardErr != nil {
+			if errors.Is(guardErr, projects.ErrFleetManaged) {
+				preview.Blockers = append(preview.Blockers, "Manage instance placement through its fleet.")
+				continue
+			}
+			return nil, guardErr
+		}
 		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env.ID)
 		if e != nil {
 			return nil, e
@@ -324,6 +353,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if poolPlacements == nil {
 			poolPlacements = map[string]CloudPlacement{}
 		}
+		// Services moving onto Loomplane Cloud take the room it previews,
+		// as pool services take their reviewed capacity.
+		platformPlacements, platformErr := s.syncPlatformPlacements(ctx, plan, capacityBindings, poolAssignment, in.TargetID)
+		if platformErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+platformErr.Error())
+		}
+		maps.Copy(poolPlacements, platformPlacements)
 		for _, c := range compensations {
 			if !c.Retained {
 				continue
@@ -359,6 +395,47 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			selector = defaultPlacementSelector
 		}
 		result := appliedCloudPlanWithIntents(planningBindings, after, selector, options, s.providers, poolPlacements, intents, routes)
+		locationReviews := []*cloudprofiles.LocationReview{}
+		priorLocations := map[string]locationSelection{}
+		for i := range result.Actions {
+			action := &result.Actions[i]
+			if action.Service == nil || action.Service.Placement == nil {
+				continue
+			}
+			cfg := action.Service
+			pin := cfg.CloudPlacement
+			if cfg.CapacityIntent != nil {
+				pin = &CloudPlacement{TargetID: cfg.CapacityIntent.Demand.TargetID, TargetName: cfg.CapacityIntent.TargetName}
+			}
+			if pin == nil || !selectsPlacement(selector, pin) {
+				continue
+			}
+			set := manifest.Settings{Placement: cfg.Placement, CloudTarget: pin.TargetName, Size: cfg.Size, Scale: cfg.Scale}
+			_, selection, placementErr := s.selectLocation(ctx, plan, after, set, action.Name, planningBindings, options, nil, cfg.Repo, priorLocations, &locationCapacityReview{Intent: cfg.CapacityIntent, Placement: cfg.CloudPlacement, Before: preview.Before}, locationRequirements{Workload: cfg.Workload})
+			if result.LocationPlacements == nil {
+				result.LocationPlacements = map[string]LocationPlacementDecision{}
+			}
+			result.LocationPlacements[action.Name] = selection.Decision
+			if placementErr != nil {
+				result.Problems = append(result.Problems, Finding{Code: "location-placement", Subject: ServiceSubject, Name: action.Name, Message: placementErr.Error()})
+				result.Executable = false
+				continue
+			}
+			if cfg.CapacityIntent != nil {
+				cfg.CapacityIntent.Demand.LocationReview = selection.Review
+				cfg.CapacityIntent.Demand.IntentHash = ""
+				hash, hashErr := Digest(cfg.CapacityIntent)
+				if hashErr != nil {
+					return nil, hashErr
+				}
+				cfg.CapacityIntent.Demand.IntentHash = hash
+			} else {
+				cfg.CloudPlacement.LocationReview = selection.Review
+			}
+			priorLocations[action.Name] = selection
+			locationReviews = append(locationReviews, selection.Review)
+		}
+
 		for i := range result.Actions {
 			a := &result.Actions[i]
 			c := compensations[a.ID]
@@ -398,6 +475,12 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		frontendPlan.ID = migrationPlanID(frontendSyncID, env.ID)
 		if frontendErr := s.pinFrontendDemands(ctx, &frontendPlan, result); frontendErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+frontendErr.Error())
+		}
+		if workloadErr := s.PrepareClusterWorkloadDemands(ctx, &frontendPlan, result); workloadErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+workloadErr.Error())
+		}
+		if cleanupErr := s.PrepareManagedCleanupTargets(ctx, &frontendPlan, result); cleanupErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+cleanupErr.Error())
 		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {
@@ -455,7 +538,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if string(routeSnapshot) == "null" {
 			routeSnapshot = []byte("[]")
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{LocationReviews: locationReviews, Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
 	}
 	if !found {
@@ -488,7 +571,18 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 }
 
 func (s *Service) validateSyncTarget(ctx context.Context, t cloudprofiles.Target, options []ConnectionOption) error {
-	if t.Runtime == "server" {
+	switch t.Runtime {
+	case platformRuntime:
+		// A Loomplane Cloud target runs through no connection of the
+		// organization's, so there is none to look up.
+		if t.Provider != platformRuntime || t.ConnectionID != "" || t.PoolID != "" {
+			return cloudprofiles.ErrInvalid
+		}
+		if s.platform == nil {
+			return errPlatformUnavailable
+		}
+		return nil
+	case "server":
 		if t.Provider != "server" || t.PoolID == "" || t.ConnectionID != "" {
 			return cloudprofiles.ErrInvalid
 		}
@@ -537,6 +631,9 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
 		}
+	}
+	if ownershipErr := s.requireUnmanagedSnapshot(ctx, p.OrgID, project, snapshot); ownershipErr != nil {
+		return nil, ownershipErr
 	}
 	if preview.Revision != revision {
 		return nil, cloudprofiles.ErrConflict
@@ -600,7 +697,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	if planErr := prepareAcceptedPlans(sync, snapshot); planErr != nil {
 		return nil, planErr
 	}
-	sync, err = st.Accept(ctx, preview, snapshot, sync, key)
+	sync, err = st.Accept(security.WithPrincipal(ctx, p), preview, snapshot, sync, key)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest"
 
 import type { Action, Deployment, Plan } from "@/client/forge/loomplane/types"
-import { commitLabel, isLive, matches, runLog, toRun } from "@/lib/runs"
+import {
+  commitLabel,
+  isLive,
+  matches,
+  runKindLabel,
+  runLog,
+  runStatusText,
+  runStatusWord,
+  toRun,
+} from "@/lib/runs"
 
 const action = (id: string, step: number, op = "create"): Action => ({
   id,
@@ -123,7 +132,7 @@ describe("toRun", () => {
     expect(isLive(paused)).toBe(true)
     const cancelled = toRun(p, deployment("cancelled", []))
     expect(cancelled.status).toBe("canceled")
-    expect(cancelled.phase).toBe("Deployment canceled")
+    expect(cancelled.phase).toBe("Deployment cancelled")
     expect(isLive(cancelled)).toBe(false)
     expect(cancelled.thread.slice(2).map((s) => s.state)).toEqual([
       "canceled",
@@ -172,6 +181,26 @@ describe("thread", () => {
       ])
     )
     expect(r.phase).toBe("Failed at create api")
+  })
+
+  it("stops the steps a cancelled deployment never finished", () => {
+    const r = toRun(
+      plan("approved", {
+        actions: [action("api", 1), action("web", 2), action("worker", 3)],
+      }),
+      deployment("cancelled", [
+        { actionId: "api", status: "succeeded" },
+        { actionId: "web", status: "deploying" },
+        { actionId: "worker", status: "pending" },
+      ])
+    )
+    const deploy = r.thread.slice(2)
+    expect(deploy.map((s) => s.state)).toEqual(["done", "canceled", "canceled"])
+    expect(deploy.map((s) => s.detail).slice(1)).toEqual([
+      "Cancelled while it ran",
+      "Not run",
+    ])
+    expect(deploy[1].progress).toBeUndefined()
   })
 
   it("draws the deploy steps of a rejected plan as never run", () => {
@@ -260,5 +289,54 @@ describe("helpers", () => {
     expect(matches(r, "PRODUCTION")).toBe(true)
     expect(matches(r, "plan_1")).toBe(true)
     expect(matches(r, "staging")).toBe(false)
+  })
+})
+
+describe("runKindLabel", () => {
+  const rollback = (trigger: string) =>
+    plan("approved", {
+      kind: "rollback",
+      rollback: {
+        reason: "errors up",
+        restoreDeploymentId: "dep_1",
+        restoreFinishedAt: "2026-10-12T09:00:00Z",
+        restorePlanId: "plan_0",
+        targetDeploymentId: "dep_2",
+        targetPlanId: "plan_2",
+        trigger,
+      },
+    })
+
+  it("labels promotions and rollbacks", () => {
+    expect(
+      runKindLabel(
+        plan("ready", { kind: "promotion", fromEnvironment: "staging" })
+      )
+    ).toBe("Promoted from staging")
+    expect(runKindLabel(rollback("watch"))).toBe("Automatic rollback")
+    expect(runKindLabel(rollback("canary"))).toBe("Automatic rollback")
+    expect(runKindLabel(rollback("manual"))).toBe("Rollback")
+    expect(runKindLabel(plan("ready"))).toBe("")
+  })
+})
+
+describe("status words", () => {
+  it("say each run status the way the cloud pages do", () => {
+    expect(runStatusText.waiting).toBe("Waiting for you")
+    expect(runStatusText.succeeded).toBe("Deployed")
+    expect(runStatusText.canceled).toBe("Cancelled")
+    expect(runStatusText.paused).toBe("Paused for capacity")
+  })
+
+  it("say whether a run in progress is planning or deploying", () => {
+    expect(runStatusWord(toRun(plan("planning")))).toBe("Planning")
+    expect(runStatusWord(toRun(plan("approved")))).toBe("Deploying")
+    expect(runStatusWord(toRun(plan("ready")))).toBe("Waiting for you")
+  })
+
+  it("name a closed plan's approval in plan words", () => {
+    const r = toRun(plan("superseded"))
+    expect(r.thread[1].detail).toBe("Replaced")
+    expect(toRun(plan("ready")).thread[1].detail).toBe("Waiting for you")
   })
 })

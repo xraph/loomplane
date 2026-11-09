@@ -16,11 +16,17 @@ const (
 	DomainFailed               DomainState = "failed"
 	DomainRenewing             DomainState = "renewing"
 	DomainCleanupPending       DomainState = "cleanup_pending"
+	// DomainProofMissing is a verified zone whose record a check found gone.
+	DomainProofMissing DomainState = "proof_missing"
 )
 
 const (
-	RouteBackendServer     = "server"
-	RouteBackendKubernetes = "kubernetes"
+	RouteBackendServer      = "server"
+	RouteBackendFirecracker = "firecracker"
+	RouteBackendKubernetes  = "kubernetes"
+	// RouteBackendPlatform is a hostname on an app the provider's platform
+	// routes itself, such as DigitalOcean App Platform.
+	RouteBackendPlatform = "platform"
 )
 
 // certificateRenewalWindow is when a valid certificate starts reading as renewing.
@@ -74,12 +80,14 @@ func DeriveRouteStatus(route Route, zone *Zone, latest *RouteOperation, now time
 		return all(DomainCleanupPending)
 	case zone == nil || !zone.verified():
 		return all(DomainAwaitingVerification)
-	case latest != nil && (latest.Status == "pending" || latest.Status == "running") && latest.Receipt == nil && zone.Mode == "managed":
+	// A route following its node's new address still has its certificate.
+	case latest != nil && latest.Kind != "address" && (latest.Status == "pending" || latest.Status == "running") && len(latest.receipts()) == 0 && zone.Mode == "managed":
 		return all(DomainProvisioning)
 	}
 	out.DNS, out.Certificate, out.Route = DomainProvisioning, DomainProvisioning, DomainProvisioning
 	switch {
-	case v.DNS:
+	// Its last check found DNS on the old address.
+	case v.DNS && route.Status != RouteRoutingPending:
 		out.DNS = DomainReady
 	case zone.Mode == "external":
 		// Nobody but the zone's owner can create the record.
@@ -87,7 +95,8 @@ func DeriveRouteStatus(route Route, zone *Zone, latest *RouteOperation, now time
 	}
 	if v.TLS {
 		out.Certificate = DomainReady
-		if v.CertState == "issuing" || v.CertExpires.Before(now.Add(certificateRenewalWindow)) {
+		// A certificate whose expiry wasn't read isn't renewing.
+		if v.CertState == "issuing" || (!v.CertExpires.IsZero() && v.CertExpires.Before(now.Add(certificateRenewalWindow))) {
 			out.Certificate = DomainRenewing
 		}
 	}

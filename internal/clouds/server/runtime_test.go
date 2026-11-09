@@ -77,7 +77,7 @@ func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T)
 				http.NotFound(w, r)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Image": "sha256:" + strings.Repeat("a", 64), "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Image": "sha256:" + strings.Repeat("a", 64), "Config": map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
 		case r.URL.Path == "/networks/"+NetworkName("org_fixture", "env_fixture"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
@@ -108,6 +108,7 @@ func TestRuntime_injectsSecretsThroughDockerAndKeepsPrivateAddress(t *testing.T)
 		return owned.RuntimeValues{Env: map[string]string{"TOKEN": "private-runtime-token"}}, nil
 	}}
 	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: "vault_reference", owned.LabelPublic: "false"}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	result, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:" + strings.Repeat("a", 64), Env: map[string]string{"MODE": "production"}, Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +201,7 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 				}
 				switch parts[len(parts)-1] {
 				case "json":
-					_ = json.NewEncoder(w).Encode(map[string]any{"Id": current.id, "Config": map[string]any{"Image": current.image, "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelInstance: iid.String(), owned.LabelRevision: current.revision}}, "State": map[string]any{"Running": current.running, "Status": "exited", "ExitCode": 1}})
+					_ = json.NewEncoder(w).Encode(map[string]any{"Id": current.id, "Config": map[string]any{"Image": current.image, "Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelInstance: iid.String(), owned.LabelRevision: current.revision}}, "State": map[string]any{"Running": current.running, "Status": "exited", "ExitCode": 1}})
 				case "stop":
 					current.running = failure == "stop-unchanged"
 					stops++
@@ -236,6 +237,7 @@ func TestRuntime_recoversInterruptedReplacement(t *testing.T) {
 					return http.DefaultTransport.RoundTrip(r)
 				})}}, nil
 			}}
+			seedOrdinaryClass(t, runtime, iid, labels)
 			_, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:new", Ports: []cpprovider.PortSpec{{Container: 8080}}}, labels)
 			if err == nil {
 				t.Fatal("failed rollout was accepted")
@@ -298,7 +300,7 @@ func TestRuntime_reconcilesLeasesAfterBackupDeletionAndOnRemoval(t *testing.T) {
 		case strings.HasPrefix(r.URL.Path, "/networks/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}, "Containers": map[string]any{"current": true}})
 		case r.URL.Path == "/containers/"+ContainerName(iid)+"/json" && present:
-			containerLabels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelInstance: iid.String(), owned.LabelRevision: "new", owned.LabelHostPort: "18081"}
+			containerLabels := map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelInstance: iid.String(), owned.LabelRevision: "new", owned.LabelHostPort: "18081"}
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "current", "Config": map[string]any{"Image": "sha256:new", "Labels": containerLabels}, "State": map[string]any{"Running": true}})
 		case r.Method == http.MethodDelete && r.URL.Path == "/containers/current":
 			present = false
@@ -315,6 +317,7 @@ func TestRuntime_reconcilesLeasesAfterBackupDeletionAndOnRemoval(t *testing.T) {
 			return http.DefaultTransport.RoundTrip(r)
 		})}}, nil
 	}}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	if _, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:new"}, labels); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +358,7 @@ func TestServerWaitProbesDeclaredHealthPort(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"Id":     "container_one",
-			"Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
+			"Config": map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
 			"State":  map[string]any{"Running": true, "Status": "running"},
 			"NetworkSettings": map[string]any{"Ports": map[string]any{
 				"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}},
@@ -422,7 +425,7 @@ func TestServerUploadsFilesBeforeStart(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
 		case r.URL.Path == "/networks/"+NetworkName("org_fixture", "env_fixture"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
@@ -479,6 +482,7 @@ func TestServerUploadsFilesBeforeStart(t *testing.T) {
 		}, nil
 	}}
 	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRuntime: "vault_reference", owned.LabelRuntimeFiles: "true", owned.LabelPublic: "false"}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	if _, err = runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:" + strings.Repeat("a", 64)}, labels); err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +549,7 @@ func TestServerWaitProbesRESP(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"Id":     "container_one",
-			"Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
+			"Config": map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
 			"State":  map[string]any{"Running": true, "Status": "running"},
 			"NetworkSettings": map[string]any{"Ports": map[string]any{
 				"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}},
@@ -610,7 +614,7 @@ func TestComponentsPublishLoopbackAndJoinTheEnvironmentNetwork(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}})
 		case r.URL.Path == "/networks/"+NetworkName("org_fixture", "env_fixture"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
@@ -640,6 +644,7 @@ func TestComponentsPublishLoopbackAndJoinTheEnvironmentNetwork(t *testing.T) {
 	}}
 	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelPublic: "false", owned.LabelCatalogKind: "sample", owned.LabelCatalogResource: "app", owned.LabelCatalogComponent: "gateway", owned.LabelKubernetesRules: `[{"api_groups":[""],"resources":["services"],"verbs":["get"]}]`}
 	spec := cpprovider.ServiceSpec{Name: "gateway", Image: "sha256:" + strings.Repeat("a", 64), Ports: []cpprovider.PortSpec{{Container: 8080, Protocol: "tcp"}, {Container: 9090, Protocol: "tcp"}}}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	if _, err = runtime.Apply(t.Context(), iid, spec, labels); err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +673,7 @@ func TestServerContainerRecordsDeclaredReadiness(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}, "NetworkSettings": map[string]any{"Ports": map[string]any{"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}}}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}, "NetworkSettings": map[string]any{"Ports": map[string]any{"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}}}}})
 		case r.URL.Path == "/networks/"+NetworkName("org_fixture", "env_fixture"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
@@ -698,6 +703,7 @@ func TestServerContainerRecordsDeclaredReadiness(t *testing.T) {
 	}}
 	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelPublic: "false", owned.LabelCatalogComponent: "api", owned.LabelHealth: "/readyz", owned.LabelHealthPort: "8080"}
 	spec := cpprovider.ServiceSpec{Name: "api", Image: "sha256:" + strings.Repeat("a", 64), Ports: []cpprovider.PortSpec{{Container: 8080, Protocol: "tcp"}}}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	if _, err = runtime.Apply(t.Context(), iid, spec, labels); err != nil {
 		t.Fatal(err)
 	}
@@ -706,5 +712,67 @@ func TestServerContainerRecordsDeclaredReadiness(t *testing.T) {
 	}
 	if _, ok := create.Labels[owned.LabelHealthProtocol]; ok {
 		t.Fatalf("an HTTP readiness check gained a protocol label: %v", create.Labels)
+	}
+}
+
+func TestServerWaitsForTheStartTimeout(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":              "container_one",
+			"Config":          map[string]any{"Labels": map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
+			"State":           map[string]any{"Running": true, "Status": "running"},
+			"NetworkSettings": map[string]any{"Ports": map[string]any{"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}}}},
+		})
+	}))
+	defer api.Close()
+	u, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{Config: &Config{Details: map[string]string{"docker_id": "daemon_fixture"}}, HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})}}
+	// The clock reads the start, then exactly two hours on, then just past.
+	start := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	waitFor := func(labels map[string]string) (int, error) {
+		ticks := []time.Time{start, start.Add(2 * time.Hour), start.Add(2*time.Hour + time.Nanosecond)}
+		probes := 0
+		runtime := &Runtime{
+			Now: func() time.Time {
+				now := ticks[0]
+				if len(ticks) > 1 {
+					ticks = ticks[1:]
+				}
+				return now
+			},
+			Probe: func(context.Context, *Client, int, string) error {
+				probes++
+				return errors.New("still loading weights")
+			},
+		}
+		return probes, runtime.wait(t.Context(), client, ContainerName(iid), iid, labels)
+	}
+	labels := func(timeout string) map[string]string {
+		out := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelHealth: "/health", owned.LabelHealthPort: "8080"}
+		if timeout != "" {
+			out[owned.LabelStartTimeout] = timeout
+		}
+		return out
+	}
+
+	// Two hours on is still inside a 7200 second start timeout.
+	if probes, err := waitFor(labels("7200")); err == nil || probes != 2 {
+		t.Fatalf("start timeout 7200: %d probes, %v", probes, err)
+	}
+	// The three minute default is long over by then.
+	if probes, err := waitFor(labels("")); err == nil || probes != 1 {
+		t.Fatalf("default wait: %d probes, %v", probes, err)
+	}
+	for _, bad := range []string{"30", "10801", "2h", "-60"} {
+		if probes, err := waitFor(labels(bad)); err == nil || probes != 0 {
+			t.Fatalf("start timeout %q: %d probes, %v", bad, probes, err)
+		}
 	}
 }

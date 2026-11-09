@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,8 @@ type GitHubApp interface {
 	RepositoryToken(ctx context.Context, installationID int64, repo string) (string, error)
 	Repositories(ctx context.Context, installationID int64) ([]InstalledRepository, error)
 	AccountURLs(account, accountType string, id int64) (avatar, manage string)
+	IssuesToken(ctx context.Context, installationID int64, repo string) (string, error)
+	IssuesClient(token string, repo Repository) Issues
 }
 
 // Auditor records connection changes. Recording must not fail the change.
@@ -47,6 +50,10 @@ type InstallationRecord struct {
 	AccountType string
 	CreatedBy   string
 	CreatedAt   time.Time
+	// Permissions are what the installation had accepted when Loomplane
+	// last read them, at PermissionsCheckedAt; nil when it never has.
+	Permissions          map[string]string
+	PermissionsCheckedAt *time.Time
 }
 
 // Store persists connected installations, per organization.
@@ -56,6 +63,8 @@ type Store interface {
 	// DeleteInstallation returns ErrInstallationNotFound when there was
 	// nothing to delete.
 	DeleteInstallation(ctx context.Context, orgID string, id int64) error
+	// SavePermissions records what an installation had accepted at at.
+	SavePermissions(ctx context.Context, orgID string, id int64, perms map[string]string, at time.Time) error
 }
 
 // GitHubInstallation is a connected installation, as the API shows it.
@@ -151,7 +160,8 @@ func (c *Connections) Connect(ctx context.Context, p security.Principal, in Conn
 	if err != nil {
 		return nil, err
 	}
-	if st.OrgID != p.OrgID || st.UserID != p.UserID {
+	if st.OrgID != p.OrgID || st.UserID != p.UserID || st.Workspace != "" {
+		// A state naming a workspace was made for Bitbucket.
 		return nil, ErrBadState
 	}
 	if in.InstallationID <= 0 {
@@ -258,6 +268,146 @@ func (c *Connections) Token(ctx context.Context, orgID string, repo Repository) 
 		return tok, err
 	}
 	return "", nil
+}
+
+// Access says whether Loomplane can open issues on repo, a repository
+// key, for orgID: through the organization's own installation on the
+// repository's owner, once that installation has accepted the Issues
+// permission. An installation's permissions are read from GitHub at most
+// every PermissionsTTL. When GitHub can't be asked, the last ones read
+// still count, and the error is returned only when there are none.
+func (c *Connections) Access(ctx context.Context, orgID, repo string) (IssueAccess, error) {
+	acc, _, err := c.access(ctx, orgID, repo)
+	return acc, err
+}
+
+// Issues returns repo's issues through a token that can reach only
+// them. When Access isn't Accepted, it returns ErrIssuesNotAccepted for
+// an installation that hasn't accepted the permission, and
+// ErrNoInstallation otherwise, each with Access's reason.
+func (c *Connections) Issues(ctx context.Context, orgID, repo string) (Issues, error) {
+	acc, r, err := c.access(ctx, orgID, repo)
+	if err != nil {
+		return nil, err
+	}
+	if !acc.Accepted {
+		if acc.InstallationID != 0 {
+			return nil, fmt.Errorf("%w: %s", ErrIssuesNotAccepted, acc.Reason)
+		}
+		return nil, fmt.Errorf("%w: %s", ErrNoInstallation, acc.Reason)
+	}
+	tok, err := c.app.IssuesToken(ctx, acc.InstallationID, r.Name)
+	var se *statusError
+	if errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusUnprocessableEntity) {
+		// The installation can't see the repository, is gone, or no
+		// longer has the permission.
+		reason := acc.Account + "'s GitHub App installation can't reach " + r.FullName() +
+			". An owner of " + acc.Account + " can choose which repositories the App can read on GitHub."
+		return nil, fmt.Errorf("%w: %s", ErrNoInstallation, reason)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("mint an issues token for %s: %w", r.FullName(), issueError(err))
+	}
+	return c.app.IssuesClient(tok, r), nil
+}
+
+func (c *Connections) access(ctx context.Context, orgID, key string) (IssueAccess, Repository, error) {
+	acc := IssueAccess{Repository: key}
+	if c.app == nil {
+		acc.Reason = "This Loomplane has no GitHub App, so reports go to Herald only"
+		return acc, Repository{}, nil
+	}
+	repo, err := ParseKey(key)
+	if err != nil {
+		// Asking again won't make the key readable, so the report is
+		// delivered without an issue rather than retried.
+		acc.Reason = "Loomplane couldn't read the repository " + key + ", so reports go to Herald only"
+		return acc, Repository{}, nil
+	}
+	if !repo.onGitHub() {
+		acc.Reason = "Loomplane opens issues on GitHub repositories only, so reports for " + key + " go to Herald only"
+		return acc, repo, nil
+	}
+	acc.Repository = repo.Key()
+	recs, err := c.store.ListInstallations(ctx, orgID)
+	if err != nil {
+		return acc, repo, err
+	}
+	var rec *InstallationRecord
+	for _, r := range recs {
+		if strings.EqualFold(r.Account, repo.Owner) {
+			rec = r
+			break
+		}
+	}
+	if rec == nil {
+		acc.Reason = "No GitHub App installation on " + repo.Owner + " is connected to this workspace"
+		return acc, repo, nil
+	}
+	_, acc.ManageURL = c.app.AccountURLs(rec.Account, rec.AccountType, rec.ID)
+	acc.InstallationID, acc.Account = rec.ID, rec.Account
+	if err := c.permissions(ctx, rec); err != nil {
+		return acc, repo, err
+	}
+	if rec.Permissions[IssuesPermission] != "write" {
+		acc.Reason = rec.Account + " hasn't accepted the Issues permission yet. An owner of " + rec.Account + " can review the App's permissions on GitHub."
+		return acc, repo, nil
+	}
+	acc.Accepted = true
+	return acc, repo, nil
+}
+
+// permissions brings rec's permissions up to date when they're older
+// than PermissionsTTL. When GitHub can't be asked it keeps the stored
+// ones, and fails only when none were ever read.
+func (c *Connections) permissions(ctx context.Context, rec *InstallationRecord) error {
+	now := c.now().UTC()
+	if rec.PermissionsCheckedAt != nil && now.Sub(*rec.PermissionsCheckedAt) < PermissionsTTL {
+		return nil
+	}
+	inst, err := c.app.Installation(ctx, rec.ID)
+	if err != nil {
+		if rec.PermissionsCheckedAt != nil {
+			return nil
+		}
+		return fmt.Errorf("read %s's GitHub App permissions: %w", rec.Account, err)
+	}
+	if err := c.store.SavePermissions(ctx, rec.OrgID, rec.ID, inst.Permissions, now); err != nil {
+		return err
+	}
+	rec.Permissions, rec.PermissionsCheckedAt = inst.Permissions, &now
+	return nil
+}
+
+// IssuesStatus says which of the organization's installations have
+// accepted the Issues permission, so AI settings can name the ones that
+// haven't. An installation whose permissions GitHub can't tell yet shows
+// as not accepted.
+func (c *Connections) IssuesStatus(ctx context.Context, p security.Principal) (*IssuesStatus, error) {
+	if err := c.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
+		return nil, err
+	}
+	st := &IssuesStatus{Configured: c.app != nil, Installations: []InstallationIssues{}}
+	if c.app == nil {
+		return st, nil
+	}
+	recs, err := c.store.ListInstallations(ctx, p.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range recs {
+		if err := c.permissions(ctx, r); err != nil && r.PermissionsCheckedAt == nil {
+			// GitHub couldn't be asked, and nothing was ever read: the row
+			// shows as not accepted, without a check time.
+			r.Permissions = nil
+		}
+		_, manage := c.app.AccountURLs(r.Account, r.AccountType, r.ID)
+		st.Installations = append(st.Installations, InstallationIssues{
+			Account: r.Account, AccountType: r.AccountType, Accepted: r.Permissions[IssuesPermission] == "write",
+			ManageURL: manage, CheckedAt: r.PermissionsCheckedAt,
+		})
+	}
+	return st, nil
 }
 
 func (c *Connections) view(r *InstallationRecord) GitHubInstallation {

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -21,24 +22,32 @@ var ErrCleanupConflict = errors.New("cleanup requires a current review of one un
 
 // CleanupReview describes the exact failed attempt you can abandon.
 type CleanupReview struct {
-	DeploymentID string `json:"deployment_id"`
-	Revision     string `json:"revision"`
-	Resource     string `json:"resource"`
-	Provider     string `json:"provider"`
-	Region       string `json:"region"`
-	ConnectionID string `json:"connection_id"`
-	Effect       string `json:"effect"`
+	Blockers         []string                        `json:"blockers,omitempty"`
+	PreviousReviewID string                          `json:"previous_review_id,omitempty"`
+	Variant          string                          `json:"variant,omitempty"`
+	ReviewSequence   int64                           `json:"review_sequence,omitempty"`
+	Targets          []planning.ManagedCleanupTarget `json:"targets,omitempty"`
+	DeploymentID     string                          `json:"deployment_id"`
+	Revision         string                          `json:"revision"`
+	Resource         string                          `json:"resource"`
+	Provider         string                          `json:"provider"`
+	Region           string                          `json:"region"`
+	ConnectionID     string                          `json:"connection_id"`
+	Effect           string                          `json:"effect"`
 }
 
 // FailedCleanup keeps deletion progress separate from the failed create evidence.
 type FailedCleanup struct {
-	DeploymentID string             `json:"deployment_id"`
-	Revision     string             `json:"revision"`
-	Status       string             `json:"status"`
-	Attempt      int                `json:"attempt"`
-	Error        string             `json:"error,omitempty"`
-	Actor        security.Principal `json:"-"`
-	Checkpoint   []byte             `json:"-"`
+	Variant        string             `json:"variant,omitempty"`
+	ReviewID       string             `json:"review_id,omitempty"`
+	ReviewSequence int64              `json:"review_sequence,omitempty"`
+	DeploymentID   string             `json:"deployment_id"`
+	Revision       string             `json:"revision"`
+	Status         string             `json:"status"`
+	Attempt        int                `json:"attempt"`
+	Error          string             `json:"error,omitempty"`
+	Actor          security.Principal `json:"-"`
+	Checkpoint     []byte             `json:"-"`
 }
 
 // CleanupStarter delivers an accepted cleanup to the durable worker.
@@ -48,9 +57,11 @@ type CleanupStarter interface {
 
 // FailedCleanups reviews and executes abandonment of a single failed SQL create.
 type FailedCleanups struct {
-	runner *Runner
-	store  *PgStore
-	start  CleanupStarter
+	runner        *Runner
+	store         *PgStore
+	start         CleanupStarter
+	managed       *planning.ManagedCleanupStore
+	managedEngine ManagedFailedCleanupEngine
 }
 
 func NewFailedCleanups(r *Runner, store *PgStore, start CleanupStarter) *FailedCleanups {
@@ -65,6 +76,9 @@ func (s *FailedCleanups) candidate(ctx context.Context, org, id string, accepted
 	plan, err := s.runner.plans.GetPlan(ctx, org, d.PlanID)
 	if err != nil {
 		return nil, nil, planning.Action{}, "", err
+	}
+	if plan.ManagedInstanceID != "" || plan.Kind == planning.KindInstance {
+		return nil, nil, planning.Action{}, "", projects.ErrFleetManaged
 	}
 	status := StatusFailed
 	if accepted {
@@ -102,10 +116,35 @@ func (s *FailedCleanups) candidate(ctx context.Context, org, id string, accepted
 	return d, plan, a, hex.EncodeToString(sum[:]), nil
 }
 
+// require checks perm on the failed deployment's project, so a team's
+// grant there counts. A deployment outside the caller's organization is
+// ErrNotFound, as reading it would be.
+func (s *FailedCleanups) require(ctx context.Context, p security.Principal, perm security.Permission, deploymentID string) error {
+	d, err := s.store.GetDeployment(ctx, p.OrgID, deploymentID)
+	if err != nil {
+		return err
+	}
+	return s.runner.authz.Require(ctx, p, perm, d.ProjectID)
+}
+
 func (s *FailedCleanups) Preview(ctx context.Context, p security.Principal, id string) (*CleanupReview, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentApprove, id); err != nil {
 		return nil, err
 	}
+	if s.managed != nil {
+		managed, err := s.managed.HasFailedCleanupEvidence(ctx, p.OrgID, id)
+		if err != nil {
+			return nil, err
+		}
+		if managed {
+			r, previewErr := s.managed.PreviewFailedCleanup(ctx, p, id)
+			if previewErr != nil {
+				return nil, previewErr
+			}
+			return managedCleanupPreview(r), nil
+		}
+	}
+
 	_, plan, a, revision, err := s.candidate(ctx, p.OrgID, id, false)
 	if err != nil {
 		return nil, err
@@ -114,6 +153,15 @@ func (s *FailedCleanups) Preview(ctx context.Context, p security.Principal, id s
 }
 
 func (s *FailedCleanups) load(ctx context.Context, org, id string) (*FailedCleanup, error) {
+	if s.managed != nil {
+		r, err := s.managed.CurrentFailedCleanup(ctx, org, id)
+		if err == nil {
+			return managedCleanupResult(r), nil
+		}
+		if !planning.IsManagedFailedCleanupMissing(err) {
+			return nil, err
+		}
+	}
 	var c FailedCleanup
 	var actor []byte
 	err := s.store.db.QueryRow(ctx, `SELECT deployment_id,revision,status,attempt,error,actor,checkpoint FROM loomplane_failed_cleanups WHERE org_id=$1 AND deployment_id=$2`, org, id).Scan(&c.DeploymentID, &c.Revision, &c.Status, &c.Attempt, &c.Error, &actor, &c.Checkpoint)
@@ -130,19 +178,38 @@ func (s *FailedCleanups) load(ctx context.Context, org, id string) (*FailedClean
 }
 
 func (s *FailedCleanups) Get(ctx context.Context, p security.Principal, id string) (*FailedCleanup, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentRead, id); err != nil {
 		return nil, err
 	}
 	return s.load(ctx, p.OrgID, id)
 }
 
 func (s *FailedCleanups) Apply(ctx context.Context, p security.Principal, id, revision string) (*FailedCleanup, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentApprove, id); err != nil {
 		return nil, err
 	}
 	if revision == "" {
 		return nil, ErrCleanupConflict
 	}
+	if s.managed != nil {
+		managed, err := s.managed.HasFailedCleanupEvidence(ctx, p.OrgID, id)
+		if err != nil {
+			return nil, err
+		}
+		if managed {
+			r, acceptErr := s.managed.AcceptFailedCleanup(ctx, p, id, revision)
+			if acceptErr != nil {
+				return nil, acceptErr
+			}
+			if r.Status == "pending" {
+				if deliveryErr := s.deliverManaged(ctx, r); deliveryErr != nil {
+					return nil, deliveryErr
+				}
+			}
+			return managedCleanupResult(r), nil
+		}
+	}
+
 	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
@@ -212,8 +279,24 @@ func (s *FailedCleanups) Apply(ctx context.Context, p security.Principal, id, re
 }
 
 func (s *FailedCleanups) Retry(ctx context.Context, p security.Principal, id string) (*FailedCleanup, error) {
-	if err := s.runner.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
+	if err := s.require(ctx, p, security.DeploymentApprove, id); err != nil {
 		return nil, err
+	}
+	if s.managed != nil {
+		_, err := s.managed.CurrentFailedCleanup(ctx, p.OrgID, id)
+		if err == nil {
+			r, retryErr := s.managed.RetryFailedCleanup(ctx, p, id)
+			if retryErr != nil {
+				return nil, retryErr
+			}
+			if deliveryErr := s.deliverManaged(ctx, r); deliveryErr != nil {
+				return nil, deliveryErr
+			}
+			return managedCleanupResult(r), nil
+		}
+		if !planning.IsManagedFailedCleanupMissing(err) {
+			return nil, err
+		}
 	}
 	result, err := s.store.db.Exec(ctx, `UPDATE loomplane_failed_cleanups SET status='pending',attempt=attempt+1,error='',updated_at=now() WHERE org_id=$1 AND deployment_id=$2 AND status='failed'`, p.OrgID, id)
 	if err != nil {
@@ -236,6 +319,9 @@ func (s *FailedCleanups) Retry(ctx context.Context, p security.Principal, id str
 
 // RecoverFailedCleanups repairs the accept-to-enqueue gap after a process restart.
 func (s *FailedCleanups) RecoverFailedCleanups(ctx context.Context) error {
+	if err := s.recoverManaged(ctx); err != nil {
+		return err
+	}
 	rows, err := s.store.db.Query(ctx, `SELECT org_id,deployment_id,attempt FROM loomplane_failed_cleanups WHERE status='pending' AND delivered_attempt<attempt ORDER BY updated_at LIMIT 100`)
 	if err != nil {
 		return err
@@ -268,6 +354,18 @@ func (s *FailedCleanups) RecoverFailedCleanups(ctx context.Context) error {
 
 // RunFailedCleanup replays only the accepted deletion, never its creation stages.
 func (s *FailedCleanups) RunFailedCleanup(ctx context.Context, org, id string, attempt int, heartbeat func([]byte) error) error {
+	// The removal runs as the deployment's approver, which may be the
+	// agent: cleaning up its own deployment is part of running it.
+	ctx = security.WithDeploymentRun(ctx)
+	if s.managed != nil {
+		_, err := s.managed.CurrentFailedCleanup(ctx, org, id)
+		if err == nil {
+			return ErrManagedCleanupProtocol
+		}
+		if !planning.IsManagedFailedCleanupMissing(err) {
+			return err
+		}
+	}
 	if heartbeat == nil {
 		return errors.New("cleanup requires an activity heartbeat")
 	}

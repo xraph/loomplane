@@ -97,7 +97,9 @@ func TestServerPoolSizingPublicPlanApproval(t *testing.T) {
 			if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "sizing-assignment").ID); result.Status != cloudprofiles.SyncSucceeded {
 				t.Fatalf("assignment: %+v", result)
 			}
-			manifest := fmt.Sprintf("version: 1\nservices:\n  api:\n    source: go:services/api\n    cloud_target: %s\n    public: false\n%signore:\n  resources: [postgres, redis]\n", target.Name, tc.size)
+			// A pooled host can't build untrusted source (build isolation), so
+			// the service ships a pinned image and the test stays on sizing.
+			manifest := fmt.Sprintf("version: 1\nservices:\n  api:\n    source: go:services/api\n    cloud_target: %s\n    public: false\n    build: {image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab}\n%signore:\n  resources: [postgres, redis]\n", target.Name, tc.size)
 			c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": manifest}, nil)
 			var plan planBody
 			c.must(http.StatusCreated, http.MethodPost, base+"/plans", map[string]string{"environment": "production"}, &plan)

@@ -181,10 +181,10 @@ func (s *overviewStore) RemoveZone(_ context.Context, org, id string, revision i
 	return ErrNotFound
 }
 
-func (s *overviewStore) ZoneProofsDue(_ context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+func (s *overviewStore) ZoneProofsDue(_ context.Context, now, checkedBefore, recheckBefore time.Time, limit int) ([]*Zone, error) {
 	out := []*Zone{}
 	for _, zone := range s.zones {
-		if zoneProofDue(zone, now, checkedBefore) && len(out) < limit {
+		if zoneProofDue(zone, now, checkedBefore, recheckBefore) && len(out) < limit {
 			v := *zone
 			out = append(out, &v)
 		}
@@ -218,6 +218,9 @@ func newProofEnv(t *testing.T, cloud string) *proofEnv {
 	}
 	env.svc = NewService(Deps{Domains: env.store, Authz: cleanupTestAuth{}, Connections: routeDNSCredentials{cloud}, Adapters: registry, Resolver: env.resolver})
 	env.svc.now = func() time.Time { return env.now }
+	// Start on the fixture clock. The wall clock would make every verified
+	// zone look checked before the start once real time passes env.now.
+	env.svc.started = env.now
 	return env
 }
 
@@ -597,8 +600,11 @@ func TestZoneProofListingFailureKeepsTheReceipt(t *testing.T) {
 		t.Fatalf("receipt not kept: %+v", stored)
 	}
 	env.dns.listErr = nil
-	if _, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) || env.stored(t, zone.ID).ProofPublishError != "" {
-		t.Fatal("error not cleared once the record was found", err)
+	// Found at the provider, the listing failure gives way to why public
+	// DNS still doesn't show the record.
+	_, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	if msg := env.stored(t, zone.ID).ProofPublishError; !errors.Is(err, ErrConflict) || strings.Contains(msg, "couldn't read") || !strings.Contains(msg, "Vercel lists the TXT record") {
+		t.Fatal("listing failure not replaced once the record was found", err, msg)
 	}
 }
 
@@ -606,6 +612,7 @@ func TestCreateZoneUnderADomainHasNoProofOfItsOwn(t *testing.T) {
 	env := newProofEnv(t, "vercel")
 	env.store.zones = append(env.store.zones, &Zone{ID: "zone_root", OrgID: "org", Name: "example.com", Mode: "external", ProjectIDs: []string{}, VerifiedAt: env.now, Revision: 1,
 		ProofName: "_loomplane.example.com", ProofValue: "root-proof", ProofExpiresAt: env.now.Add(24 * time.Hour)})
+	env.resolver.values = []string{"root-proof"}
 	managed, err := env.svc.CreateZone(t.Context(), proofManager, ZoneInput{Name: "app.example.com", Mode: "managed", ConnectionID: "dns", ProjectIDs: []string{"shop"}})
 	if err != nil {
 		t.Fatal(err)
@@ -623,11 +630,214 @@ func TestCreateZoneUnderADomainHasNoProofOfItsOwn(t *testing.T) {
 	if external.ProofName != "" || external.ProofValue != "" {
 		t.Fatalf("external subdomain proof: %+v", external)
 	}
-	if due, _ := env.store.ZoneProofsDue(t.Context(), env.now, env.now, 10); len(due) != 0 {
-		t.Fatalf("a subdomain is background-checked: %+v", due)
+	// The domain's own record is rechecked; the subdomains have none.
+	due, _ := env.store.ZoneProofsDue(t.Context(), env.now, env.now, env.now, 10)
+	for _, z := range due {
+		if z.ID != "zone_root" {
+			t.Fatalf("a subdomain is background-checked: %s", z.Name)
+		}
 	}
 	zones, err := env.svc.ProjectZones(t.Context(), proofManager, "shop")
 	if err != nil || len(zones) != 2 || !zones[0].Verified || !zones[1].Verified {
 		t.Fatalf("subdomains read as verified through example.com: %+v %v", zones, err)
+	}
+}
+
+func TestVerifiedZoneProofDeletedAfterItsWindowIsPublishedAgain(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	first := *env.stored(t, zone.ID).ProofRecord
+
+	// Weeks later someone deletes it at the provider. The window a pending
+	// proof has to verify is long over, but this one already did.
+	env.dns.records = env.dns.records[:1]
+	env.resolver.values = nil
+	env.now = env.now.Add(30 * 24 * time.Hour)
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	proofs := env.dns.proofs()
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 2 || len(proofs) != 1 || proofs[0].ID == first.ID || stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] {
+		t.Fatalf("writes=%d proofs=%+v receipt=%+v", env.dns.writes, proofs, stored.ProofRecord)
+	}
+}
+
+func TestMissingProofSaysWhichRecordAndWhatToDo(t *testing.T) {
+	for _, mode := range []string{"managed", "external"} {
+		t.Run(mode, func(t *testing.T) {
+			env := newProofEnv(t, "vercel")
+			zone := env.create(t, mode)
+			env.resolver.values = []string{zone.ProofValue}
+			if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+				t.Fatal(err)
+			}
+			env.resolver.values = []string{"someone-else"}
+			err := env.svc.verifyZoneControl(t.Context(), env.stored(t, zone.ID))
+			var missing *ProofMissingError
+			if !errors.Is(err, ErrConflict) || !errors.As(err, &missing) {
+				t.Fatalf("got %v", err)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "_loomplane.shop.example.com") || !strings.Contains(msg, "shop.example.com under Domains") || !strings.Contains(msg, "Check again") {
+				t.Fatal(msg)
+			}
+			if wantsHost := strings.Contains(msg, "DNS host"); wantsHost != (mode == "external") {
+				t.Fatal("wrong remedy for", mode, msg)
+			}
+		})
+	}
+}
+
+func TestAddingASubdomainChecksItsDomainsRecord(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.store.zones = append(env.store.zones, &Zone{ID: "zone_root", OrgID: "org", Name: "example.com", Mode: "external", ProjectIDs: []string{}, VerifiedAt: env.now.Add(-30 * 24 * time.Hour), Revision: 1,
+		ProofName: "_loomplane.example.com", ProofValue: "root-proof", ProofExpiresAt: env.now.Add(-29 * 24 * time.Hour)})
+	in := ZoneInput{Name: "app.example.com", Mode: "managed", ConnectionID: "dns", ProjectIDs: []string{"shop"}}
+	// The domain's record is gone, so the subdomain isn't proved by it.
+	_, err := env.svc.CreateZone(t.Context(), proofManager, in)
+	var missing *ProofMissingError
+	if !errors.As(err, &missing) || missing.Zone != "example.com" || len(env.store.zones) != 1 {
+		t.Fatalf("added without its domain's record: %v zones=%d", err, len(env.store.zones))
+	}
+	env.resolver.values = []string{"root-proof"}
+	if _, err = env.svc.CreateZone(t.Context(), proofManager, in); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifiedZoneWithAMissingRecordReadsProofMissing(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	sub := &Zone{ID: "zone_sub", OrgID: "org", Name: "app.shop.example.com", Mode: "managed", ProjectIDs: []string{}, Revision: 1}
+	state := func() (DomainState, DomainState) {
+		zones := []*Zone{env.stored(t, zone.ID), sub}
+		LinkZoneParents(zones)
+		return zoneState(zones[0]), zoneState(zones[1])
+	}
+	if own, inherited := state(); own != DomainReady || inherited != DomainReady {
+		t.Fatal(own, inherited)
+	}
+
+	env.resolver.values = nil
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	if env.stored(t, zone.ID).ProofMissingAt.IsZero() {
+		t.Fatal("missing record not recorded")
+	}
+	// The subdomain is proved by the same record, so it says so too.
+	if own, inherited := state(); own != DomainProofMissing || inherited != DomainProofMissing {
+		t.Fatal(own, inherited)
+	}
+
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	if own, _ := state(); own != DomainReady || !env.stored(t, zone.ID).ProofMissingAt.IsZero() {
+		t.Fatal("found record still reads missing", own)
+	}
+}
+
+func TestVerifiedZoneProofIsRecheckedDailyAndOftenWhileMissing(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	checkedBefore := now.Add(-zoneProofCheckEvery)
+	zone := &Zone{Mode: "managed", Name: "acme.dev", ProofName: "_loomplane.acme.dev", ProofValue: "v", ProofExpiresAt: now.Add(-30 * 24 * time.Hour), VerifiedAt: now.Add(-31 * 24 * time.Hour)}
+	for _, c := range []struct {
+		checked time.Duration
+		missing bool
+		due     bool
+	}{
+		{time.Hour, false, false},
+		{25 * time.Hour, false, true},
+		{time.Hour, true, true},
+		{time.Minute, true, false},
+	} {
+		zone.ProofCheckedAt, zone.ProofMissingAt = now.Add(-c.checked), time.Time{}
+		if c.missing {
+			zone.ProofMissingAt = now.Add(-2 * time.Hour)
+		}
+		if got := zoneProofDue(zone, now, checkedBefore, now.Add(-zoneProofRecheckEvery)); got != c.due {
+			t.Errorf("checked %v ago, missing=%v: due=%v", c.checked, c.missing, got)
+		}
+	}
+	// One whose DNS its owner runs is checked the same way once verified.
+	external := *zone
+	external.Mode, external.ProofCheckedAt, external.ProofMissingAt = "external", now.Add(-25*time.Hour), time.Time{}
+	if !zoneProofDue(&external, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
+		t.Error("verified external zone not rechecked")
+	}
+	external.VerifiedAt = time.Time{}
+	external.ProofExpiresAt = now.Add(time.Hour)
+	if zoneProofDue(&external, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
+		t.Error("pending external zone checked in the background")
+	}
+	// A domain verified before proofs were required has no record to check.
+	legacy := &Zone{Mode: "managed", Name: "old.dev", VerifiedAt: now.Add(-time.Hour * 24 * 400)}
+	if zoneProofDue(legacy, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
+		t.Error("legacy zone due")
+	}
+}
+
+func TestVerifiedZonesAreRecheckedOnceAfterAStart(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The record goes while Loomplane is down, and it starts an hour after
+	// the last check: well inside the day the daily recheck waits.
+	env.dns.records = env.dns.records[:1]
+	env.resolver.values = nil
+	env.now = env.now.Add(time.Hour)
+	env.svc.started = env.now
+	env.now = env.now.Add(time.Minute)
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stored := env.stored(t, zone.ID)
+	if !stored.ProofCheckedAt.Equal(env.now) || stored.ProofMissingAt.IsZero() || len(env.dns.proofs()) != 1 {
+		t.Fatalf("not rechecked after the start: %+v", stored)
+	}
+	// Checked since the start, it waits for the next pass's two minutes,
+	// then the day, as before.
+	checked := stored.ProofCheckedAt
+	env.resolver.values = []string{zone.ProofValue}
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil || !env.stored(t, zone.ID).ProofCheckedAt.Equal(checked) {
+		t.Fatal("rechecked twice in one pass window", err)
+	}
+}
+
+func TestProofListedButNotServedSaysSo(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Vercel still lists the record, but its nameservers stopped serving
+	// it, as when the domain moves to another team.
+	env.resolver.values = nil
+	env.now = env.now.Add(zoneProofRelistAfter)
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 1 || !strings.Contains(stored.ProofPublishError, "Vercel lists the TXT record _loomplane.shop.example.com") || !strings.Contains(stored.ProofPublishError, "Vercel account Loomplane connects to") {
+		t.Fatalf("writes=%d error=%q", env.dns.writes, stored.ProofPublishError)
+	}
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil || env.stored(t, zone.ID).ProofPublishError != "" {
+		t.Fatal("explanation kept once the record showed", err)
 	}
 }

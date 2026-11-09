@@ -3,11 +3,15 @@ package notifications
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xraph/authsome/bridge"
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/driver"
+	emaildriver "github.com/xraph/herald/driver/email"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	heraldmem "github.com/xraph/herald/store/memory"
@@ -54,5 +58,132 @@ func TestAuthBridgeDisabledMailDoesNotPretendDelivery(t *testing.T) {
 	svc := &Service{}
 	if err := svc.AuthBridge().Send(context.Background(), &bridge.HeraldSendRequest{Channel: "email"}); !errors.Is(err, ErrMailDisabled) {
 		t.Fatalf("disabled delivery: %v", err)
+	}
+}
+
+func TestAuthBridgeManagesTemplatesForTheConsole(t *testing.T) {
+	ctx := context.Background()
+	store := heraldmem.New()
+	sink := &capturingDriver{}
+	engine, err := herald.New(herald.WithStore(privateHeraldStore{Store: store}), herald.WithDriver(sink))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.CreateProvider(ctx, &provider.Provider{AppID: "app", Name: "capture", Channel: "email", Driver: "capture", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: config.Config{Identity: config.IdentityConfig{AppID: "app"}, Notifications: config.NotificationsConfig{SMTPHost: "localhost"}}, herald: engine}
+	// authsome's notification plugin finds its console's templates this way.
+	tm, ok := svc.AuthBridge().(bridge.HeraldTemplateManager)
+	if !ok {
+		t.Fatal("the auth bridge can't manage templates, so the console says the notification service isn't configured")
+	}
+	if err = tm.SeedDefaultTemplates(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	templates, err := tm.ListTemplates(ctx, "app")
+	if err != nil || len(templates) == 0 {
+		t.Fatalf("templates: %d, %v", len(templates), err)
+	}
+	// A test send keeps to what the bridge sends at all: auth mail only.
+	if err = tm.TestSend(ctx, &bridge.HeraldSendRequest{Channel: "email", Template: "deploy.failed", To: []string{"test@example.com"}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("test send of a non-auth template: %v", err)
+	}
+	req := &bridge.HeraldSendRequest{Channel: "email", Template: "auth.password-changed", To: []string{"test@example.com"}}
+	if err = tm.TestSend(ctx, req); err != nil || len(sink.got) != 1 {
+		t.Fatalf("test send: %v, %d sent", err, len(sink.got))
+	}
+}
+
+type capturingDriver struct{ got []*driver.OutboundMessage }
+
+func (*capturingDriver) Name() string                                        { return "capture" }
+func (*capturingDriver) Channel() string                                     { return "email" }
+func (*capturingDriver) Validate(map[string]string, map[string]string) error { return nil }
+func (c *capturingDriver) Send(_ context.Context, m *driver.OutboundMessage) (*driver.DeliveryResult, error) {
+	c.got = append(c.got, m)
+	return &driver.DeliveryResult{Status: message.StatusSent}, nil
+}
+
+func TestSendWaitlistApproved(t *testing.T) {
+	ctx := context.Background()
+	store := heraldmem.New()
+	sink := &capturingDriver{}
+	engine, err := herald.New(herald.WithStore(privateHeraldStore{Store: store}), herald.WithDriver(sink))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{PublicURL: "https://loom.example", Identity: config.IdentityConfig{AppID: "app"}, Notifications: config.NotificationsConfig{SMTPHost: "localhost"}}
+	svc := &Service{cfg: cfg, herald: engine, mailStore: privateHeraldStore{Store: store}}
+	// Seeding twice must not duplicate the template.
+	for range 2 {
+		if err = svc.seedTemplates(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = engine.CreateProvider(ctx, &provider.Provider{AppID: "app", Name: "test", Channel: "email", Driver: "capture", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.SendWaitlistApproved(ctx, "ada+x@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.got) != 1 {
+		t.Fatalf("sent %d messages", len(sink.got))
+	}
+	m := sink.got[0]
+	const link = "https://loom.example/sign-up?email=ada%2Bx%40example.com"
+	if m.Subject != "You're in: create your Loomplane account" || m.Text != "Your spot on the Loomplane waitlist was approved. Create your account here: "+link {
+		t.Fatalf("unexpected message: %q / %q", m.Subject, m.Text)
+	}
+	if !strings.Contains(m.HTML, `href="`+link+`"`) {
+		t.Fatalf("html lacks the link: %s", m.HTML)
+	}
+}
+
+func TestSendWaitlistApprovedMailDisabled(t *testing.T) {
+	svc := &Service{cfg: config.Config{PublicURL: "https://loom.example"}}
+	if err := svc.SendWaitlistApproved(context.Background(), "ada@example.com"); !errors.Is(err, ErrMailDisabled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestMailDirWritesAuthMailToAFolder(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	n := config.NotificationsConfig{MailDir: dir}
+	p := mailProvider(n)
+	if p.Name != "loomplane-file" || p.Driver != "file" || p.Settings["dir"] != dir {
+		t.Fatalf("provider %+v", p)
+	}
+	store := heraldmem.New()
+	engine, err := herald.New(herald.WithStore(privateHeraldStore{Store: store}), herald.WithDriver(&emaildriver.FileDriver{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.SeedDefaultTemplates(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.CreateProvider(ctx, &provider.Provider{AppID: "app", Name: p.Name, Channel: "email", Driver: p.Driver, Credentials: p.Credentials, Settings: p.Settings, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{cfg: config.Config{Identity: config.IdentityConfig{AppID: "app"}, Notifications: n}, herald: engine}
+	req := &bridge.HeraldSendRequest{Channel: "email", Template: "auth.password-changed", To: []string{"ada@example.com"}}
+	if err = svc.AuthBridge().Send(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "*.eml"))
+	if len(files) != 1 {
+		t.Fatalf("want one .eml in %s, got %v", dir, files)
+	}
+	raw, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(raw), "To: <ada@example.com>") || !strings.Contains(string(raw), "From: <loomplane@localhost>") {
+		t.Fatalf("headers:\n%s", raw)
+	}
+}
+
+func TestMailProviderResolvesARelativeMailDir(t *testing.T) {
+	p := mailProvider(config.NotificationsConfig{MailDir: ".forge/mail"})
+	if !filepath.IsAbs(p.Settings["dir"]) || !strings.HasSuffix(p.Settings["dir"], filepath.Join(".forge", "mail")) {
+		t.Fatalf("dir %q", p.Settings["dir"])
 	}
 }

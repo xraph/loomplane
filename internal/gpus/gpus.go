@@ -99,15 +99,24 @@ type ServerReader interface {
 	RuntimeServers(ctx context.Context, org string) ([]*cloudinfra.Server, error)
 }
 
+// StoredConnections lists an organization's stored connections with no
+// principal, for Loomplane's own background work. *connections.PgStore is
+// the real one.
+type StoredConnections interface {
+	ListConnections(ctx context.Context, orgID string) ([]*connections.Connection, error)
+}
+
 // Authorizer decides whether a principal may act.
 type Authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
 }
 
 // Deps are what the service reads. Options and Servers may be nil: there
-// are then no sizes to create and no server prices.
+// are then no sizes to create and no server prices. Stored may be nil, and
+// then ConnectedTargets has nothing to read.
 type Deps struct {
 	Connections ConnectionLister
+	Stored      StoredConnections
 	Bindings    GPUBindingReader
 	Options     ServerOptionsReader
 	Servers     ServerReader
@@ -190,6 +199,50 @@ func (s *Service) Targets(ctx context.Context, p security.Principal, q GPUTarget
 	slices.SortFunc(out.Unreachable, func(a, b UnreachableAccount) int {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ConnectionID, b.ConnectionID))
 	})
+	return out, nil
+}
+
+// ConnectedTargets lists the rows of an organization's connected servers
+// and clusters, each with its price per hour where Loomplane knows it,
+// for one GPU. It's for Loomplane's own background work, such as adding
+// up what a model costs each month: it checks no permission, so its
+// caller decides what it may read, and it asks no provider anything, so
+// it never lists server sizes.
+func (s *Service) ConnectedTargets(ctx context.Context, orgID string) ([]GPUTarget, error) {
+	if s.d.Stored == nil {
+		return nil, errors.New("gpus: stored connections aren't configured")
+	}
+	conns, err := s.d.Stored.ListConnections(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	held, err := s.d.Bindings.GPUBindings(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("read the GPUs services hold: %w", err)
+	}
+	prices := map[string]*cloudinfra.Server{}
+	if s.d.Servers != nil {
+		servers, serr := s.d.Servers.RuntimeServers(ctx, orgID)
+		if serr != nil {
+			return nil, fmt.Errorf("read server prices: %w", serr)
+		}
+		for _, v := range servers {
+			if v.Ownership == "managed" && v.RuntimeConnectionID != "" {
+				prices[v.RuntimeConnectionID] = v
+			}
+		}
+	}
+	q := GPUTargetQuery{Count: 1}
+	out := []GPUTarget{}
+	for _, c := range conns {
+		switch c.Cloud {
+		case connections.Server:
+			out = append(out, serverRows(c, q, held[c.ID], prices[c.ID])...)
+		case connections.Kubernetes:
+			out = append(out, clusterRows(c, q)...)
+		}
+	}
+	slices.SortStableFunc(out, compareTargets)
 	return out, nil
 }
 

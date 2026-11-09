@@ -51,21 +51,92 @@ docker compose up -d --wait --wait-timeout 240
 docker compose ps
 ```
 
-Open `https://YOUR_HOSTNAME`. Create your account and organization, then
-connect a repository. Caddy obtains and renews the TLS certificate and
-forwards WebSocket and SSE traffic to the API. Health and metrics routes
-are blocked at the public proxy.
+Open `https://YOUR_HOSTNAME`. Setup needs a one-time token, so get the link
+first. The API logs it as a `setup is waiting` warning with a `url` field,
+and `loomplane setup-token` prints the same link:
+
+```bash
+docker compose exec loomplane loomplane setup-token
+# Finish setup at https://YOUR_HOSTNAME/setup?token=...
+```
+
+Open that link, create your account and organization, then connect a
+repository. Once setup is done the command prints `Setup is complete.`
+
+Caddy obtains and renews the TLS certificate and forwards WebSocket and SSE
+traffic to the API. Health and metrics routes are blocked at the public
+proxy.
 
 If GHCR requires authentication, run `docker login ghcr.io` with a token
 that can read the package. A newly published package may need its visibility
 changed to public in GitHub before anonymous pulls work.
+
+## Optional push gateway
+
+You can run the push gateway in this stack, behind the same Caddy instance.
+Use this if you operate XRaph's gateway or ship your own mobile app build.
+The store app needs XRaph's push credentials, so running a gateway with your
+own Firebase project or Apple key won't enable push for that app.
+
+Point a second hostname, such as `push.example.com`, at this host. It must
+be different from `LOOMPLANE_DOMAIN`. In `.env`, uncomment and set:
+
+```dotenv
+COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml
+PUSH_GATEWAY_IMAGE=ghcr.io/xraph/loomplane-push-gateway:VERSION
+PUSH_GATEWAY_DOMAIN=push.example.com
+PUSH_GATEWAY_SEALING_KEY_ID=k202611
+```
+
+Choose a published gateway version, preferably pinned by digest. The Docker
+bundle includes `compose.push-gateway.yaml` and `Caddyfile.push-gateway`.
+`COMPOSE_FILE` keeps the gateway enabled for subsequent `docker compose`
+commands, including upgrades on a DigitalOcean install.
+
+Prepare its secret files from the directory containing `compose.yaml`:
+
+```bash
+umask 077
+mkdir -p secrets
+openssl rand -base64 32 > secrets/sealing-key
+touch secrets/previous-sealing-key secrets/apns-key.p8
+cp /path/to/firebase-service-account.json secrets/fcm-service-account.json
+sudo chown 10001:10001 secrets/*
+sudo chmod 0400 secrets/*
+docker compose config --quiet
+docker compose pull
+docker compose up -d --wait --wait-timeout 240
+```
+
+These commands start an Android gateway. For iOS, copy your Apple `.p8` key
+to `secrets/apns-key.p8`, give it the same owner and permissions, and set
+both `PUSH_GATEWAY_APNS_KEY_ID` and `PUSH_GATEWAY_APNS_TEAM_ID` in `.env`.
+Set `PUSH_GATEWAY_APNS_BUNDLE_ID` when your app uses a different bundle ID.
+The Compose option requires a Firebase service-account file even if you
+also enable iOS. Keep the empty previous-key and Apple files when unused.
+
+The option sets the API and workers' gateway URL to
+`https://PUSH_GATEWAY_DOMAIN` and enables push. Only Caddy publishes ports
+80 and 443. On the gateway hostname it exposes `/v1/registrations` and
+`/v1/send`, limits request bodies to 64 KB and keeps health checks private.
+Your phones and server both need to reach that hostname over HTTPS.
+
+Back up `secrets/` securely alongside `.env`. Never regenerate the sealing
+key on restart. Gateway key rotation follows the push notifications guide;
+keep `COMPOSE_FILE` enabled for those commands too. After an upgrade,
+restart Caddy to reload the mounted configuration. To return to the hosted
+gateway, run `docker compose stop push-gateway`, remove `COMPOSE_FILE` from
+`.env`, then run `docker compose up -d --remove-orphans` and
+`docker compose restart caddy`. The base stack uses
+`LOOMPLANE_PUSH_GATEWAY_URL`, which defaults to XRaph's gateway.
 
 ## Configuration and storage
 
 The API runs migrations before it becomes healthy. Compose starts the
 analysis worker after that check passes. Both run as UID 10001 with a read-only
 root filesystem, dropped capabilities, a PID limit and a temporary `/tmp`.
-The API gets a writable artifact volume. Neither container gets the host's
+The API gets a writable artifact volume, and the worker gets its own scratch
+volume for repository checkouts. Neither container gets the host's
 Docker socket; connections to deployment targets use Loomplane's normal
 credential and approval flow.
 
@@ -73,8 +144,17 @@ credential and approval flow.
 | --------------- | --------------------------------------------------------------- |
 | `postgres-data` | Accounts, credentials, jobs, deployment state and audit records |
 | `artifact-data` | Deployment source artifacts and local recovery objects          |
+| `analysis-work` | The worker's scratch space for repository checkouts             |
 | `caddy-data`    | TLS certificates and Caddy's certificate authority state        |
 | `caddy-config`  | Caddy's saved runtime configuration                             |
+
+One analysis can unpack up to 2 GiB of source, which is more than the
+1 GiB RAM-backed `/tmp`, so checkouts go to `analysis-work` on disk. Keep a
+few GiB free on the host for it. The worker runs two analyses at once by
+default. Set `LOOMPLANE_ANALYSIS_CONCURRENCY` in `.env` to change that (the
+minimum is 1). Each extra analysis needs more disk and more memory, so raise
+the worker's `mem_limit` in `compose.yaml` along with it. The volume is only
+scratch space, so you don't need to back it up.
 
 Volume names carry the Compose project prefix `loomplane-production`.
 Keep that project name stable across upgrades. `docker compose down` keeps
@@ -91,10 +171,32 @@ repositories. See the repository's [GitHub App guide](https://github.com/xraph/l
 You can put a multiline PEM in a single-quoted `.env` value. Set the webhook
 secret in both Loomplane and GitHub.
 
-Email is disabled until you configure SMTP. Set the SMTP host, credentials
-and sender for password recovery and email notifications. Production uses
+Email is disabled until you configure it. Set `LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY`
+and `LOOMPLANE_NOTIFICATIONS_FROM` to use Resend, or the SMTP host, credentials
+and sender, for password recovery and email notifications. Production SMTP uses
 implicit TLS, usually on port 465. Verify delivery with your mail provider
 before relying on account recovery.
+
+Open Loomplane in a browser after the first start. A new instance sends
+you to `/setup`, where you enter the setup token (see above) and create the
+first account and organization. See
+[Running Loomplane](operations.md#first-run) for what setup does.
+
+| Variable                       | Default      | What it does                                                                                           |
+| ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------ |
+| `LOOMPLANE_WAITLIST_ENABLED`   | unset        | `true` or `false` forces the waitlist on or off. Unset or empty uses the stored setting.               |
+| `LOOMPLANE_CONSOLE_PATH`       | `/__console` | Where platform admins reach the console. One path segment starting with `__`.                          |
+
+Put them in `.env` next to the Compose file and both services pick them up.
+An instance that existed before the waitlist stays open after you upgrade
+unless you set `LOOMPLANE_WAITLIST_ENABLED=true`. On an upgraded instance,
+run this once to give someone console access:
+
+```bash
+docker compose exec loomplane loomplane admin grant-platform-admin you@example.com
+```
+
+[Running Loomplane](operations.md#the-console) covers both.
 
 `LOOMPLANE_BACKUP_URL` can point recovery objects at an independent storage
 backend. Without it, they share the local artifact volume. This setting

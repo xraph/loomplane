@@ -49,7 +49,9 @@ type Service struct {
 	authz    Authorizer
 	enqueue  Enqueuer
 	audit    projects.Auditor
-	access   Access
+	access   Checker
+	hosts    repositories.Hosts
+	hooks    SourceHooks
 	now      func() time.Time
 }
 
@@ -138,14 +140,34 @@ func (s *Service) Start(ctx context.Context, p security.Principal, projectID str
 	return out, nil
 }
 
-// PushActor is who an analysis a push started is recorded as created by.
-const PushActor = "github-push"
+// PushActor is who an analysis a GitHub push started is recorded as created
+// by, and GitLabPushActor who an analysis a GitLab push started is.
+const (
+	PushActor       = "github-push"
+	GitLabPushActor = "gitlab-push"
+)
 
 // StartFromPush queues an analysis of a source's tracked branch because
 // GitHub said it moved. It skips the permission check, since nobody asked:
 // the webhook's signature is the authority. A source with an analysis
 // already under way is left alone, and that's ErrAlreadyActive.
 func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, PushActor)
+}
+
+// StartFromBitbucketPush is StartFromPush for a push Bitbucket signed, which
+// the analysis records as BitbucketPushActor's.
+func (s *Service) StartFromBitbucketPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, BitbucketPushActor)
+}
+
+// StartFromGitLabPush is StartFromPush for a push GitLab announced, recorded
+// as GitLabPushActor's.
+func (s *Service) StartFromGitLabPush(ctx context.Context, src *Source) (*Analysis, error) {
+	return s.startFromPush(ctx, src, GitLabPushActor)
+}
+
+func (s *Service) startFromPush(ctx context.Context, src *Source, actor string) (*Analysis, error) {
 	now := s.now().UTC()
 	switch _, err := s.store.ActiveAnalysis(ctx, src.OrgID, src.ID, now.Add(-activeWindow)); {
 	case err == nil:
@@ -153,7 +175,7 @@ func (s *Service) StartFromPush(ctx context.Context, src *Source) (*Analysis, er
 	case !errors.Is(err, ErrNotFound):
 		return nil, err
 	}
-	return s.queue(ctx, security.Principal{OrgID: src.OrgID, UserID: PushActor}, src, src.Ref, now)
+	return s.queue(ctx, security.Principal{OrgID: src.OrgID, UserID: actor}, src, src.Ref, now)
 }
 
 // pick finds the sources aliases name, in alias order. No aliases means all
@@ -226,12 +248,12 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID stri
 
 // Get returns one analysis.
 func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Analysis, error) {
-	if err := s.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
-		return nil, err
-	}
 	a, err := s.store.GetAnalysis(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if aerr := s.authz.Require(ctx, p, security.ProjectRead, a.ProjectID); aerr != nil {
+		return nil, aerr
 	}
 	list, err := s.analysisSummaries(ctx, p.OrgID, a.ProjectID, []*Analysis{a})
 	if err != nil {
@@ -269,10 +291,15 @@ func (s *Service) analysisSummaries(ctx context.Context, orgID, projectID string
 	return out, nil
 }
 
-// Graph returns the application graph a succeeded analysis found.
+// Graph returns the application graph a succeeded analysis found. It
+// reads the analysis first, to check its project.
 func (s *Service) Graph(ctx context.Context, p security.Principal, id string) (*graph.Graph, error) {
-	if err := s.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
+	a, err := s.store.GetAnalysis(ctx, p.OrgID, id)
+	if err != nil {
 		return nil, err
+	}
+	if aerr := s.authz.Require(ctx, p, security.ProjectRead, a.ProjectID); aerr != nil {
+		return nil, aerr
 	}
 	return s.store.Graph(ctx, p.OrgID, id)
 }

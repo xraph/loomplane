@@ -1,6 +1,6 @@
 ---
 title: Deployments and recovery
-description: What happens after you approve a plan, how to follow it, and how to retry from the step that failed.
+description: What happens after you approve a plan, how to follow it, how to cancel it, and how to retry from the step that failed.
 ---
 
 Approval starts a deployment, a durable Dispatch workflow that runs beside the API. Each step is an activity with retries, and a crash resumes from the last completed step. Long steps checkpoint the cloud's operation ID, so a retry waits on the build or database already under way instead of starting another.
@@ -40,6 +40,18 @@ loomctl retry <deployment-id>
 A failed deployment retries from the step that failed, with the plan that was approved. Earlier attempts stay visible. An interrupted Docker build may need rebuilding, and its first attempt stays visible as incomplete.
 
 If a step fails because a connection lost a permission, fix the permission, check the connection again, then retry.
+
+## Cancel a running deployment
+
+```bash
+loomctl cancel <deployment-id>
+```
+
+You can also cancel from the deployment's page. The step that's running finishes first, because stopping a provider halfway through a change would leave you cleaning it up by hand. The deployment is cancelled as its next step would start, and nothing after that runs. So you can only cancel while a step is still waiting: once every step has started, the deployment finishes on its own. Steps that already finished stay as they are, and so does what they deployed, since a cancel doesn't roll anything back. Capacity the deployment had reserved but not started using is released, as it is when you cancel a wait for capacity.
+
+A deployment paused for capacity has nothing running, so it's cancelled at once. Add `--revision` and `loomctl cancel` cancels only the capacity wait you read, refusing one that changed since.
+
+If the deployment has a canary, its candidates are reverted when it stops. You can't retry a cancelled deployment, so plan again to finish what it started.
 
 ## When a canary rolls back
 

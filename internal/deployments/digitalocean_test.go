@@ -3,13 +3,16 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,20 +31,27 @@ type fakeAppPlatform struct {
 	mu sync.Mutex
 	// tip is the commit App Platform builds; liveAt is the phase at which
 	// a deployment first reports it, BUILDING or ACTIVE.
-	tip, liveAt string
-	apps        map[string]map[string]any
-	active      map[string]string // app ID → live deployment ID
-	specs       []map[string]any
-	created     []string // deployments Apply started
-	canceled    []string
-	rollbacks   []string
-	deleted     []string
-	databases   map[string]map[string]any
+	tip, liveAt    string
+	apps           map[string]map[string]any
+	active         map[string]string // app ID → live deployment ID
+	specs          []map[string]any
+	created        []string // deployments Apply started
+	canceled       []string
+	rollbacks      []string
+	deleted        []string
+	databases      map[string]map[string]any
+	deployments    map[string]map[string]any // immutable specs keyed by deployment ID
+	alterBuild     func(map[string]any)      // provider-side edits before the first readback
+	encryptSecrets bool
+	// held reports whether the client's lock is held, and locked records
+	// it for the first call of each method and path.
+	held   func() bool
+	locked map[string]bool
 }
 
 func newFakeAppPlatform(t *testing.T) (*fakeAppPlatform, *digitalocean.Client) {
 	t.Helper()
-	f := &fakeAppPlatform{tip: doApproved, liveAt: "BUILDING", apps: map[string]map[string]any{}, active: map[string]string{}, databases: map[string]map[string]any{}}
+	f := &fakeAppPlatform{tip: doApproved, liveAt: "BUILDING", apps: map[string]map[string]any{}, active: map[string]string{}, databases: map[string]map[string]any{}, deployments: map[string]map[string]any{}, locked: map[string]bool{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, digitalocean.New(srv.URL)
@@ -57,6 +67,11 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if call := r.Method + " " + r.URL.Path; f.held != nil {
+		if _, seen := f.locked[call]; !seen {
+			f.locked[call] = f.held()
+		}
+	}
 	app := func(id string) map[string]any {
 		a := map[string]any{"id": id, "spec": f.apps[id], "live_url": "https://" + id + ".ondigitalocean.app"}
 		if dep := f.active[id]; dep != "" {
@@ -67,13 +82,21 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/apps":
+		// The list is a summary: nothing promises it carries an app's
+		// domains, so this one never does.
 		out := make([]any, 0, len(f.apps))
 		for id := range f.apps {
-			out = append(out, app(id))
+			a := app(id)
+			if spec, ok := a["spec"].(map[string]any); ok {
+				a["spec"] = maps.Clone(spec)
+				delete(a["spec"].(map[string]any), "domains")
+			}
+			out = append(out, a)
 		}
 		reply(200, map[string]any{"apps": out})
 	case r.Method == http.MethodPost && r.URL.Path == "/v2/apps":
 		spec := body["spec"].(map[string]any)
+		f.encryptSpec(spec)
 		id := "app-" + spec["name"].(string)
 		f.apps[id], f.specs = spec, append(f.specs, spec)
 		a := app(id)
@@ -81,6 +104,7 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, map[string]any{"app": a})
 	case len(parts) == 3 && parts[1] == "apps" && r.Method == http.MethodPut:
 		f.apps[parts[2]] = body["spec"].(map[string]any)
+		f.encryptSpec(f.apps[parts[2]])
 		f.specs = append(f.specs, f.apps[parts[2]])
 		reply(200, map[string]any{"app": app(parts[2])})
 	case len(parts) == 3 && parts[1] == "apps" && r.Method == http.MethodGet:
@@ -95,6 +119,14 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		reply(200, map[string]any{"id": parts[2]})
 	case len(parts) == 4 && parts[3] == "deployments" && r.Method == http.MethodPost:
 		dep := "dep-" + parts[2]
+		f.deployments[dep] = f.apps[parts[2]]
+		if f.alterBuild != nil {
+			raw, _ := json.Marshal(f.deployments[dep])
+			var spec map[string]any
+			_ = json.Unmarshal(raw, &spec)
+			f.alterBuild(spec)
+			f.deployments[dep] = spec
+		}
 		f.created = append(f.created, dep)
 		reply(200, map[string]any{"deployment": map[string]any{"id": dep, "phase": "PENDING_BUILD"}})
 	case len(parts) == 5 && parts[3] == "deployments" && r.Method == http.MethodGet:
@@ -107,13 +139,16 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 			phase = "ACTIVE"
 			f.active[parts[2]] = parts[4]
 		}
-		reply(200, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase,
+		reply(200, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": phase, "spec": f.deployments[parts[4]],
 			"services": []any{map[string]any{"name": "api", "source_commit_hash": hash}}}})
 	case len(parts) == 6 && parts[5] == "cancel":
 		f.canceled = append(f.canceled, parts[4])
 		reply(200, map[string]any{"deployment": map[string]any{"id": parts[4], "phase": "CANCELED"}})
 	case len(parts) == 4 && parts[3] == "rollback":
 		f.rollbacks = append(f.rollbacks, body["deployment_id"].(string))
+		if spec := f.deployments[body["deployment_id"].(string)]; spec != nil {
+			f.apps[parts[2]], f.deployments["rb"] = spec, spec
+		}
 		reply(200, map[string]any{"deployment": map[string]any{"id": "rb"}})
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/databases":
 		out := make([]any, 0, len(f.databases))
@@ -142,6 +177,24 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (f *fakeAppPlatform) encryptSpec(spec map[string]any) {
+	if !f.encryptSecrets {
+		return
+	}
+	for _, kind := range []string{"services", "workers", "static_sites"} {
+		components, _ := spec[kind].([]any)
+		for _, component := range components {
+			envs, _ := component.(map[string]any)["envs"].([]any)
+			for _, item := range envs {
+				env := item.(map[string]any)
+				if env["type"] == "SECRET" {
+					env["value"] = "EV[" + env["value"].(string) + "]"
+				}
+			}
+		}
+	}
+}
+
 // newDO is an executor whose apps' addresses are in DNS at once.
 func newDO(client *digitalocean.Client) *DigitalOcean {
 	return &DigitalOcean{Client: client, Resolve: func(context.Context, string) error { return nil }}
@@ -163,6 +216,64 @@ func doJob(cfg *planning.ServiceConfig, ref string) *Job {
 func apiConfig() *planning.ServiceConfig {
 	return &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile", Port: 8080, Public: true,
 		Workload: provider.HTTPService, Execution: provider.Container, Size: &manifest.Size{CPU: 1, Memory: 1024}, Scale: &manifest.Scale{Min: 2, Max: 2}}
+}
+
+// The app's domains are read from the app itself, which the list of apps
+// FindApp reads may leave them out of.
+func TestEnsureAppKeepsTheAppsDomains(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	f.apps["app-api-production-23456789"] = map[string]any{
+		"name": "api-production-23456789",
+		"domains": []any{
+			map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+			map[string]any{"domain": "hand.example.com", "type": "PRIMARY"},
+		},
+	}
+	if _, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "release")); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.specs) != 1 {
+		t.Fatalf("specs %v", f.specs)
+	}
+	want := []any{
+		map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+		map[string]any{"domain": "hand.example.com", "type": "PRIMARY"},
+	}
+	if got := f.specs[0]["domains"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("domains %v, want %v", got, want)
+	}
+}
+
+// A deploy holds the app from reading its domains until it has started its
+// deployment, so a hostname change can't write the spec in between. It
+// doesn't hold it while the build runs.
+func TestEnsureAppHoldsTheAppUntilItDeploys(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	const id = "app-api-production-23456789"
+	f.apps[id] = map[string]any{"name": "api-production-23456789"}
+	var held atomic.Bool
+	var names []string
+	client.Lock = func(ctx context.Context, name string, fn func(context.Context) error) error {
+		names = append(names, name)
+		held.Store(true)
+		defer held.Store(false)
+		return fn(ctx)
+	}
+	f.held = held.Load
+	if _, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "release")); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(names, []string{"digitalocean-app/" + id}) {
+		t.Fatalf("locks %v", names)
+	}
+	for _, call := range []string{"GET /v2/apps/" + id, "PUT /v2/apps/" + id, "POST /v2/apps/" + id + "/deployments"} {
+		if locked, seen := f.locked[call]; !seen || !locked {
+			t.Fatalf("%s: seen %v, under the lock %v", call, seen, locked)
+		}
+	}
+	if call := "GET /v2/apps/" + id + "/deployments/dep-" + id; f.locked[call] {
+		t.Fatalf("%s ran under the lock", call)
+	}
 }
 
 func TestDigitalOcean_deploysTheApprovedCommitFromItsBranch(t *testing.T) {
@@ -249,6 +360,86 @@ func TestDigitalOcean_refusesACommitNobodyApproved(t *testing.T) {
 			t.Fatalf("deleted %v apps %v", f.deleted, f.apps)
 		}
 	})
+}
+
+// A rollback puts the app back on the deployment the restored release
+// recorded. App Platform keeps that build, so nothing builds again.
+func TestDigitalOcean_rollsBackWithoutBuilding(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	job := doJob(apiConfig(), "main")
+	name := DigitalOceanName(job)
+	f.apps["app-"+name] = map[string]any{"name": name}
+	f.active["app-"+name] = "dep-bad-release"
+	job.Binding = &planning.Binding{ExternalID: "app-" + name}
+	cfg := apiConfig()
+	cfg.Artifact = &planning.ReusedArtifact{Revision: "do_dep_7", CommitSHA: doApproved}
+	job.Action.Service = cfg
+	var saved []byte
+	job.Checkpoint = func(b []byte) error { saved = b; return nil }
+	out, err := newDO(client).Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.rollbacks, []string{"do_dep_7"}) || len(f.created) != 0 || len(f.specs) != 0 {
+		t.Fatalf("rollbacks %v, created %v, specs %d", f.rollbacks, f.created, len(f.specs))
+	}
+	// The rollback's own deployment is what runs, and what's recorded.
+	if out.ExternalID != "app-"+name || out.Revision != "rb" || f.active["app-"+name] != "rb" {
+		t.Fatalf("outcome %+v, active %s", out, f.active["app-"+name])
+	}
+	var state doState
+	if err = json.Unmarshal(saved, &state); err != nil || state.DeploymentID != "rb" {
+		t.Fatalf("checkpoint %s: %v", saved, err)
+	}
+
+	// A rollback whose deployment was built from another commit fails, and
+	// starts nothing else.
+	f, client = newFakeAppPlatform(t)
+	f.apps["app-"+name] = map[string]any{"name": name}
+	f.tip = "ffffffffffffffffffffffffffffffffffffffff"
+	job.Resume = nil
+	if _, err = newDO(client).Apply(t.Context(), job); err == nil || !strings.Contains(err.Error(), "ffffffffffff") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.created) != 0 || len(f.rollbacks) != 1 {
+		t.Fatalf("created %v rollbacks %v", f.created, f.rollbacks)
+	}
+}
+
+// A rollback holds the app while it starts, as a deploy does, so a
+// hostname change can't write the spec in between. It doesn't hold it
+// while the rollback's deployment runs.
+func TestDigitalOcean_rollbackHoldsTheAppUntilItStarts(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	job := doJob(apiConfig(), "main")
+	name := DigitalOceanName(job)
+	id := "app-" + name
+	f.apps[id] = map[string]any{"name": name}
+	job.Binding = &planning.Binding{ExternalID: id}
+	cfg := apiConfig()
+	cfg.Artifact = &planning.ReusedArtifact{Revision: "do_dep_7", CommitSHA: doApproved}
+	job.Action.Service = cfg
+	var held atomic.Bool
+	var names []string
+	client.Lock = func(ctx context.Context, name string, fn func(context.Context) error) error {
+		names = append(names, name)
+		held.Store(true)
+		defer held.Store(false)
+		return fn(ctx)
+	}
+	f.held = held.Load
+	if _, err := newDO(client).Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(names, []string{"digitalocean-app/" + id}) {
+		t.Fatalf("locks %v", names)
+	}
+	if locked, seen := f.locked["POST /v2/apps/"+id+"/rollback"]; !seen || !locked {
+		t.Fatalf("rollback: seen %v, under the lock %v", seen, locked)
+	}
+	if call := "GET /v2/apps/" + id + "/deployments/rb"; f.locked[call] {
+		t.Fatalf("%s ran under the lock", call)
+	}
 }
 
 func TestDigitalOcean_workersPrivateServicesAndStaticSites(t *testing.T) {

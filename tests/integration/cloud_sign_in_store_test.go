@@ -4,6 +4,7 @@ package integration
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -53,24 +54,31 @@ func TestSignInAppsAndMethodPersist(t *testing.T) {
 	defer pg.Close()
 	store := connections.NewPgStore(pg)
 	now := time.Now().UTC()
-	if err := store.PutApp(ctx, &connections.StoredApp{OrgID: "org_1", Cloud: "digitalocean", ClientID: "one", UpdatedBy: "usr_1", CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := store.PutApp(ctx, &connections.StoredApp{Cloud: "digitalocean", ClientID: "one", UpdatedBy: "usr_1", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutApp(ctx, &connections.StoredApp{OrgID: "org_1", Cloud: "digitalocean", ClientID: "two", UpdatedBy: "usr_2", CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)}); err != nil {
+	if err := store.PutApp(ctx, &connections.StoredApp{Cloud: "digitalocean", ClientID: "two", UpdatedBy: "usr_2", CreatedAt: now.Add(time.Hour), UpdatedAt: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := store.GetApp(ctx, "org_1", "digitalocean")
+	if err := store.PutApp(ctx, &connections.StoredApp{Cloud: "vercel", ClientID: "oac", Slug: "loomplane", UpdatedBy: "usr_1", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := store.GetApp(ctx, "digitalocean")
 	if err != nil || a.ClientID != "two" || a.UpdatedBy != "usr_2" || a.CreatedAt.After(now.Add(time.Minute)) {
 		t.Fatalf("app: %+v %v", a, err)
 	}
-	if list, err := store.ListApps(ctx, "org_2"); err != nil || len(list) != 0 {
-		t.Fatalf("other org: %v %v", list, err)
+	list, err := store.ListApps(ctx)
+	if err != nil || len(list) != 2 || list[0].Cloud != "digitalocean" || list[1].Cloud != "vercel" || list[1].Slug != "loomplane" {
+		t.Fatalf("list: %v %v", list, err)
 	}
-	if err := store.DeleteApp(ctx, "org_1", "digitalocean"); err != nil {
+	if err = store.DeleteApp(ctx, "digitalocean"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetApp(ctx, "org_1", "digitalocean"); !errors.Is(err, connections.ErrNotFound) {
+	if _, err = store.GetApp(ctx, "digitalocean"); !errors.Is(err, connections.ErrNotFound) {
 		t.Fatalf("after delete: %v", err)
+	}
+	if list, err = store.ListApps(ctx); err != nil || len(list) != 1 {
+		t.Fatalf("after delete: %v %v", list, err)
 	}
 	c := &connections.Connection{ID: "conn_1", OrgID: "org_1", Cloud: "digitalocean", Name: "a", Status: "ready", Method: connections.MethodOAuth, CreatedAt: now, UpdatedAt: now}
 	d := &connections.Connection{ID: "conn_2", OrgID: "org_1", Cloud: "digitalocean", Name: "b", Status: "ready", CreatedAt: now, UpdatedAt: now}
@@ -138,34 +146,106 @@ func TestAppProblemsRoundTrip(t *testing.T) {
 	store, _ := signInStore(t)
 	ctx := t.Context()
 	now := time.Now().UTC()
-	if got, err := store.AppProblems(ctx, "org_1"); err != nil || got == nil || len(got) != 0 {
+	if got, err := store.AppProblems(ctx); err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("empty: %v %v", got, err)
 	}
-	for _, p := range [][3]string{{"org_1", "vercel", "first"}, {"org_1", "gcp", "gcp broke"}, {"org_2", "vercel", "other org"}} {
-		if err := store.SetAppProblem(ctx, p[0], p[1], p[2], now); err != nil {
+	for _, cloud := range []string{"vercel", "gcp", "azure"} {
+		if err := store.PutApp(ctx, &connections.StoredApp{Cloud: cloud, ClientID: cloud + "-id", UpdatedBy: "usr_1", CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range [][2]string{{"vercel", "first"}, {"gcp", "gcp broke"}} {
+		if err := store.SetAppProblem(ctx, p[0], p[0]+"-id", p[1], now); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Setting again replaces the message.
-	if err := store.SetAppProblem(ctx, "org_1", "vercel", "second", now.Add(time.Minute)); err != nil {
+	if err := store.SetAppProblem(ctx, "vercel", "vercel-id", "second", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.AppProblems(ctx, "org_1")
+	// A cloud with no app has no row to put a problem on.
+	if err := store.SetAppProblem(ctx, "digitalocean", "digitalocean-id", "nowhere", now); err != nil {
+		t.Fatalf("problem for a cloud with no app: %v", err)
+	}
+	// A row holding another client ID is a replaced app: not blamed.
+	if err := store.SetAppProblem(ctx, "azure", "an-older-id", "stale", now); err != nil {
+		t.Fatalf("problem for a replaced app: %v", err)
+	}
+	got, err := store.AppProblems(ctx)
 	if err != nil || len(got) != 2 || got["vercel"] != "second" || got["gcp"] != "gcp broke" {
 		t.Fatalf("problems: %v %v", got, err)
 	}
-	if err = store.ClearAppProblem(ctx, "org_1", "vercel"); err != nil {
+	if err = store.ClearAppProblem(ctx, "vercel"); err != nil {
 		t.Fatal(err)
 	}
-	if err = store.ClearAppProblem(ctx, "org_1", "azure"); err != nil {
+	if err = store.ClearAppProblem(ctx, "azure"); err != nil {
 		t.Fatalf("clearing nothing: %v", err)
 	}
-	got, err = store.AppProblems(ctx, "org_1")
+	if err = store.ClearAppProblem(ctx, "digitalocean"); err != nil {
+		t.Fatalf("clearing for a cloud with no app: %v", err)
+	}
+	got, err = store.AppProblems(ctx)
 	if err != nil || len(got) != 1 || got["gcp"] != "gcp broke" {
 		t.Fatalf("after clear: %v %v", got, err)
 	}
-	if other, _ := store.AppProblems(ctx, "org_2"); other["vercel"] != "other org" {
-		t.Fatalf("other org lost its problem: %v", other)
+	// Saving the app again leaves its problem for the service to clear,
+	// and the app itself reads back unchanged.
+	if err = store.PutApp(ctx, &connections.StoredApp{Cloud: "gcp", ClientID: "new-id", UpdatedBy: "usr_2", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if a, getErr := store.GetApp(ctx, "gcp"); getErr != nil || a.ClientID != "new-id" {
+		t.Fatalf("app: %+v %v", a, getErr)
+	}
+	if got, _ = store.AppProblems(ctx); got["gcp"] != "gcp broke" {
+		t.Fatalf("save dropped the problem: %v", got)
+	}
+}
+
+// A connection keeps the client ID it signed in with.
+func TestConnectionKeepsItsOAuthClientID(t *testing.T) {
+	store, _ := signInStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	c := &connections.Connection{ID: "conn_1", OrgID: "org_1", Cloud: "gcp", Name: "a", Status: "ready", Method: connections.MethodOAuth, OAuthClientID: "client-1", CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateConnection(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetConnection(ctx, "org_1", "conn_1")
+	if err != nil || got.OAuthClientID != "client-1" {
+		t.Fatalf("created: %+v %v", got, err)
+	}
+	got.OAuthClientID = "client-2"
+	if err = store.UpdateConnection(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = store.GetConnection(ctx, "org_1", "conn_1"); err != nil || got.OAuthClientID != "client-2" {
+		t.Fatalf("updated: %+v %v", got, err)
+	}
+}
+
+// Counting an app's sign-ins skips other apps, other clouds, tokens and
+// sign-ins waiting to be redone, and counts each organization once.
+func TestSignedInWithCountsWorkingSignIns(t *testing.T) {
+	store, _ := signInStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	for i, c := range []connections.Connection{
+		{OrgID: "org_1", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "ready"},
+		{OrgID: "org_1", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "incomplete"},
+		{OrgID: "org_2", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "ready"},
+		{OrgID: "org_3", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "app", Status: connections.StatusSignInNeeded},
+		{OrgID: "org_4", Cloud: "gcp", Method: connections.MethodOAuth, OAuthClientID: "other", Status: "ready"},
+		{OrgID: "org_5", Cloud: "gcp", Method: connections.MethodToken, Status: "ready"},
+		{OrgID: "org_6", Cloud: "azure", Method: connections.MethodOAuth, OAuthClientID: "app", Status: "ready"},
+	} {
+		c.ID, c.Name, c.CreatedAt, c.UpdatedAt = fmt.Sprintf("conn_%d", i), fmt.Sprintf("n%d", i), now, now
+		if err := store.CreateConnection(ctx, &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, orgs, err := store.SignedInWith(ctx, "gcp", "app")
+	if err != nil || n != 3 || orgs != 2 {
+		t.Fatalf("got %d connections in %d orgs: %v", n, orgs, err)
 	}
 }
 

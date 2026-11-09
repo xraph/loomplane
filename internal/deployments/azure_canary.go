@@ -156,6 +156,9 @@ type azureCanary struct {
 	app, name string
 	baseline  string
 	candidate string
+	// Keep a recorded source available until a new recovery baseline is
+	// returned and persisted, including when candidate preparation fails.
+	retainedSource string
 	// note shows what the canary couldn't tidy, when set.
 	note func(string)
 }
@@ -243,7 +246,7 @@ func (c *azureCanary) others(ctx context.Context) ([]string, error) {
 	}
 	var out []string
 	for _, rev := range active {
-		if !strings.EqualFold(rev.Name, c.baseline) && !strings.EqualFold(rev.Name, c.candidate) {
+		if !strings.EqualFold(rev.Name, c.baseline) && !strings.EqualFold(rev.Name, c.candidate) && !strings.EqualFold(rev.Name, c.retainedSource) {
 			out = append(out, rev.Name)
 		}
 	}
@@ -532,7 +535,8 @@ func azureReleaseTemplate(job *Job, image, suffix string) azure.Template {
 // read and deactivate revisions and list secrets, picks the baseline,
 // builds the image as Apply does, then starts the candidate as a revision
 // beside the baseline, reading secrets of its own.
-func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, error) {
+func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (_ *CanaryTarget, err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	cfg := job.Action.Service
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
@@ -586,6 +590,10 @@ func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, er
 	if changes := app.AppWideChanges(candidate); len(changes) > 0 {
 		return nil, azureAppWideRefusal(job, c.name, changes)
 	}
+	if err := c.externalBaseline(ctx, job, baseline); err != nil {
+		return nil, err
+	}
+	candidate.Properties.Configuration.Ingress.Traffic = c.alone()
 	if err := c.start(ctx, candidate, azureRestoreSuffix(job.Deployment.ID, job.Deployment.Retries)); err != nil {
 		return nil, err
 	}
@@ -620,7 +628,8 @@ func (a *Azure) canaryPermissions(ctx context.Context, s *azure.Session, job *Jo
 }
 
 // SetWeights implements Weighted.
-func (a *Azure) SetWeights(ctx context.Context, job *Job, t CanaryTarget, candidatePercent int) error {
+func (a *Azure) SetWeights(ctx context.Context, job *Job, t CanaryTarget, candidatePercent int) (err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
 	if err != nil {
 		return err
@@ -634,7 +643,8 @@ func (a *Azure) SetWeights(ctx context.Context, job *Job, t CanaryTarget, candid
 
 // Promote implements Weighted. The candidate becomes what the app runs,
 // with all of the traffic, in single revision mode again.
-func (a *Azure) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outcome, error) {
+func (a *Azure) Promote(ctx context.Context, job *Job, t CanaryTarget) (_ *Outcome, err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	if job.Action.Service == nil {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
 	}
@@ -665,7 +675,8 @@ func (a *Azure) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outcome
 // agree again. The app stays in multiple revisions mode with its traffic
 // pinned to the baseline until the next deploy, which goes back to single
 // revision mode.
-func (a *Azure) Revert(ctx context.Context, job *Job, t CanaryTarget) error {
+func (a *Azure) Revert(ctx context.Context, job *Job, t CanaryTarget) (err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	s, err := azureSession(ctx, a.Client, job.Connection, job.Credential)
 	if err != nil {
 		return err

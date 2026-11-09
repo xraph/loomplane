@@ -26,6 +26,9 @@ func (s *Service) CloudSyncNeedsCapacity(ctx context.Context, org, project, id s
 		if decodeErr := json.Unmarshal(env.Plan, &p); decodeErr != nil {
 			return false, decodeErr
 		}
+		if p.RequiredRuntimeProtocol != "" {
+			return true, nil
+		}
 		for _, a := range p.Actions {
 			if HasCapacityIntent(a) {
 				return true, nil
@@ -189,4 +192,25 @@ func terminalCapacitySyncError(err error) bool {
 	var syntax *json.SyntaxError
 	var shape *json.UnmarshalTypeError
 	return errors.As(err, &syntax) || errors.As(err, &shape)
+}
+
+func (s *Service) CloudSyncNeedsCleanupExecutor(ctx context.Context, org, project, id string) (bool, error) {
+	st, err := s.syncStore()
+	if err != nil {
+		return false, err
+	}
+	_, snapshot, err := st.GetSync(ctx, org, project, id)
+	if err != nil {
+		return false, err
+	}
+	for _, env := range snapshot.Environments {
+		var p Plan
+		if decodeErr := json.Unmarshal(env.Plan, &p); decodeErr != nil {
+			return false, decodeErr
+		}
+		if p.RequiredRuntimeProtocol == orchestration.ManagedCleanupProtocol {
+			return true, nil
+		}
+	}
+	return false, nil
 }

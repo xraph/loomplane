@@ -59,17 +59,28 @@ func NewService(store Store, authz Authorizer, retry Retrier, audit Auditor) *Se
 // ErrNotFailed is a retry of a deployment that hasn't failed.
 var ErrNotFailed = errors.New("only a failed deployment can be retried")
 
+// ErrStaleRollback is a retry of a rollback refused as stale: it would
+// undo the newer release.
+var ErrStaleRollback = errors.New(StaleRollback)
+
 // Retry runs a failed deployment's failed and skipped steps again, from
 // the first that failed, with the plan that was approved. Steps that
 // succeeded stay as they are. Approving is what lets someone act on the
 // clouds, so retrying needs the same role.
 func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*Deployment, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
-		return nil, err
-	}
 	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	// On the deployment's project, so a team's approver there may retry.
+	if aerr := s.authz.Require(ctx, p, security.DeploymentApprove, d.ProjectID); aerr != nil {
+		return nil, aerr
+	}
+	if ownershipErr := s.requireUnmanagedDeployment(ctx, d); ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	if d.Status == StatusFailed && d.Error == StaleRollback {
+		return nil, ErrStaleRollback
 	}
 	ok, err := s.store.Reopen(ctx, p.OrgID, id)
 	if err != nil {
@@ -91,6 +102,66 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 		})
 	}
 	return s.store.GetDeployment(ctx, p.OrgID, id)
+}
+
+// Canceller cancels deployments. *PgStore is the real one.
+type Canceller interface {
+	// CancelDeployment cancels a paused deployment, or records a cancel of
+	// a running one, which StopDeployment carries out before its next
+	// action.
+	CancelDeployment(ctx context.Context, orgID, id string, at time.Time) (*Deployment, error)
+}
+
+// StepClaimer marks an action started before it has any effect, or says to
+// stop instead when a cancel was requested. *PgStore is the real one.
+type StepClaimer interface {
+	ClaimStep(ctx context.Context, orgID, id, actionID string) (stop bool, err error)
+}
+
+// Stopper cancels a running deployment whose cancel was requested, as its
+// next action starts. *PgStore is the real one.
+type Stopper interface {
+	StopDeployment(ctx context.Context, orgID, id string, at time.Time) (*Deployment, error)
+}
+
+// Cancel stops a running or paused deployment. A paused one is cancelled at
+// once. A running one finishes the action it's on, since stopping that
+// halfway would leave its provider's work half done, and is cancelled
+// before the next: it needs a step that hasn't started. Steps that finished
+// stay as they are. Cancelling again answers it unchanged. Cancelling needs
+// the same role as retrying.
+func (s *Service) Cancel(ctx context.Context, p security.Principal, id string) (*Deployment, error) {
+	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	if authErr := s.authz.Require(ctx, p, security.DeploymentApprove, d.ProjectID); authErr != nil {
+		return nil, authErr
+	}
+	if ownershipErr := s.requireUnmanagedDeployment(ctx, d); ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	if d.Status == StatusCancelled {
+		return d, nil
+	}
+	if d.Status != StatusRunning && d.Status != StatusPaused {
+		return nil, ErrNotRunning
+	}
+	c, ok := s.store.(Canceller)
+	if !ok {
+		return nil, errors.New("deployment cancellation is unavailable")
+	}
+	cancelled, err := c.CancelDeployment(ctx, p.OrgID, id, s.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if s.audit != nil {
+		s.audit.Record(ctx, projects.AuditEvent{
+			Action: "deployment.cancel", Severity: "warning", ProjectID: d.ProjectID, Principal: p,
+			Attributes: map[string]any{"deployment_id": d.ID, "plan_id": d.PlanID, "environment": d.Environment},
+		})
+	}
+	return cancelled, nil
 }
 
 // List returns a page of a project's deployments started before the
@@ -118,18 +189,26 @@ func (s *Service) List(ctx context.Context, p security.Principal, projectID stri
 
 // Get returns one deployment.
 func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Deployment, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.GetDeployment(ctx, p.OrgID, id)
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, d.ProjectID); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // ForPlan returns the deployment an approved plan started.
 func (s *Service) ForPlan(ctx context.Context, p security.Principal, planID string) (*Deployment, error) {
-	if err := s.authz.Require(ctx, p, security.DeploymentRead, ""); err != nil {
+	d, err := s.store.ForPlan(ctx, p.OrgID, planID)
+	if err != nil {
 		return nil, err
 	}
-	return s.store.ForPlan(ctx, p.OrgID, planID)
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, d.ProjectID); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // ErrNoCanaries is a service whose store keeps no canaries.
@@ -177,6 +256,43 @@ func (s *Service) Canary(ctx context.Context, p security.Principal, deploymentID
 	}
 	report.Verdicts = currentVerdicts(d, all)
 	return report, nil
+}
+
+// lastCanaryStore finds the newest canary that ramped one action. The
+// Postgres store has it; a store without it makes LastCanary fail, never
+// answer "none".
+type lastCanaryStore interface {
+	LastCanary(ctx context.Context, orgID, projectID, environmentID, actionID string) (*Deployment, error)
+}
+
+// LastCanary returns the newest of an environment's deployments whose
+// canary ramped actionID, however many canaries of other services ran
+// since, with its current retry's verdicts; nil when no canary ever ramped
+// it.
+func (s *Service) LastCanary(ctx context.Context, p security.Principal, projectID, environmentID, actionID string) (*CanaryRun, error) {
+	cs, ok := s.store.(CanaryStore)
+	last, ok2 := s.store.(lastCanaryStore)
+	if !ok || !ok2 {
+		return nil, ErrNoCanaries
+	}
+	if actionID == "" {
+		return nil, errors.New("a canary is looked up by the action it ramped")
+	}
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
+		return nil, err
+	}
+	d, err := last.LastCanary(ctx, p.OrgID, projectID, environmentID, actionID)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	all, err := cs.Verdicts(ctx, p.OrgID, d.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &CanaryRun{
+		DeploymentID: d.ID, PlanID: d.PlanID, Environment: d.Environment, Status: d.Status,
+		StartedAt: d.StartedAt, FinishedAt: d.FinishedAt, Canary: d.Canary, Verdicts: currentVerdicts(d, all),
+	}, nil
 }
 
 // RecentCanaries returns up to limit of an environment's deployments that

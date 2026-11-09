@@ -33,6 +33,7 @@ func Kinds() []string { return []string{KindProduction, KindStaging, KindPreview
 
 // Errors the service and stores return.
 var (
+	ErrFleetManaged        = errors.New("manage this project or environment through its instance fleet")
 	ErrNotFound            = errors.New("project not found")
 	ErrSlugTaken           = errors.New("a project with that slug already exists in this organization")
 	ErrInvalid             = errors.New("invalid project")
@@ -40,6 +41,8 @@ var (
 	ErrEnvironmentExists   = errors.New("this project already has an environment with that name")
 	ErrLastEnvironment     = errors.New("a project needs at least one environment, so its last one can't be deleted")
 	ErrRepository          = errors.New("the repository couldn't be attached")
+	ErrTeamNotFound        = errors.New("that team isn't in this workspace")
+	ErrHistoryRetained     = errors.New("a deployment of this project has cleanup history that has to be kept, so it can't be deleted: finish or cancel the cleanup of its abandoned deployments first, or keep the project")
 )
 
 // Project is an application an organization deploys with Loomplane. Its
@@ -50,13 +53,14 @@ var (
 // generated client, which keeps one normalized copy per ID. A tag, not a
 // Forge interface, so this package stays free of Forge.
 type Project struct {
-	ID          string `json:"id" forge:"id"`
-	OrgID       string `json:"org_id"`
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	Icon        string `json:"icon"`
-	Color       string `json:"color"`
+	DeploymentMode string `json:"deployment_mode"`
+	ID             string `json:"id" forge:"id"`
+	OrgID          string `json:"org_id"`
+	Name           string `json:"name"`
+	Slug           string `json:"slug"`
+	Description    string `json:"description"`
+	Icon           string `json:"icon"`
+	Color          string `json:"color"`
 	// Repositories are the "owner/name" of each repository the project
 	// builds from, each once, by its first alias. Its sources belong to discovery; the store
 	// reads them so a list of projects can show them.
@@ -64,21 +68,41 @@ type Project struct {
 	// Exclusions keep analysis-found services out of the graph, plans
 	// and deploys. See Exclusion.
 	Exclusions []Exclusion `json:"exclusions"`
-	Status     string      `json:"status"`
-	CreatedBy  string      `json:"created_by"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	// AutonomousPromotion lets the AI agent promote a release it was asked
+	// for to production without asking a person first, once the release
+	// has passed every other check. Every project starts at "ask first"
+	// (false), and only a person who may approve deployments can change
+	// it (Service.SetAutonomy). It never covers continuous delivery, and
+	// never a change that deletes or replaces production data or
+	// resources: that always needs a person, whatever this says. The JSON
+	// names are the column names, so realtime project events agree with
+	// the API.
+	AutonomousPromotion bool `json:"autonomous_promotion"`
+	// MinStagingSoakSeconds is how long a release must have run in staging
+	// before the agent promotes it alone, in whole minutes up to a week.
+	// 0 asks for no minimum beyond the agent's own rule.
+	MinStagingSoakSeconds int64 `json:"min_staging_soak_seconds"`
+	// ResponsibleTeamID is the team that answers for the project: the
+	// agent sends it the project's requests, and its members hear about
+	// plans waiting there. Empty is none, and workspace admins hear
+	// instead. Deleting the team clears it.
+	ResponsibleTeamID string    `json:"responsible_team_id"`
+	Status            string    `json:"status"`
+	CreatedBy         string    `json:"created_by"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Environment is a place a project deploys to, such as production.
 type Environment struct {
-	ID        string    `json:"id" forge:"id"`
-	OrgID     string    `json:"org_id"`
-	ProjectID string    `json:"project_id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	ID         string    `json:"id" forge:"id"`
+	OrgID      string    `json:"org_id"`
+	ProjectID  string    `json:"project_id"`
+	Name       string    `json:"name"`
+	Kind       string    `json:"kind"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // DefaultEnvironments are the environments every new project starts with.

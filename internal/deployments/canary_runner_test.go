@@ -370,7 +370,7 @@ func TestPromoteBindsTheCandidate(t *testing.T) {
 		t.Fatalf("observers heard %+v", rel)
 	}
 	d := getDeployment(t, store, id)
-	if s := d.Step("service:api"); s.Status != StepSucceeded || s.Image != "img:api-new" || s.FinishedAt == nil {
+	if s := d.Step("service:api"); s.Status != StepSucceeded || s.Image != "img:api-new" || s.Revision != "img:api-new" || s.FinishedAt == nil {
 		t.Fatalf("step %+v", s)
 	}
 	if d.Canary.Status != CanaryPromoted {

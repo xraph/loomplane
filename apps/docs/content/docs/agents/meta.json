@@ -1,4 +1,13 @@
 {
   "title": "AI agents",
-  "pages": ["mcp-server"]
+  "pages": [
+    "built-in-agent",
+    "workspace-settings",
+    "what-needs-a-person",
+    "release-preparation",
+    "watching-and-reports",
+    "assistant",
+    "knowledge",
+    "mcp-server"
+  ]
 }

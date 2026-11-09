@@ -1,6 +1,6 @@
-.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
-	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
-	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
+.PHONY: help up up-knowledge down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
+	image image-push-gateway test-push-gateway test-push-kubernetes test-digitalocean helm-lint k8s-manifest test-kubernetes build-cloud test-cloud test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
+	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client docs-bundle setup clean \
 	h b r t ti c f l lf v d
 
 .DEFAULT_GOAL := help
@@ -13,6 +13,12 @@ COMPOSE       := docker compose -f deployments/docker-compose/docker-compose.yml
 # The compose Postgres. The integration tests create a database of their
 # own on it for each run.
 TEST_DATABASE_URL ?= postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable
+# The compose Postgres with pgvector (make up-knowledge). test-integration
+# passes it to the knowledge tests only when TEST_PGVECTOR_URL is set in
+# the environment or on the command line; they skip otherwise. To run them
+# against this one, make up-knowledge, then set it to this same URL.
+TEST_PGVECTOR_URL ?= postgres://loomplane:loomplane@localhost:55533/loomplane?sslmode=disable
+PGVECTOR_TEST_ENV := $(if $(filter environment command,$(firstword $(origin TEST_PGVECTOR_URL))),LOOMPLANE_TEST_PGVECTOR_URL='$(TEST_PGVECTOR_URL)')
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -27,11 +33,35 @@ setup: ## Install Go modules and the dashboard's packages
 up: ## Start Postgres in Docker
 	$(COMPOSE) up -d --wait
 
+up-knowledge: ## Start a Postgres with pgvector for the knowledge tests
+	$(COMPOSE) --profile knowledge up -d --wait postgres-vector
+
 stack: ## Build the image and run all of Loomplane in Docker on LOOMPLANE_PORT (8780)
 	$(COMPOSE) --profile app up -d --build --wait
 
 down: ## Stop everything compose started (the data volume stays)
-	$(COMPOSE) --profile app down
+	$(COMPOSE) --profile app --profile knowledge down
+
+migrate: ## Apply pending migrations to the database config.local.yaml names
+	go run ./cmd/loomplane migrate
+
+migrations: ## Show applied and pending migrations
+	go run ./cmd/loomplane migrations
+
+# The database remigrate drops: the one compose creates, which
+# config.local.yaml.example points at. The integration tests' databases
+# beside it stay.
+DEV_DATABASE := loomplane
+
+remigrate: ## Drop the compose database and migrate it from scratch (YES=1 skips the prompt)
+	@if [ "$(YES)" != 1 ]; then \
+		printf 'This deletes everything in the compose database "$(DEV_DATABASE)". Continue? [y/N] '; \
+		read -r answer; [ "$$answer" = y ] || [ "$$answer" = Y ] || { echo 'Left it alone.'; exit 1; }; \
+	fi
+	$(COMPOSE) exec -T postgres psql -U loomplane -d postgres -v ON_ERROR_STOP=1 \
+		-c 'DROP DATABASE IF EXISTS "$(DEV_DATABASE)" WITH (FORCE)' \
+		-c 'CREATE DATABASE "$(DEV_DATABASE)" OWNER loomplane'
+	$(MAKE) migrate
 
 dev: ## Run the API (forge dev, hot reload), the analysis worker and the dashboard (Vite)
 	@API_PORT=$(API_PORT) DASHBOARD_DIR=$(DASHBOARD_DIR) bash scripts/dev.sh
@@ -42,17 +72,31 @@ dev-api: ## Run only the API with hot reload
 dev-dashboard: ## Run only the dashboard's dev server, proxying the API
 	LOOMPLANE_API_URL=http://localhost:$(API_PORT) pnpm --dir $(DASHBOARD_DIR) dev
 
-build: build-dashboard build-api build-cli build-agent ## Build the dashboard, API, worker, agent and loomctl
+build: build-dashboard build-api build-cli build-agent build-push-gateway ## Build the dashboard, API, worker, agent, push gateway and loomctl
 
 build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
 	go build $(LDFLAGS) -o bin/loomplane-worker ./cmd/loomplane-worker
 
+build-cloud: ## Build bin/loomplane-cloud and bin/loomplane-cloud-worker with the cloud tag (private; needs the cloud dashboard separately)
+	go build -tags cloud $(LDFLAGS) -o bin/loomplane-cloud ./cmd/loomplane
+	go build -tags cloud $(LDFLAGS) -o bin/loomplane-cloud-worker ./cmd/loomplane-worker
+
+build-firecracker: ## Build standalone Firecracker host and guest agents for Linux
+	CGO_ENABLED=0 GOOS=linux go build $(LDFLAGS) -o bin/loomplane-host-agent ./cmd/loomplane-host-agent
+	CGO_ENABLED=0 GOOS=linux go build $(LDFLAGS) -o bin/loomplane-guest-agent ./cmd/loomplane-guest-agent
+
 build-agent: ## Build the destination observer and signed-policy receiver
 	go build $(LDFLAGS) -o bin/loomplane-agent ./cmd/loomplane-agent
 
+build-push-gateway: ## Build bin/loomplane-push-gateway, the push gateway XRaph runs at push.loomplane.com
+	go build $(LDFLAGS) -o bin/loomplane-push-gateway ./cmd/loomplane-push-gateway
+
 build-cli: ## Build bin/loomctl, the command-line client
 	go build $(LDFLAGS) -o bin/loomctl ./cmd/loomctl
+
+build-qualify: ## Build bin/loomplane-qualify, the model qualification job (its run command costs money)
+	go build $(LDFLAGS) -o bin/loomplane-qualify ./cmd/loomplane-qualify
 
 build-dashboard: ## Build the dashboard into apps/dashboard/dist
 	pnpm --dir $(DASHBOARD_DIR) build
@@ -62,6 +106,18 @@ run: build ## Build everything and run the API on API_PORT, with the analysis wo
 
 image: ## Build the container image, tagged with the git version
 	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:$(VERSION) .
+
+image-push-gateway: ## Build the push gateway image, tagged with the git version
+	docker build -f deployments/push-gateway/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane-push-gateway:$(VERSION) .
+
+test-push-gateway: image-push-gateway ## Run the push gateway stack in Docker with throwaway secrets and check it
+	bash scripts/test-push-gateway.sh loomplane-push-gateway:$(VERSION)
+
+test-push-kubernetes: image image-push-gateway ## Check Helm push delivery, HTTPS routes and key rotation in a disposable kind cluster
+	python3 tests/kubernetes/push_gateway.py loomplane:$(VERSION) loomplane-push-gateway:$(VERSION)
+
+test-digitalocean: image image-push-gateway ## Check the Droplet installer, upgrade and bundled gateway locally
+	bash deployments/digitalocean/test-install.sh loomplane:$(VERSION) loomplane-push-gateway:$(VERSION)
 
 helm-lint: ## Lint the Helm chart and validate what it renders (needs helm and kubeconform)
 	bash scripts/check-helm.sh
@@ -78,11 +134,15 @@ test: test-go test-dashboard ## Run the Go and dashboard unit tests
 test-go: ## Run the Go unit tests
 	go test ./...
 
+test-cloud: ## Run the Go tests that cover the cloud edition (the Postgres ones need LOOMPLANE_TEST_DATABASE_URL)
+	go test -timeout 20m -tags cloud ./internal/buildinfo/... ./internal/platform/... ./internal/billing/... ./extensions/billing/... ./extensions/identity/... ./database/migrations/...
+	go test -timeout 20m -count=1 -tags 'integration cloud' ./database/migrations/ -run 'Billing'
+
 test-dashboard: ## Run the dashboard's unit tests
 	pnpm --dir $(DASHBOARD_DIR) test
 
 test-integration: ## Boot the whole app against the compose Postgres (make up first)
-	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags=integration -count=1 -timeout=60m ./tests/integration/
+	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' $(PGVECTOR_TEST_ENV) go test -tags=integration -count=1 -timeout=90m ./tests/integration/
 
 acceptance: ## Deploy to real clouds and take it down again; costs money (docs/acceptance.md)
 	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags='integration acceptance' -count=1 -timeout=180m -v \
@@ -99,10 +159,10 @@ acceptance-catalog: ## Deploy a test-only composed catalog kind to isolated SSH/
 lint: lint-go lint-dashboard ## Lint Go and the dashboard
 
 lint-go: ## golangci-lint, integration tests included
-	golangci-lint run --build-tags=integration ./...
+	golangci-lint run --allow-serial-runners --build-tags=integration ./...
 
 lint-fix: ## Lint Go and the dashboard, applying the fixes each linter can make
-	golangci-lint run --fix --build-tags=integration ./...
+	golangci-lint run --allow-serial-runners --fix --build-tags=integration ./...
 	pnpm --dir $(DASHBOARD_DIR) lint --fix
 
 fmt: fmt-go fmt-dashboard ## Format Go and the dashboard
@@ -140,6 +200,9 @@ gen-client: ## Refresh the API specs from the running API, then regenerate the d
 
 check-client: ## Fail if the generated clients drifted from the specs
 	pnpm --dir $(DASHBOARD_DIR) check:client
+
+docs-bundle: ## Rebuild the docs bundle the built-in agent searches (run after editing apps/docs/content)
+	go generate ./internal/agentknowledge
 
 clean: ## Remove build output
 	rm -rf bin $(DASHBOARD_DIR)/dist .forge

@@ -1,6 +1,7 @@
 // Package providers is Loomplane's catalog of deployment targets: the
 // clouds and platforms a plan can name, described with pkg/provider.
 //
+// Infrastructure capability declarations do not establish runtime readiness.
 // Nothing here talks to a cloud: internal/deployments has the adapters.
 // A target without one, or one paused in the configuration, is described
 // but not available, and plans that use it are for review only.
@@ -48,12 +49,20 @@ var builtinKinds = []string{"postgres", "mysql", "mariadb", "redis", "valkey"}
 
 // Catalog returns the built-in targets, in the order a person choosing one
 // should see them. The server and Kubernetes targets also offer every kind
-// registered in internal/recipes that runs on them.
+// registered in internal/recipes that runs on them, except the kinds of a
+// server feature, which Catalog has off.
 func Catalog() []provider.Provider {
-	return catalogWith(recipes.Default())
+	return CatalogFor(nil)
 }
 
-func catalogWith(kinds *recipes.Registry) []provider.Provider {
+// CatalogFor is Catalog on a server whose features named true in features
+// are on, such as recipes.FeatureAI. A kind of a feature that's off isn't
+// offered, as planning refuses it.
+func CatalogFor(features map[string]bool) []provider.Provider {
+	return catalogWith(recipes.Default(), features)
+}
+
+func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.Provider {
 	all := []provider.Provider{
 		{
 			Name: "vercel", Title: "Vercel", Cloud: "vercel",
@@ -250,6 +259,10 @@ func catalogWith(kinds *recipes.Registry) []provider.Provider {
 			// internal/clouds/azure).
 			Available: true,
 		},
+		{Name: "firecracker", Title: "Firecracker microVM", Cloud: "firecracker", BuildLogs: "polled", Description: "Runs stateless applications and isolated builds in microVMs on a Linux host.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true},
+		// Loomplane Cloud is reached only through the targets of the
+		// Loomplane Cloud a workspace is given, never by naming it.
+		{Name: "platform", Title: "Loomplane Cloud", Cloud: "platform", BuildLogs: "polled", Description: "Runs stateless applications in microVMs on hosts this Loomplane runs.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true, Unlisted: true},
 		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",
@@ -267,6 +280,7 @@ func catalogWith(kinds *recipes.Registry) []provider.Provider {
 		},
 		{
 			Name: "kubernetes", Title: "Kubernetes", Cloud: "kubernetes",
+			Workloads:   &provider.WorkloadCapabilities{Revision: provider.PodGroupCapabilityRevision, PodGroups: true, ScratchVolumes: true},
 			BuildLogs:   "streamed",
 			Description: "Runs service containers in the namespace of the cluster you choose.",
 			Model:       provider.Instance, Scaling: true,
@@ -282,19 +296,23 @@ func catalogWith(kinds *recipes.Registry) []provider.Provider {
 		case "vercel":
 			all[i].Infrastructure = vercel.InfrastructureCapabilities()
 		case "server", "kubernetes":
-			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, all[i].Cloud)...)
+			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, features, all[i].Cloud)...)
 		}
 	}
-	return all
+	return edgeResourceProviders(all)
 }
 
 // registeredProvisions describes the registered kinds, other than the five
 // built-in engines, that run on the cloud. A dependency-only kind is only
-// provisioned for another kind, so it isn't offered on its own.
-func registeredProvisions(kinds *recipes.Registry, cloud string) []provider.Provisions {
+// provisioned for another kind, so it isn't offered on its own, and a kind
+// of a feature that's off isn't offered at all.
+func registeredProvisions(kinds *recipes.Registry, features map[string]bool, cloud string) []provider.Provisions {
 	var out []provider.Provisions
 	for _, info := range kinds.Kinds() {
 		if slices.Contains(builtinKinds, info.Name) || !slices.Contains(info.Targets, cloud) || info.Placement == recipes.PlacementDependency {
+			continue
+		}
+		if info.Feature != "" && !features[info.Feature] {
 			continue
 		}
 		out = append(out, provider.Provisions{
@@ -323,10 +341,16 @@ func Pause(p *provider.Provider) {
 	p.Available, p.Note = false, PausedNote
 }
 
-// Registry returns a registry of the catalog.
-// Any named in paused are for review only.
+// Registry returns a registry of the catalog, with every server feature
+// off. Any named in paused are for review only.
 func Registry(paused ...string) *provider.Registry {
-	all := Catalog()
+	return RegistryFor(nil, paused...)
+}
+
+// RegistryFor is Registry on a server whose features named true in
+// features are on.
+func RegistryFor(features map[string]bool, paused ...string) *provider.Registry {
+	all := CatalogFor(features)
 	for i := range all {
 		if slices.Contains(paused, all[i].Name) {
 			Pause(&all[i])

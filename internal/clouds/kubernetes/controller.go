@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 
@@ -17,7 +18,9 @@ import (
 // ControllerReceipt records a successful provider mutation, not a discovery
 // observation. It contains no credentials and does not authorize issuance.
 type ControllerReceipt struct {
+	PodGroupDigest string `json:"pod_group_digest,omitempty"`
 	domain.Scope
+	ReleaseID            string `json:"release_id,omitempty"`
 	ConnectionID         string `json:"connection_id"`
 	InstanceID           string `json:"instance_id"`
 	PlanID               string `json:"plan_id"`
@@ -35,6 +38,15 @@ type ControllerReceipt struct {
 }
 
 func (r ControllerReceipt) Valid() bool {
+	if r.PodGroupDigest != "" {
+		digest, err := hex.DecodeString(strings.TrimPrefix(r.PodGroupDigest, "sha256:"))
+		if err != nil || len(digest) != 32 || len(r.PodGroupDigest) != 71 || !strings.HasPrefix(r.PodGroupDigest, "sha256:") {
+			return false
+		}
+	}
+	if r.ReleaseID != "" && r.ReleaseID != WorkloadReleaseID(r.RuntimeRef, r.RuntimeRevision) {
+		return false
+	}
 	for _, v := range []string{r.OrgID, r.ProjectID, r.EnvironmentID, r.ConnectionID, r.PlanID, r.ServiceID, r.NamespaceUID, r.DeploymentUID} {
 		if !domain.ValidIdentitySegment(v) {
 			return false
@@ -47,9 +59,12 @@ func (r ControllerReceipt) Valid() bool {
 
 func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string, d *appsv1.Deployment) error {
 	if r.RecordController == nil {
+		if c.Config.journalRequired() {
+			return ErrManagedAuthority
+		}
 		return nil
 	}
-	if d == nil || d.Name != WorkloadName(iid) || d.Namespace != c.Config.Namespace || d.DeletionTimestamp != nil || d.ResourceVersion == "" || checkOwner(d, iid, labels) != nil || len(d.Spec.Template.Spec.Containers) != 1 || d.Spec.Template.Spec.Containers[0].Name != spec.Name || d.Spec.Template.Spec.Containers[0].Image != spec.Image || d.Spec.Template.Annotations[owned.LabelRevision] != labels[owned.LabelRevision] {
+	if d == nil || d.Name != WorkloadName(iid) || d.Namespace != c.Config.Namespace || d.DeletionTimestamp != nil || d.ResourceVersion == "" || checkOwner(d, iid, labels) != nil || !podGroupControllerMatches(d.Spec.Template, spec.Name, spec.Image, labels) || d.Spec.Template.Annotations[owned.LabelRevision] != labels[owned.LabelRevision] {
 		return ErrOwned
 	}
 	account := d.Spec.Template.Spec.ServiceAccountName
@@ -57,8 +72,31 @@ func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, sp
 		account = "default"
 	}
 	receipt := ControllerReceipt{Scope: domain.Scope{OrgID: labels[owned.LabelOrg], ProjectID: labels[owned.LabelProject], EnvironmentID: labels[owned.LabelEnvironment]}, ConnectionID: labels[owned.LabelConnection], InstanceID: iid.String(), PlanID: labels[owned.LabelPlan], RuntimeRef: labels[owned.LabelRuntime], ServiceID: labels[owned.LabelService], Container: spec.Name, Image: spec.Image, Namespace: d.Namespace, NamespaceUID: c.Config.Details["namespace_uid"], ClusterCA: c.Config.Details["cluster_ca"], ServiceAccount: account, DeploymentUID: string(d.UID), DeploymentGeneration: d.Generation, RuntimeRevision: labels[owned.LabelRevision]}
+	receipt.PodGroupDigest = podGroupDigest(labels)
+	if c.Config.journalRequired() {
+		receipt.ReleaseID = d.Spec.Template.Annotations[WorkloadReleaseAnnotation]
+		if receipt.ReleaseID != WorkloadReleaseID(receipt.RuntimeRef, receipt.RuntimeRevision) {
+			return ErrOwned
+		}
+	}
 	if !receipt.Valid() {
 		return ErrOwned
 	}
+	if c.Config.journalRequired() {
+		ctx = WithManagedScope(ctx, c.Config.ManagedScope)
+	}
 	return r.RecordController(ctx, receipt)
+}
+
+// WorkloadReleaseAnnotation binds the durable runtime attempt to its pod template.
+const WorkloadReleaseAnnotation = "loomplane.io/capacity-release"
+
+// WorkloadReleaseID hashes only server-owned attempt identities, never template
+// contents or secrets. Retries reuse the same marker across lost responses.
+func WorkloadReleaseID(runtimeRef, runtimeRevision string) string {
+	if runtimeRef == "" || runtimeRevision == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(runtimeRef + "\x00" + runtimeRevision))
+	return hex.EncodeToString(sum[:])
 }

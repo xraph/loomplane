@@ -24,7 +24,7 @@ afterEach(() => {
 })
 const cloud = { id: "c", revision: 4, name: "Shared" }
 const writes: { path: string; body: Record<string, unknown> }[] = []
-function fixture(stale = false) {
+function fixture(stale = false, unknownCost = false) {
   writes.length = 0
   vi.stubGlobal(
     "fetch",
@@ -41,6 +41,21 @@ function fixture(stale = false) {
             input: body,
             actions: [],
             connection_generation: 7,
+            ...(unknownCost
+              ? {
+                  budget_review: {
+                    estimate: {
+                      known: false,
+                      hourly_micro_usd: "9007199254740993",
+                      horizon_micro_usd: "9007199254740993",
+                      horizon_seconds: 3600,
+                      components: [
+                        { category: "network_egress", quantity: "1" },
+                      ],
+                    },
+                  },
+                }
+              : {}),
           })
         if (path.endsWith("/apply") && stale)
           return Response.json(
@@ -120,7 +135,7 @@ it("reviews generic SSH adoption even with no provider provisioning capability, 
   const user = userEvent.setup()
   show(<Servers cloud={cloud as never} />)
   await user.click(
-    await screen.findByRole("button", { name: "Connect existing server" })
+    (await screen.findAllByRole("button", { name: "Connect server" }))[0]!
   )
   await user.type(
     screen.getByRole("textbox", { name: "Server name" }),
@@ -131,8 +146,8 @@ it("reviews generic SSH adoption even with no provider provisioning capability, 
   await user.click(screen.getByRole("checkbox", { name: /Confirm pinned SSH/ }))
   await user.click(screen.getByRole("button", { name: "Review server" }))
   expect(
-    await screen.findByText(/Connection generation: 7/)
-  ).toBeInTheDocument()
+    (await screen.findByText("Connection generation")).nextElementSibling
+  ).toHaveTextContent("7")
   await user.click(
     screen.getByRole("button", { name: "Apply reviewed server" })
   )
@@ -155,7 +170,7 @@ it("invalidates a stale server review and requires another preview", async () =>
   const user = userEvent.setup()
   show(<Servers cloud={cloud as never} />)
   await user.click(
-    await screen.findByRole("button", { name: "Connect existing server" })
+    (await screen.findAllByRole("button", { name: "Connect server" }))[0]!
   )
   await user.type(screen.getByRole("textbox", { name: "Server name" }), "host")
   await user.click(screen.getByRole("combobox", { name: "Server account" }))
@@ -743,7 +758,7 @@ async function openCreate(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("option", { name: "DigitalOcean" }))
 }
 const h100Option =
-  "gpu-h100x1-80gb · 1× NVIDIA H100 80GB · 80 GiB · 20 CPU · $3.39/hr"
+  "gpu-h100x1-80gb · 1× NVIDIA H100 80GB · 80 GiB · 20 vCPU · $3.39/hr"
 
 it("groups GPU sizes and prices them per hour", async () => {
   gpuFixture()
@@ -757,7 +772,7 @@ it("groups GPU sizes and prices them per hour", async () => {
   ).toBeInTheDocument()
   // CPU sizes keep their line and stay out of the GPU group.
   expect(
-    screen.getByRole("option", { name: /^s-2vcpu-4gb · 2 CPU · 4096 MiB/ })
+    screen.getByRole("option", { name: /^s-2vcpu-4gb · 2 vCPU · 4 GiB/ })
   ).toBeInTheDocument()
   expect(
     within(gpu).queryByRole("option", { name: /s-2vcpu-4gb/ })
@@ -883,11 +898,9 @@ it("marks a GPU server that can't take GPU work", async () => {
   expect(
     await screen.findByText(/1× NVIDIA H100 80GB · \$3\.39\/hr/)
   ).toBeInTheDocument()
-  const badge = screen.getByText("Can't take GPU work")
-  await user.hover(badge)
-  expect(await screen.findByText(message)).toBeInTheDocument()
-  await user.unhover(badge)
-  await user.click(screen.getByRole("button", { name: "Inspect gpu-host" }))
+  const pill = screen.getByText("No GPU runtime")
+  expect(pill.closest("[title]")).toHaveAttribute("title", message)
+  await user.click(screen.getByRole("button", { name: "Open gpu-host" }))
   const details = await screen.findByRole("dialog")
   expect(within(details).getByText(message)).toBeInTheDocument()
   expect(
@@ -920,7 +933,9 @@ it("budgets GPUs per member in a GPU pool", async () => {
   })
   const user = userEvent.setup()
   show(<Servers cloud={cloud as never} />)
-  await user.click(await screen.findByRole("button", { name: "Add pool" }))
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Add pool" }))[0]!
+  )
   await user.type(screen.getByRole("textbox", { name: "Pool name" }), "gpus")
   await user.click(screen.getByRole("checkbox", { name: "gpu-box" }))
   await user.click(screen.getByRole("combobox", { name: "GPU kind" }))
@@ -1067,12 +1082,12 @@ it("prices CPU sizes the same way, unknown when the price is", async () => {
   await user.click(await screen.findByRole("combobox", { name: "Server size" }))
   expect(
     await screen.findByRole("option", {
-      name: "s-2vcpu-4gb · 2 CPU · 4096 MiB · $0.04/hr",
+      name: "s-2vcpu-4gb · 2 vCPU · 4 GiB · $0.04/hr",
     })
   ).toBeInTheDocument()
   expect(
     screen.getByRole("option", {
-      name: "s-unpriced · 1 CPU · 1024 MiB · price unknown",
+      name: "s-unpriced · 1 vCPU · 1 GiB · price unknown",
     })
   ).toBeInTheDocument()
   expect(screen.queryByRole("option", { name: /\$0\/h|undefined/ })).toBeNull()
@@ -1082,7 +1097,9 @@ it("keeps a GPU budget between one and the server's GPUs", async () => {
   gpuFixture({ servers: [readGpuBox] })
   const user = userEvent.setup()
   show(<Servers cloud={cloud as never} />)
-  await user.click(await screen.findByRole("button", { name: "Add pool" }))
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Add pool" }))[0]!
+  )
   await user.type(screen.getByRole("textbox", { name: "Pool name" }), "gpus")
   await user.click(screen.getByRole("checkbox", { name: "gpu-box" }))
   await user.click(screen.getByRole("combobox", { name: "GPU kind" }))
@@ -1104,4 +1121,42 @@ it("keeps a GPU budget between one and the server's GPUs", async () => {
   await user.type(budget, "2")
   expect(budget).not.toHaveAttribute("aria-invalid", "true")
   expect(save).toBeEnabled()
+})
+
+it("requires scoped unknown server costs to be acknowledged in a fresh review", async () => {
+  fixture(false, true)
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Connect server" }))[0]!
+  )
+  await user.type(
+    screen.getByRole("textbox", { name: "Server name" }),
+    "shared-host"
+  )
+  await user.click(screen.getByRole("combobox", { name: "Server account" }))
+  await user.click(await screen.findByRole("option", { name: /Pinned SSH/ }))
+  await user.click(screen.getByRole("checkbox", { name: /Confirm pinned SSH/ }))
+  await user.click(screen.getByRole("button", { name: "Review server" }))
+  expect(await screen.findByText("Network traffic")).toBeInTheDocument()
+  expect(screen.getByText(/\$9007199254\.74\/hr/)).toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Apply reviewed server" })
+  ).toBeDisabled()
+  await user.click(
+    screen.getByRole("checkbox", {
+      name: /Acknowledge the displayed unknown cost categories/,
+    })
+  )
+  expect(
+    screen.queryByRole("button", { name: "Apply reviewed server" })
+  ).toBeNull()
+  await user.click(screen.getByRole("button", { name: "Review server" }))
+  expect(
+    await screen.findByRole("button", { name: "Apply reviewed server" })
+  ).toBeEnabled()
+  expect(
+    writes.filter((w) => w.path.endsWith("/preview"))[1].body
+      .acknowledge_unknown_costs
+  ).toBe(true)
 })

@@ -402,6 +402,17 @@ func TestCreatePlanReportsACloudLookupFailureOnTheComposedResource(t *testing.T)
 	if f := result.Problems[0]; f.Code != "cloud-target" || f.Subject != ResourceSubject || f.Name != "edge" || f.Path != "resources.edge.target" || f.Message != "cloud assignments are unavailable" {
 		t.Fatalf("finding: %+v", f)
 	}
+
+	// Production's own target is where production's finding points.
+	doc = "version: 1\nresources:\n  edge:\n    kind: sample\n    provider: server\n    target: " + targetA + "\n    environments:\n      production: {target: " + targetB + "}\n"
+	service, plan, _ = edgeService(t, doc)
+	service.cloudProfiles = failingResolver{}
+	if result, _, err = service.compute(t.Context(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].Path != "resources.edge.environments.production.target" {
+		t.Fatalf("finding: %+v", result.Problems)
+	}
 }
 
 // refusingAuthz fails the test on any check: the paths below refuse the
@@ -423,6 +434,10 @@ func TestPublicPathsRefuseTheSystemPrincipal(t *testing.T) {
 	paths := map[string]func() error{
 		"Create": func() error {
 			_, err := s.Create(ctx, p, "proj", CreatePlanInput{Environment: "production"})
+			return err
+		},
+		"CreateRollback": func() error {
+			_, err := s.CreateRollback(ctx, p, "proj", RollbackInput{Environment: "production", Reason: "errors"})
 			return err
 		},
 		"Approve": func() error {
@@ -603,5 +618,56 @@ func TestPlanIsBlockedWhileACanaryRamps(t *testing.T) {
 	store.err = errors.New("database unavailable")
 	if _, _, err = service.compute(t.Context(), plan); !errors.Is(err, store.err) {
 		t.Fatalf("compute with the store down: %v", err)
+	}
+}
+
+// TestCloudSyncRefusesTheAgent: the agent holds deployment:approve, which
+// is all a project's Cloud change asks for, but Cloud syncs aren't its to
+// start or drive, alone or for a person. It's refused before Warden.
+func TestCloudSyncRefusesTheAgent(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(Deps{Authz: refusingAuthz{t}})
+	for who, p := range map[string]security.Principal{
+		"alone":      security.AgentPrincipal("org", nil),
+		"for admins": security.AgentPrincipal("org", &security.Principal{UserID: "usr_admin", OrgID: "org"}),
+	} {
+		paths := map[string]func() error{
+			"PreviewCloudChange": func() error {
+				_, err := s.PreviewCloudChange(ctx, p, "proj", cloudprofiles.ChangeInput{})
+				return err
+			},
+			"ApplyCloudChange": func() error {
+				_, err := s.ApplyCloudChange(ctx, p, "proj", "preview", "rev", "key")
+				return err
+			},
+			"RetryCloudSync": func() error {
+				_, err := s.RetryCloudSync(ctx, p, "proj", "sync")
+				return err
+			},
+			"CompleteCloudRouting": func() error {
+				_, err := s.CompleteCloudRouting(ctx, p, "proj", "sync", "production", "evidence")
+				return err
+			},
+			"CloudPreview": func() error {
+				_, err := s.CloudPreview(ctx, p, "proj", "preview")
+				return err
+			},
+			"PreviewCloudRevert": func() error {
+				_, err := s.PreviewCloudRevert(ctx, p, "proj", "sync")
+				return err
+			},
+			"ApplyCloudRevert": func() error {
+				_, err := s.ApplyCloudRevert(ctx, p, "proj", "preview", "rev", "key")
+				return err
+			},
+			"organization": func() error { return s.authorizeCloudSync(ctx, p, "") },
+		}
+		for name, call := range paths {
+			t.Run(who+"/"+name, func(t *testing.T) {
+				if err := call(); !errors.Is(err, security.ErrForbidden) {
+					t.Fatalf("%s as the agent: %v, want ErrForbidden", name, err)
+				}
+			})
+		}
 	}
 }

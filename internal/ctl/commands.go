@@ -1,28 +1,101 @@
 package ctl
 
 import (
-	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/xraph/forge/cli"
 
+	"github.com/xraph/loomplane/internal/node"
 	"github.com/xraph/loomplane/pkg/client"
 )
 
 var jsonFlag = cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 
+// commands are loomctl's commands: its own, then the node group it shares
+// with loomplane.
 func (a *App) commands() []cli.Command {
+	return append(a.ownCommands(), node.Commands(node.Options{
+		Version: a.opts.Version, Out: a.opts.Out, Getenv: a.opts.Getenv, Login: a.nodeLogin,
+	})...)
+}
+
+// nodeLogin is the login node join, list and revoke act with: the saved one,
+// or the environment's. Under sudo, root usually has no login of its own
+// and sudo drops LOOMPLANE_*, so when root has nothing it reads the login of
+// the user who ran sudo (SUDO_USER), after checking that the file is theirs
+// and that nobody else can write it.
+func (a *App) nodeLogin() (url, key string, err error) {
+	s, err := a.settings()
+	if err != nil {
+		return "", "", err
+	}
+	if s.URL == "" && s.Key == "" {
+		su, serr := a.sudoSettings()
+		if serr != nil {
+			return "", "", serr
+		}
+		// Renewing the user's sign-in as root would spend their refresh
+		// token on a file root can't save back to theirs.
+		if su.RefreshToken != "" && time.Until(su.ExpiresAt) <= renewBefore {
+			return "", "", fmt.Errorf("%s's sign-in has expired: run `loomctl login` as %[1]s, then try again", a.opts.Getenv("SUDO_USER"))
+		}
+		s = su
+	} else if err := a.renew(&s); err != nil {
+		return "", "", err
+	}
+	if s.URL == "" || s.Key == "" {
+		return "", "", fmt.Errorf("loomctl doesn't know where Loomplane is: run `loomctl login`, or set %s and %s", EnvURL, EnvKey)
+	}
+	return s.URL, s.Key, nil
+}
+
+// sudoSettings is the saved login of the user who ran sudo, when root runs
+// loomctl through sudo. It returns empty Settings when that doesn't apply or
+// the user has no login, and an error when the file is there but can't be
+// trusted.
+func (a *App) sudoSettings() (Settings, error) {
+	name := a.opts.Getenv("SUDO_USER")
+	if a.opts.euid() != 0 || name == "" || name == "root" {
+		return Settings{}, nil
+	}
+	u, err := a.opts.lookupUser(name)
+	if err != nil {
+		return Settings{}, fmt.Errorf("finding %s, who ran sudo: %w", name, err)
+	}
+	if sudoUID := a.opts.Getenv("SUDO_UID"); sudoUID != "" && sudoUID != u.Uid {
+		return Settings{}, fmt.Errorf("SUDO_UID %s is not the uid of %s (%s), so their login isn't used", sudoUID, name, u.Uid)
+	}
+	path := filepath.Join(u.HomeDir, userConfigDir, "loomplane", "loomctl.json")
+	data, err := readOwnedBy(path, u.Uid)
+	if errors.Is(err, os.ErrNotExist) {
+		return Settings{}, nil
+	}
+	if err != nil {
+		return Settings{}, fmt.Errorf("not using %s's login: %w", name, err)
+	}
+	var s Settings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return Settings{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return s, nil
+}
+
+func (a *App) ownCommands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
+		a.agentCommand(),
 		a.federationCommand(),
 		a.cloudsCommand(),
 		a.cloudTargetsCommand(),
 		a.cloudSyncsCommand(),
 		a.cloudServersCommand(),
+		a.cloudClustersCommand(),
 		a.cloudPoolsCommand(),
 		a.cloudCapacityCommand(),
 		a.dnsZonesCommand(),
@@ -33,13 +106,10 @@ func (a *App) commands() []cli.Command {
 		a.retirementsCommand(),
 		a.servicesCommand(),
 		a.storageCommand(),
-		cli.NewCommand("login", "Save where Loomplane is and the API key to use", a.login,
-			cli.WithUsage("login --url https://loomplane.example.com --key lp_live_..."),
-			cli.WithFlags(
-				cli.NewStringFlag("url", "", "Loomplane's address", ""),
-				cli.NewStringFlag("key", "", "An API key from Settings, API keys; - reads it from standard input", ""),
-			)),
-		cli.NewCommand("logout", "Forget the saved key", a.logout),
+		a.teamsCommand(),
+		a.loginCommand(),
+		cli.NewCommand("logout", "Forget the saved login, and end a sign-in's session", a.logout),
+		a.organizationsCommand(),
 		cli.NewCommand("whoami", "Who the key acts as, and what it may do", a.whoami, cli.WithFlag(jsonFlag)),
 		cli.NewCommand("projects", "List the organization's projects", a.projects,
 			cli.WithFlag(jsonFlag),
@@ -47,7 +117,11 @@ func (a *App) commands() []cli.Command {
 				cli.WithUsage("projects create <name> --repo acme/web --repo billing=other/web"),
 				cli.WithFlags(
 					cli.NewStringSliceFlag("repo", "", "A repository, as owner/name or a URL; repeat it for each, and write alias=repository to name one", nil),
-					jsonFlag)))),
+					jsonFlag))),
+			cli.WithSubcommand(cli.NewCommand("team", "Name the team responsible for a project, or clear it", a.projectTeam,
+				cli.WithUsage("projects team <project> <team> | projects team <project> --none"),
+				cli.WithFlag(cli.NewBoolFlag("none", "", "Clear the responsible team", false)))),
+		),
 		cli.NewCommand("analyze", "Read a project's repositories and find their services", a.analyze,
 			cli.WithUsage("analyze <project> [--source web] [--ref main]"),
 			cli.WithFlags(
@@ -61,18 +135,23 @@ func (a *App) commands() []cli.Command {
 				cli.WithUsage("manifest save <project> -f loomplane.yaml"),
 				cli.WithFlag(cli.NewStringFlag("file", "f", "The file; - reads standard input", "loomplane.yaml"))))),
 		cli.NewCommand("plan", "Plan a project's manifest for an environment", a.plan,
-			cli.WithUsage("plan <project> --env production [--scope web] [--catalog]"),
+			cli.WithUsage("plan <project> --env production [--from staging] [--scope web] [--catalog]"),
 			cli.WithFlags(
 				cli.NewStringFlag("env", "e", "The environment", "production"),
+				cli.NewStringFlag("from", "", "An environment to promote from: the plan pins the commits it runs", ""),
 				cli.NewStringSliceFlag("scope", "", "A repository the plan moves, by alias; every one if none, and the rest stay as deployed", nil),
 				cli.NewBoolFlag("catalog", "", "Plan standalone resources without a repository", false),
 				cli.NewBoolFlag("no-wait", "", "Start planning and return", false), jsonFlag)),
+		a.promoteCommand(),
+		a.releaseCommand(),
+		a.rollbackCommand(),
 		cli.NewCommand("plans", "List a project's plans", a.plans, cli.WithUsage("plans <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,
 			cli.WithUsage("show <plan-id>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("approve", "Approve a plan, which deploys it", a.approve,
-			cli.WithUsage("approve <plan-id> [--yes] [--note ...]"),
+			cli.WithUsage("approve <plan-id> [--revision <rev>] [--yes] [--note ...]"),
 			cli.WithFlags(
+				cli.NewStringFlag("revision", "", "Approve only if the plan is still at this revision, such as the one the agent asked about", ""),
 				cli.NewStringFlag("note", "", "Why, for the record", ""),
 				cli.NewBoolFlag("yes", "y", "Don't ask first", false),
 				cli.NewBoolFlag("no-wait", "", "Approve and return without following the deployment", false))),
@@ -81,6 +160,7 @@ func (a *App) commands() []cli.Command {
 			cli.WithFlag(cli.NewStringFlag("note", "", "Why, for the record", ""))),
 		cli.NewCommand("deployments", "List a project's deployments", a.deployments,
 			cli.WithUsage("deployments <project>"), cli.WithFlag(jsonFlag)),
+		a.failedCleanupCommand(),
 		cli.NewCommand("deployment", "Show a deployment, step by step", a.deployment,
 			cli.WithUsage("deployment <deployment-id> [--watch]"),
 			cli.WithFlags(cli.NewBoolFlag("watch", "w", "Follow it until it finishes", false), jsonFlag)),
@@ -90,8 +170,8 @@ func (a *App) commands() []cli.Command {
 		cli.NewCommand("resume", "Check capacity again for a deployment paused for it", a.resume,
 			cli.WithUsage("resume <deployment-id> --revision <n>"),
 			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
-		cli.NewCommand("cancel", "Cancel a deployment paused for capacity; finished steps stay", a.cancel,
-			cli.WithUsage("cancel <deployment-id> --revision <n>"),
+		cli.NewCommand("cancel", "Cancel a running deployment, or one paused for capacity; finished steps stay", a.cancel,
+			cli.WithUsage("cancel <deployment-id> [--revision <n>]"),
 			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
 		cli.NewCommand("status", "What runs each of a project's services and resources, and any drift", a.status,
 			cli.WithUsage("status <project>"), cli.WithFlag(jsonFlag)),
@@ -105,47 +185,6 @@ func (a *App) commands() []cli.Command {
 					cli.NewStringFlag("service", "s", "One service's graph ID; every service if empty", ""),
 					cli.NewBoolFlag("secret", "", "Keep it secret: write-only, and in the cloud's secret store", false))))),
 	}
-}
-
-func (a *App) login(ctx cli.CommandContext) error {
-	s, err := a.settings()
-	if err != nil {
-		return err
-	}
-	if v := ctx.String("url"); v != "" {
-		s.URL = strings.TrimRight(v, "/")
-	}
-	key := ctx.String("key")
-	if key == "-" {
-		line, rerr := bufio.NewReader(a.opts.In).ReadString('\n')
-		if rerr != nil && line == "" {
-			return fmt.Errorf("read the key: %w", rerr)
-		}
-		key = line
-	}
-	if key = strings.TrimSpace(key); key != "" {
-		s.Key = key
-	}
-	if s.URL == "" || s.Key == "" {
-		return errors.New("give both --url and --key; make a key under Settings, API keys")
-	}
-	who, err := client.New(s.URL, s.Key).Session(ctxOf(ctx))
-	if err != nil {
-		return fmt.Errorf("that key doesn't work at %s: %w", s.URL, err)
-	}
-	if err := a.save(s); err != nil {
-		return err
-	}
-	a.printf("Logged in to %s, in organization %s.\n", s.URL, who.OrgID)
-	return nil
-}
-
-func (a *App) logout(cli.CommandContext) error {
-	if err := os.Remove(a.opts.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	a.printf("Logged out. The key still works until you revoke it under Settings, API keys.\n")
-	return nil
 }
 
 func (a *App) whoami(ctx cli.CommandContext) error {
@@ -346,7 +385,7 @@ func (a *App) plan(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	plan, err := c.CreatePlan(ctxOf(ctx), p.ID, client.NewPlan{Environment: ctx.String("env"), Scope: ctx.StringSlice("scope"), Catalog: ctx.Bool("catalog")})
+	plan, err := c.CreatePlan(ctxOf(ctx), p.ID, client.NewPlan{Environment: ctx.String("env"), From: ctx.String("from"), Scope: ctx.StringSlice("scope"), Catalog: ctx.Bool("catalog")})
 	if err != nil {
 		return err
 	}
@@ -402,8 +441,15 @@ func (a *App) show(ctx cli.CommandContext) error {
 	return nil
 }
 
-func (a *App) printPlan(p *client.Plan) {
+func (a *App) printPlan(p *client.Plan) { a.printPlanWith(p, "") }
+
+// printPlanWith prints a plan with a promotion's soak line, when there is
+// one, after what it deploys.
+func (a *App) printPlanWith(p *client.Plan, soak string) {
 	a.printf("Plan %s for %s: %s\n", p.ID, p.Environment, p.Status)
+	if line := kindLine(p); line != "" {
+		a.printf("%s\n", line)
+	}
 	if p.Error != "" {
 		a.printf("  %s\n", p.Error)
 	}
@@ -424,6 +470,18 @@ func (a *App) printPlan(p *client.Plan) {
 	}
 	if p.Release != nil {
 		a.printf("\nRelease: %s\n", releaseLine(p.Release))
+	}
+	if len(p.Artifacts) > 0 {
+		a.printf("\nImages:\n")
+		for _, x := range p.Artifacts {
+			a.printf("  %s\n", artifactLine(x))
+		}
+	}
+	if soak != "" {
+		a.printf("\n%s\n", soak)
+	}
+	for _, l := range p.Leftovers {
+		a.printf("\n%s\n", leftoverLine(l))
 	}
 	for _, f := range p.Problems {
 		a.printf("\nProblem (%s): %s", f.Code, f.Message)
@@ -453,6 +511,9 @@ func (a *App) approve(ctx cli.CommandContext) error {
 	}
 	if plan.Status != "ready" {
 		return fmt.Errorf("plan %s is %s, so there's nothing to approve", plan.ID, plan.Status)
+	}
+	if want := ctx.String("revision"); want != "" && want != plan.Revision {
+		return fmt.Errorf("plan %s is at revision %s now, not %s; read it again before you approve", plan.ID, plan.Revision, want)
 	}
 	a.printPlan(plan)
 	if !ctx.Bool("yes") {
@@ -619,6 +680,7 @@ func (a *App) printDeployment(ctx cli.CommandContext, c *client.Client, d *clien
 	if d.Canary != nil {
 		a.printCanary(ctx, c, d)
 	}
+	a.printWatch(ctx, c, d)
 }
 
 // releaseLine says how a plan rolls out. A canary that no service in the

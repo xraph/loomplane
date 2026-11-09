@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/orchestration"
 )
 
@@ -38,7 +39,10 @@ func (r *Runner) replayFinalization(ctx context.Context, d *Deployment, reason s
 	}
 	// A successful finish can still owe repository bookkeeping after its commit.
 	if generation == d.Retries && reason == "" && d.Status == StatusSucceeded && d.FinishedAt != nil {
-		return true, r.recordDeployed(ctx, d, *d.FinishedAt)
+		if recordErr := r.recordDeployed(ctx, d, *d.FinishedAt); recordErr != nil {
+			return true, recordErr
+		}
+		return true, r.rearmWatch(ctx, d)
 	}
 	return true, nil
 }
@@ -59,6 +63,9 @@ func (s *PgStore) finishActivity(ctx context.Context, org, id, key, status, reas
 		return err
 	}
 	defer func() { err = rollback(tx, err) }()
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, org); lockErr != nil {
+		return lockErr
+	}
 	var current, plan string
 	var generation int
 	var raw, canaryRaw []byte

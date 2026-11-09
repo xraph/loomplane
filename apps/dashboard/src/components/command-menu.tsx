@@ -16,6 +16,7 @@ import {
   ActivityIcon,
   ApiKeysIcon,
   ApproveIcon,
+  AssistantIcon,
   CloudsIcon,
   DeploymentsIcon,
   InfrastructureIcon,
@@ -29,6 +30,7 @@ import {
   ShortcutsIcon,
   ThemeIcon,
   VariablesIcon,
+  WebhooksIcon,
 } from "@/components/icons"
 import { RunDot } from "@/components/runs"
 import { useShell } from "@/components/shell"
@@ -43,6 +45,7 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import { useAssistantAvailable } from "@/lib/agent-stream"
 import { analyzeItems, projectIDFromPath } from "@/lib/command-menu"
 import { repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -206,14 +209,18 @@ type Page = {
     | "/deployments"
     | "/projects"
     | "/services"
+    | "/services/catalog"
     | "/clouds"
     | "/infrastructure"
     | "/activity"
     | "/variables"
     | "/members"
     | "/notifications"
+    | "/notifications/settings"
+    | "/webhooks"
     | "/integrations"
-    | "/api-keys"
+    | "/integrations/resources"
+    | "/settings/api-keys"
   label: string
   icon: ReactNode
   search: string
@@ -247,8 +254,15 @@ const pages: Page[] = [
     to: "/services",
     label: "Services",
     icon: <ServicesIcon />,
-    search: "services catalog databases caches postgres redis",
+    search: "services deployed running managed",
     keys: "G S",
+  },
+  {
+    to: "/services/catalog",
+    label: "Service catalog",
+    icon: <ServicesIcon />,
+    search:
+      "services catalog databases caches postgres redis managed provider one click create deploy",
   },
   {
     to: "/clouds",
@@ -289,7 +303,19 @@ const pages: Page[] = [
     to: "/notifications",
     label: "Notifications",
     icon: <NotificationsIcon />,
-    search: "notifications inbox email webhooks",
+    search: "notifications inbox",
+  },
+  {
+    to: "/notifications/settings",
+    label: "Notification settings",
+    icon: <NotificationsIcon />,
+    search: "notification settings email preferences",
+  },
+  {
+    to: "/webhooks",
+    label: "Webhooks",
+    icon: <WebhooksIcon />,
+    search: "webhooks endpoints relay signing secret deliveries",
   },
   {
     to: "/integrations",
@@ -298,7 +324,13 @@ const pages: Page[] = [
     search: "integrations github catalog",
   },
   {
-    to: "/api-keys",
+    to: "/integrations/resources",
+    label: "Provider resources",
+    icon: <IntegrationsIcon />,
+    search: "resources provider managed inventory buckets databases sync",
+  },
+  {
+    to: "/settings/api-keys",
     label: "API keys",
     icon: <ApiKeysIcon />,
     search: "api keys tokens cli",
@@ -315,7 +347,9 @@ export function CommandMenu({
 }) {
   const navigate = useNavigate()
   const { can } = useOrganization()
-  const { openDeploy, openNewProject, openShortcuts } = useShell()
+  const { openAssistant, openDeploy, openNewProject, openShortcuts } =
+    useShell()
+  const assistant = useAssistantAvailable()
   const { theme, setTheme } = useTheme()
   const list = useQuery(useProjectsList)
   const projects = list.data?.projects ?? []
@@ -428,6 +462,18 @@ export function CommandMenu({
             <RepositoryActions projectID={projectID} onAnalyze={analyze} />
           )}
           <CommandGroup heading="Actions">
+            {assistant && (
+              <CommandItem
+                value="ask the agent ask agent assistant chat ai"
+                onSelect={run(() => openAssistant())}
+              >
+                <Entry
+                  icon={<AssistantIcon />}
+                  label="Ask the agent"
+                  keys="⌘J"
+                />
+              </CommandItem>
+            )}
             {can("deployment:create") && (
               <CommandItem
                 value="new deployment deploy plan"

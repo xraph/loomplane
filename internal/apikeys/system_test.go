@@ -36,3 +36,29 @@ func TestKeysNeverActAsTheAutomation(t *testing.T) {
 		t.Fatalf("a key resolved to %+v, %v", p, authErr)
 	}
 }
+
+func TestKeysNeverActAsTheAgent(t *testing.T) {
+	engine, err := keysmith.NewEngine(keysmith.WithStore(memory.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(engine, "app", nil, nil)
+	ada := security.Principal{UserID: "usr_ada", OrgID: "org"}
+	for _, p := range []security.Principal{security.AgentPrincipal("org", nil), security.AgentPrincipal("org", &ada)} {
+		if _, err = svc.Create(t.Context(), p, NewKey{Name: "ci", Access: Write}); !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("the agent made a key: %v", err)
+		}
+	}
+	expires := time.Now().Add(time.Hour)
+	res, err := engine.CreateKey(svc.tenant(t.Context(), "org"), &keysmith.CreateKeyInput{
+		Name: "forged", Prefix: Prefix, Environment: key.EnvLive, TenantID: "org",
+		CreatedBy: security.AgentSubject("org"), ExpiresAt: &expires,
+		Metadata: map[string]any{"access": string(Write)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, authErr := svc.Authenticate(t.Context(), res.RawKey); !errors.Is(authErr, ErrRejected) {
+		t.Fatalf("a key resolved to %+v, %v", p, authErr)
+	}
+}

@@ -14,6 +14,10 @@ import (
 
 func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput) (cloudprofiles.Target, error) {
 	after := before
+	if before.Runtime == platformRuntime {
+		// Loomplane Cloud's targets are the platform's to change.
+		return after, cloudprofiles.ErrPlatformOwned
+	}
 	if in.Provider != "" {
 		after.Provider = in.Provider
 	}
@@ -42,6 +46,10 @@ func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput
 		if after.ConnectionID == "" {
 			return after, errors.New("managed targets require a connection")
 		}
+	case platformRuntime:
+		// Only the platform makes a Loomplane Cloud target, and only on
+		// its own Cloud: no target becomes one.
+		return after, cloudprofiles.ErrPlatformOwned
 	default:
 		return after, errors.New("runtime must be managed or server")
 	}
@@ -109,7 +117,7 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			return nil, errors.New("selected pool connection is unavailable")
 		}
 		connection := options[ci]
-		result[b.Name] = CloudPlacement{Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes, GPUKind: placed.GPUKind, GPUs: placed.GPUs}
+		result[b.Name] = CloudPlacement{LocationID: target.LocationID, ManagedResourceID: target.ManagedResourceID, Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes, GPUKind: placed.GPUKind, GPUs: placed.GPUs}
 		planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: b.Name, Placement: *placed})
 	}
 	return result, nil
@@ -134,7 +142,7 @@ func prepareAcceptedPlans(sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snap
 		if err != nil {
 			return err
 		}
-		result, err := json.Marshal(Result{CloudSyncID: sync.ID, Actions: plan.Actions, Problems: plan.Problems, Warnings: plan.Warnings, Summary: plan.Summary, Executable: plan.Executable, Connections: plan.Connections})
+		result, err := json.Marshal(Result{CloudSyncID: sync.ID, RequiredRuntimeProtocol: plan.RequiredRuntimeProtocol, Actions: plan.Actions, Problems: plan.Problems, Warnings: plan.Warnings, Summary: plan.Summary, Executable: plan.Executable, Connections: plan.Connections})
 		if err != nil {
 			return err
 		}

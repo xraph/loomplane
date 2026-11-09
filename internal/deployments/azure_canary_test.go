@@ -1382,3 +1382,30 @@ func TestAzureTakeOverRefusesARevisionThatIsntUp(t *testing.T) {
 		}
 	}
 }
+
+// A canary that promotes staging's image runs it as the candidate and
+// builds nothing. The step only ever reaches ApplyCandidate for a
+// promotion: a rollback plan never ramps.
+func TestApplyCandidateReusesAnArtifactWithoutBuilding(t *testing.T) {
+	t.Parallel()
+	e := newAzureCanaryEnv(t)
+	reused := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789@sha256:" + strings.Repeat("a8", 32)
+	e.job.Resume = nil
+	messages := reusing(t, e.job, reused)
+	e.f.Lock()
+	tasks, uploads := len(e.f.Tasks), len(e.f.Uploads)
+	e.f.Unlock()
+	target := e.start(t)
+	if target.Image != reused || !slices.Contains(*messages, "Using the image staging ran") {
+		t.Fatalf("target %+v, progress %q", target, *messages)
+	}
+	e.f.Lock()
+	builtTasks, builtUploads := len(e.f.Tasks), len(e.f.Uploads)
+	e.f.Unlock()
+	if builtTasks != tasks || builtUploads != uploads {
+		t.Fatalf("built: tasks %d to %d, uploads %d to %d", tasks, builtTasks, uploads, builtUploads)
+	}
+	if cand := e.f.Revisions(e.app)[target.Candidate]; cand.Image != reused {
+		t.Fatalf("the candidate runs %q", cand.Image)
+	}
+}

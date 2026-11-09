@@ -131,7 +131,7 @@ func TestRuntime_waitsForNewGenerationBeforeAcceptingFailure(t *testing.T) {
 		return true, d, nil
 	})
 	r := &Runtime{Wait: 2 * time.Second}
-	if err := r.waitReady(t.Context(), &Client{Config: &Config{Namespace: "selected"}, Kube: kube}, applied); err != nil {
+	if err := r.waitReady(t.Context(), &Client{Config: &Config{Namespace: "selected"}, Kube: kube}, applied, r.readyWait(0)); err != nil {
 		t.Fatal(err)
 	}
 	if reads.Load() < 2 {
@@ -148,7 +148,7 @@ func TestRuntime_waitsThroughAutoscalerReplicaChange(t *testing.T) {
 	current.Spec.Replicas = &scaled
 	current.Status = appsv1.DeploymentStatus{ObservedGeneration: 3, UpdatedReplicas: 3, AvailableReplicas: 3}
 	kube := fake.NewClientset(current)
-	if err := (&Runtime{Wait: time.Second}).waitReady(t.Context(), &Client{Config: &Config{Namespace: "selected"}, Kube: kube}, applied); err != nil {
+	if err := (&Runtime{}).waitReady(t.Context(), &Client{Config: &Config{Namespace: "selected"}, Kube: kube}, applied, time.Second); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -501,4 +501,57 @@ func TestKubernetesFarpLabelRejectsUnsafeMetadata(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestKubernetesProgressDeadline(t *testing.T) {
+	kube := fake.NewClientset()
+	client := &Client{Config: &Config{Namespace: "selected"}, Kube: kube}
+	runtime := &Runtime{WaitReady: func(context.Context, *Client, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }}
+	spec := cpprovider.ServiceSpec{Name: "engine", Image: "registry.example/engine@sha256:fixture", Ports: []cpprovider.PortSpec{{Container: 8000, Protocol: "tcp"}}}
+	apply := func(timeout string) (*appsv1.Deployment, error) {
+		t.Helper()
+		labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelPublic: "false", owned.LabelHealth: "/health"}
+		if timeout != "" {
+			labels[owned.LabelStartTimeout] = timeout
+		}
+		iid := id.New(id.PrefixInstance)
+		if _, err := runtime.Apply(t.Context(), iid, spec, labels); err != nil {
+			return nil, err
+		}
+		return kube.AppsV1().Deployments("selected").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{})
+	}
+
+	deployment, err := apply("7200")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := deployment.Spec.ProgressDeadlineSeconds; d == nil || *d != 7260 {
+		t.Fatalf("progress deadline %v, want 7260", d)
+	}
+	if deployment, err = apply(""); err != nil || deployment.Spec.ProgressDeadlineSeconds != nil {
+		t.Fatalf("no start timeout keeps the cluster's default: %v, %v", deployment.Spec.ProgressDeadlineSeconds, err)
+	}
+
+	// Nothing is written for a start timeout out of bounds.
+	before := len(kube.Actions())
+	if _, err = apply("30"); err == nil {
+		t.Fatal("a 30 second start timeout was accepted")
+	}
+	for _, action := range kube.Actions()[before:] {
+		if action.GetVerb() != "get" && action.GetVerb() != "list" {
+			t.Fatalf("a refused start timeout changed the cluster: %v", action)
+		}
+	}
+
+	// The readiness wait, for a Deployment or a StatefulSet, is the start
+	// timeout when there is one.
+	if got := (&Runtime{Wait: time.Minute}).readyWait(2 * time.Hour); got != 2*time.Hour {
+		t.Fatalf("readiness wait %s", got)
+	}
+	if got := (&Runtime{Wait: time.Minute}).readyWait(0); got != time.Minute {
+		t.Fatalf("readiness wait without a start timeout %s", got)
+	}
+	if got := (&Runtime{}).readyWait(0); got != 3*time.Minute {
+		t.Fatalf("default readiness wait %s", got)
+	}
 }

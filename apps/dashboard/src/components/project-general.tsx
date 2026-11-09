@@ -5,11 +5,12 @@ import { messageOf } from "@/client/errors"
 import { useProjectsUpdate } from "@/client/forge/loomplane/hooks"
 import type { Project } from "@/client/forge/loomplane/types"
 import { useMutation } from "@/client/hooks"
+import { CloudCallout } from "@/components/cloud-targets/cloud-page"
+import { CloudSectionHead } from "@/components/cloud-targets/infrastructure-ui"
 import {
   ProjectColorPicker,
   ProjectIconPicker,
 } from "@/components/project-style-picker"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Field,
@@ -111,19 +112,16 @@ export function ProjectGeneral({
   }
 
   return (
-    <section
-      aria-labelledby="project-general"
-      className="rounded-xl bg-card px-4 py-3.5 ring-1 ring-border"
-    >
-      <h2 id="project-general" className="text-[14px] font-semibold">
-        General
-      </h2>
-      <p className="mt-0.5 mb-3 text-[12.5px] text-muted-foreground">
-        What your team calls the project and how its tile looks. Renaming it
-        keeps its slug, so URLs and anything keyed on it still work.
-      </p>
-      <form onSubmit={submit}>
-        <FieldGroup>
+    <section aria-label="General" className="grid gap-2.5">
+      <CloudSectionHead
+        title="General"
+        description="What your team calls the project and how its tile looks. Renaming it keeps its slug, so URLs and anything keyed on it still work."
+      />
+      <form
+        onSubmit={submit}
+        className="overflow-hidden rounded-xl bg-card ring-1 ring-border"
+      >
+        <FieldGroup className="p-4">
           <Field data-invalid={nameMissing}>
             <FieldLabel htmlFor="project-name">Name</FieldLabel>
             <Input
@@ -179,31 +177,27 @@ export function ProjectGeneral({
               </Field>
             </>
           )}
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          {mayEdit && (
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!dirty || update.isPending}
-                onClick={reset}
-              >
-                Reset
-              </Button>
-              <Button
-                type="submit"
-                disabled={!dirty || nameMissing || update.isPending}
-              >
-                {update.isPending && <Spinner />}
-                Save changes
-              </Button>
-            </div>
-          )}
+          {error && <CloudCallout tone="error" title={error} />}
         </FieldGroup>
+        {mayEdit && (
+          <div className="flex flex-wrap justify-end gap-2 border-t bg-muted/40 px-4 py-3">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!dirty || update.isPending}
+              onClick={reset}
+            >
+              Reset
+            </Button>
+            <Button
+              type="submit"
+              disabled={!dirty || nameMissing || update.isPending}
+            >
+              {update.isPending && <Spinner />}
+              Save
+            </Button>
+          </div>
+        )}
       </form>
     </section>
   )

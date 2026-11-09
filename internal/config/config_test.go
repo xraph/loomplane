@@ -67,6 +67,57 @@ func TestFromSource_emptyValuesKeepDefaults(t *testing.T) {
 	}
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+func TestFromSource_waitlist(t *testing.T) {
+	tests := []struct {
+		name string
+		src  mapGetter
+		want *bool
+	}{
+		{"unset", mapGetter{"database.url": testDSN}, nil},
+		{"empty", mapGetter{"database.url": testDSN, "identity.waitlist": ""}, nil},
+		{"true", mapGetter{"database.url": testDSN, "identity.waitlist": "true"}, boolPtr(true)},
+		{"off", mapGetter{"database.url": testDSN, "identity.waitlist": "off"}, boolPtr(false)},
+		{"native bool", mapGetter{"database.url": testDSN, "identity.waitlist": false}, boolPtr(false)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := FromSource(tt.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := c.Identity.Waitlist
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Fatalf("waitlist = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	_, err := FromSource(mapGetter{"database.url": testDSN, "identity.waitlist": "maybe"})
+	if err == nil || !strings.Contains(err.Error(), "identity.waitlist") {
+		t.Fatalf("error %v, want it to mention identity.waitlist", err)
+	}
+}
+
+func TestFromSource_consolePath(t *testing.T) {
+	if got := Defaults().Console.Path; got != "/__console" {
+		t.Fatalf("default console path = %q", got)
+	}
+	for _, p := range []string{"/api/x", "/", "/__a/b", "__console", "/console"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, "console.path": p})
+		if err == nil || !strings.Contains(err.Error(), "console.path") {
+			t.Errorf("console.path %q: error %v, want it to mention console.path", p, err)
+		}
+	}
+	c, err := FromSource(mapGetter{"database.url": testDSN, "console.path": "/__ops-7f3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Console.Path != "/__ops-7f3" {
+		t.Fatalf("console path = %q", c.Console.Path)
+	}
+}
+
 func TestFromSource_rejects(t *testing.T) {
 	tests := []struct {
 		name string
@@ -153,6 +204,53 @@ func TestLoad_poolSizeFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoad_analysisConcurrencyFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 2},
+		{"set", "1", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_ANALYSIS_CONCURRENCY", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Analysis.Concurrency != tt.want {
+				t.Fatalf("analysis concurrency %d, want %d", c.Analysis.Concurrency, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_analysisConcurrencyZeroFailsValidation(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err = os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+	t.Setenv("LOOMPLANE_ANALYSIS_CONCURRENCY", "0")
+	_, err = Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "analysis.concurrency must be at least 1") {
+		t.Fatalf("Load error %v, want analysis.concurrency must be at least 1", err)
+	}
+}
+
 func TestLoad_requiresConfigFile(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load succeeded without config.yaml")
@@ -225,5 +323,117 @@ func TestFromSource_endpointDeniedCIDRs(t *testing.T) {
 		if _, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v}); err == nil || !strings.Contains(err.Error(), "planning.endpoint_denied_cidrs") {
 			t.Fatalf("%#v: %v", v, err)
 		}
+	}
+}
+
+func TestConfig_bitbucket(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if c.Bitbucket.APIURL != "https://api.bitbucket.org/2.0" || c.Bitbucket.WebURL != "https://bitbucket.org" {
+		t.Errorf("defaults %+v", c.Bitbucket)
+	}
+	if c.Bitbucket.Configured() {
+		t.Error("a default config shouldn't have a Bitbucket consumer")
+	}
+
+	c, err = FromSource(mapGetter{
+		"database.url":            testDSN,
+		"bitbucket.api_url":       "https://bb.example.com/2.0",
+		"bitbucket.web_url":       "https://bb.example.com",
+		"bitbucket.client_id":     "key",
+		"bitbucket.client_secret": "secret",
+	})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if c.Bitbucket.APIURL != "https://bb.example.com/2.0" || c.Bitbucket.WebURL != "https://bb.example.com" || !c.Bitbucket.Configured() {
+		t.Errorf("overrides %+v", c.Bitbucket)
+	}
+
+	for name, src := range map[string]mapGetter{
+		"client_id without client_secret": {"database.url": testDSN, "bitbucket.client_id": "key"},
+		"client_secret without client_id": {"database.url": testDSN, "bitbucket.client_secret": "secret"},
+	} {
+		_, err := FromSource(src)
+		if err == nil || !strings.Contains(err.Error(), "bitbucket.client_id and client_secret") {
+			t.Errorf("%s: error %v, want it to say both are needed", name, err)
+		}
+	}
+	for _, key := range []string{"bitbucket.api_url", "bitbucket.web_url"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, key: "bitbucket"})
+		if err == nil || !strings.Contains(err.Error(), key+" must be an absolute URL") {
+			t.Errorf("%s: error %v", key, err)
+		}
+	}
+}
+
+func TestConfig_gitLabDefaults(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GitLab.APIURL != "https://gitlab.com" || !c.GitLab.AllowOrganizationHosts || len(c.GitLab.Hosts) != 0 {
+		t.Fatalf("GitLab defaults %+v", c.GitLab)
+	}
+	c, err = FromSource(mapGetter{
+		"database.url":                    testDSN,
+		"gitlab.client_id":                "id",
+		"gitlab.client_secret":            "secret",
+		"gitlab.allow_organization_hosts": "no",
+		"gitlab.webhook_url":              "https://hooks.example.com/gitlab",
+		"gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.corp.example", "client_id": "a", "client_secret": "b"},
+			map[string]any{"web_url": "http://127.0.0.1:9000"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := c.GitLab
+	if g.ClientID != "id" || g.ClientSecret != "secret" || g.AllowOrganizationHosts || g.WebhookURL != "https://hooks.example.com/gitlab" ||
+		len(g.Hosts) != 2 || g.Hosts[0] != (GitLabHostConfig{WebURL: "https://git.corp.example", ClientID: "a", ClientSecret: "b"}) ||
+		g.Hosts[1].WebURL != "http://127.0.0.1:9000" {
+		t.Fatalf("GitLab settings %+v", g)
+	}
+}
+
+func TestConfig_gitLabHostValidation(t *testing.T) {
+	host := func(m map[string]any) mapGetter {
+		return mapGetter{"database.url": testDSN, "gitlab.hosts": []any{m}}
+	}
+	tests := []struct {
+		name string
+		src  mapGetter
+		want string
+	}{
+		{"client id without secret", host(map[string]any{"web_url": "https://git.example.com", "client_id": "a"}), "client_secret"},
+		{"client secret without id", host(map[string]any{"web_url": "https://git.example.com", "client_secret": "b"}), "client_id"},
+		{"sub-path web url", host(map[string]any{"web_url": "https://example.com/gitlab"}), "web_url"},
+		{"no web url", host(map[string]any{"client_id": "a", "client_secret": "b"}), "web_url"},
+		{"the same host twice", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.example.com"}, map[string]any{"web_url": "HTTPS://Git.Example.com/"},
+		}}, "twice"},
+		{"the same host over http and https", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "http://git.example.com"}, map[string]any{"web_url": "https://git.example.com"},
+		}}, "twice"},
+		{"the same host with its default port", mapGetter{"database.url": testDSN, "gitlab.hosts": []any{
+			map[string]any{"web_url": "https://git.example.com"}, map[string]any{"web_url": "https://git.example.com:443"},
+		}}, "twice"},
+		{"gitlab.com id without secret", mapGetter{"database.url": testDSN, "gitlab.client_id": "a"}, "gitlab.client_secret"},
+		{"relative api url", mapGetter{"database.url": testDSN, "gitlab.api_url": "gitlab.com"}, "gitlab.api_url"},
+		{"relative webhook url", mapGetter{"database.url": testDSN, "gitlab.webhook_url": "/hook"}, "gitlab.webhook_url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := FromSource(tt.src)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("FromSource = %v, want an error mentioning %q", err, tt.want)
+			}
+		})
+	}
+	if _, err := FromSource(host(map[string]any{"web_url": "https://git.example.com", "client_id": "a", "client_secret": "b"})); err != nil {
+		t.Fatalf("a complete host should pass: %v", err)
 	}
 }

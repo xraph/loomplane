@@ -307,6 +307,7 @@ func TestAcceptanceInfrastructure(t *testing.T) {
 		t.Fatal("invalid acceptance ownership record")
 	}
 	credential, settings := fixtureSSH(t, state)
+	settings["build_workers"] = "dedicated"
 	kubeconfig, err := os.ReadFile(state.Kubeconfig)
 	if err != nil {
 		t.Fatal(err)
@@ -341,11 +342,7 @@ func TestAcceptanceInfrastructure(t *testing.T) {
 	browser := startInfrastructureBrowser(t, r.srv.URL, path)
 	defer browser.close()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "acceptance@example.test", "password": "Acceptance-Build-logs-42"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "acceptance@example.test", "Acceptance-Build-logs-42")
 	var org struct {
 		ID string `json:"id"`
 	}

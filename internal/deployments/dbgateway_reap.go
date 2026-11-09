@@ -47,6 +47,8 @@ type reapedEnvironment struct {
 	org, id, name string
 	gateways      []dbgateway.Gateway
 	bindings      []*planning.Binding
+	// single is a deletion of the environment alone, not of its project.
+	single bool
 }
 
 // Reap implements projects.Reaper. It reads the gateways and gateway

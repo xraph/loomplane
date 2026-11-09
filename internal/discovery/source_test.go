@@ -1,9 +1,12 @@
 package discovery
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 func TestValidAlias(t *testing.T) {
@@ -108,14 +111,32 @@ func TestRootsOverlap(t *testing.T) {
 
 func TestParseRepository(t *testing.T) {
 	for _, in := range []string{"acme/mono", " https://github.com/acme/mono.git ", "git@github.com:acme/mono.git", "github.com/acme/mono"} {
-		repo, err := ParseRepository(in)
+		repo, err := ParseRepository(context.Background(), repositories.Hosts{}, org, in)
 		if err != nil || repo.FullName() != "acme/mono" {
 			t.Errorf("ParseRepository(%q) = %v, %v", in, repo, err)
 		}
 	}
-	for _, in := range []string{"https://gitlab.com/acme/mono", "acme", ""} {
-		if _, err := ParseRepository(in); err == nil {
+	for _, in := range []string{"https://git.example.com/acme/mono", "acme", ""} {
+		if _, err := ParseRepository(context.Background(), repositories.Hosts{}, org, in); err == nil {
 			t.Errorf("ParseRepository(%q) succeeded", in)
 		}
+	}
+}
+
+func TestParseRepository_hostQualified(t *testing.T) {
+	ctx := context.Background()
+	for in, key := range map[string]string{
+		"acme/api":                       "acme/api",
+		"https://bitbucket.org/Acme/API": "bitbucket.org/acme/api",
+		"bitbucket.org/acme/api":         "bitbucket.org/acme/api",
+		"git@bitbucket.org:acme/api.git": "bitbucket.org/acme/api",
+	} {
+		repo, err := ParseRepository(ctx, repositories.Hosts{}, org, in)
+		if err != nil || repo.Key() != key {
+			t.Errorf("ParseRepository(%q) = %+v, %v; want key %q", in, repo, err, key)
+		}
+	}
+	if _, err := ParseRepository(ctx, repositories.Hosts{}, org, "bitbucket.org/acme"); !errors.Is(err, repositories.ErrInvalidURL) {
+		t.Errorf("a Bitbucket workspace alone: %v", err)
 	}
 }

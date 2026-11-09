@@ -23,7 +23,7 @@ func (s *Service) PrepareCompensationRoutes(ctx context.Context, p security.Prin
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
 		}
-		prepared, readErr := st.RouteOperation(ctx, p.OrgID, releasePrepareID(in.Key, source.ID))
+		prepared, readErr := st.RouteOperation(ctx, p.OrgID, ReleasePrepareID(in.Key, source.ID))
 		if errors.Is(readErr, ErrNotFound) {
 			continue
 		}
@@ -148,11 +148,12 @@ func (s *Service) ReconcileCompensationRoutes(ctx context.Context, p security.Pr
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
 		}
-		// A Kubernetes route was never handed off, as in ReconcileReleaseRoutes.
-		if source.Binding.BackendName() == RouteBackendKubernetes {
+		// A Kubernetes or platform route was never handed off, as in
+		// ReconcileReleaseRoutes.
+		if noServerIngress(source) {
 			continue
 		}
-		preparedID := releasePrepareID(in.Key, source.ID)
+		preparedID := ReleasePrepareID(in.Key, source.ID)
 		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: preparedID}
 		prepared, readErr := st.RouteOperation(ctx, p.OrgID, preparedID)
 		if errors.Is(readErr, ErrNotFound) {

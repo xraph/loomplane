@@ -93,6 +93,7 @@ import {
   routeCountLabel,
 } from "@/lib/octopus"
 import { useOrganization } from "@/lib/organization"
+import { operationRecords } from "@/lib/routable-ports"
 import { Link } from "@/lib/router"
 
 export function DomainsPanel(props: CatalogPanelProps) {
@@ -540,7 +541,7 @@ function AttachDialog({
     preview.for.hostname === value.hostname
       ? preview.op
       : undefined
-  const record = current?.desiredRecord
+  const records = current ? operationRecords(current) : []
 
   const run = async () => {
     setError("")
@@ -603,7 +604,7 @@ function AttachDialog({
                 out.
               </span>
             </div>
-            {record?.value && (
+            {records.some((r) => r.value) && (
               <div
                 role="group"
                 aria-labelledby={`${ids}-record`}
@@ -613,14 +614,19 @@ function AttachDialog({
                   id={`${ids}-record`}
                   className="text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase"
                 >
-                  DNS record
+                  {records.length > 1 ? "DNS records" : "DNS record"}
                 </span>
-                <span className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[12.5px] leading-relaxed break-all">
-                  {/* The server names records relative to the zone. */}
-                  <span>{record.name || "@"}</span>
-                  <span className="text-muted-foreground">{record.type}</span>
-                  <span>{record.value}</span>
-                </span>
+                {records.map((record) => (
+                  <span
+                    key={`${record.type}-${record.value}`}
+                    className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[12.5px] leading-relaxed break-all"
+                  >
+                    {/* The server names records relative to the zone. */}
+                    <span>{record.name || "@"}</span>
+                    <span className="text-muted-foreground">{record.type}</span>
+                    <span>{record.value}</span>
+                  </span>
+                ))}
               </div>
             )}
             {shown && (

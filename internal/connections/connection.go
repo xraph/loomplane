@@ -22,6 +22,7 @@ const (
 	DigitalOcean = "digitalocean"
 	Azure        = "azure"
 	Server       = "server"
+	Firecracker  = "firecracker"
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"
 	Cloudflare   = "cloudflare"
@@ -46,12 +47,15 @@ func CloudTitle(cloud string) string { return cloudTitle(cloud) }
 // signed in to the cloud. A keyless connection has none: the cloud trusts
 // Loomplane's own tokens, and Vault holds nothing for it. Nor does an
 // in-cluster one, which reaches the Kubernetes cluster Loomplane runs in
-// as Loomplane's own service account.
+// as Loomplane's own service account, or a node one, which reaches a
+// joined node through its own streams. Both of those get a marker
+// Loomplane makes on read, and neither marker is ever taken pasted.
 const (
 	MethodToken     = "token"
 	MethodOAuth     = "oauth"
 	MethodKeyless   = "keyless"
 	MethodInCluster = "in_cluster"
+	MethodNode      = "node"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone
@@ -81,6 +85,9 @@ var (
 	ErrAppLocked = errors.New("this cloud's sign-in app is set in Loomplane's configuration")
 	// ErrNoApp is a sign-in for a cloud with no app.
 	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
+	// ErrAppChanged is a signed-in connection whose sign-in app is no
+	// longer the one it signed in with, so its grant can't be renewed.
+	ErrAppChanged = errors.New("this cloud's sign-in app changed")
 )
 
 // DetailCanaryMissing is the detail listing, comma separated, what a
@@ -98,7 +105,7 @@ type Connection struct {
 	OrgID      string `json:"org_id"`
 	Cloud      string `json:"cloud"`
 	Name       string `json:"name"`
-	// Method is token, oauth, keyless or in_cluster. Empty means token.
+	// Method is token, oauth, keyless, in_cluster or node. Empty means token.
 	Method string `json:"method"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
@@ -120,9 +127,13 @@ type Connection struct {
 	CreatedBy string     `json:"created_by"`
 	// SignedInBy is the Loomplane user who signed in to the cloud, for a
 	// connection made that way. Empty for a pasted token.
-	SignedInBy string    `json:"signed_in_by,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	SignedInBy string `json:"signed_in_by,omitempty"`
+	// OAuthClientID is the client ID of the sign-in app this connection's
+	// grant came from. Empty for a pasted token and for a connection that
+	// predates it.
+	OAuthClientID string    `json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (c *Connection) normalize() {

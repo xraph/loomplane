@@ -10,6 +10,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -22,16 +23,25 @@ type CatalogKindList struct {
 }
 
 // catalogKindList describes every engine and kind in the registry: the
-// five built-in engines first, then the registered ones.
-func catalogKindList(r *recipes.Registry) CatalogKindList {
-	return CatalogKindList{Kinds: r.Kinds()}
+// five built-in engines first, then the registered ones. A kind of a
+// server feature that's off isn't listed; nil features have every
+// feature off.
+func catalogKindList(r *recipes.Registry, features map[string]bool) CatalogKindList {
+	kinds := r.Kinds()
+	return CatalogKindList{Kinds: slices.DeleteFunc(kinds, func(k recipes.KindInfo) bool {
+		return k.Feature != "" && !features[k.Feature]
+	})}
 }
 
 func (e *Extension) listCatalogKinds(c forge.Context) error {
 	if _, err := principal(c); err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, catalogKindList(recipes.Default()))
+	kinds := e.catalogKinds
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	return c.JSON(http.StatusOK, catalogKindList(kinds, e.features))
 }
 
 // EndpointList is the body of GET /api/v1/catalog/endpoints.
@@ -134,8 +144,10 @@ func (e *Extension) checkEndpoint(c forge.Context, p security.Principal, in cata
 	if kinds == nil {
 		kinds = recipes.Default()
 	}
+	// A kind of a server feature that's off is refused as unknown, the
+	// way the catalog list leaves it out.
 	kind, ok := kinds.Kind(in.Kind)
-	if !ok {
+	if !ok || kind.Feature != "" && !e.features[kind.Feature] {
 		return catalogconnect.CheckResult{}, fmt.Errorf("%w: Loomplane has no catalog kind %q", catalogconnect.ErrInvalid, in.Kind)
 	}
 	i := slices.IndexFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == in.Dependency })
@@ -172,8 +184,10 @@ func (e *Extension) checkEndpoint(c forge.Context, p security.Principal, in cata
 	result := report.Result()
 	// A cluster has nothing inside it to dial from, so its check runs from
 	// Loomplane, as a plan's does.
-	if cloud, cerr := e.endpointDialer.TargetCloud(ctx, p.OrgID, in.Target); cerr == nil && cloud == connections.Kubernetes {
-		result.Notes = append(result.Notes, "Checked from Loomplane, not from inside the cluster.")
+	if cloud, cerr := e.endpointDialer.TargetCloud(ctx, p.OrgID, in.Target); cerr == nil {
+		if note := planning.ResourceCheckNote(cloud); note != "" {
+			result.Notes = append(result.Notes, note)
+		}
 	}
 	return result, nil
 }

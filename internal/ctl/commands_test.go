@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/xraph/forge/cli"
 
 	"github.com/xraph/loomplane/pkg/client"
@@ -224,5 +226,161 @@ func TestPlanPrintsTheRelease(t *testing.T) {
 				t.Errorf("%s: the refusal is hidden:\n%s", tc.name, got)
 			}
 		}
+	}
+}
+
+// mcpAgent connects an MCP client to loomctl's MCP server over a fake API.
+func mcpAgent(t *testing.T, handler http.HandlerFunc, opts MCPOptions) *mcp.ClientSession {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := NewMCPServer(client.New(srv.URL, "lp_test_key"), "test", opts).Connect(t.Context(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil).Connect(t.Context(), ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any, out any) {
+	t.Helper()
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("%s: %+v", name, res.Content)
+	}
+	data, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		t.Fatalf("%s: %v in %s", name, err, data)
+	}
+}
+
+func TestMCP_createPlanTakesFrom(t *testing.T) {
+	api := &releaseAPI{}
+	cs := mcpAgent(t, api.handler(t), MCPOptions{})
+	var plan client.Plan
+	callTool(t, cs, "create_plan", map[string]any{"project": "shop", "environment": "production", "from": "staging"}, &plan)
+	if want := map[string]any{"environment": "production", "from": "staging"}; !reflect.DeepEqual(api.bodies["/api/v1/projects/proj_1/plans"], want) {
+		t.Fatalf("plans.create body %v", api.bodies)
+	}
+	if plan.ID != "plan_1" || plan.Kind != "promotion" || plan.From != "staging" {
+		t.Fatalf("plan %+v", plan)
+	}
+}
+
+func TestMCP_rollbackNeedsAllowDeploy(t *testing.T) {
+	tool := func(cs *mcp.ClientSession, name string) *mcp.Tool {
+		res, err := cs.ListTools(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tl := range res.Tools {
+			if tl.Name == name {
+				return tl
+			}
+		}
+		return nil
+	}
+	if tool(mcpAgent(t, (&releaseAPI{}).handler(t), MCPOptions{}), "create_rollback") != nil {
+		t.Fatal("create_rollback is offered without --allow-deploy")
+	}
+
+	api := &releaseAPI{}
+	cs := mcpAgent(t, api.handler(t), MCPOptions{AllowDeploy: true})
+	tl := tool(cs, "create_rollback")
+	if tl == nil || tl.Annotations == nil || tl.Annotations.DestructiveHint == nil || !*tl.Annotations.DestructiveHint {
+		t.Fatalf("create_rollback %+v", tl)
+	}
+	var plan client.Plan
+	callTool(t, cs, "create_rollback", map[string]any{"project": "shop", "environment": "production", "reason": "5xx", "deployment_id": "dep_3"}, &plan)
+	if want := map[string]any{"environment": "production", "reason": "5xx", "deployment_id": "dep_3"}; !reflect.DeepEqual(api.bodies["/api/v1/projects/proj_1/rollbacks"], want) {
+		t.Fatalf("rollbacks.create body %v", api.bodies)
+	}
+	// It waits until the plan is planned, and approves nothing.
+	if plan.ID != "plan_r" || plan.Status != "ready" || len(plan.Leftovers) != 1 || api.approved {
+		t.Fatalf("plan %+v, approved %v", plan, api.approved)
+	}
+}
+
+func TestMCP_getReleaseWatch(t *testing.T) {
+	api := &releaseAPI{watch: watchJSON("watching", "", "", "", false, `[{"name":"api","provider":"render","verdict":"pass","reason":"","op":"update"}]`)}
+	// Read-only: offered without --allow-deploy.
+	cs := mcpAgent(t, api.handler(t), MCPOptions{})
+	res, err := cs.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *mcp.Tool
+	for _, tl := range res.Tools {
+		if tl.Name == "get_release_watch" {
+			found = tl
+		}
+	}
+	if found == nil || found.Annotations == nil || !found.Annotations.ReadOnlyHint {
+		t.Fatalf("get_release_watch %+v", found)
+	}
+	var w client.ReleaseWatch
+	callTool(t, cs, "get_release_watch", map[string]any{"deployment_id": "dep_9"}, &w)
+	if w.ID != "rw_1" || w.Status != client.WatchWatching || len(w.Services) != 1 || w.Services[0].Verdict != "pass" {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+func TestNodeCommandsAreMounted(t *testing.T) {
+	var out bytes.Buffer
+	app := New(Options{Out: &out, Getenv: func(string) string { return "" }, ConfigPath: t.TempDir() + "/none.json"})
+	var node cli.Command
+	for _, c := range app.commands() {
+		if c.Name() == "node" {
+			node = c
+		}
+	}
+	if node == nil {
+		t.Fatal("loomctl has no node command")
+	}
+	subs := make([]string, 0, len(node.Subcommands()))
+	for _, s := range node.Subcommands() {
+		subs = append(subs, s.Name())
+	}
+	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke"} {
+		if !slices.Contains(subs, want) {
+			t.Errorf("node %s is missing; have %v", want, subs)
+		}
+	}
+	if err := app.Run([]string{"node", "status", "--state-dir", t.TempDir() + "/state"}); err != nil {
+		t.Fatalf("node status: %v", err)
+	}
+	if !strings.Contains(out.String(), "Not joined") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestNodeListUsesTheSavedLogin(t *testing.T) {
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"nodes":[{"id":"node_1","name":"web-1","status":"online"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	cfg := t.TempDir() + "/loomctl.json"
+	var out bytes.Buffer
+	app := New(Options{Out: &out, Getenv: func(string) string { return "" }, ConfigPath: cfg})
+	if err := app.save(Settings{URL: srv.URL, Key: "lp_test_saved"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Run([]string{"node", "list"}); err != nil {
+		t.Fatalf("node list: %v", err)
+	}
+	if auth != "Bearer lp_test_saved" || !strings.Contains(out.String(), "web-1") {
+		t.Fatalf("auth %q, output:\n%s", auth, out.String())
 	}
 }

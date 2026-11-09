@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/graph"
@@ -13,19 +12,17 @@ import (
 	"github.com/xraph/loomplane/internal/telemetry"
 )
 
-// Fetcher reads a repository at one commit. *repositories.GitHub is the
-// real one.
+// Fetcher reads a repository at one commit. repositories.Readers is the
+// real one, and picks the reader by the repository's host.
 type Fetcher interface {
 	Resolve(ctx context.Context, repo repositories.Repository, ref, token string) (string, error)
 	Fetch(ctx context.Context, repo repositories.Repository, sha, token, dest string) (repositories.Stats, error)
 }
 
 // TokenSource gives a short-lived token that reads one repository for one
-// organization, or "" to read it anonymously. Loomplane's comes from the
-// organization's GitHub App installation.
-type TokenSource interface {
-	Token(ctx context.Context, orgID string, repo repositories.Repository) (string, error)
-}
+// organization, or "" to read it anonymously. repositories.Tokens is the
+// real one; GitHub's comes from the organization's App installation.
+type TokenSource = repositories.TokenSource
 
 // Runner runs analyses: the worker side of an analysis job. It never runs
 // anything from the repository, only reads it.
@@ -83,14 +80,12 @@ func (r *Runner) Run(ctx context.Context, orgID, analysisID string) error {
 }
 
 func (r *Runner) analyze(ctx context.Context, a *Analysis) error {
-	owner, name, ok := strings.Cut(a.Repository, "/")
-	if !ok {
-		return fmt.Errorf("%w: repository %q", repositories.ErrInvalidURL, a.Repository)
+	repo, err := repositories.ParseKey(a.Repository)
+	if err != nil {
+		return fmt.Errorf("%w: repository %q", err, a.Repository)
 	}
-	repo := repositories.Repository{Owner: owner, Name: name}
 	token := ""
 	if r.tokens != nil {
-		var err error
 		if token, err = r.tokens.Token(ctx, a.OrgID, repo); err != nil {
 			return fmt.Errorf("repository access: %w", err)
 		}
@@ -128,13 +123,20 @@ func permanent(err error) bool {
 	return errors.Is(err, repositories.ErrNotFound) ||
 		errors.Is(err, repositories.ErrTooLarge) ||
 		errors.Is(err, repositories.ErrInvalidURL) ||
-		errors.Is(err, repositories.ErrUnsupportedHost)
+		errors.Is(err, repositories.ErrUnsupportedHost) ||
+		errors.Is(err, repositories.ErrGitLabSignInLapsed)
 }
 
 // reason is what a person sees for a failed analysis: the cause in
 // Loomplane's words when it's one Loomplane knows, the error itself when
 // it isn't.
 func reason(err error) string {
+	// A lapsed GitLab sign-in says whose it is and where, which is what
+	// someone needs to sign in again.
+	var lapsed *repositories.GitLabSignInLapsedError
+	if errors.As(err, &lapsed) {
+		return lapsed.Error()
+	}
 	for _, known := range []error{
 		repositories.ErrNotFound, repositories.ErrTooLarge, repositories.ErrInvalidURL,
 		repositories.ErrUnsupportedHost, repositories.ErrRateLimited,

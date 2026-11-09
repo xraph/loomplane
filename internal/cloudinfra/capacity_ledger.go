@@ -24,14 +24,17 @@ func (e *CapacityAdmissionError) Error() string {
 }
 
 type infrastructureReservation struct {
-	OperationID string         `json:"operation_id"`
-	Provider    string         `json:"provider"`
-	AccountID   string         `json:"account_id"`
-	ServerID    string         `json:"server_id"`
-	PoolID      string         `json:"pool_id"`
-	Delta       ResourceVector `json:"delta"`
-	Target      ResourceVector `json:"target"`
-	CreatedAt   time.Time      `json:"created_at"`
+	LegacyAttempt      bool           `json:"legacy_attempt,omitempty"`
+	ClusterOperationID string         `json:"cluster_operation_id,omitempty"`
+	ManagedResourceID  string         `json:"managed_resource_id,omitempty"`
+	OperationID        string         `json:"operation_id"`
+	Provider           string         `json:"provider"`
+	AccountID          string         `json:"account_id"`
+	ServerID           string         `json:"server_id"`
+	PoolID             string         `json:"pool_id"`
+	Delta              ResourceVector `json:"delta"`
+	Target             ResourceVector `json:"target"`
+	CreatedAt          time.Time      `json:"created_at"`
 }
 
 // Organization serialization also covers accounts shared by several Clouds.
@@ -39,6 +42,9 @@ type infrastructureReservation struct {
 func lockCapacityCloud(ctx context.Context, tx driver.Tx, org, cloud string) error {
 	if err := cloudprofiles.LockOrganization(ctx, tx, org); err != nil {
 		return err
+	}
+	if _, checkErr := tx.Exec(ctx, `SELECT loomplane_cluster_controls_current($1,'')`, org); checkErr != nil {
+		return checkErr
 	}
 	var id string
 	return storeError(tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, cloud).Scan(&id))
@@ -103,12 +109,15 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	if err := lockCapacityCloud(ctx, tx, d.OrgID, d.CloudID); err != nil {
 		return nil, err
 	}
+	if checkErr := cloudprofiles.ValidateLocationReviewTx(ctx, tx, d.OrgID, d.ProjectID, d.LocationReview, time.Now()); checkErr != nil {
+		return nil, checkErr
+	}
 	p, err := capacityPolicyTx(ctx, tx, d.OrgID, d.CloudID)
 	if err != nil {
 		return nil, err
 	}
 	if p.Revision == 0 {
-		return nil, nil
+		return legacyClusterPolicyGate(ctx, tx, d.OrgID, d.CloudID, operationID)
 	}
 	if d.PolicyRevision != 0 && d.PolicyRevision != p.Revision {
 		return capacityBlock(p, d, "review_required", "policy"), nil
@@ -116,6 +125,19 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	o, err := scanOperation(tx.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, d.OrgID, d.CloudID, operationID))
 	if err != nil {
 		return nil, err
+	}
+	if p.Budget != nil {
+		reviewMoney, priceErr := serverBudgetMoney(ctx, tx, o)
+		if priceErr != nil {
+			return nil, priceErr
+		}
+		review, e := scopedBudgetReviewTx(ctx, tx, o.OrgID, o.CloudID, o.Provider, o.AccountID, o.ID, reviewMoney, p, nil)
+		if e != nil {
+			return nil, e
+		}
+		if e := checkBudgetReview(p, o.BudgetReview, review, o.Input.AcknowledgeUnknownCosts); e != nil {
+			return nil, e
+		}
 	}
 	var existing []byte
 	var reservationStatus string
@@ -169,7 +191,7 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	}
 	used := capacityResources(ResourceVector{})
 	for _, r := range records {
-		if !freshCapacity(r.CheckedAt, time.Now()) {
+		if !freshCapacityRecord(r, time.Now()) {
 			return capacityBlock(p, d, "stale_inventory", "inventory"), nil
 		}
 		if r.Observation != nil && r.ServerID != "" {
@@ -217,6 +239,14 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 				return nil, err
 			}
 		}
+	}
+	localEnvelope, accountEnvelope, err := envelopeUsage(ctx, tx, d.OrgID, d.CloudID, o.Provider, o.AccountID, operationID)
+	if err != nil {
+		return nil, err
+	}
+	used, err = sumResources(used, capacityResources(localEnvelope))
+	if err != nil {
+		return nil, err
 	}
 	if b := checkCapacityLimit(p, d, used, delta, capacityResources(p.Limits), "hard_limit"); b != nil {
 		return b, nil
@@ -303,6 +333,13 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		if !freshCapacity(account.CheckedAt, time.Now()) {
 			return capacityBlock(p, d, "stale_inventory", "account"), nil
 		}
+		unknown, checkErr := unresolvedLegacyCapacity(ctx, tx, d.OrgID, o.Provider, o.AccountID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if unknown {
+			return capacityBlock(p, d, "stale_inventory", "account"), nil
+		}
 		accountUsed := account.Provisioned
 		for _, r := range reservations {
 			if r.reservation.Provider == o.Provider && r.reservation.AccountID == o.AccountID {
@@ -311,6 +348,10 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 					return nil, err
 				}
 			}
+		}
+		accountUsed, err = sumResources(accountUsed, capacityResources(accountEnvelope))
+		if err != nil {
+			return nil, err
 		}
 		// Adoption changes Cloud attribution, but does not consume provider quota.
 		if o.Input.Kind != "adopt" {
@@ -367,15 +408,23 @@ func capacityRecordsTx(ctx context.Context, tx driver.Tx, org, cloud string) ([]
 	for rows.Next() {
 		var r CapacityRecord
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, err
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
 		}
 		if checkErr := json.Unmarshal(raw, &r); checkErr != nil {
 			return nil, checkErr
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if checkErr := rows.Err(); checkErr != nil {
+		return nil, checkErr
+	}
+	clusters, err := clusterCapacityRecordsTx(ctx, tx, org, cloud)
+	if err != nil {
+		return nil, err
+	}
+	return deduplicateClusterCapacity(out, clusters), nil
 }
 
 // poolMemberSet lists the servers in a pool.
@@ -428,6 +477,13 @@ func (s *PgStore) reserveOperationCapacity(ctx context.Context, tx driver.Tx, o 
 		return err
 	}
 	if p.Revision == 0 {
+		block, checkErr := legacyClusterPolicyGate(ctx, tx, o.OrgID, o.CloudID, o.ID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if block != nil {
+			return &CapacityAdmissionError{Block: *block}
+		}
 		return nil
 	}
 	d := CapacityDemand{OrgID: o.OrgID, CloudID: o.CloudID}
@@ -443,6 +499,15 @@ func (s *PgStore) reserveOperationCapacity(ctx context.Context, tx driver.Tx, o 
 		}
 		if o.CapacityTarget == nil || *o.CapacityTarget != r.Target {
 			return ErrConflict
+		}
+		if !o.Attempted && o.Provider != "server" {
+			unknown, checkErr := unresolvedLegacyCapacity(ctx, tx, o.OrgID, o.Provider, o.AccountID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if unknown {
+				return &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "account")}
+			}
 		}
 		return nil
 	} else if !errors.Is(readErr, pgx.ErrNoRows) {
@@ -645,7 +710,7 @@ func operationCapacityDelta(ctx context.Context, tx driver.Tx, o *Operation, p *
 		if err := json.Unmarshal(raw, &r); err != nil {
 			return ResourceVector{}, err
 		}
-		if !freshCapacity(r.CheckedAt, time.Now()) {
+		if !freshCapacityRecord(r, time.Now()) {
 			return ResourceVector{}, &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "server")}
 		}
 		facts := factValues(r.Resources)
@@ -688,6 +753,8 @@ func capacityInventoryIncomplete(ctx context.Context, tx driver.Tx, org, cloud s
  AND o.body->'input'->>'kind'='delete' AND s.resource_id<>''
  AND o.body->>'provider'=s.provider AND o.body->>'account_id'=s.account_id AND o.body->>'resource_id'=s.resource_id
  AND coalesce(o.body->>'absence_confirmed_at','') NOT IN ('','0001-01-01T00:00:00Z'))
- )`, org, cloud).Scan(&missing)
+ ) OR EXISTS(SELECT 1 FROM loomplane_managed_resources r LEFT JOIN loomplane_cluster_capacity_inventory c ON c.org_id=r.org_id AND c.resource_id=r.id
+ WHERE r.org_id=$1 AND r.cloud_id=$2 AND r.deleted_at IS NULL AND r.kind='cluster'
+ AND (r.body->>'status' IN ('missing','identity_changed') OR c.body IS NULL OR NOT c.complete OR c.checked_at<now()-interval '2 minutes' OR c.checked_at>now()))`, org, cloud).Scan(&missing)
 	return missing, err
 }

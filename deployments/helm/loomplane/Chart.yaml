@@ -3,7 +3,7 @@ name: loomplane
 description: Loomplane, the self-hosted platform that deploys your monorepos to your own clouds, run highly available on Kubernetes
 type: application
 # Bump on every chart change. A release overrides it with the release version.
-version: 0.1.0
+version: 0.1.1
 # The image this chart runs by default. A release overrides it with its tag;
 # from a checkout it's the image CI publishes for every commit on main.
 appVersion: "main"

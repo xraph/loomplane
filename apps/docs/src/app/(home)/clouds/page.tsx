@@ -2,12 +2,61 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { Code } from "@/components/landing/code";
+import { NodeJoin } from "@/components/landing/node-join";
 
 export const metadata: Metadata = {
   title: "Clouds",
   description:
-    "Vercel, Cloud Run, ECS, Render, App Platform, Container Apps and your own servers.",
+    "Vercel, Cloud Run, ECS, Render, App Platform, Container Apps, your own servers, and any machine you join as a node.",
 };
+
+const nodeFeatures = [
+  {
+    what: "Join with one command",
+    how: "loomctl node join, or a signed install script with a single-use token",
+    soon: false,
+  },
+  {
+    what: "Report what the machine has",
+    how: "The probe endpoint, shown on the node in the dashboard",
+    soon: false,
+  },
+  {
+    what: "Signed updates",
+    how: "cosign keyless releases, rolled back if the new binary dies in its first five seconds",
+    soon: false,
+  },
+  {
+    what: "Revoke",
+    how: "From the dashboard, the CLI or the machine. A revoked node stops at its next connect",
+    soon: false,
+  },
+  {
+    what: "Deploy with Docker",
+    how: "A node with docker allowed becomes a server target, like an SSH server",
+    soon: false,
+  },
+  {
+    what: "Builds on a node",
+    how: "Mark a node as a dedicated build worker when you join it",
+    soon: false,
+  },
+  {
+    what: "Domains routed to a node",
+    how: "Direct to a node with a public address, confirmed on port 80 before DNS points at it",
+    soon: false,
+  },
+  {
+    what: "Relay for nodes behind NAT",
+    how: "An edge relays traffic to nodes with no public address, and TLS ends on the node",
+    soon: true,
+  },
+  {
+    what: "Kubernetes through a node",
+    how: "Reach a cluster's API from inside its own network",
+    soon: true,
+  },
+];
 
 export default function CloudsPage() {
   return (
@@ -386,7 +435,92 @@ export default function CloudsPage() {
             </div>
           </div>
         </div>
+
+        <div className="feature flip">
+          <div className="txt">
+            <div className="eyebrow">Nodes</div>
+            <h3 className="h3" id="nodes">
+              Any machine can join, from behind any firewall.
+            </h3>
+            <p>
+              A node is a machine that joins your organization and keeps one
+              connection open to Loomplane. Run{" "}
+              <code>sudo loomctl node join</code> on it, or paste the one-line
+              install the dashboard gives you under Nodes, Add node. It dials
+              out and opens no port, so a laptop behind a router and a server in
+              a locked-down network join the same way.
+            </p>
+            <p>
+              The allowlist lives on the machine. You pick from five endpoints (
+              <code>probe</code>, <code>docker</code>, <code>dial</code>,{" "}
+              <code>kube</code> and <code>firecracker</code>), and Loomplane can
+              only narrow what you chose. Access to the Docker socket is root on
+              that host, so allow it only on a machine you&apos;d let Loomplane
+              administer.
+            </p>
+            <ul className="ticks">
+              <li>
+                Linux runs it as a systemd service, and macOS works for
+                development
+              </li>
+              <li>
+                Several Loomplane replicas share nodes, with requests hopping to
+                the replica a node is connected to
+              </li>
+              <li>
+                Revoke an API key as compromised, and Loomplane offers to revoke
+                the nodes it joined
+              </li>
+            </ul>
+          </div>
+          <NodeJoin />
+        </div>
       </div>
+
+      <section
+        className="band"
+        style={{ borderTop: "1px solid var(--line)" } as CSSProperties}
+        aria-labelledby="nodes-today"
+      >
+        <div className="wrap sec">
+          <div className="eyebrow">Nodes</div>
+          <h2 id="nodes-today">
+            What a node does today, and what&apos;s next.
+          </h2>
+          <p className="sec-lede">
+            Joining, trust and updates came first. Now a node with{" "}
+            <code>docker</code> allowed takes deploys, builds and domains, and
+            you answered the allowlist only once. Relay and Kubernetes are still
+            to come.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>What</th>
+                  <th>How it works</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nodeFeatures.map((f) => (
+                  <tr key={f.what}>
+                    <td>{f.what}</td>
+                    <td>{f.how}</td>
+                    <td>
+                      {f.soon ? (
+                        <span className="chip warn">Coming soon</span>
+                      ) : (
+                        <span className="chip ok">Available</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </>
   );
 }

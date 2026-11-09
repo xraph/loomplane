@@ -1,0 +1,7 @@
+version: 1
+services:
+  web:
+    source: .
+    provider: render
+    port: 3000
+    health_path: /health

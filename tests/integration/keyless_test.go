@@ -31,6 +31,7 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/issuer"
+	"github.com/xraph/loomplane/internal/setuptoken"
 )
 
 // keylessApp is a Loomplane app whose public URL is where it really
@@ -296,7 +297,7 @@ func keylessForms(a *keylessApp) map[string]keylessForm {
 	return out
 }
 
-// keylessState is the keyless part of GET /api/v1/cloud-sign-in/apps.
+// keylessState is the keyless part of GET /api/v1/platform/cloud-sign-in/apps.
 func keylessState(a *keylessApp) (enabled bool, iss, reason string) {
 	a.t.Helper()
 	var list struct {
@@ -306,7 +307,7 @@ func keylessState(a *keylessApp) (enabled bool, iss, reason string) {
 			Reason  string `json:"reason"`
 		} `json:"keyless"`
 	}
-	a.send(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+	a.send(http.StatusOK, http.MethodGet, "/api/v1/platform/cloud-sign-in/apps", nil, &list)
 	if list.Keyless == nil {
 		a.t.Fatal("the apps list has no keyless state")
 	}
@@ -370,6 +371,18 @@ func TestKeyless_googleEndToEnd(t *testing.T) {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.Permissions})
+		case "/sql/v1beta4/projects/shop-prod/instances", "/v1/projects/shop-prod/locations/-/instances", "/storage/v1/b":
+			if r.Method != http.MethodGet || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ya29.keyless-") {
+				t.Error("inventory must read through the connected Google identity")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			if r.URL.Path == "/storage/v1/b" && r.URL.Query().Get("project") != "shop-prod" {
+				t.Error("bucket inventory reached another project")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[],"instances":[]}`))
 		default:
 			t.Errorf("asked Google %s %s", r.Method, r.URL)
 			w.WriteHeader(http.StatusNotFound)
@@ -568,7 +581,16 @@ func TestKeyless_offWithoutAUsableIssuer(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	a := &keylessApp{running: r, url: r.srv.URL, c: &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}}
-	signedIn(t, a.c)
+	// Staging asks for the setup token, as production does.
+	token, err := setuptoken.Derive(cfg.SecretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := map[string]string{"token": token}
+	for k, v := range ada {
+		form[k] = v
+	}
+	a.c.token = setUp(t, a.c, form)
 
 	for cloud, f := range keylessForms(a) {
 		if slices.Contains(f.Methods, connections.MethodKeyless) {

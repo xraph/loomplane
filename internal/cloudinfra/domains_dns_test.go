@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,7 +112,13 @@ func TestDNSProofFailuresPreserveVerification(t *testing.T) {
 			} else if !errors.Is(err, tc.err) || errors.Is(err, ErrConflict) {
 				t.Fatalf("resolver failure changed: %v", err)
 			}
-			if st.saves != 1 || !checkedOnly(before, st.zone) {
+			// Only a record public DNS answered without reads as missing.
+			if st.zone.ProofMissingAt.IsZero() == tc.conflict {
+				t.Fatal("missing record not recorded, or a resolver failure taken for one")
+			}
+			after := st.zone
+			after.ProofMissingAt = time.Time{}
+			if st.saves != 1 || !checkedOnly(before, after) {
 				t.Fatal("failure changed stored verification")
 			}
 		})
@@ -157,7 +164,13 @@ func TestDNSManagedProofRequiresProviderAndPublicControl(t *testing.T) {
 	if _, err := svc.VerifyZone(t.Context(), p, "zone"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("public absence: %v", err)
 	}
-	if !checkedOnly(before, st.zone) {
+	// Vercel lists the record public DNS doesn't show, and the zone says so.
+	after := st.zone
+	if !strings.Contains(after.ProofPublishError, "Vercel lists the TXT record") {
+		t.Fatalf("unserved record not explained: %q", after.ProofPublishError)
+	}
+	after.ProofPublishError = ""
+	if !checkedOnly(before, after) {
 		t.Fatal("failed managed proof changed verification")
 	}
 	r.err = nil

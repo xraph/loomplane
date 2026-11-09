@@ -78,7 +78,7 @@ func TestIngressCompensationDrainsDetachedMutationBeforeCancellation(t *testing.
 	candidate := source
 	candidate.Binding.InstanceID = "candidate"
 	st := &compensationRuntimeStore{generation: 1, compensationRouteStore: compensationRouteStore{source: source, destination: candidate}}
-	st.prepared = RouteOperation{ID: releasePrepareID("old/action", source.ID), Kind: "prepare", Status: "succeeded", Source: &source, Route: candidate}
+	st.prepared = RouteOperation{ID: ReleasePrepareID("old/action", source.ID), Kind: "prepare", Status: "succeeded", Source: &source, Route: candidate}
 	st.cutover = RouteOperation{ID: "pending-release", Kind: "release", HandoffID: st.prepared.ID, Status: "running", Source: &source, Route: candidate}
 	conn := &connections.Connection{OrgID: "org", Cloud: "server", Generation: 1, Details: client.Config.Details}
 	svc := NewService(Deps{Store: st, Domains: st, Authz: cleanupTestAuth{}, Connections: rotatedRouteCredential{conn: conn, raw: key}})

@@ -1,0 +1,19 @@
+[Unit]
+Description=Loomplane Firecracker host agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/loomplane-host-agent /etc/loomplane/firecracker.json
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+UMask=0077
+LimitNOFILE=65536
+Delegate=yes
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

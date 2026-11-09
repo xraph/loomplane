@@ -105,7 +105,12 @@ The dashboard and `POST /projects/:id/manifest/edits` can change these in place 
 | `version` | The engine's version, such as `"17"`. Without it, the provider's newest |
 | `target` | The `conn_...` of the checked server or Kubernetes connection a catalog resource runs on |
 | `uses` | Where a catalog resource gets each dependency |
-| `environments` | `provider`, `region` or `enabled` by environment name |
+| `settings` | Values a catalog kind takes, by setting name. Names follow the need option rule; a value is up to 1024 characters. The kind says which settings it has and what each must look like, and that's checked when you plan |
+| `environments` | `provider`, `region`, `enabled`, `gpu`, `target` or `settings` by environment name |
+
+An environment's `target` replaces the resource's, and an environment that changes the provider doesn't keep the resource's target. Each setting an environment sets replaces that one setting, and the rest come from the resource.
+
+`POST /projects/:id/manifest/edits` can change a resource in place as well. `update_resource` sets its `provider`, `target`, `gpu` or `settings`, leaving out what you don't send. A setting sent as `""` is deleted, and `clear_gpu` drops the GPU. Send `environment` with it and the change goes under that environment instead, where `enabled` turns the resource on or off. `remove_resource` takes the resource out, but not while a service needs it or another resource uses it: unlink those first.
 
 ### uses
 
@@ -170,8 +175,9 @@ A link needs more than a connection check asks for. The Google Cloud key needs C
 | `thresholds.error_rate_delta` | percentage | How far above the current version's failure share a step may be. Above 0% and at most 100%. Default `0.5%` |
 | `thresholds.p95_latency_ratio` | number | How many times the current version's p95 latency a step may reach, from 1 to 10. Default `1.3` |
 | `min_requests` | integer | The fewest requests a step needs before its health counts, 1 to 1,000,000. Default `200` |
+| `watch` | duration | How long Loomplane watches a release's health after it deploys, in whole minutes up to `24h`, such as `15m` or `1h`. `0` turns it off. Default `15m` for `canary` and `blue_green`, and no watch for `direct`. A breach rolls the release back automatically |
 
-Percentages are written with a percent sign, such as `1%` or `0.5%`. Thresholds and `min_requests` are allowed with every strategy, but today only a canary reads them. `steps` and `hold` are refused with any strategy but `canary`. Environment names follow the same rule as other names.
+Percentages are written with a percent sign, such as `1%` or `0.5%`. Thresholds and `min_requests` are allowed with every strategy, because a canary and the post-deploy watch both read them, and a promotion's staging soak reads the error ceiling and `min_requests`. `steps` and `hold` are refused with any strategy but `canary`. Environment names follow the same rule as other names.
 
 ```yaml
 environments:
@@ -187,7 +193,7 @@ environments:
       min_requests: 200
 ```
 
-See [Canary releases](/docs/concepts/canary-releases) for what a canary does with these settings.
+See [Canary releases](/docs/concepts/canary-releases) for what a canary does with these settings, and [Promotion and rollback](/docs/concepts/promotion-and-rollback#watch-a-release-after-it-deploys) for the watch.
 
 ## ignore
 

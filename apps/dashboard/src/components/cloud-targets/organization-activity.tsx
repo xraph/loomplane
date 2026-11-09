@@ -20,15 +20,20 @@ import {
 
 export function EnvironmentProgress({
   environment,
+  heading,
 }: {
   environment: EnvironmentChange
+  /** Name the environment and its state, where the caller doesn't already. */
+  heading?: boolean
 }) {
   return (
     <div className="grid gap-1 text-xs">
-      <p>
-        {environment.projectId && `${environment.projectId} / `}
-        {environment.environment}: {environment.status}
-      </p>
+      {heading && (
+        <p className="flex flex-wrap items-center gap-2">
+          <span className="font-medium">{environment.environment}</span>
+          <StatePill status={environment.status} />
+        </p>
+      )}
       {environment.compensationMode && (
         <p className="font-medium">
           Recovery:{" "}
@@ -42,11 +47,18 @@ export function EnvironmentProgress({
       {environment.compensationMessage && (
         <p>{environment.compensationMessage}</p>
       )}
-      {environment.routingStatus && <p>Routing: {environment.routingStatus}</p>}
+      {environment.routingStatus && (
+        <p className="flex flex-wrap items-center gap-2">
+          Routing <StatePill status={environment.routingStatus} />
+        </p>
+      )}
       {environment.routes?.map((route) => (
         <div key={route.routeId} className="grid gap-1 rounded-md bg-muted p-2">
-          <p className="break-all">
-            {route.hostname || route.routeId}: {route.status}
+          <p className="flex flex-wrap items-center gap-2">
+            <span className="font-medium break-all">
+              {route.hostname || route.routeId}
+            </span>
+            <StatePill status={route.status} />
           </p>
           {route.message && <p>{route.message}</p>}
           {route.recordType && (

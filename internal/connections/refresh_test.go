@@ -241,7 +241,7 @@ func newRefreshRig(t *testing.T) *refreshRig {
 func (r *refreshRig) signedIn(t *testing.T, id, token string, expiry time.Time) {
 	t.Helper()
 	r.store.rows[id] = Connection{ID: id, OrgID: "org", Cloud: DigitalOcean, Name: id, Method: MethodOAuth, Account: "Acme",
-		Details: map[string]string{"team_uuid": "team-1", "account_uuid": "acct-1"}, Status: StatusReady, Generation: 3}
+		Details: map[string]string{"team_uuid": "team-1", "account_uuid": "acct-1"}, Status: StatusReady, Generation: 3, OAuthClientID: "cfg-id"}
 	r.keep(t, id, oauth.Grant{AccessToken: token, RefreshToken: "rt-" + token, Expiry: expiry, Account: map[string]string{"team_uuid": "team-1", "team_name": "Acme", "account_uuid": "acct-1"}})
 }
 
@@ -712,11 +712,11 @@ func TestRenewalsAcrossConnectionsAreCapped(t *testing.T) {
 // grant never expires, last checked at checked.
 func (r *refreshRig) vercelSignIn(t *testing.T, checked *time.Time) {
 	t.Helper()
-	r.s.Providers[Vercel] = r.renewer
+	r.s.Providers[Vercel] = independentRenewer{r.renewer}
 	r.s.ConfigApps[Vercel] = oauth.App{ClientID: "vercel-id", ClientSecret: "vercel-secret", Slug: "loomplane"}
 	const id, token = "conn_vercel", "vt-1"
 	r.store.rows[id] = Connection{ID: id, OrgID: "org", Cloud: Vercel, Name: id, Method: MethodOAuth, Account: "Acme",
-		Details: map[string]string{"team_id": "team_1"}, Status: StatusReady, Generation: 3, CheckedAt: checked}
+		Details: map[string]string{"team_id": "team_1"}, Status: StatusReady, Generation: 3, CheckedAt: checked, OAuthClientID: "vercel-id"}
 	r.keep(t, id, oauth.Grant{AccessToken: token, Account: map[string]string{"team_id": "team_1"}})
 }
 
@@ -799,6 +799,7 @@ func TestRefreshDueRecordsARejectedAppFoundByAProbe(t *testing.T) {
 	r := newRefreshRig(t)
 	old := r.clock.Add(-48 * time.Hour)
 	r.vercelSignIn(t, &old)
+	usePlatformApp(r.s, Vercel, oauth.App{ClientID: "vercel-id", ClientSecret: "vercel-secret", Slug: "loomplane"})
 	r.renewer.probeErrs = map[string]error{"vt-1": oauth.ErrAppRejected}
 	report, err := r.s.RefreshDue(t.Context())
 	if err != nil {
@@ -807,7 +808,7 @@ func TestRefreshDueRecordsARejectedAppFoundByAProbe(t *testing.T) {
 	if report != (RefreshReport{Lapsed: 1}) || r.store.rows["conn_vercel"].Status != StatusSignInNeeded || len(r.lapsed) != 1 {
 		t.Fatalf("report %+v row %+v", report, r.store.rows["conn_vercel"])
 	}
-	if r.apps.problems["org/"+Vercel] == "" {
+	if r.apps.problems[Vercel] == "" {
 		t.Fatalf("no app problem recorded: %v", r.apps.problems)
 	}
 }
@@ -914,4 +915,113 @@ func mustConn(t *testing.T, r *refreshRig, id string) *Connection {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// independentRenewer is a renewer for a cloud whose grants outlive the app.
+type independentRenewer struct{ *renewer }
+
+func (independentRenewer) GrantOutlivesApp() bool { return true }
+
+func TestRenewAppChangedAsksSignIn(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	row := r.store.rows["conn_do"]
+	row.OAuthClientID = "old"
+	r.store.rows["conn_do"] = row
+	usePlatformApp(r.s, DigitalOcean, oauth.App{ClientID: "new", ClientSecret: "s"})
+	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("got %v", err)
+	}
+	row = r.store.rows["conn_do"]
+	if row.Status != StatusSignInNeeded || row.Message != appChangedWhy(DigitalOcean) || row.Generation != 3 {
+		t.Fatalf("row: %+v", row)
+	}
+	if r.renewer.calls != 0 || len(r.lapsed) != 1 {
+		t.Fatalf("calls=%d lapsed=%d", r.renewer.calls, len(r.lapsed))
+	}
+	if got, _ := r.apps.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("problems %v", got)
+	}
+}
+
+func TestRenewEmptyClientIDAsksSignIn(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	row := r.store.rows["conn_do"]
+	row.OAuthClientID = ""
+	r.store.rows["conn_do"] = row
+	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("got %v", err)
+	}
+	row = r.store.rows["conn_do"]
+	if row.Status != StatusSignInNeeded || row.Message != appChangedWhy(DigitalOcean) || r.renewer.calls != 0 {
+		t.Fatalf("row %+v, calls %d", row, r.renewer.calls)
+	}
+	if got, _ := r.apps.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("problems %v", got)
+	}
+}
+
+func TestRenewSameClientIDNewSecret(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Minute))
+	row := r.store.rows["conn_do"]
+	row.OAuthClientID = "abc"
+	r.store.rows["conn_do"] = row
+	usePlatformApp(r.s, DigitalOcean, oauth.App{ClientID: "abc", ClientSecret: "rotated"})
+	r.renewer.grants["rt-at-1"] = oauth.Grant{AccessToken: "at-2", RefreshToken: "rt-at-2", Expiry: r.clock.Add(time.Hour)}
+	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); err != nil {
+		t.Fatal(err)
+	}
+	if r.renewer.calls != 1 || r.renewer.apps[0].ClientSecret != "rotated" {
+		t.Fatalf("calls %d apps %+v", r.renewer.calls, r.renewer.apps)
+	}
+	if got := r.store.rows["conn_do"]; got.Status != StatusReady {
+		t.Fatalf("row: %+v", got)
+	}
+}
+
+func TestProbeVercelWithoutApp(t *testing.T) {
+	r := newRefreshRig(t)
+	old := r.clock.Add(-48 * time.Hour)
+	r.vercelSignIn(t, &old)
+	delete(r.s.ConfigApps, Vercel)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{Probed: 1}) || !slices.Equal(r.renewer.probed, []string{"vt-1"}) {
+		t.Fatalf("report %+v probed %v", report, r.renewer.probed)
+	}
+	if row := r.store.rows["conn_vercel"]; row.Status != StatusReady {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestConfigAppRemoved(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.s.ConfigApps = nil
+	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("got %v", err)
+	}
+	row := r.store.rows["conn_do"]
+	if row.Status != StatusSignInNeeded || row.Message != noAppWhy(DigitalOcean) || r.renewer.calls != 0 {
+		t.Fatalf("row %+v, calls %d", row, r.renewer.calls)
+	}
+}
+
+func TestAppRejectedOnlyForCurrentClient(t *testing.T) {
+	s, store, _, _ := signInService(nil)
+	store.apps[DigitalOcean] = &StoredApp{Cloud: DigitalOcean, ClientID: "new"}
+	if why := s.appRejected(t.Context(), DigitalOcean, "old"); why == "" {
+		t.Fatal("no message")
+	}
+	if got, _ := store.AppProblems(t.Context()); len(got) != 0 {
+		t.Fatalf("recorded for a client that isn't current: %v", got)
+	}
+	s.appRejected(t.Context(), DigitalOcean, "new")
+	if got, _ := store.AppProblems(t.Context()); len(got) != 1 {
+		t.Fatalf("not recorded for the current client: %v", got)
+	}
 }

@@ -82,7 +82,18 @@ func (d *Deployments) StartCloudSync(ctx context.Context, org, project, id strin
 				return e
 			}
 			if needs {
-				build = CapacityBuild
+				build = CurrentBuild
+				if source, ok := r.(interface {
+					CloudSyncNeedsCleanupExecutor(context.Context, string, string, string) (bool, error)
+				}); ok {
+					cleanup, readErr := source.CloudSyncNeedsCleanupExecutor(ctx, org, project, id)
+					if readErr != nil {
+						return readErr
+					}
+					if cleanup {
+						build = ManagedCleanupBuild
+					}
+				}
 				in.ReconcileInterval = capacityInterval
 			}
 		}
@@ -107,7 +118,7 @@ func (d *Deployments) RecoverCloudSyncs(ctx context.Context) error {
 	if cleanup != nil {
 		cleanupErr = cleanup.RecoverFailedCleanups(ctx)
 	}
-	return errors.Join(reconciler.RecoverCloudSyncs(ctx), cleanupErr)
+	return errors.Join(d.ReconcileHistoricalCleanup(ctx), reconciler.RecoverCloudSyncs(ctx), cleanupErr)
 }
 
 const resumeReleaseWorkflow = "loomplane.release.resume.v1"
@@ -161,9 +172,17 @@ func (d *Deployments) ResumeRelease(ctx context.Context, org, planID string) err
 		}
 		return resumeReleaseOn(ctx, recordedRecovery{releaseRecoveryEngine: eng, workflows: d, org: org, plan: planID}, org, planID)
 	}
-	// A v3 run resumes on v3, as it was approved. Every later build resumes
-	// on CurrentBuild.
-	build, request := CurrentBuild, "resume-release-v4:"+planID
+	// Resume on the original build so historical releases keep their protocol.
+	build, request := current.BuildID, "resume-release-v4:"+planID
+	if current.BuildID == ManagedCleanupBuild {
+		request = "resume-release-v7:" + planID
+	}
+	if current.BuildID == LegacyCleanupBuild {
+		request = "resume-release-v6:" + planID
+	}
+	if current.BuildID == ManagedWorkloadBuild {
+		request = "resume-release-v5:" + planID
+	}
 	if current.BuildID == CapacityBuild {
 		build, request = CapacityBuild, "resume-release-v3:"+planID
 	}

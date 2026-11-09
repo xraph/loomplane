@@ -38,6 +38,11 @@ func (s *PgStore) GetCapacityPolicy(ctx context.Context, org, cloud string) (*Ca
 }
 
 func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy, previous int64) error {
+	if policy.Budget != nil && policy.Budget.HorizonSeconds == 0 {
+		copyBudget := *policy.Budget
+		copyBudget.HorizonSeconds = DefaultBudgetHorizonSeconds
+		policy.Budget = &copyBudget
+	}
 	if previous < 0 || policy.Revision != previous+1 {
 		return ErrInvalid
 	}

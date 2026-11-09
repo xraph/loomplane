@@ -83,7 +83,7 @@ func TestCapacityIntentEmptyPoolPlan(t *testing.T) {
 	p.ID = "plan"
 	s.capacityTemplates = futureTemplateValidator{}
 	s.store = futurePoolStore{policy: policy}
-	s.clouds = targetOptions{connections: []*connections.Connection{{ID: targetA, Cloud: "server", Status: "ready", Details: map[string]string{"architecture": "amd64", "docker_id": "builder"}}, {ID: registryTarget, Cloud: "registry", Status: "ready"}}}
+	s.clouds = targetOptions{connections: []*connections.Connection{{ID: targetA, Cloud: "server", Status: "ready", Details: map[string]string{"build_workers": "dedicated", "architecture": "amd64", "docker_id": "builder"}}, {ID: registryTarget, Cloud: "registry", Status: "ready"}}}
 	result, _, err := s.compute(t.Context(), p)
 	if err != nil || !result.Executable {
 		t.Fatalf("future pool blocked: %+v %v", result, err)
@@ -107,7 +107,7 @@ func TestCapacityIntentPrivateDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := Input{Environment: "production", Graph: infrastructureGraph(), Providers: infrastructureProviders(t), Manifest: parse(t, "version: 1\nservices:\n  web: {source: cmd/api, provider: server, endpoint: {host_port: 8080}, needs: [api], build: {builder: conn_01m4vewksnea2bwdxwdy5aekhn, registry: conn_01m4vem4sde8ab4yfr1abnj3wf}}\n  api: {source: cmd/api, provider: server, public: false, build: {builder: conn_01m4vewksnea2bwdxwdy5aekhn, registry: conn_01m4vem4sde8ab4yfr1abnj3wf}}\n"), Connections: []ConnectionOption{{ID: targetA, Cloud: "server", Ready: true, Details: map[string]string{"architecture": "amd64", "docker_id": "builder"}}, {ID: registryTarget, Cloud: "registry", Ready: true}}, CapacityIntents: map[string]*CapacityIntent{"web": intent, "api": intent}}
+	in := Input{Environment: "production", Graph: infrastructureGraph(), Providers: infrastructureProviders(t), Manifest: parse(t, "version: 1\nservices:\n  web: {source: cmd/api, provider: server, endpoint: {host_port: 8080}, needs: [api], build: {builder: conn_01m4vewksnea2bwdxwdy5aekhn, registry: conn_01m4vem4sde8ab4yfr1abnj3wf}}\n  api: {source: cmd/api, provider: server, public: false, build: {builder: conn_01m4vewksnea2bwdxwdy5aekhn, registry: conn_01m4vem4sde8ab4yfr1abnj3wf}}\n"), Connections: []ConnectionOption{{ID: targetA, Cloud: "server", Ready: true, Details: map[string]string{"build_workers": "dedicated", "architecture": "amd64", "docker_id": "builder"}}, {ID: registryTarget, Cloud: "registry", Ready: true}}, CapacityIntents: map[string]*CapacityIntent{"web": intent, "api": intent}}
 	result := Compute(in)
 	if result.Executable {
 		t.Fatal("future hosts implied private connectivity")

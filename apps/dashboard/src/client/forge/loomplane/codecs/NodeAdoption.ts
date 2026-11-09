@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_NodeAdoption: Codec = {"kind": "object", "fields": {"approved_by": {"ts": "approvedBy"}, "cloud_id": {"ts": "cloudId"}, "created_at": {"ts": "createdAt"}, "node_id": {"ts": "nodeId"}, "node_name": {"ts": "nodeName"}, "operation_id": {"ts": "operationId"}, "org_id": {"ts": "orgId"}, "reason": {"ts": "reason"}, "server_id": {"ts": "serverId"}, "status": {"ts": "status"}, "updated_at": {"ts": "updatedAt"}}, "required": ["approved_by", "cloud_id", "created_at", "node_id", "node_name", "operation_id", "org_id", "reason", "server_id", "status", "updated_at"]};

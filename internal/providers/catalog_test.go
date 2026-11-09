@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -62,15 +63,16 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "platform", "server", "kubernetes", "cloudflare-workers"}},
+		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "platform", "server", "kubernetes", "cloudflare-workers"}},
+		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "firecracker", "platform", "server", "kubernetes"}},
+		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "platform", "server", "kubernetes"}},
 		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "azure-database", "server", "kubernetes"}},
 		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "azure-database", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
 		{"redis", names(r.Provisioning("redis")), []string{"render", "digitalocean", "memorystore", "elasticache", "azure-managed-redis", "server"}},
 		{"valkey", names(r.Provisioning("valkey")), []string{"server"}},
+		{"object storage", names(r.Provisioning("object-storage")), []string{"cloud-storage", "s3", "cloudflare-workers"}},
 		{"kafka", names(r.Provisioning("kafka")), nil},
 	}
 	for _, tt := range tests {
@@ -94,6 +96,7 @@ func TestProvider_engine(t *testing.T) {
 		// Vercel and Render build from the source themselves, so
 		// Loomplane's adapters manage what they run.
 		{"vercel", provider.WebApp, provider.Loomplane},
+		{"cloudflare-workers", provider.WebApp, provider.Loomplane},
 		{"render", provider.Worker, provider.Loomplane},
 		{"render", provider.StaticSite, provider.Loomplane},
 		// Loomplane builds and runs Container Apps itself, without Ctrl Plane.
@@ -177,11 +180,14 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 		{Kind: "valkey", Creates: "Persistent Valkey container", Versions: []string{"8.1"}},
 	}
 	wantDefault := append(slices.Clone(builtIn),
+		provider.Provisions{Kind: "elasticsearch", Creates: "Elasticsearch catalog service", Versions: []string{"9.4"}},
 		provider.Provisions{Kind: "fabriq", Creates: "Fabriq catalog service", Versions: []string{"1.9"}},
 		provider.Provisions{Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}},
+		provider.Provisions{Kind: "falkordb", Creates: "FalkorDB catalog service", Versions: []string{"4.2"}},
 		provider.Provisions{Kind: "memcached", Creates: "Memcached catalog service", Versions: []string{"1.6"}},
 		provider.Provisions{Kind: "nats", Creates: "NATS JetStream catalog service", Versions: []string{"2.11"}},
 		provider.Provisions{Kind: "octopus", Creates: "Octopus catalog service", Versions: []string{"0.5"}},
+		provider.Provisions{Kind: "opensearch", Creates: "OpenSearch catalog service", Versions: []string{"3.9"}},
 		provider.Provisions{Kind: "rabbitmq", Creates: "RabbitMQ catalog service", Versions: []string{"4.3"}},
 		provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB catalog service", Versions: []string{"16"}},
 	)
@@ -190,7 +196,7 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 		t.Fatalf("default registry changed the server provisions: %+v", got)
 	}
 
-	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "server")
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t), nil), "server")
 	if len(got) != 7 || !reflect.DeepEqual(got[:5], builtIn) {
 		t.Fatalf("built-in provisions moved or changed: %+v", got)
 	}
@@ -206,16 +212,25 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 	fabriq := provider.Provisions{Kind: "fabriq", Creates: "Fabriq catalog service", Versions: []string{"1.9"}}
 	timescaledb := provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB catalog service", Versions: []string{"16"}}
 	octopus := provider.Provisions{Kind: "octopus", Creates: "Octopus catalog service", Versions: []string{"0.5"}}
-	if !reflect.DeepEqual(got, []provider.Provisions{first, fabriq, {Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}}, octopus, timescaledb}) {
+	if !reflect.DeepEqual(got, []provider.Provisions{
+		first,
+		{Kind: "elasticsearch", Creates: "Elasticsearch catalog service", Versions: []string{"9.4"}},
+		fabriq,
+		{Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}},
+		{Kind: "falkordb", Creates: "FalkorDB catalog service", Versions: []string{"4.2"}},
+		octopus,
+		{Kind: "opensearch", Creates: "OpenSearch catalog service", Versions: []string{"3.9"}},
+		timescaledb,
+	}) {
 		t.Fatalf("default registry changed the Kubernetes provisions: %+v", got)
 	}
 
-	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "kubernetes")
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t), nil), "kubernetes")
 	if len(got) != 3 || !reflect.DeepEqual(got[0], first) || got[2].Kind != "sample" || got[2].Creates != "Sample catalog service" {
 		t.Fatalf("Kubernetes provisions: %+v", got)
 	}
 	// Managed clouds don't gain registered kinds.
-	for _, p := range catalogWith(recipestest.Registry(t)) {
+	for _, p := range catalogWith(recipestest.Registry(t), nil) {
 		if p.Cloud == "server" || p.Cloud == "kubernetes" {
 			continue
 		}
@@ -225,7 +240,7 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 			}
 		}
 	}
-	if _, err := provider.NewRegistry(catalogWith(recipestest.Registry(t))...); err != nil {
+	if _, err := provider.NewRegistry(catalogWith(recipestest.Registry(t), nil)...); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -235,7 +250,7 @@ func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
 	if err := kinds.Register(recipestest.Graph()); err != nil {
 		t.Fatal(err)
 	}
-	all := catalogWith(kinds)
+	all := catalogWith(kinds, nil)
 	for _, name := range []string{"server", "kubernetes"} {
 		got := provisionsOf(t, all, name)
 		if !slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "sample" }) {
@@ -243,6 +258,97 @@ func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
 		}
 		if slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "graph" }) {
 			t.Fatalf("%s offers a dependency-only kind: %+v", name, got)
+		}
+	}
+}
+
+func TestProvisionsHideKindsOfAnOffFeature(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Featured()); err != nil {
+		t.Fatal(err)
+	}
+	offers := func(got []provider.Provisions, kind string) bool {
+		return slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == kind })
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: false}, {"other": true}} {
+		all := catalogWith(kinds, features)
+		for _, name := range []string{"server", "kubernetes"} {
+			got := provisionsOf(t, all, name)
+			if offers(got, "featured") {
+				t.Errorf("features %v: %s offers a kind of an off feature", features, name)
+			}
+			if !offers(got, "sample") {
+				t.Errorf("features %v: %s lost the sample kind", features, name)
+			}
+		}
+	}
+	all := catalogWith(kinds, map[string]bool{recipes.FeatureAI: true})
+	for _, name := range []string{"server", "kubernetes"} {
+		if got := provisionsOf(t, all, name); !offers(got, "featured") || !offers(got, "sample") {
+			t.Errorf("AI on: %s provisions %+v", name, got)
+		}
+	}
+}
+
+func TestModelKindsAreOfferedOnlyWithAI(t *testing.T) {
+	models := recipes.ModelKinds()
+	modelOffers := func(all []provider.Provider, name string) []string {
+		var out []string
+		for _, offer := range provisionsOf(t, all, name) {
+			if recipes.IsModelKind(offer.Kind) {
+				out = append(out, offer.Kind)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, all := range [][]provider.Provider{Catalog(), CatalogFor(nil), CatalogFor(map[string]bool{recipes.FeatureAI: false})} {
+		for _, name := range []string{"server", "kubernetes"} {
+			if got := modelOffers(all, name); len(got) != 0 {
+				t.Errorf("AI off: %s offers %v", name, got)
+			}
+		}
+	}
+	on := CatalogFor(map[string]bool{recipes.FeatureAI: true})
+	for _, name := range []string{"server", "kubernetes"} {
+		if got, want := modelOffers(on, name), slices.Sorted(slices.Values(models)); !slices.Equal(got, want) {
+			t.Errorf("AI on: %s offers %v, want %v", name, got, want)
+		}
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: true}} {
+		r := RegistryFor(features, "server")
+		p, err := r.Get("server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Available {
+			t.Errorf("features %v: paused server is available", features)
+		}
+		if _, ok := p.Provisioning(recipes.ModelTEIKind); ok != features[recipes.FeatureAI] {
+			t.Errorf("features %v: server provisions %s = %v", features, recipes.ModelTEIKind, ok)
+		}
+	}
+}
+
+func TestClusterContractsAdvertiseInstalledBuiltinSupport(t *testing.T) {
+	for _, target := range Catalog() {
+		for _, capability := range target.Infrastructure {
+			switch capability {
+			case provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess, provider.ClusterCreation, provider.ClusterMutationObservation:
+				if target.Name != "digitalocean" {
+					t.Fatalf("%s advertises uninstalled cluster capability %s", target.Name, capability)
+				}
+			}
+		}
+		if target.Name == "digitalocean" {
+			for _, capability := range []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess, provider.ClusterCreation, provider.ClusterMutationObservation} {
+				if !slices.Contains(target.Infrastructure, capability) {
+					t.Fatalf("DigitalOcean is missing installed capability %s", capability)
+				}
+			}
+		}
+		if target.Name == "digitalocean" && (target.Model != provider.Build || target.Title != "DigitalOcean App Platform") {
+			t.Fatal("cluster contracts changed the App Platform target")
 		}
 	}
 }

@@ -1,0 +1,356 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: deepseek
+entries:
+  - id: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    title: DeepSeek R1 Distill Qwen 1.5B
+    publisher: DeepSeek
+    summary: A tiny reasoning model trained on DeepSeek R1's answers, best at math.
+    revision: ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 1777088000
+    context_length: 131072
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 12
+      kv_heads: 2
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 3554214621
+        min_gpu_memory_gib: 6
+  - id: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+    title: DeepSeek R1 Distill Qwen 7B
+    publisher: DeepSeek
+    summary: A 7B reasoning model trained on DeepSeek R1's answers.
+    revision: 916b56a44061fd5cd7d6a8fb632557ed4f724f60
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 7615616512
+    context_length: 131072
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 28
+      kv_heads: 4
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 15231271850
+        min_gpu_memory_gib: 19
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF
+        revision: 361004151d4f4f6b446dc5e6d46fbf4422a80d5f
+        file: DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf
+        weight_bytes: 4683073504
+        min_memory_gib: 6
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF
+        revision: 361004151d4f4f6b446dc5e6d46fbf4422a80d5f
+        file: DeepSeek-R1-Distill-Qwen-7B-Q8_0.gguf
+        weight_bytes: 8098525152
+        min_memory_gib: 10
+  - id: deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+    title: DeepSeek R1 Distill Qwen 14B
+    publisher: DeepSeek
+    summary: A 14B reasoning model trained on DeepSeek R1's answers.
+    revision: 1df8507178afcc1bef68cd8c393f61a886323761
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 14770033664
+    context_length: 131072
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 48
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29540133872
+        min_gpu_memory_gib: 36
+  - id: deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    title: DeepSeek R1 Distill Qwen 32B
+    publisher: DeepSeek
+    summary: A 32B reasoning model trained on DeepSeek R1's answers, close to the full R1 on math.
+    revision: 711ad2ea6aa40cfca18895e8aca02ab92df1a746
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 32763876352
+    context_length: 131072
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 64
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65527841532
+        min_gpu_memory_gib: 77
+      - id: awq-int4
+        engine: vllm
+        repo: casperhansen/deepseek-r1-distill-qwen-32b-awq
+        revision: e20a4933e66aa5eccc8270489f5aeab17f90b888
+        weight_bytes: 19328994120
+        min_gpu_memory_gib: 25
+  - id: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+    title: DeepSeek R1 Distill Llama 8B
+    publisher: DeepSeek
+    summary: An 8B reasoning model built on Llama 3.1 and trained on DeepSeek R1's answers.
+    revision: 6a6f4aa4197940add57724a7707d069478df56b1
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 8030261248
+    context_length: 131072
+    architecture:
+      name: LlamaForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 16060556354
+        min_gpu_memory_gib: 21
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: unsloth/DeepSeek-R1-Distill-Llama-8B-GGUF
+        revision: 615f8936e16dfde29dcc00be71145d4d5ce8ed53
+        file: DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf
+        weight_bytes: 4920737216
+        min_memory_gib: 7
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: unsloth/DeepSeek-R1-Distill-Llama-8B-GGUF
+        revision: 615f8936e16dfde29dcc00be71145d4d5ce8ed53
+        file: DeepSeek-R1-Distill-Llama-8B-Q8_0.gguf
+        weight_bytes: 8540773088
+        min_memory_gib: 11
+  - id: deepseek-ai/DeepSeek-R1-Distill-Llama-70B
+    title: DeepSeek R1 Distill Llama 70B
+    publisher: DeepSeek
+    summary: The largest R1 distill, built on Llama 3.3 70B.
+    revision: b1c0b44b4369b597ad119a196caf79a9c40e141e
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 70553706496
+    context_length: 131072
+    architecture:
+      name: LlamaForCausalLM
+      layers: 80
+      attention_heads: 64
+      kv_heads: 8
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 141107497606
+        min_gpu_memory_gib: 161
+  - id: deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
+    title: DeepSeek R1 0528 Qwen3 8B
+    publisher: DeepSeek
+    summary: An 8B reasoning model trained on the May 2025 DeepSeek R1's answers.
+    revision: 6e8885a6ff5c1dc5201574c8fd700323f23c25fa
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 8190735360
+    context_length: 131072
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 16381516796
+        min_gpu_memory_gib: 21
+  - id: deepseek-ai/DeepSeek-V2-Lite-Chat
+    title: DeepSeek V2 Lite Chat
+    publisher: DeepSeek
+    summary: A 16B mixture of experts chat model with only 2.4B parameters active per token.
+    revision: 85864749cd611b4353ce1decdb286193298f64c7
+    license:
+      id: deepseek
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 15706484224
+    active_parameters: 2400000000
+    context_length: 163840
+    architecture:
+      name: DeepseekV2ForCausalLM
+      layers: 27
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 128
+      kv_lora_rank: 512
+      rope_head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 31413626576
+        min_gpu_memory_gib: 37
+  - id: deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct
+    title: DeepSeek Coder V2 Lite Instruct
+    publisher: DeepSeek
+    summary: A 16B mixture of experts coding model for 338 programming languages.
+    revision: e434a23f91ba5b4923cf6c9d9a238eb4a08e3a11
+    license:
+      id: deepseek
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 15706484224
+    active_parameters: 2400000000
+    context_length: 163840
+    architecture:
+      name: DeepseekV2ForCausalLM
+      layers: 27
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 128
+      kv_lora_rank: 512
+      rope_head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 31413626609
+        min_gpu_memory_gib: 37
+  - id: deepseek-ai/deepseek-coder-6.7b-instruct
+    title: DeepSeek Coder 6.7B Instruct
+    publisher: DeepSeek
+    summary: A 6.7B coding model trained mostly on code.
+    revision: e5d64addd26a6a1db0f9b863abf6ee3141936807
+    license:
+      id: deepseek
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 6740512768
+    context_length: 16384
+    architecture:
+      name: LlamaForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 32
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 13481059368
+        min_gpu_memory_gib: 19
+  - id: deepseek-ai/DeepSeek-R1-0528
+    title: DeepSeek R1 0528
+    publisher: DeepSeek
+    summary: DeepSeek's full reasoning model from May 2025, which needs a whole node of large GPUs.
+    revision: 4236a6af538feda4548eca9ab308586007567f52
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 684531386000
+    active_parameters: 37000000000
+    context_length: 163840
+    architecture:
+      name: DeepseekV3ForCausalLM
+      layers: 61
+      attention_heads: 128
+      kv_heads: 128
+      head_dim: 56
+      kv_lora_rank: 512
+      rope_head_dim: 64
+    tool_parser: deepseek_v3
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: fp8
+        engine: vllm
+        weight_bytes: 688586727753
+        min_gpu_memory_gib: 772
+  - id: deepseek-ai/DeepSeek-V3-0324
+    title: DeepSeek V3 0324
+    publisher: DeepSeek
+    summary: DeepSeek's large mixture of experts chat model from March 2025, for a whole node of large GPUs.
+    revision: e9b33add76883f293d6bf61f6bd89b497e80e335
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - code
+    parameters: 684531386000
+    active_parameters: 37000000000
+    context_length: 163840
+    architecture:
+      name: DeepseekV3ForCausalLM
+      layers: 61
+      attention_heads: 128
+      kv_heads: 128
+      head_dim: 56
+      kv_lora_rank: 512
+      rope_head_dim: 64
+    tool_parser: deepseek_v3
+    quantizations:
+      - id: fp8
+        engine: vllm
+        weight_bytes: 688586727753
+        min_gpu_memory_gib: 772

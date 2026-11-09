@@ -35,11 +35,7 @@ func TestAPIKeys_actAsTheirMakerUntilRevoked(t *testing.T) {
 
 	signUp := func(email string) *client {
 		c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-		var auth struct {
-			SessionToken string `json:"session_token"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": email, "password": "Correct-horse-battery-9"}, &auth)
-		c.token = auth.SessionToken
+		account(t, c, email)
 		return c
 	}
 	ada := signUp("ada@example.com")
@@ -66,12 +62,22 @@ func TestAPIKeys_actAsTheirMakerUntilRevoked(t *testing.T) {
 	// A write key acts as Ada, in her organization, with no session.
 	ci := as(write.Secret)
 	var sess struct {
-		UserID string `json:"user_id"`
-		OrgID  string `json:"org_id"`
+		UserID    string `json:"user_id"`
+		OrgID     string `json:"org_id"`
+		SessionID string `json:"session_id"`
 	}
 	ci.must(http.StatusOK, http.MethodGet, "/api/v1/session", nil, &sess)
-	if sess.OrgID != org.ID || sess.UserID == "" {
+	if sess.OrgID != org.ID || sess.UserID == "" || sess.SessionID != "" {
 		t.Fatalf("session as the key %+v", sess)
+	}
+	// A signed-in browser names its session, so the account page can tell
+	// it apart from the others it lists.
+	var mine struct {
+		SessionID string `json:"session_id"`
+	}
+	ada.must(http.StatusOK, http.MethodGet, "/api/v1/session", nil, &mine)
+	if mine.SessionID == "" {
+		t.Fatal("a signed-in session doesn't say which session it is")
 	}
 	var proj struct {
 		ID string `json:"id"`

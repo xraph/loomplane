@@ -48,7 +48,7 @@ func (s *Service) VerifyRoute(ctx context.Context, p security.Principal, project
 	if err != nil {
 		return nil, err
 	}
-	op := &RouteOperation{ID: opID, Route: *route, Kind: "verify", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Principal: p}
+	op := &RouteOperation{ID: opID, Route: *route, Kind: "verify", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Receipts: route.Receipts, Principal: p}
 	if checkErr := st.AcceptRoute(ctx, op); checkErr != nil {
 		return nil, checkErr
 	}
@@ -90,6 +90,9 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 			}
 			var notice *routeNoticeError
 			switch {
+			case errors.Is(err, errAddressAbandoned):
+				// Its node no longer takes traffic directly; the route is free.
+				op.Status = "cancelled"
 			case errors.Is(err, ErrPending):
 				op.Status, op.Message = "waiting", "DNS, certificate or backend verification is still pending."
 			case err != nil:
@@ -113,6 +116,14 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 
 func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOperation, state *IngressState) error {
 	route := &op.Route
+	if err := st.GuardRouteOwnership(ctx, *route); err != nil {
+		return err
+	}
+	if op.Source != nil {
+		if err := st.GuardRouteOwnership(ctx, *op.Source); err != nil {
+			return err
+		}
+	}
 	// Accepted removal retains exact cleanup authority after a grant is revoked.
 	if op.Kind != "remove" {
 		if err := s.domainScope(ctx, op.executionPrincipal(), route.ProjectID, true); err != nil {
@@ -136,6 +147,11 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			}
 		default:
 			current, err := st.ResolveRouteBinding(ctx, route.OrgID, route.ProjectID, route.Input)
+			if op.Kind == "address" {
+				if waitErr := s.addressNotSettled(ctx, op, current, err); waitErr != nil {
+					return waitErr
+				}
+			}
 			if err != nil {
 				return err
 			}
@@ -150,6 +166,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 		return err
 	}
 	if op.Kind != "remove" && op.Kind != "release" {
+		if checkErr := s.checkPlatformCloudZone(ctx, *route, zone); checkErr != nil {
+			return checkErr
+		}
 		if !slices.Contains(zone.ProjectIDs, route.ProjectID) {
 			return ErrNotFound
 		}
@@ -157,13 +176,23 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return checkErr
 		}
 	}
+	if route.Binding.BackendName() == RouteBackendFirecracker {
+		return s.executeFirecrackerRoute(ctx, st, op, zone)
+	}
 	if route.Binding.BackendName() == RouteBackendKubernetes {
 		return s.executeKubernetesRoute(ctx, st, op, zone)
+	}
+	if route.Binding.BackendName() == RouteBackendPlatform {
+		return s.executePlatformRoute(ctx, st, op, zone)
 	}
 	if op.Kind == "prepare" && op.Source != nil && op.Source.Binding.ServerID != op.Route.Binding.ServerID {
 		if checkErr := s.prepareSourceIngress(ctx, st, op); checkErr != nil {
 			return checkErr
 		}
+	}
+	// A node's new address moves DNS alone; the proxy config stays.
+	if op.Kind == "address" {
+		return s.followRouteAddress(ctx, st, op, state, zone)
 	}
 	client := s.routeClient
 	if op.Kind == "remove" || op.Kind == "release" {
@@ -273,7 +302,8 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 			state.Current = snapshot
 			state.Config = server.IngressConfig{OrgID: route.OrgID, ServerID: route.Binding.ServerID, Version: "initial", Routes: []server.IngressRoute{}}
 			initial, configErr := state.Config.JSON()
-			if configErr != nil || !server.SameIngressConfig(initial, snapshot.Config) {
+			// An address check left behind is replaced by this change's config.
+			if configErr != nil || proxyAgainst(initial, snapshot.Config) == proxyChanged {
 				return ErrConflict
 			}
 		}
@@ -324,7 +354,7 @@ func (s *Service) reconcileRouteConfig(ctx context.Context, st DomainStore, c *s
 		return err
 	}
 	if !server.SameIngressConfig(desired, actual.Config) {
-		actual, err = server.ApplyIngress(ctx, c, op.PreviousConfig, *op.DesiredConfig)
+		actual, err = server.ApplyIngress(ctx, c, ingressExpected(op.PreviousConfig, actual), *op.DesiredConfig)
 		if err != nil {
 			return err
 		}
@@ -474,6 +504,9 @@ func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, 
 	out.DNS = err == nil && len(addresses) > 0
 	for _, address := range addresses {
 		out.DNS = out.DNS && address.IP.Equal(net.ParseIP(route.Binding.Address))
+	}
+	if route.Receipt != nil && route.Receipt.Proxied {
+		out.DNS = err == nil && len(addresses) > 0 && s.verifyProxiedRouteDNS(ctx, route)
 	}
 	if !out.DNS {
 		out.DNSError = "DNS does not resolve exclusively to the accepted server address."

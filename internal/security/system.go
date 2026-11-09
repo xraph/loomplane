@@ -11,6 +11,12 @@ const (
 	// KindSystem is Loomplane automation: the identity that rolls back a
 	// release whose watch or canary failed, with or without the AI agent.
 	KindSystem Kind = "system"
+	// KindNodeJoin is a single-use token that lets one machine join an
+	// organization as a node. It's never a request principal: it can't
+	// authenticate as an API key, only be consumed once to enrol a node.
+	KindNodeJoin Kind = "node-join"
+	// KindAgent is a workspace's AI agent, acting alone or for a person.
+	KindAgent Kind = "agent"
 )
 
 // RoleSystem is the Warden role Loomplane automation holds in each
@@ -54,11 +60,15 @@ func (p Principal) IsServiceAccount() bool { return p.Kind != KindUser }
 
 // ActorPrincipal rebuilds the principal a durable record names, such as a
 // deployment's started_by: Loomplane automation for the organization's own
-// SystemSubject, else a person. Another organization's subject stays a
-// person, who holds no role here.
+// SystemSubject, the AI agent acting alone for its AgentSubject, else a
+// person. Another organization's subject stays a person, who holds no role
+// here.
 func ActorPrincipal(orgID, actorID string) Principal {
 	if sub, ok := IsSystemSubject(actorID); ok && sub == orgID {
 		return SystemPrincipal(orgID)
+	}
+	if sub, ok := IsAgentSubject(actorID); ok && sub == orgID {
+		return AgentPrincipal(orgID, nil)
 	}
 	return Principal{OrgID: orgID, UserID: actorID}
 }

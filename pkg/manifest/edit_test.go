@@ -438,6 +438,181 @@ services:
 	check("ignoring a kind", out)
 }
 
+const modelDoc = `# Acme's manifest.
+version: 1
+services:
+  api:
+    source: services/api
+    needs: [llm] # the model
+resources:
+  # The model, on the GPU server.
+  llm:
+    kind: sample # catalog kind
+    provider: server
+    target: conn_1
+    settings:
+      model: acme/x # the weights
+      file: model.gguf
+  db:
+    kind: postgres
+`
+
+func TestWithResourceUpdate(t *testing.T) {
+	target := "conn_2"
+	gpu := &GPU{Kind: "nvidia-l40s", Count: 1}
+	out, err := WithResourceUpdate([]byte(modelDoc), "llm", ResourceUpdate{
+		Target:   &target,
+		GPU:      &gpu,
+		Settings: map[string]string{"max_model_len": "8192", "file": ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"# Acme's manifest.", "# The model, on the GPU server.", "# catalog kind", "# the weights", "# the model"} {
+		if !strings.Contains(string(out), c) {
+			t.Errorf("lost %q:\n%s", c, out)
+		}
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := Resource{
+		Kind: "sample", Provider: "server", Target: "conn_2", GPU: &GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: map[string]string{"model": "acme/x", "max_model_len": "8192"},
+	}
+	if got := m.Resources["llm"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("llm = %+v, want %+v\n%s", got, want, out)
+	}
+	// The fields keep their order, and new ones go at the end.
+	text := string(out)
+	order := []string{"kind: sample", "provider: server", "target: conn_2", "settings:", "model: acme/x", "max_model_len", "gpu:"}
+	for i := 1; i < len(order); i++ {
+		if strings.Index(text, order[i-1]) >= strings.Index(text, order[i]) {
+			t.Errorf("%q isn't before %q:\n%s", order[i-1], order[i], out)
+		}
+	}
+
+	// A nil field keeps what is there; a GPU pointing at nil removes it,
+	// and so does deleting the last setting.
+	var none *GPU
+	out, err = WithResourceUpdate(out, "llm", ResourceUpdate{GPU: &none, Settings: map[string]string{"model": "", "max_model_len": ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if got := m.Resources["llm"]; got.GPU != nil || got.Settings != nil || got.Target != "conn_2" || got.Provider != "server" {
+		t.Errorf("llm = %+v\n%s", got, out)
+	}
+
+	if _, err := WithResourceUpdate([]byte(modelDoc), "nope", ResourceUpdate{Target: &target}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown resource: %v", err)
+	}
+	if _, err := WithResourceUpdate([]byte(modelDoc), "llm", ResourceUpdate{Settings: map[string]string{"Bad": "x"}}); err == nil {
+		t.Error("a bad setting name was written")
+	}
+}
+
+func TestWithoutResource(t *testing.T) {
+	out, err := WithoutResource([]byte(modelDoc), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, ok := m.Resources["db"]; ok || m.Resources["llm"].Kind != "sample" {
+		t.Errorf("resources %+v\n%s", m.Resources, out)
+	}
+	if !strings.Contains(string(out), "# The model, on the GPU server.") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+
+	_, err = WithoutResource([]byte(modelDoc), "llm")
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "service api") {
+		t.Errorf("removing a needed resource: %v", err)
+	}
+	used := strings.Replace(modelDoc, "  db:\n    kind: postgres\n", "  db:\n    kind: postgres\n  fabriq:\n    kind: sample\n    uses:\n      postgres: {resource: db}\n", 1)
+	if _, err = WithoutResource([]byte(used), "db"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "resource fabriq") {
+		t.Errorf("removing a used resource: %v", err)
+	}
+	if _, err = WithoutResource([]byte(modelDoc), "nope"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown resource: %v", err)
+	}
+
+	// The last resource takes the section with it.
+	out, err = WithoutResource([]byte("version: 1\nresources:\n  db: {kind: postgres}\n"), "db")
+	if err != nil || strings.Contains(string(out), "resources") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestWithResourceEnabled(t *testing.T) {
+	doc := strings.Replace(modelDoc, "    target: conn_1\n", "    target: conn_1\n    environments:\n      production: {provider: kubernetes, region: eu} # the cluster\n", 1)
+	out, err := WithResourceEnabled([]byte(doc), "llm", "staging", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	envs := m.Resources["llm"].Environments
+	if s := envs["staging"]; s.Enabled == nil || *s.Enabled {
+		t.Errorf("staging %+v\n%s", s, out)
+	}
+	if p := envs["production"]; p.Provider != "kubernetes" || p.Region != "eu" || p.Enabled != nil {
+		t.Errorf("production %+v\n%s", p, out)
+	}
+	if !strings.Contains(string(out), "# the cluster") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+
+	out, err = WithResourceEnabled(out, "llm", "staging", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if s := m.Resources["llm"].Environments["staging"]; s.Enabled == nil || !*s.Enabled {
+		t.Errorf("staging %+v\n%s", s, out)
+	}
+	out, err = WithResourceEnabled(out, "llm", "production", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if p := m.Resources["llm"].Environments["production"]; p.Provider != "kubernetes" || p.Region != "eu" || p.Enabled == nil || !*p.Enabled {
+		t.Errorf("production %+v\n%s", p, out)
+	}
+
+	if _, err := WithResourceEnabled([]byte(doc), "nope", "staging", true); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown resource: %v", err)
+	}
+	if _, err := WithResourceEnabled([]byte(doc), "llm", "Staging!", true); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad environment name: %v", err)
+	}
+}
+
+func TestWithResourceWritesSettingsAndGPU(t *testing.T) {
+	want := Resource{
+		Kind: "sample", Provider: "server", Target: "conn_1",
+		GPU:      &GPU{Kind: "nvidia-l4", Count: 2},
+		Settings: map[string]string{"model": "acme/x", "size": "1"},
+	}
+	out, err := WithResource([]byte(commented), "llm", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := m.Resources["llm"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("llm = %+v, want %+v\n%s", got, want, out)
+	}
+}
+
 func TestWithPlacement_scaleAndSize(t *testing.T) {
 	doc := []byte(`version: 1
 services:
@@ -507,5 +682,218 @@ services:
 		if _, err := WithPlacement(doc, p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// TestWithResourceUpdateKeepsEnvironmentBlocksInTheFile: an edit takes
+// away only the environment block it created. One already in the file,
+// empty or not, stays with its comment.
+func TestWithResourceUpdateKeepsEnvironmentBlocksInTheFile(t *testing.T) {
+	empty := ""
+	var none *GPU
+	for name, tt := range map[string]struct {
+		doc  string
+		want []string
+	}{
+		"a null block with a comment": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:
+      production:  # pin later
+`,
+			want: []string{"production:", "# pin later"},
+		},
+		"an empty mapping": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:
+      production: {}  # pin later
+`,
+			want: []string{"production:", "# pin later"},
+		},
+		"an empty environments key": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments: {}  # per environment copies go here
+`,
+			want: []string{"environments:", "# per environment copies go here"},
+		},
+		"a null environments key": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:  # copies
+`,
+			want: []string{"environments:", "# copies"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := "production"
+			if strings.Contains(name, "environments key") {
+				env = "staging"
+			}
+			out, err := WithResourceUpdate([]byte(tt.doc), "llm", ResourceUpdate{Environment: env, Target: &empty, GPU: &none})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(string(out), w) {
+					t.Errorf("lost %q:\n%s", w, out)
+				}
+			}
+			if strings.Contains(name, "environments key") && strings.Contains(string(out), "staging") {
+				t.Errorf("left the staging block this edit created:\n%s", out)
+			}
+			m, err := Parse(out)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if got := m.Resources["llm"]; got.Target != "c1" {
+				t.Errorf("llm = %+v", got)
+			}
+		})
+	}
+
+	// Clearing the last field of a block already in the file keeps the
+	// block, now empty, and its comment.
+	const doc = `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:
+      production:  # its own server
+        target: c2
+`
+	out, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "production", Target: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "production:") || !strings.Contains(string(out), "# its own server") || strings.Contains(string(out), "c2") {
+		t.Errorf("want the production block kept with its comment and no target:\n%s", out)
+	}
+}
+
+// TestWithResourceUpdateJoinsCommentsOnAnEmptiedBlock: when the key and
+// the block it holds both carry a line comment, emptying the block puts
+// the two together after the {}, never one of them on the next line.
+func TestWithResourceUpdateJoinsCommentsOnAnEmptiedBlock(t *testing.T) {
+	const doc = `version: 1
+resources:
+  llm:
+    environments:
+      production: # its own server
+        {target: c2} # until the move
+    kind: sample
+    target: c1
+`
+	empty := ""
+	out, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "production", Target: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "production: {} # its own server # until the move\n") {
+		t.Errorf("want both comments on the production line:\n%s", out)
+	}
+	if strings.Count(string(out), "#") != 2 {
+		t.Errorf("a comment moved onto another key:\n%s", out)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := m.Resources["llm"]; got.Target != "c1" || got.Environments["production"].Target != "" {
+		t.Errorf("llm = %+v\n%s", got, out)
+	}
+}
+
+func TestWithResourceUpdateInOneEnvironment(t *testing.T) {
+	const doc = `version: 1
+resources:
+  # keep me
+  llm:
+    kind: sample
+    provider: server
+    target: c1
+    settings: {model: acme/x}
+`
+	on := true
+	target := "c2"
+	gpu := &GPU{Kind: "nvidia-l4", Count: 1}
+	out, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{
+		Environment: "production", Enabled: &on, Target: &target, GPU: &gpu,
+		Settings: map[string]string{"quantization": "awq"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	llm := m.Resources["llm"]
+	want := ResourceSettings{Enabled: &on, Target: "c2", GPU: &GPU{Kind: "nvidia-l4", Count: 1}, Settings: map[string]string{"quantization": "awq"}}
+	if got := llm.Environments["production"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("production = %+v, want %+v\n%s", got, want, out)
+	}
+	if llm.Target != "c1" || llm.GPU != nil || !reflect.DeepEqual(llm.Settings, map[string]string{"model": "acme/x"}) {
+		t.Errorf("the top level changed: %+v\n%s", llm, out)
+	}
+	if !strings.Contains(string(out), "# keep me") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+
+	// Deleting the environment's last setting takes its settings key away.
+	out, err = WithResourceUpdate(out, "llm", ResourceUpdate{Environment: "production", Settings: map[string]string{"quantization": ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if got := m.Resources["llm"].Environments["production"]; got.Settings != nil || got.Target != "c2" || got.Enabled == nil {
+		t.Errorf("production = %+v\n%s", got, out)
+	}
+	if strings.Contains(string(out), "quantization") {
+		t.Errorf("the setting is still there:\n%s", out)
+	}
+
+	// An environment the update leaves empty goes, and so does the
+	// environments key when it was the last.
+	var none *GPU
+	empty, enabledOff := "", false
+	out, err = WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "staging", Target: &empty, GPU: &none})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "environments") {
+		t.Errorf("left an empty environment:\n%s", out)
+	}
+	out, err = WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "staging", Enabled: &enabledOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if s := m.Resources["llm"].Environments["staging"]; s.Enabled == nil || *s.Enabled {
+		t.Errorf("staging = %+v\n%s", s, out)
+	}
+
+	if _, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Enabled: &on}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("enabled without an environment: %v", err)
+	}
+	if _, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "Prod!", Target: &target}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a bad environment name: %v", err)
+	}
+	if _, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "production", Settings: map[string]string{"Bad": "x"}}); err == nil {
+		t.Error("a bad setting name was written to an environment")
 	}
 }

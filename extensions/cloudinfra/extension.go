@@ -4,12 +4,14 @@ package cloudinfra
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
+	troveext "github.com/xraph/trove/extension"
 	"github.com/xraph/vault/crypto"
 	"github.com/xraph/vault/secret"
 	vaultpg "github.com/xraph/vault/store/postgres"
@@ -18,16 +20,30 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 )
 
 const Name = "loomplane-cloud-infrastructure"
+
+// newService builds the service with the operator's capacity gates taken
+// from config, so a gate can't be left at its zero value by accident.
+func newService(cfg config.CloudsConfig, d cloudinfra.Deps) *cloudinfra.Service {
+	d.ClusterCapacity = cfg.ClusterCapacity
+	d.ManagedClusters = cfg.ManagedClusters
+	d.EnableAutomaticCapacity = cfg.AutomaticCapacity.Enabled
+	return cloudinfra.NewService(d)
+}
 
 // registrationSweepEvery spaces renewal sweeps; each one reads a domain
 // back from the registrar at most daily.
@@ -37,16 +53,19 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg       config.Config
 	workflows *orchestration.Deployments
+	streams   server.NodeStreams
 	svc       *cloudinfra.Service
 	cancel    context.CancelFunc
 	done      chan struct{}
 }
 
-func New(cfg config.Config, workflows *orchestration.Deployments) *Extension {
-	return &Extension{BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud server infrastructure"), cfg: cfg, workflows: workflows}
+// New returns the extension. streams reaches joined nodes, so a server whose
+// connection is a node's is inspected through its streams.
+func New(cfg config.Config, workflows *orchestration.Deployments, streams server.NodeStreams) *Extension {
+	return &Extension{BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud server infrastructure"), cfg: cfg, workflows: workflows, streams: streams}
 }
 func (*Extension) Dependencies() []string {
-	return []string{connectionsext.Name, identity.Name, projectsext.Name, notificationsext.DeliveryName}
+	return []string{troveext.ExtensionName, connectionsext.Name, identity.Name, projectsext.Name, notificationsext.DeliveryName}
 }
 func (e *Extension) Register(app forge.App) error {
 	if err := e.BaseExtension.Register(app); err != nil {
@@ -87,6 +106,16 @@ func (e *Extension) Register(app forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	pg := pgdriver.Unwrap(db)
+	// Server proxies order certificates from the configured directory too.
+	issuer := server.ACMEIssuer{Directory: e.cfg.Clouds.ACMEDirectory}
+	if e.cfg.Clouds.ACMERootsFile != "" {
+		if issuer.Roots, err = os.ReadFile(e.cfg.Clouds.ACMERootsFile); err != nil {
+			return fmt.Errorf("read clouds.acme_roots_file: %w", err)
+		}
+	}
+	if err = server.SetACMEIssuer(issuer); err != nil {
+		return fmt.Errorf("clouds.acme_directory: %w", err)
+	}
 	endpoint := e.cfg.Clouds.EnrollmentURL
 	if endpoint == "" {
 		endpoint = e.cfg.PublicURL
@@ -95,9 +124,20 @@ func (e *Extension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	e.svc = cloudinfra.NewService(cloudinfra.Deps{CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
+	proofKey, err := kubernetes.ReplicaProofKey(e.cfg.SecretKey)
+	if err != nil {
+		return err
+	}
+	e.svc = newService(e.cfg.Clouds, cloudinfra.Deps{ReplicaVerifier: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey), Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Runtime: cloudinfra.HostRuntime{Streams: e.streams}, NodeStreams: e.streams, Nodes: &nodes.Adopter{Connections: creds}, NodeConnections: creds, NodeAddresses: creds, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) }})
+	creds.ManagedCredentials = e.svc
+	files, filesErr := forge.InjectType[*backupfiles.Store](c)
+	if filesErr != nil {
+		return filesErr
+	}
+	e.svc.RegistryFiles = files
 	e.workflows.BindInfrastructure(e.svc)
+	e.workflows.BindClusters(e.svc)
 	if err = forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide cloud infrastructure: %w", err)
 	}
@@ -109,12 +149,54 @@ func (e *Extension) Start(context.Context) error {
 	e.done = make(chan struct{})
 	go func() {
 		defer close(e.done)
+		registryDone := make(chan struct{})
+		go func() {
+			defer close(registryDone)
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				if err := e.svc.RecoverManagedRegistries(ctx); err != nil && ctx.Err() == nil {
+					e.Logger().Warn("Reconcile managed registries", forge.F("error", err.Error()))
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		defer func() { <-registryDone }()
+		// A node's address change that didn't finish is picked up here, on
+		// its own loop: one node can take a while.
+		addressesDone := make(chan struct{})
+		go func() {
+			defer close(addressesDone)
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				if err := e.svc.ReconcileNodeAddresses(ctx); err != nil && ctx.Err() == nil {
+					e.Logger().Warn("Follow nodes to their addresses", forge.F("error", err.Error()))
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		defer func() { <-addressesDone }()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		var swept time.Time
 		for {
+			if err := e.svc.RecoverEdges(ctx); err != nil && ctx.Err() == nil {
+				e.Logger().Warn("Recover CDN operations", forge.F("error", err.Error()))
+			}
 			if err := e.svc.RecoverRoutes(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover domain route operations", forge.F("error", err.Error()))
+			}
+			if err := e.svc.RecoverClusterOperations(ctx); err != nil && ctx.Err() == nil {
+				e.Logger().Warn("Recover cluster operations", forge.F("error", err.Error()))
 			}
 			if err := e.svc.RecoverInfrastructure(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover infrastructure operations", forge.F("error", err.Error()))
@@ -129,7 +211,8 @@ func (e *Extension) Start(context.Context) error {
 				e.Logger().Warn("Recover domain registrations", forge.F("error", err.Error()))
 			}
 			// Each managed zone waiting on its TXT proof is looked at no more
-			// than every two minutes, however often this runs.
+			// than every two minutes, however often this runs, and each
+			// verified zone's record once a day.
 			if err := e.svc.CheckZoneProofs(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Check domain zone proofs", forge.F("error", err.Error()))
 			}

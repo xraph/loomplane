@@ -303,8 +303,9 @@ Removing a link from the manifest takes it down on both clouds, Google's side fi
 | `thresholds.error_rate_delta` | percentage | How far above the current version's failure share a step may be. Above 0% and at most 100%. Default `0.5%` |
 | `thresholds.p95_latency_ratio` | number | How many times the current version's p95 latency a step may reach, from 1 to 10. Default `1.3` |
 | `min_requests` | integer | The fewest requests a step needs before its health counts, 1 to 1,000,000. Default `200` |
+| `watch` | duration | How long Loomplane watches a release's health after it deploys, in whole minutes up to `24h`, such as `15m` or `1h`. `0` turns it off. Default `15m` for `canary` and `blue_green`, and no watch for `direct`. A breach rolls the release back automatically |
 
-Percentages are written with a percent sign, such as `1%` or `0.5%`. Thresholds and `min_requests` are allowed with every strategy, because the post-deploy watch reads the same block. `steps` and `hold` are refused with any strategy but `canary`. Environment names follow the same rule as other names.
+Percentages are written with a percent sign, such as `1%` or `0.5%`. Thresholds and `min_requests` are allowed with every strategy, because a canary and the post-deploy watch both read them, and a promotion's staging soak reads the error ceiling and `min_requests`. `steps` and `hold` are refused with any strategy but `canary`. Environment names follow the same rule as other names.
 
 ```yaml
 environments:

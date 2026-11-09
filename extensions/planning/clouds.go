@@ -85,7 +85,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 	const syncs = base + "/cloud-syncs"
 	const sync = syncs + "/:syncId"
 	const assignment = base + "/environments/:environmentId/cloud"
-	routes := []cloudRoute{
+	routes := append(e.cloudLocationRoutes(), []cloudRoute{
 		{http.MethodGet, "/clouds", "organizationClouds.list", e.listClouds, nil, CloudList{}, http.StatusOK},
 		{http.MethodPost, "/clouds", "organizationClouds.create", e.createCloud, cloudprofiles.CreateInput{}, cloudprofiles.Profile{}, http.StatusCreated},
 		{http.MethodGet, "/clouds/:cloudId", "organizationClouds.get", e.getCloud, nil, cloudprofiles.Profile{}, http.StatusOK},
@@ -134,7 +134,8 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, sync + "/revert/preview", "cloudSyncs.previewRevert", e.previewCloudRevert, nil, cloudprofiles.Preview{}, http.StatusOK},
 		{http.MethodPost, syncs + "/revert/apply", "cloudSyncs.applyRevert", e.applyCloudRevert, ApplyCloudInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
 		{http.MethodPost, sync + "/routing", "cloudSyncs.completeRouting", e.completeCloudRouting, CompleteCloudRoutingInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
-	}
+	}...)
+	routes = append(routes, e.placementGroupRoutes()...)
 	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Clouds"))
 	for _, rt := range routes {
 		opts := []forge.RouteOption{forge.WithName(rt.name), forge.WithSummary(rt.name)}
@@ -174,6 +175,9 @@ func cloudBody[T any](c forge.Context) (T, error) {
 }
 func cloudResult(c forge.Context, status int, value any, err error) error {
 	if err != nil {
+		if handled, result := cleanupProblem(c, err); handled {
+			return result
+		}
 		return fail(err)
 	}
 	return c.JSON(status, value)

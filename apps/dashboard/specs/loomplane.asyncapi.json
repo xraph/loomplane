@@ -5,6 +5,42 @@
     "version": "0.1.0-dev"
   },
   "channels": {
+    "api-v1-agent-tasks-:id-stream": {
+      "address": "/api/v1/agent/tasks/:id/stream",
+      "messages": {
+        "agent.end": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeAgentEnd"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent.end",
+          "title": "agent.end event",
+          "summary": "SSE event: agent.end"
+        },
+        "agent.event": {
+          "payload": {
+            "$ref": "#/components/schemas/RealtimeAgentEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent.event",
+          "title": "agent.event event",
+          "summary": "SSE event: agent.event"
+        }
+      },
+      "title": "Follow a task's events as they happen",
+      "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+      "tags": [
+        {
+          "name": "Agent"
+        }
+      ],
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "bindingVersion": "latest"
+        }
+      }
+    },
     "api-v1-realtime-events": {
       "address": "/api/v1/realtime/events",
       "bindings": {
@@ -14,6 +50,60 @@
         }
       },
       "messages": {
+        "agent_report.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_report.deleted",
+          "title": "agent_report.deleted event",
+          "summary": "SSE event: agent_report.deleted"
+        },
+        "agent_report.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Report"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_report.updated",
+          "title": "agent_report.updated event",
+          "summary": "SSE event: agent_report.updated"
+        },
+        "agent_request.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/RequestEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_request.deleted",
+          "title": "agent_request.deleted event",
+          "summary": "SSE event: agent_request.deleted"
+        },
+        "agent_request.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/RequestEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_request.updated",
+          "title": "agent_request.updated event",
+          "summary": "SSE event: agent_request.updated"
+        },
+        "agent_task.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_task.deleted",
+          "title": "agent_task.deleted event",
+          "summary": "SSE event: agent_task.deleted"
+        },
+        "agent_task.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "agent_task.updated",
+          "title": "agent_task.updated event",
+          "summary": "SSE event: agent_task.updated"
+        },
         "analysis.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Analysis"
@@ -112,6 +202,15 @@
           "name": "cloud_capacity.updated",
           "title": "cloud_capacity.updated event",
           "summary": "SSE event: cloud_capacity.updated"
+        },
+        "cloud_cluster.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/ClusterChange"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_cluster.updated",
+          "title": "cloud_cluster.updated event",
+          "summary": "SSE event: cloud_cluster.updated"
         },
         "cloud_sync.updated": {
           "payload": {
@@ -239,6 +338,24 @@
           "title": "manifest.updated event",
           "summary": "SSE event: manifest.updated"
         },
+        "node.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Node"
+          },
+          "contentType": "text/event-stream",
+          "name": "node.updated",
+          "title": "node.updated event",
+          "summary": "SSE event: node.updated"
+        },
+        "notification.created": {
+          "payload": {
+            "$ref": "#/components/schemas/NotificationCreated"
+          },
+          "contentType": "text/event-stream",
+          "name": "notification.created",
+          "title": "notification.created event",
+          "summary": "SSE event: notification.created"
+        },
         "plan.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Plan"
@@ -292,6 +409,42 @@
           "name": "realtime.status",
           "title": "realtime.status event",
           "summary": "SSE event: realtime.status"
+        },
+        "release_report.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/ReleaseReportEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_report.deleted",
+          "title": "release_report.deleted event",
+          "summary": "SSE event: release_report.deleted"
+        },
+        "release_report.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/ReleaseReportEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_report.updated",
+          "title": "release_report.updated event",
+          "summary": "SSE event: release_report.updated"
+        },
+        "release_watch.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/Watch"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_watch.deleted",
+          "title": "release_watch.deleted event",
+          "summary": "SSE event: release_watch.deleted"
+        },
+        "release_watch.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/Watch"
+          },
+          "contentType": "text/event-stream",
+          "name": "release_watch.updated",
+          "title": "release_watch.updated event",
+          "summary": "SSE event: release_watch.updated"
         },
         "source.deleted": {
           "payload": {
@@ -415,7 +568,7 @@
             "Plan[]"
           ],
           "message": "plan.updated",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Plan",
@@ -424,7 +577,7 @@
             "Plan[]"
           ],
           "message": "plan.deleted",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Binding",
@@ -501,6 +654,24 @@
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
         },
         {
+          "entityType": "Watch",
+          "intent": "upsert",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.updated",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
+          "entityType": "Watch",
+          "intent": "evict",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.deleted",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
           "entityType": "Profile",
           "intent": "upsert",
           "invalidates": [
@@ -557,6 +728,24 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "ClusterChange",
+          "intent": "patch",
+          "invalidates": [
+            "CloudCluster",
+            "CloudClusterPage",
+            "CloudClusterOperation",
+            "CloudClusterOperationPage",
+            "Target",
+            "Target[]",
+            "Connection",
+            "Connection[]",
+            "Profile",
+            "Profile[]"
+          ],
+          "message": "cloud_cluster.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
+        },
+        {
           "entityType": "CapacityChange",
           "intent": "patch",
           "invalidates": [
@@ -566,6 +755,101 @@
           ],
           "message": "cloud_capacity.updated",
           "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
+        },
+        {
+          "entityType": "NotificationCreated",
+          "intent": "upsert",
+          "invalidates": [
+            "NotificationList"
+          ],
+          "message": "notification.created",
+          "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
+        },
+        {
+          "entityType": "Node",
+          "intent": "upsert",
+          "invalidates": [
+            "Node[]"
+          ],
+          "message": "node.updated",
+          "type": "github.com/xraph/loomplane/internal/nodes.Node"
+        },
+        {
+          "entityType": "TaskEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentTask",
+            "AgentTask[]"
+          ],
+          "message": "agent_task.updated",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "TaskEvent",
+          "intent": "evict",
+          "invalidates": [
+            "TaskEvent[]"
+          ],
+          "message": "agent_task.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "Report",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentReport",
+            "AgentReport[]"
+          ],
+          "message": "agent_report.updated",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "Report",
+          "intent": "evict",
+          "invalidates": [
+            "Report[]"
+          ],
+          "message": "agent_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentRequest",
+            "AgentRequest[]"
+          ],
+          "message": "agent_request.updated",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "evict",
+          "invalidates": [
+            "RequestEvent[]"
+          ],
+          "message": "agent_request.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.updated",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "evict",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
         },
         {
           "entityType": "Log",
@@ -718,7 +1002,7 @@
             "Plan[]"
           ],
           "message": "plan.updated",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Plan",
@@ -727,7 +1011,7 @@
             "Plan[]"
           ],
           "message": "plan.deleted",
-          "type": "github.com/xraph/loomplane/internal/planning.Plan"
+          "type": "github.com/xraph/loomplane/internal/publicplan.Plan"
         },
         {
           "entityType": "Binding",
@@ -804,6 +1088,24 @@
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
         },
         {
+          "entityType": "Watch",
+          "intent": "upsert",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.updated",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
+          "entityType": "Watch",
+          "intent": "evict",
+          "invalidates": [
+            "Watch[]"
+          ],
+          "message": "release_watch.deleted",
+          "type": "github.com/xraph/loomplane/internal/releasewatch.Watch"
+        },
+        {
           "entityType": "Profile",
           "intent": "upsert",
           "invalidates": [
@@ -860,6 +1162,24 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "ClusterChange",
+          "intent": "patch",
+          "invalidates": [
+            "CloudCluster",
+            "CloudClusterPage",
+            "CloudClusterOperation",
+            "CloudClusterOperationPage",
+            "Target",
+            "Target[]",
+            "Connection",
+            "Connection[]",
+            "Profile",
+            "Profile[]"
+          ],
+          "message": "cloud_cluster.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
+        },
+        {
           "entityType": "CapacityChange",
           "intent": "patch",
           "invalidates": [
@@ -869,6 +1189,101 @@
           ],
           "message": "cloud_capacity.updated",
           "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
+        },
+        {
+          "entityType": "NotificationCreated",
+          "intent": "upsert",
+          "invalidates": [
+            "NotificationList"
+          ],
+          "message": "notification.created",
+          "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
+        },
+        {
+          "entityType": "Node",
+          "intent": "upsert",
+          "invalidates": [
+            "Node[]"
+          ],
+          "message": "node.updated",
+          "type": "github.com/xraph/loomplane/internal/nodes.Node"
+        },
+        {
+          "entityType": "TaskEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentTask",
+            "AgentTask[]"
+          ],
+          "message": "agent_task.updated",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "TaskEvent",
+          "intent": "evict",
+          "invalidates": [
+            "TaskEvent[]"
+          ],
+          "message": "agent_task.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
+        },
+        {
+          "entityType": "Report",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentReport",
+            "AgentReport[]"
+          ],
+          "message": "agent_report.updated",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "Report",
+          "intent": "evict",
+          "invalidates": [
+            "Report[]"
+          ],
+          "message": "agent_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentreports.Report"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "AgentRequest",
+            "AgentRequest[]"
+          ],
+          "message": "agent_request.updated",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "RequestEvent",
+          "intent": "evict",
+          "invalidates": [
+            "RequestEvent[]"
+          ],
+          "message": "agent_request.deleted",
+          "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "upsert",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.updated",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
+        },
+        {
+          "entityType": "ReleaseReportEvent",
+          "intent": "evict",
+          "invalidates": [
+            "ReleaseReport",
+            "ReleaseReport[]"
+          ],
+          "message": "release_report.deleted",
+          "type": "github.com/xraph/loomplane/internal/releaseprep.ReleaseReportEvent"
         },
         {
           "entityType": "Log",
@@ -892,6 +1307,28 @@
     }
   },
   "operations": {
+    "agentTasks.stream": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/api-v1-agent-tasks-:id-stream"
+      },
+      "title": "Receive SSE events",
+      "summary": "Receive Server-Sent Events from /api/v1/agent/tasks/:id/stream",
+      "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
+      "tags": [
+        {
+          "name": "Agent"
+        }
+      ],
+      "messages": [
+        {
+          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.end"
+        },
+        {
+          "$ref": "#/channels/api-v1-agent-tasks-:id-stream/messages/agent.event"
+        }
+      ]
+    },
     "realtime.events": {
       "action": "receive",
       "channel": {
@@ -905,6 +1342,24 @@
         }
       ],
       "messages": [
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_report.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_request.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_request.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_task.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/agent_task.updated"
+        },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/analysis.deleted"
         },
@@ -937,6 +1392,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud_capacity.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_cluster.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud_sync.updated"
@@ -981,6 +1439,12 @@
           "$ref": "#/channels/api-v1-realtime-events/messages/manifest.updated"
         },
         {
+          "$ref": "#/channels/api-v1-realtime-events/messages/node.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/notification.created"
+        },
+        {
           "$ref": "#/channels/api-v1-realtime-events/messages/plan.deleted"
         },
         {
@@ -997,6 +1461,18 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/realtime.status"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_report.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_report.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_watch.deleted"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/release_watch.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/source.deleted"
@@ -1071,6 +1547,12 @@
               "$ref": "#/components/schemas/Change"
             }
           },
+          "cleanup_targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupTarget"
+            }
+          },
           "cloud_adoption": {
             "$ref": "#/components/schemas/CloudAdoption"
           },
@@ -1130,19 +1612,35 @@
           }
         }
       },
-      "AppliedInputs": {
-        "type": "object",
+      "AgentreportsEvidence": {
         "properties": {
-          "artifact_key": {
+          "analysis_id": {
             "type": "string"
           },
-          "source": {
-            "$ref": "#/components/schemas/PlanSource"
+          "binding_id": {
+            "type": "string"
           },
-          "variables": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "source_alias": {
+            "type": "string"
+          },
+          "verdict_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "watch_id": {
             "type": "string"
           }
-        }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/agentreports.Evidence"
       },
       "ArtifactChoice": {
         "type": "object",
@@ -1171,110 +1669,13 @@
           }
         }
       },
-      "Binding": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "environment_id",
-          "subject",
-          "name",
-          "provider",
-          "region",
-          "engine",
-          "external_id",
-          "config",
-          "url",
-          "connection_id",
-          "revision",
-          "commit_sha",
-          "drift",
-          "drift_message",
-          "plan_id",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "commit_sha": {
-            "type": "string"
-          },
-          "config": {
-            "type": "string"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "drift": {
-            "type": "string"
-          },
-          "drift_message": {
-            "type": "string"
-          },
-          "engine": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "external_id": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "name": {
-            "type": "string"
-          },
-          "observed_at": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "owned_resources": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "physical_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "region": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "string"
-          },
-          "subject": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "url": {
-            "type": "string"
-          }
-        }
-      },
       "BuildTarget": {
         "type": "object",
         "properties": {
           "builder": {
+            "type": "string"
+          },
+          "builder_cloud": {
             "type": "string"
           },
           "builder_settings": {
@@ -1421,36 +1822,6 @@
           }
         }
       },
-      "CapacityChange": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "cloud_id",
-          "kind",
-          "entity_id",
-          "revision"
-        ],
-        "properties": {
-          "cloud_id": {
-            "type": "string"
-          },
-          "entity_id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
       "CapacityDemand": {
         "type": "object",
         "required": [
@@ -1518,7 +1889,6 @@
         "type": "object",
         "required": [
           "demand",
-          "provider_pin",
           "template",
           "template_hash",
           "commit_sha",
@@ -1544,9 +1914,6 @@
           "grant_revision": {
             "type": "integer"
           },
-          "provider_pin": {
-            "$ref": "#/components/schemas/CapacityTemplatePin"
-          },
           "target_name": {
             "type": "string"
           },
@@ -1558,21 +1925,6 @@
           },
           "template_hash": {
             "type": "string"
-          }
-        }
-      },
-      "CapacityTemplatePin": {
-        "type": "object",
-        "required": [
-          "connection_generation",
-          "account_id"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "connection_generation": {
-            "type": "integer"
           }
         }
       },
@@ -1618,20 +1970,77 @@
           }
         }
       },
+      "CleanupObject": {
+        "type": "object",
+        "required": [
+          "resource",
+          "name",
+          "namespace"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "CleanupTarget": {
+        "type": "object",
+        "required": [
+          "kind",
+          "service",
+          "plan_id",
+          "deployment_id",
+          "namespace",
+          "objects",
+          "unresolved_writes",
+          "identity_current"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "identity_current": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CleanupObject"
+            }
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "unresolved_writes": {
+            "type": "integer"
+          }
+        }
+      },
       "CloudAdoption": {
         "type": "object",
         "required": [
           "binding_id",
           "external_id",
           "revision",
-          "plan_id",
-          "config_digest"
+          "plan_id"
         ],
         "properties": {
           "binding_id": {
-            "type": "string"
-          },
-          "config_digest": {
             "type": "string"
           },
           "external_id": {
@@ -1650,8 +2059,6 @@
         "required": [
           "plan_id",
           "action_id",
-          "source",
-          "candidate",
           "retained",
           "server_attempt",
           "original_completed"
@@ -1659,9 +2066,6 @@
         "properties": {
           "action_id": {
             "type": "string"
-          },
-          "candidate": {
-            "$ref": "#/components/schemas/Binding"
           },
           "original_completed": {
             "type": "boolean"
@@ -1680,15 +2084,13 @@
           },
           "server_attempt": {
             "type": "boolean"
-          },
-          "source": {
-            "$ref": "#/components/schemas/Binding"
           }
         }
       },
       "CloudPlacement": {
         "type": "object",
         "required": [
+          "account_identity",
           "cloud_id",
           "cloud_revision",
           "assignment_revision",
@@ -1696,8 +2098,7 @@
           "target_revision",
           "target_name",
           "provider",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -1836,6 +2237,12 @@
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
           },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
+          },
           "revision": {
             "type": "integer"
           },
@@ -1865,6 +2272,86 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.Route"
       },
+      "ClusterDemand": {
+        "type": "object",
+        "required": [
+          "mode",
+          "maximum"
+        ],
+        "properties": {
+          "maximum": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ClusterSchedulingProfile"
+          }
+        }
+      },
+      "ClusterSchedulingProfile": {
+        "type": "object",
+        "required": [
+          "pool_id",
+          "template_digest",
+          "digest",
+          "architecture",
+          "zone",
+          "allocatable",
+          "overhead",
+          "available"
+        ],
+        "properties": {
+          "allocatable": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "available": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "overhead": {
+            "$ref": "#/components/schemas/ClusterWorkloadVector"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "template_digest": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterWorkloadVector": {
+        "type": "object",
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "ephemeral_storage_bytes",
+          "pods"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "ephemeral_storage_bytes": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "pods": {
+            "type": "integer"
+          }
+        }
+      },
       "ComponentConfig": {
         "type": "object",
         "required": [
@@ -1885,6 +2372,9 @@
           "gpu": {
             "$ref": "#/components/schemas/GPUPlacement"
           },
+          "inputs": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -1896,6 +2386,10 @@
           },
           "revision": {
             "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -1953,6 +2447,9 @@
           },
           "owner": {
             "type": "string"
+          },
+          "proxied": {
+            "type": "boolean"
           },
           "ttl": {
             "type": "integer"
@@ -2050,6 +2547,43 @@
             "type": "string"
           },
           "region": {
+            "type": "string"
+          }
+        }
+      },
+      "DiscoveryEvidence": {
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "detail"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/discovery.Evidence"
+      },
+      "DurableObjectClass": {
+        "type": "object",
+        "required": [
+          "name",
+          "class_name"
+        ],
+        "properties": {
+          "class_name": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -2193,24 +2727,113 @@
           }
         }
       },
-      "Evidence": {
+      "Exclusion": {
         "type": "object",
         "required": [
-          "path",
-          "detail"
+          "kind",
+          "match",
+          "reason",
+          "keep_running",
+          "created_by",
+          "created_at"
         ],
         "properties": {
-          "detail": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
             "type": "string"
           },
-          "line": {
+          "keep_running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ExistingResourceConfig": {
+        "type": "object",
+        "required": [
+          "incarnation",
+          "account_identity",
+          "resource_id",
+          "endpoint_id",
+          "revision",
+          "endpoint_revision",
+          "external_id"
+        ],
+        "properties": {
+          "account_identity": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "endpoint_revision": {
             "type": "integer"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "Fact": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
           },
           "path": {
             "type": "string"
           },
-          "source": {
+          "untrusted": {
+            "type": "boolean"
+          },
+          "value": {
             "type": "string"
+          }
+        }
+      },
+      "FarpConfig": {
+        "type": "object",
+        "required": [
+          "gateway",
+          "port"
+        ],
+        "properties": {
+          "gateway": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "port": {
+            "type": "integer"
           }
         }
       },
@@ -2226,6 +2849,10 @@
             "additionalProperties": true
           },
           "network_links": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "placement_groups": {
             "type": "object",
             "additionalProperties": true
           },
@@ -2245,6 +2872,9 @@
           "path"
         ],
         "properties": {
+          "certificate_secret": {
+            "type": "string"
+          },
           "mode": {
             "type": "integer"
           },
@@ -2266,7 +2896,7 @@
           "evidence": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Evidence"
+              "$ref": "#/components/schemas/DiscoveryEvidence"
             }
           },
           "message": {
@@ -2280,6 +2910,107 @@
           },
           "subject": {
             "type": "string"
+          }
+        }
+      },
+      "Findings": {
+        "type": "object",
+        "required": [
+          "summary",
+          "likely_cause",
+          "suggestions",
+          "confidence",
+          "written_at"
+        ],
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "likely_cause": {
+            "type": "string"
+          },
+          "suggestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "GateCheck": {
+        "type": "object",
+        "required": [
+          "number",
+          "name",
+          "passed",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "passed": {
+            "type": "boolean"
           }
         }
       },
@@ -2316,6 +3047,9 @@
             "type": "integer"
           },
           "encoding": {
+            "type": "string"
+          },
+          "generator": {
             "type": "string"
           },
           "name": {
@@ -2361,6 +3095,9 @@
           "path"
         ],
         "properties": {
+          "checker": {
+            "type": "string"
+          },
           "path": {
             "type": "string"
           },
@@ -2406,6 +3143,28 @@
           }
         }
       },
+      "HeldRoute": {
+        "type": "object",
+        "required": [
+          "service",
+          "key",
+          "route_ids"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "route_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
       "Ignore": {
         "type": "object",
         "properties": {
@@ -2414,6 +3173,87 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "Inventory": {
+        "type": "object",
+        "required": [
+          "os",
+          "kernel",
+          "arch",
+          "cpus",
+          "memory_mib",
+          "disk_gib"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "cpus": {
+            "type": "integer"
+          },
+          "disk_gib": {
+            "type": "integer"
+          },
+          "docker": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeprotoGPU"
+            }
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": "string"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "os": {
+            "type": "string"
+          },
+          "podman": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "ports_80_443": {
+            "type": "string"
+          },
+          "public_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -2475,9 +3315,9 @@
       "ManagedDatabaseConfig": {
         "type": "object",
         "required": [
+          "account_identity",
           "profile",
-          "connection_id",
-          "account_identity"
+          "connection_id"
         ],
         "properties": {
           "account_identity": {
@@ -2615,6 +3455,42 @@
           }
         }
       },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
+      "NodeprotoGPU": {
+        "properties": {
+          "memory_mib": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vendor",
+          "model",
+          "memory_mib"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/nodeproto.GPU"
+      },
       "Output": {
         "type": "object",
         "required": [
@@ -2634,6 +3510,9 @@
           "per_consumer": {
             "type": "boolean"
           },
+          "public_ca": {
+            "type": "string"
+          },
           "requires": {
             "type": "string"
           },
@@ -2641,6 +3520,71 @@
             "type": "boolean"
           },
           "template": {
+            "type": "string"
+          }
+        }
+      },
+      "PlacementGroupMemberReview": {
+        "type": "object",
+        "required": [
+          "member_id",
+          "replicas"
+        ],
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "replicas": {
+            "type": "integer"
+          }
+        }
+      },
+      "PlacementGroupReview": {
+        "type": "object",
+        "required": [
+          "group_id",
+          "generation",
+          "revision",
+          "name",
+          "service",
+          "image",
+          "min_ready",
+          "routing_mode",
+          "hostname",
+          "members"
+        ],
+        "properties": {
+          "generation": {
+            "type": "integer"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementGroupMemberReview"
+            }
+          },
+          "min_ready": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "routing_mode": {
+            "type": "string"
+          },
+          "service": {
             "type": "string"
           }
         }
@@ -2826,6 +3770,20 @@
           }
         }
       },
+      "PushState": {
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "Recipe": {
         "type": "object",
         "required": [
@@ -2875,6 +3833,24 @@
             "type": "integer"
           }
         }
+      },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
       },
       "Ref": {
         "type": "object",
@@ -2996,6 +3972,9 @@
           "role": {
             "type": "string"
           },
+          "start_timeout": {
+            "type": "integer"
+          },
           "step": {
             "type": "integer"
           },
@@ -3017,6 +3996,9 @@
           "kind"
         ],
         "properties": {
+          "account_identity": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
@@ -3028,6 +4010,13 @@
           },
           "composition": {
             "$ref": "#/components/schemas/CompositionConfig"
+          },
+          "endpoint_pins": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "existing_resource": {
+            "$ref": "#/components/schemas/ExistingResourceConfig"
           },
           "kind": {
             "type": "string"
@@ -3047,6 +4036,10 @@
               "type": "integer"
             }
           },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "target": {
             "type": "string"
           },
@@ -3056,6 +4049,20 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "ResourceStep": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
+            "type": "integer"
           }
         }
       },
@@ -3103,6 +4110,9 @@
           },
           "memory_mb": {
             "type": "integer"
+          },
+          "per_gpu": {
+            "$ref": "#/components/schemas/ResourceStep"
           },
           "shm_mb": {
             "type": "integer"
@@ -3216,6 +4226,9 @@
           "container_id": {
             "type": "string"
           },
+          "external_id": {
+            "type": "string"
+          },
           "ingress_class": {
             "type": "string"
           },
@@ -3223,6 +4236,9 @@
             "type": "string"
           },
           "namespace": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "release_id": {
@@ -3323,6 +4339,21 @@
           }
         }
       },
+      "Runtime": {
+        "type": "object",
+        "required": [
+          "socket",
+          "version"
+        ],
+        "properties": {
+          "socket": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "Scale": {
         "type": "object",
         "required": [
@@ -3350,9 +4381,6 @@
           "public"
         ],
         "properties": {
-          "applied_inputs": {
-            "$ref": "#/components/schemas/AppliedInputs"
-          },
           "artifact": {
             "$ref": "#/components/schemas/ReusedArtifact"
           },
@@ -3365,6 +4393,9 @@
           "capacity_intent": {
             "$ref": "#/components/schemas/CapacityIntent"
           },
+          "capacity_mode": {
+            "type": "string"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
@@ -3373,6 +4404,9 @@
           },
           "cloud_sql_network": {
             "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          },
+          "cluster_demand": {
+            "$ref": "#/components/schemas/ClusterDemand"
           },
           "commit_sha": {
             "type": "string"
@@ -3401,6 +4435,9 @@
           "execution": {
             "type": "string"
           },
+          "farp": {
+            "$ref": "#/components/schemas/FarpConfig"
+          },
           "framework": {
             "type": "string"
           },
@@ -3409,6 +4446,9 @@
             "items": {
               "$ref": "#/components/schemas/GatewayRoute"
             }
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "health_path": {
             "type": "string"
@@ -3455,21 +4495,18 @@
           "target": {
             "type": "string"
           },
+          "target_account_identity": {
+            "type": "string"
+          },
           "target_settings": {
             "type": "object",
             "additionalProperties": true
           },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerSettings"
+          },
           "workload": {
             "type": "string"
-          },
-          "farp": {
-            "$ref": "#/components/schemas/FarpConfig"
-          },
-          "frontend_demand": {
-            "$ref": "#/components/schemas/FrontendDemand"
-          },
-          "gpu": {
-            "$ref": "#/components/schemas/GPUPlacement"
           }
         }
       },
@@ -3681,6 +4718,25 @@
           }
         }
       },
+      "UnwatchedService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "Volume": {
         "type": "object",
         "required": [
@@ -3695,6 +4751,390 @@
           },
           "mount_path": {
             "type": "string"
+          }
+        }
+      },
+      "WatchedService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "binding_id",
+          "op",
+          "revision",
+          "verdict",
+          "reason"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        }
+      },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "size_setting": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkerSettings": {
+        "type": "object",
+        "required": [
+          "main",
+          "compatibility_date"
+        ],
+        "properties": {
+          "compatibility_date": {
+            "type": "string"
+          },
+          "compatibility_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "durable_objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DurableObjectClass"
+            }
+          },
+          "main": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeAgentEnd": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RealtimeAgentEvent": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "seq",
+          "kind",
+          "data",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "signal",
+          "component",
+          "fingerprint",
+          "status",
+          "severity",
+          "title",
+          "facts",
+          "evidence",
+          "repository",
+          "occurrences",
+          "first_seen_at",
+          "last_seen_at",
+          "closed_by",
+          "resolution",
+          "taken_by",
+          "investigation",
+          "investigation_note",
+          "task_id",
+          "issue",
+          "revision",
+          "opened_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "closed_by": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AgentreportsEvidence"
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fact"
+            }
+          },
+          "findings": {
+            "$ref": "#/components/schemas/Findings"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "investigation": {
+            "type": "string"
+          },
+          "investigation_note": {
+            "type": "string"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "occurrences": {
+            "type": "integer"
+          },
+          "opened_by": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "signal": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "taken_at": {
+            "type": "string"
+          },
+          "taken_by": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RequestEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "kind",
+          "status",
+          "team_id",
+          "team_name",
+          "route_source",
+          "asked_for",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "asked_for": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "route_source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "team_name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TaskEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "kind",
+          "run_id",
+          "status",
+          "requested_by",
+          "event_seq",
+          "tokens",
+          "max_tokens",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_seq": {
+            "type": "integer"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_tokens": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -3766,6 +5206,106 @@
           },
           "summary": {
             "$ref": "#/components/schemas/GraphSummary"
+          }
+        }
+      },
+      "Binding": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "subject",
+          "name",
+          "provider",
+          "region",
+          "engine",
+          "external_id",
+          "config",
+          "url",
+          "connection_id",
+          "revision",
+          "commit_sha",
+          "drift",
+          "drift_message",
+          "plan_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "commit_sha": {
+            "type": "string"
+          },
+          "config": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "drift": {
+            "type": "string"
+          },
+          "drift_message": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "owned_resources": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "physical_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -3977,6 +5517,7 @@
           "project_id",
           "name",
           "default_placement",
+          "platform_owned",
           "revision",
           "created_at",
           "updated_at"
@@ -4010,6 +5551,9 @@
           "org_id": {
             "type": "string"
           },
+          "platform_owned": {
+            "type": "boolean"
+          },
           "project_id": {
             "type": "string"
           },
@@ -4019,6 +5563,67 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "CapacityChange": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "kind",
+          "entity_id",
+          "revision"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterChange": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "cloud_id",
+          "resource_id",
+          "revision",
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },
@@ -4107,6 +5712,12 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "location_id": {
+            "type": "string"
+          },
+          "managed_resource_id": {
+            "type": "string"
           },
           "name": {
             "type": "string"
@@ -4245,6 +5856,9 @@
           "canary": {
             "$ref": "#/components/schemas/Canary"
           },
+          "cancel_requested_at": {
+            "type": "string"
+          },
           "capacity_wait": {
             "$ref": "#/components/schemas/CapacityWait"
           },
@@ -4322,6 +5936,9 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "instance_id": {
+            "type": "string"
           },
           "kind": {
             "type": "string"
@@ -4439,6 +6056,132 @@
           }
         }
       },
+      "Node": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "key_fingerprint",
+          "identity_generation",
+          "status",
+          "endpoints",
+          "ingress_mode",
+          "role",
+          "edge_scope",
+          "labels",
+          "version",
+          "protocol_version",
+          "inventory",
+          "joined_by",
+          "joined_by_key_id",
+          "revoked_by",
+          "created_at",
+          "updated_at",
+          "public_address",
+          "ingress_applied",
+          "ingress_detail"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edge_scope": {
+            "type": "string"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "identity_generation": {
+            "type": "integer"
+          },
+          "ingress_applied": {
+            "type": "string"
+          },
+          "ingress_detail": {
+            "type": "string"
+          },
+          "ingress_mode": {
+            "type": "string"
+          },
+          "inventory": {
+            "$ref": "#/components/schemas/Inventory"
+          },
+          "joined_by": {
+            "type": "string"
+          },
+          "joined_by_key_id": {
+            "type": "string"
+          },
+          "key_fingerprint": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "last_seen_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "integer"
+          },
+          "public_address": {
+            "type": "string"
+          },
+          "public_address_confirmed_at": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "revoked_by": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "NotificationCreated": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          }
+        }
+      },
       "Plan": {
         "type": "object",
         "required": [
@@ -4552,6 +6295,12 @@
           "org_id": {
             "type": "string"
           },
+          "placement_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementGroupReview"
+            }
+          },
           "planned_at": {
             "type": "string"
           },
@@ -4572,6 +6321,12 @@
           },
           "rollback": {
             "$ref": "#/components/schemas/Rollback"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "sources": {
             "type": "array",
@@ -4596,6 +6351,7 @@
       "Project": {
         "type": "object",
         "required": [
+          "deployment_mode",
           "id",
           "org_id",
           "name",
@@ -4605,12 +6361,18 @@
           "color",
           "repositories",
           "exclusions",
+          "autonomous_promotion",
+          "min_staging_soak_seconds",
+          "responsible_team_id",
           "status",
           "created_by",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "autonomous_promotion": {
+            "type": "boolean"
+          },
           "color": {
             "type": "string"
           },
@@ -4619,6 +6381,9 @@
             "format": "date-time"
           },
           "created_by": {
+            "type": "string"
+          },
+          "deployment_mode": {
             "type": "string"
           },
           "description": {
@@ -4637,6 +6402,9 @@
             "type": "string",
             "x-forge-id": true
           },
+          "min_staging_soak_seconds": {
+            "type": "integer"
+          },
           "name": {
             "type": "string"
           },
@@ -4648,6 +6416,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "responsible_team_id": {
+            "type": "string"
           },
           "slug": {
             "type": "string"
@@ -4699,6 +6470,243 @@
           }
         }
       },
+      "ReleaseReportEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "from_environment_id",
+          "from_environment",
+          "to_environment_id",
+          "to_environment",
+          "scope",
+          "status",
+          "state",
+          "state_reason",
+          "requested_by",
+          "via",
+          "plan_id",
+          "plan_revision",
+          "reused_plan",
+          "task_id",
+          "run_id",
+          "gates",
+          "preview",
+          "decision",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "evaluated_at": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "from_environment": {
+            "type": "string"
+          },
+          "from_environment_id": {
+            "type": "string"
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GateCheck"
+            }
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "plan_revision": {
+            "type": "string"
+          },
+          "preview": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "reused_plan": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string"
+          },
+          "state_reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "to_environment": {
+            "type": "string"
+          },
+          "to_environment_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "via": {
+            "type": "string"
+          }
+        }
+      },
+      "Watch": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "deployment_id",
+          "plan_id",
+          "status",
+          "verdict",
+          "reason",
+          "thresholds",
+          "services",
+          "unwatched",
+          "held",
+          "held_released",
+          "unverified",
+          "rollback_plan_id",
+          "starts_at",
+          "ends_at",
+          "bound_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "bound_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldRoute"
+            }
+          },
+          "held_released": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rollback_approved_at": {
+            "type": "string"
+          },
+          "rollback_plan_id": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WatchedService"
+            }
+          },
+          "settled_at": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "unverified": {
+            "type": "boolean"
+          },
+          "unwatched": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnwatchedService"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        }
+      },
       "Source": {
         "type": "object",
         "required": [
@@ -4733,6 +6741,9 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "push": {
+            "$ref": "#/components/schemas/PushState"
           },
           "ref": {
             "type": "string"
@@ -4802,218 +6813,617 @@
             }
           }
         }
-      },
-      "FarpConfig": {
-        "type": "object",
-        "required": [
-          "gateway",
-          "port"
-        ],
-        "properties": {
-          "gateway": {
-            "type": "string"
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "port": {
-            "type": "integer"
-          }
-        }
-      },
-      "Exclusion": {
-        "type": "object",
-        "required": [
-          "kind",
-          "match",
-          "reason",
-          "keep_running",
-          "created_by",
-          "created_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "created_by": {
-            "type": "string"
-          },
-          "keep_running": {
-            "type": "boolean"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "match": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          }
-        }
-      },
-      "FrontendDemand": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "cloud_id",
-          "target_id",
-          "project_id",
-          "environment_id",
-          "service",
-          "plan_id",
-          "provider",
-          "connection_id",
-          "account_id",
-          "target_revision",
-          "connection_generation",
-          "grant_revision"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "cloud_id": {
-            "type": "string"
-          },
-          "connection_generation": {
-            "type": "integer"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "grant_revision": {
-            "type": "integer"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string"
-          },
-          "target_id": {
-            "type": "string"
-          },
-          "target_revision": {
-            "type": "integer"
-          }
-        }
-      },
-      "GPUPlacement": {
-        "type": "object",
-        "required": [
-          "kind",
-          "count"
-        ],
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "node_selector": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "tolerations": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GPUToleration"
-            }
-          }
-        }
-      },
-      "GPUToleration": {
-        "type": "object",
-        "required": [
-          "key",
-          "operator",
-          "effect"
-        ],
-        "properties": {
-          "effect": {
-            "type": "string"
-          },
-          "key": {
-            "type": "string"
-          },
-          "operator": {
-            "type": "string"
-          },
-          "value": {
-            "type": "string"
-          }
-        }
-      },
-      "ManifestGPU": {
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "count"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
-      },
-      "RecipesGPU": {
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "min_memory_gib": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "count"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
-      },
-      "WeightCache": {
-        "type": "object",
-        "required": [
-          "mount_path",
-          "kubernetes_size_mb"
-        ],
-        "properties": {
-          "kubernetes_size_mb": {
-            "type": "integer"
-          },
-          "mount_path": {
-            "type": "string"
-          }
-        }
       }
     },
     "messages": {
+      "api-v1-agent-tasks-:id-streamagent.end": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent.end",
+        "title": "agent.end event",
+        "summary": "SSE event: agent.end"
+      },
+      "api-v1-agent-tasks-:id-streamagent.event": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "task_id",
+            "seq",
+            "kind",
+            "data",
+            "at"
+          ],
+          "properties": {
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "data": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "integer"
+            },
+            "task_id": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent.event",
+        "title": "agent.event event",
+        "summary": "SSE event: agent.event"
+      },
+      "api-v1-realtime-eventsagent_report.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "signal",
+            "component",
+            "fingerprint",
+            "status",
+            "severity",
+            "title",
+            "facts",
+            "evidence",
+            "repository",
+            "occurrences",
+            "first_seen_at",
+            "last_seen_at",
+            "closed_by",
+            "resolution",
+            "taken_by",
+            "investigation",
+            "investigation_note",
+            "task_id",
+            "issue",
+            "revision",
+            "opened_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "closed_by": {
+              "type": "string"
+            },
+            "component": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "evidence": {
+              "$ref": "#/components/schemas/AgentreportsEvidence"
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Fact"
+              }
+            },
+            "findings": {
+              "$ref": "#/components/schemas/Findings"
+            },
+            "fingerprint": {
+              "type": "string"
+            },
+            "first_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "investigation": {
+              "type": "string"
+            },
+            "investigation_note": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "last_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "occurrences": {
+              "type": "integer"
+            },
+            "opened_by": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "resolution": {
+              "type": "string"
+            },
+            "resolved_at": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "signal": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "taken_at": {
+              "type": "string"
+            },
+            "taken_by": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_report.deleted",
+        "title": "agent_report.deleted event",
+        "summary": "SSE event: agent_report.deleted"
+      },
+      "api-v1-realtime-eventsagent_report.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "signal",
+            "component",
+            "fingerprint",
+            "status",
+            "severity",
+            "title",
+            "facts",
+            "evidence",
+            "repository",
+            "occurrences",
+            "first_seen_at",
+            "last_seen_at",
+            "closed_by",
+            "resolution",
+            "taken_by",
+            "investigation",
+            "investigation_note",
+            "task_id",
+            "issue",
+            "revision",
+            "opened_by",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "closed_by": {
+              "type": "string"
+            },
+            "component": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "evidence": {
+              "$ref": "#/components/schemas/AgentreportsEvidence"
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Fact"
+              }
+            },
+            "findings": {
+              "$ref": "#/components/schemas/Findings"
+            },
+            "fingerprint": {
+              "type": "string"
+            },
+            "first_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "investigation": {
+              "type": "string"
+            },
+            "investigation_note": {
+              "type": "string"
+            },
+            "issue": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "last_seen_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "occurrences": {
+              "type": "integer"
+            },
+            "opened_by": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "resolution": {
+              "type": "string"
+            },
+            "resolved_at": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "signal": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "taken_at": {
+              "type": "string"
+            },
+            "taken_by": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_report.updated",
+        "title": "agent_report.updated event",
+        "summary": "SSE event: agent_report.updated"
+      },
+      "api-v1-realtime-eventsagent_request.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "kind",
+            "status",
+            "team_id",
+            "team_name",
+            "route_source",
+            "asked_for",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "asked_for": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "route_source": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "team_id": {
+              "type": "string"
+            },
+            "team_name": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_request.deleted",
+        "title": "agent_request.deleted event",
+        "summary": "SSE event: agent_request.deleted"
+      },
+      "api-v1-realtime-eventsagent_request.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "kind",
+            "status",
+            "team_id",
+            "team_name",
+            "route_source",
+            "asked_for",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "asked_for": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "route_source": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "team_id": {
+              "type": "string"
+            },
+            "team_name": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_request.updated",
+        "title": "agent_request.updated event",
+        "summary": "SSE event: agent_request.updated"
+      },
+      "api-v1-realtime-eventsagent_task.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "kind",
+            "run_id",
+            "status",
+            "requested_by",
+            "event_seq",
+            "tokens",
+            "max_tokens",
+            "error",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "event_seq": {
+              "type": "integer"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "max_tokens": {
+              "type": "integer"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "requested_by": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tokens": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_task.deleted",
+        "title": "agent_task.deleted event",
+        "summary": "SSE event: agent_task.deleted"
+      },
+      "api-v1-realtime-eventsagent_task.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "kind",
+            "run_id",
+            "status",
+            "requested_by",
+            "event_seq",
+            "tokens",
+            "max_tokens",
+            "error",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "event_seq": {
+              "type": "integer"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "max_tokens": {
+              "type": "integer"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "requested_by": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tokens": {
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "agent_task.updated",
+        "title": "agent_task.updated event",
+        "summary": "SSE event: agent_task.updated"
+      },
       "api-v1-realtime-eventsanalysis.deleted": {
         "payload": {
           "type": "object",
@@ -5699,6 +8109,7 @@
             "project_id",
             "name",
             "default_placement",
+            "platform_owned",
             "revision",
             "created_at",
             "updated_at"
@@ -5731,6 +8142,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "platform_owned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -5758,6 +8172,7 @@
             "project_id",
             "name",
             "default_placement",
+            "platform_owned",
             "revision",
             "created_at",
             "updated_at"
@@ -5790,6 +8205,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "platform_owned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -5843,6 +8261,43 @@
         "name": "cloud_capacity.updated",
         "title": "cloud_capacity.updated event",
         "summary": "SSE event: cloud_capacity.updated"
+      },
+      "api-v1-realtime-eventscloud_cluster.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "operation_id",
+            "cloud_id",
+            "resource_id",
+            "revision",
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "resource_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_cluster.updated",
+        "title": "cloud_cluster.updated event",
+        "summary": "SSE event: cloud_cluster.updated"
       },
       "api-v1-realtime-eventscloud_sync.updated": {
         "payload": {
@@ -5937,6 +8392,12 @@
               "type": "string",
               "x-forge-id": true
             },
+            "location_id": {
+              "type": "string"
+            },
+            "managed_resource_id": {
+              "type": "string"
+            },
             "name": {
               "type": "string"
             },
@@ -6014,6 +8475,12 @@
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "location_id": {
+              "type": "string"
+            },
+            "managed_resource_id": {
+              "type": "string"
             },
             "name": {
               "type": "string"
@@ -6249,6 +8716,9 @@
             "canary": {
               "$ref": "#/components/schemas/Canary"
             },
+            "cancel_requested_at": {
+              "type": "string"
+            },
             "capacity_wait": {
               "$ref": "#/components/schemas/CapacityWait"
             },
@@ -6335,6 +8805,9 @@
             "canary": {
               "$ref": "#/components/schemas/Canary"
             },
+            "cancel_requested_at": {
+              "type": "string"
+            },
             "capacity_wait": {
               "$ref": "#/components/schemas/CapacityWait"
             },
@@ -6419,6 +8892,9 @@
               "type": "string",
               "x-forge-id": true
             },
+            "instance_id": {
+              "type": "string"
+            },
             "kind": {
               "type": "string"
             },
@@ -6462,6 +8938,9 @@
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "instance_id": {
+              "type": "string"
             },
             "kind": {
               "type": "string"
@@ -6658,6 +9137,144 @@
         "title": "manifest.updated event",
         "summary": "SSE event: manifest.updated"
       },
+      "api-v1-realtime-eventsnode.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "name",
+            "key_fingerprint",
+            "identity_generation",
+            "status",
+            "endpoints",
+            "ingress_mode",
+            "role",
+            "edge_scope",
+            "labels",
+            "version",
+            "protocol_version",
+            "inventory",
+            "joined_by",
+            "joined_by_key_id",
+            "revoked_by",
+            "created_at",
+            "updated_at",
+            "public_address",
+            "ingress_applied",
+            "ingress_detail"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "edge_scope": {
+              "type": "string"
+            },
+            "endpoints": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "identity_generation": {
+              "type": "integer"
+            },
+            "ingress_applied": {
+              "type": "string"
+            },
+            "ingress_detail": {
+              "type": "string"
+            },
+            "ingress_mode": {
+              "type": "string"
+            },
+            "inventory": {
+              "$ref": "#/components/schemas/Inventory"
+            },
+            "joined_by": {
+              "type": "string"
+            },
+            "joined_by_key_id": {
+              "type": "string"
+            },
+            "key_fingerprint": {
+              "type": "string"
+            },
+            "labels": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "last_seen_at": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "protocol_version": {
+              "type": "integer"
+            },
+            "public_address": {
+              "type": "string"
+            },
+            "public_address_confirmed_at": {
+              "type": "string"
+            },
+            "revoked_at": {
+              "type": "string"
+            },
+            "revoked_by": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "node.updated",
+        "title": "node.updated event",
+        "summary": "SSE event: node.updated"
+      },
+      "api-v1-realtime-eventsnotification.created": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "notification.created",
+        "title": "notification.created event",
+        "summary": "SSE event: notification.created"
+      },
       "api-v1-realtime-eventsplan.deleted": {
         "payload": {
           "type": "object",
@@ -6772,6 +9389,12 @@
             "org_id": {
               "type": "string"
             },
+            "placement_groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlacementGroupReview"
+              }
+            },
             "planned_at": {
               "type": "string"
             },
@@ -6792,6 +9415,12 @@
             },
             "rollback": {
               "$ref": "#/components/schemas/Rollback"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "sources": {
               "type": "array",
@@ -6932,6 +9561,12 @@
             "org_id": {
               "type": "string"
             },
+            "placement_groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlacementGroupReview"
+              }
+            },
             "planned_at": {
               "type": "string"
             },
@@ -6952,6 +9587,12 @@
             },
             "rollback": {
               "$ref": "#/components/schemas/Rollback"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             },
             "sources": {
               "type": "array",
@@ -6982,6 +9623,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "deployment_mode",
             "id",
             "org_id",
             "name",
@@ -6991,12 +9633,18 @@
             "color",
             "repositories",
             "exclusions",
+            "autonomous_promotion",
+            "min_staging_soak_seconds",
+            "responsible_team_id",
             "status",
             "created_by",
             "created_at",
             "updated_at"
           ],
           "properties": {
+            "autonomous_promotion": {
+              "type": "boolean"
+            },
             "color": {
               "type": "string"
             },
@@ -7005,6 +9653,9 @@
               "format": "date-time"
             },
             "created_by": {
+              "type": "string"
+            },
+            "deployment_mode": {
               "type": "string"
             },
             "description": {
@@ -7023,6 +9674,9 @@
               "type": "string",
               "x-forge-id": true
             },
+            "min_staging_soak_seconds": {
+              "type": "integer"
+            },
             "name": {
               "type": "string"
             },
@@ -7034,6 +9688,9 @@
               "items": {
                 "type": "string"
               }
+            },
+            "responsible_team_id": {
+              "type": "string"
             },
             "slug": {
               "type": "string"
@@ -7056,6 +9713,7 @@
         "payload": {
           "type": "object",
           "required": [
+            "deployment_mode",
             "id",
             "org_id",
             "name",
@@ -7065,12 +9723,18 @@
             "color",
             "repositories",
             "exclusions",
+            "autonomous_promotion",
+            "min_staging_soak_seconds",
+            "responsible_team_id",
             "status",
             "created_by",
             "created_at",
             "updated_at"
           ],
           "properties": {
+            "autonomous_promotion": {
+              "type": "boolean"
+            },
             "color": {
               "type": "string"
             },
@@ -7079,6 +9743,9 @@
               "format": "date-time"
             },
             "created_by": {
+              "type": "string"
+            },
+            "deployment_mode": {
               "type": "string"
             },
             "description": {
@@ -7097,6 +9764,9 @@
               "type": "string",
               "x-forge-id": true
             },
+            "min_staging_soak_seconds": {
+              "type": "integer"
+            },
             "name": {
               "type": "string"
             },
@@ -7108,6 +9778,9 @@
               "items": {
                 "type": "string"
               }
+            },
+            "responsible_team_id": {
+              "type": "string"
             },
             "slug": {
               "type": "string"
@@ -7176,6 +9849,256 @@
         "title": "realtime.status event",
         "summary": "SSE event: realtime.status"
       },
+      "api-v1-realtime-eventsrelease_watch.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "deployment_id",
+            "plan_id",
+            "status",
+            "verdict",
+            "reason",
+            "thresholds",
+            "services",
+            "unwatched",
+            "held",
+            "held_released",
+            "unverified",
+            "rollback_plan_id",
+            "starts_at",
+            "ends_at",
+            "bound_at",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "bound_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "checked_at": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "ends_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "held": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/HeldRoute"
+              }
+            },
+            "held_released": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "rollback_approved_at": {
+              "type": "string"
+            },
+            "rollback_plan_id": {
+              "type": "string"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/WatchedService"
+              }
+            },
+            "settled_at": {
+              "type": "string"
+            },
+            "starts_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "type": "string"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "unverified": {
+              "type": "boolean"
+            },
+            "unwatched": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnwatchedService"
+              }
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "verdict": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "release_watch.deleted",
+        "title": "release_watch.deleted event",
+        "summary": "SSE event: release_watch.deleted"
+      },
+      "api-v1-realtime-eventsrelease_watch.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "environment_id",
+            "environment",
+            "deployment_id",
+            "plan_id",
+            "status",
+            "verdict",
+            "reason",
+            "thresholds",
+            "services",
+            "unwatched",
+            "held",
+            "held_released",
+            "unverified",
+            "rollback_plan_id",
+            "starts_at",
+            "ends_at",
+            "bound_at",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "bound_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "checked_at": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "ends_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "environment": {
+              "type": "string"
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "held": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/HeldRoute"
+              }
+            },
+            "held_released": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "rollback_approved_at": {
+              "type": "string"
+            },
+            "rollback_plan_id": {
+              "type": "string"
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/WatchedService"
+              }
+            },
+            "settled_at": {
+              "type": "string"
+            },
+            "starts_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "type": "string"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "unverified": {
+              "type": "boolean"
+            },
+            "unwatched": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/UnwatchedService"
+              }
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "verdict": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "release_watch.updated",
+        "title": "release_watch.updated event",
+        "summary": "SSE event: release_watch.updated"
+      },
       "api-v1-realtime-eventssource.deleted": {
         "payload": {
           "type": "object",
@@ -7211,6 +10134,9 @@
             },
             "project_id": {
               "type": "string"
+            },
+            "push": {
+              "$ref": "#/components/schemas/PushState"
             },
             "ref": {
               "type": "string"
@@ -7270,6 +10196,9 @@
             },
             "project_id": {
               "type": "string"
+            },
+            "push": {
+              "$ref": "#/components/schemas/PushState"
             },
             "ref": {
               "type": "string"

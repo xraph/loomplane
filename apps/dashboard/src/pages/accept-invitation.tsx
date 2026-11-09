@@ -10,12 +10,10 @@ import {
 import { useSessionGet } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
 import { AuthLayout } from "@/components/auth-layout"
-import { BrandLogo } from "@/components/brand-logo"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { clearInvite } from "@/lib/invite"
-import { useNavigate } from "@/lib/router"
 
 const lastOrgKey = "loomplane.last-org"
 
@@ -25,7 +23,6 @@ const lastOrgKey = "loomplane.last-org"
  * so opening a link is never enough to change anything.
  */
 export function AcceptInvitation({ token }: { token: string }) {
-  const navigate = useNavigate()
   const { user, signOut } = useAuth()
   const accept = useMutation(useAcceptInvitation)
   const switchOrg = useMutation(useSwitchOrg)
@@ -52,9 +49,8 @@ export function AcceptInvitation({ token }: { token: string }) {
       await switchOrg.mutateAsync({ body: { orgId: member.orgId } })
       window.localStorage.setItem(lastOrgKey, member.orgId)
       invalidate(useSessionGet)
-      // Last: clearing it takes this page away and shows the organization.
+      // Last: clearing it sends the accept page home, into the workspace.
       clearInvite()
-      void navigate({ to: "/", replace: true })
     } catch (err) {
       setError(
         /not found for email/i.test(String(err))
@@ -67,33 +63,20 @@ export function AcceptInvitation({ token }: { token: string }) {
     }
   }
 
-  const skip = () => {
-    clearInvite()
-    void navigate({ to: "/", replace: true })
-  }
-
   return (
     <AuthLayout title="Join a workspace">
       <AuthCard
         title="Join a workspace"
         description={`You've been invited to a workspace on Loomplane${user?.email ? `, as ${user.email}` : ""}.`}
-        logo={<BrandLogo />}
         align="left"
         variant="borderless"
         className="auth-card"
         footer={
-          <div className="flex gap-4">
-            <Button
-              variant="link"
-              className="h-8 px-0 text-foreground"
-              onClick={skip}
-              disabled={busy}
-            >
-              Not now
-            </Button>
-            <Button
-              variant="link"
-              className="h-8 px-0 text-foreground"
+          <p className="text-[13px] text-muted-foreground">
+            Wrong account?{" "}
+            <button
+              type="button"
+              className="font-medium text-(--auth-link) underline-offset-4 hover:underline disabled:opacity-50"
               onClick={() => {
                 if (spent) clearInvite()
                 void signOut()
@@ -101,19 +84,24 @@ export function AcceptInvitation({ token }: { token: string }) {
               disabled={busy}
             >
               Sign out
-            </Button>
-          </div>
+            </button>
+          </p>
         }
       >
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
           {error && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" className="mb-2">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
           <Button onClick={() => void join()} disabled={busy}>
             {busy && <Spinner />}
             Accept invitation
+          </Button>
+          {/* Declining is the other half of the same choice, so it sits
+              beside accepting rather than down in the footer. */}
+          <Button variant="ghost" onClick={clearInvite} disabled={busy}>
+            Not now
           </Button>
         </div>
       </AuthCard>

@@ -47,49 +47,42 @@ func (c *Client) GetProject(ctx context.Context, tok Token, idOrName string) (*P
 // EnsureProject creates a project with settings, or brings an existing
 // one's settings in step.
 func (c *Client) EnsureProject(ctx context.Context, tok Token, name string, s ProjectSettings) (*Project, error) {
+	p, _, err := c.EnsureProjectCreated(ctx, tok, name, s)
+	return p, err
+}
+
+// EnsureProjectCreated is EnsureProject, and says whether this call
+// created the project. One that existed, or that another caller created
+// first, is not created by this call.
+func (c *Client) EnsureProjectCreated(ctx context.Context, tok Token, name string, s ProjectSettings) (*Project, bool, error) {
 	p, err := c.GetProject(ctx, tok, name)
 	switch {
 	case IsNotFound(err):
 		var created Project
 		body := map[string]any{"name": name, "framework": s.Framework, "rootDirectory": s.RootDirectory}
-		if cerr := c.json(ctx, tok, http.MethodPost, "/v10/projects", nil, body, &created); cerr != nil {
-			return nil, fmt.Errorf("create the vercel project: %w", cerr)
+		cerr := c.json(ctx, tok, http.MethodPost, "/v10/projects", nil, body, &created)
+		var ae *APIError
+		if errors.As(cerr, &ae) && ae.Status == http.StatusConflict {
+			// Another environment of the service made it first.
+			p, err = c.GetProject(ctx, tok, name)
+			return p, false, err
 		}
-		return &created, nil
+		if cerr != nil {
+			return nil, false, fmt.Errorf("create the vercel project: %w", cerr)
+		}
+		return &created, true, nil
 	case err != nil:
-		return nil, err
+		return nil, false, err
 	}
 	if !same(p.Framework, s.Framework) || !same(p.RootDirectory, s.RootDirectory) {
 		if err := c.json(ctx, tok, http.MethodPatch, "/v9/projects/"+url.PathEscape(p.ID), nil, s, p); err != nil {
-			return nil, fmt.Errorf("update the vercel project: %w", err)
+			return nil, false, fmt.Errorf("update the vercel project: %w", err)
 		}
 	}
-	return p, nil
+	return p, false, nil
 }
 
 func same(a, b *string) bool { return (a == nil && b == nil) || (a != nil && b != nil && *a == *b) }
-
-// SetEnv sets variables on a project's production target, replacing
-// earlier values of the same keys. Every value is encrypted; the secret
-// ones are sensitive too, so Vercel never shows them again.
-func (c *Client) SetEnv(ctx context.Context, tok Token, projectID string, env map[string]string, secret map[string]bool) error {
-	if len(env) == 0 {
-		return nil
-	}
-	vars := make([]map[string]any, 0, len(env))
-	for k, v := range env {
-		kind := "encrypted"
-		if secret[k] {
-			kind = "sensitive"
-		}
-		vars = append(vars, map[string]any{"key": k, "value": v, "type": kind, "target": []string{"production"}})
-	}
-	q := url.Values{"upsert": {"true"}}
-	if err := c.json(ctx, tok, http.MethodPost, "/v10/projects/"+url.PathEscape(projectID)+"/env", q, vars, nil); err != nil {
-		return fmt.Errorf("set the project's variables: %w", err)
-	}
-	return nil
-}
 
 // UploadFile uploads one file's content, named by its SHA-1. Vercel keeps
 // each content once, so uploading it again is harmless.
@@ -148,12 +141,32 @@ func (e *MissingFilesError) Error() string {
 	return fmt.Sprintf("vercel is missing %d of the deployment's files", len(e.SHAs))
 }
 
-// CreateDeployment deploys files to a project's production target. meta
-// is shown on the deployment, such as the commit it's from.
-func (c *Client) CreateDeployment(ctx context.Context, tok Token, project *Project, files []File, meta map[string]string) (*Deployment, error) {
+// deployTarget adds t to a deployment body. Production names itself,
+// Preview is Vercel's default so it names nothing, and a custom
+// environment is named by ID. The zero Target is refused, since it would
+// otherwise deploy to Preview.
+func (t Target) deployTarget(body map[string]any) error {
+	if err := t.check(); err != nil {
+		return err
+	}
+	switch {
+	case t.CustomID != "":
+		body["customEnvironmentSlugOrId"] = t.CustomID
+	case t.Builtin == Production.Builtin:
+		body["target"] = "production"
+	}
+	return nil
+}
+
+// CreateDeployment deploys files to one target of a project. meta is
+// shown on the deployment, such as the commit it's from.
+func (c *Client) CreateDeployment(ctx context.Context, tok Token, project *Project, t Target, files []File, meta map[string]string) (*Deployment, error) {
 	body := map[string]any{
-		"name": project.Name, "project": project.ID, "target": "production", "files": files, "meta": meta,
+		"name": project.Name, "project": project.ID, "files": files, "meta": meta,
 		"projectSettings": map[string]any{"framework": project.Framework, "rootDirectory": project.RootDirectory},
+	}
+	if err := t.deployTarget(body); err != nil {
+		return nil, err
 	}
 	var d Deployment
 	err := c.json(ctx, tok, http.MethodPost, "/v13/deployments", url.Values{"skipAutoDetectionConfirmation": {"1"}}, body, &d)
@@ -176,9 +189,11 @@ func (c *Client) GetDeployment(ctx context.Context, tok Token, id string) (*Depl
 	return &d, nil
 }
 
-// WaitDeployment polls a deployment until it's ready and its production
-// domain points at it, and fails if its build failed.
-func (c *Client) WaitDeployment(ctx context.Context, tok Token, id string) (*Deployment, error) {
+// WaitDeployment polls a deployment of target t until it's ready, and
+// fails if its build failed. A production deployment also waits for its
+// production domain to point at it; Preview and custom environments are
+// done once they're ready.
+func (c *Client) WaitDeployment(ctx context.Context, tok Token, id string, t Target) (*Deployment, error) {
 	for {
 		d, err := c.GetDeployment(ctx, tok, id)
 		if err != nil {
@@ -186,7 +201,7 @@ func (c *Client) WaitDeployment(ctx context.Context, tok Token, id string) (*Dep
 		}
 		switch d.ReadyState {
 		case "READY":
-			if d.AliasAssigned || len(d.Alias) > 0 {
+			if t != Production || d.AliasAssigned || len(d.Alias) > 0 {
 				return d, nil
 			}
 		case "ERROR", "CANCELED":

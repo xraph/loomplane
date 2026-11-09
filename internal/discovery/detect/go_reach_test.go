@@ -152,3 +152,24 @@ func cache() { redis.NewClient(nil) }
 		t.Fatalf("shadowed function became reachable: %+v", u.Entrypoints[0].Resources)
 	}
 }
+
+func TestGo_entrypointsListThePackagesTheyReach(t *testing.T) {
+	r := run(t, Go{}, map[string]string{
+		"go.mod":                    "module example.com/app\n\ngo 1.26\n",
+		"cmd/api/main.go":           "package main\nimport \"example.com/app/internal/apiconfig\"\nfunc main() { apiconfig.Load() }\n",
+		"cmd/worker/main.go":        "package main\nimport \"example.com/app/internal/jobconfig\"\nfunc main() { jobconfig.Load() }\n",
+		"internal/apiconfig/c.go":   "package apiconfig\nimport \"example.com/app/internal/shared\"\nfunc Load() { shared.Init() }\n",
+		"internal/jobconfig/c.go":   "package jobconfig\nimport \"example.com/app/internal/shared\"\nfunc Load() { shared.Init() }\n",
+		"internal/shared/shared.go": "package shared\nfunc Init() {}\n",
+		"internal/unused/unused.go": "package unused\n",
+	})
+	want := map[string]string{
+		"api":    "cmd/api internal/apiconfig internal/shared",
+		"worker": "cmd/worker internal/jobconfig internal/shared",
+	}
+	for _, ep := range onlyUnit(t, r, "go:.").Entrypoints {
+		if got := strings.Join(ep.Packages, " "); got != want[ep.Name] {
+			t.Errorf("%s packages = %q, want %q", ep.Name, got, want[ep.Name])
+		}
+	}
+}

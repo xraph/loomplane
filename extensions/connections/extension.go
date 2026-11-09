@@ -29,11 +29,13 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/render"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -48,8 +50,13 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg     config.Config
 	plugins *plugins.Set
+	// streams reach joined nodes, for the servers they connect.
+	streams server.NodeStreams
 	svc     *connections.Service
 	issuer  *issuer.Service
+	// platformUser says whether a request is a platform owner's or admin's,
+	// for the routes that manage the platform's sign-in apps.
+	platformUser identity.PlatformUser
 	// rotating is closed once the startup key rotation is done, and
 	// stopRotating cuts it short.
 	rotating     chan struct{}
@@ -63,10 +70,12 @@ const startupRotateTimeout = time.Minute
 // issuer is serving its keys.
 const issuerCheckTimeout = 10 * time.Second
 
-// New returns the extension.
-func New(cfg config.Config, plugs *plugins.Set) *Extension {
+// New returns the extension. streams reach joined nodes: the nodes
+// extension's hub.
+func New(cfg config.Config, plugs *plugins.Set, streams server.NodeStreams) *Extension {
 	return &Extension{
 		plugins:       plugs,
+		streams:       streams,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud connections"),
 		cfg:           cfg,
 	}
@@ -98,6 +107,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("connections needs the identity extension: %w", err)
 	}
+	platformUser, err := forge.InjectType[identity.PlatformUser](c)
+	if err != nil {
+		return fmt.Errorf("connections needs the identity extension: %w", err)
+	}
+	e.platformUser = platformUser
 	audit, err := forge.InjectType[*chronicle.Chronicle](c)
 	if err != nil {
 		return fmt.Errorf("connections needs the audit trail: %w", err)
@@ -127,6 +141,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	gcpClient, vercelClient := gcp.New(e.cfg.Clouds.GoogleEndpoint).WithMinter(e.issuer), vercel.New(e.cfg.Clouds.VercelEndpoint)
 	doClient, azureClient := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint), azure.New(e.cfg.Clouds.AzureEndpoint).WithMinter(e.issuer)
 	awsClient := aws.New(e.cfg.Clouds.AWSEndpoint).WithMinter(e.issuer)
+	cfClient := cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, e.cfg.Clouds.CloudflareRegistrarSandbox)
 	checkers := map[string]connections.Checker{
 		connections.GCP:          connections.GCPChecker{Client: gcpClient},
 		connections.Vercel:       connections.VercelChecker{Client: vercelClient},
@@ -134,8 +149,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
 		connections.Azure:        connections.AzureChecker{Client: azureClient},
-		connections.Cloudflare:   connections.CloudflareChecker{Client: cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, e.cfg.Clouds.CloudflareRegistrarSandbox)},
-		connections.Server:       connections.ServerChecker{},
+		connections.Cloudflare:   connections.CloudflareChecker{Client: cfClient},
+		connections.Server:       connections.ServerChecker{Streams: e.streams},
+		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},
 	}
@@ -156,16 +172,17 @@ func (e *Extension) Register(fapp forge.App) error {
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
-	// Signing in. An org's own sign-in app secrets share the credentials'
+	// Signing in. The platform's sign-in app secrets share the credentials'
 	// key but live under a Vault app of their own.
 	e.svc.Apps = store
-	e.svc.AppSecrets = connections.NewVaultSecretsFor(
-		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.OAuthAppsVaultAppID)), connections.OAuthAppsVaultAppID)
+	e.svc.AppSecrets = connections.NewVaultAppSecrets(
+		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.PlatformOAuthAppsVaultAppID)))
 	e.svc.Providers = map[string]connections.Provider{
 		connections.DigitalOcean: doClient,
 		connections.Vercel:       vercelClient,
 		connections.GCP:          gcpClient,
 		connections.Azure:        azureClient,
+		connections.Cloudflare:   cfClient,
 	}
 	e.svc.ConfigApps = map[string]oauth.App{}
 	for cloud, app := range e.cfg.Clouds.OAuth {
@@ -306,10 +323,11 @@ func (a auditor) Record(ctx context.Context, action string, p security.Principal
 }
 
 // RecordApp implements connections.AppAuditor. It records the cloud and the
-// client ID, never the secret.
-func (a auditor) RecordApp(ctx context.Context, action string, p security.Principal, cloud, clientID string) {
+// client ID, never the secret, in the staff stream: only a platform user
+// changes a sign-in app.
+func (a auditor) RecordApp(ctx context.Context, action, userID, cloud, clientID string) {
 	b := a.chronicle.Warning(ctx, action, "cloud_signin_app", cloud).
-		Category("cloud_connections").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Category("cloud_connections").AppID(a.appID).TenantID(platformadmin.AuditTenant).UserID(userID).Outcome("success").
 		Meta("cloud", cloud).Meta("client_id", clientID)
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))

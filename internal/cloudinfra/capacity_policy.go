@@ -51,7 +51,7 @@ func withPolicyLists(policy *CapacityPolicy) *CapacityPolicy {
 }
 
 func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, cloudID string, in CapacityPolicyInput) (*CapacityPolicy, error) {
-	if _, err := s.authorize(ctx, p, cloudID); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloudID); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {
@@ -182,6 +182,17 @@ func multiplyCapacity(v ResourceVector, n int64) (ResourceVector, error) {
 	return ResourceVector{Servers: out[0], CPUMillis: out[1], MemoryBytes: out[2], StorageBytes: out[3], GPUKind: kind, GPUs: out[4]}, nil
 }
 func validateCapacityPolicyShape(policy CapacityPolicy) error {
+	if policy.Budget != nil {
+		b := policy.Budget
+		if b.MaxHourlyMicroUSD < 0 || b.MaxHorizonMicroUSD < 0 || b.HorizonSeconds < 0 {
+			return ErrInvalid
+		}
+		for _, n := range vectorValues(policy.Limits) {
+			if n <= 0 {
+				return ErrInvalid
+			}
+		}
+	}
 	if !nonnegativeCapacity(policy.Limits) || len(policy.Pools) > 100 || len(policy.FrontendLimits) > 1000 {
 		return ErrInvalid
 	}

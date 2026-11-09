@@ -61,6 +61,10 @@ type DiscoverZonesQuery struct {
 func (e *Extension) domainRoutes(r forge.Router, guard identity.Guard) error {
 	group := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Domains"))
 	routes := []route{
+		{http.MethodGet, "/projects/:projectId/domain-routes/:routeId/edge", "domainEdge.get", e.getDomainEdge, nil, infra.EdgeState{}, http.StatusOK},
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/edge", "domainEdge.update", e.updateDomainEdge, infra.EdgeInput{}, infra.EdgeState{}, http.StatusAccepted},
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/edge/purge", "domainEdge.purge", e.purgeDomainEdge, infra.EdgePurgeInput{}, infra.EdgeState{}, http.StatusAccepted},
+		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/edge/retry", "domainEdge.retry", e.retryDomainEdge, RemoveRouteInput{}, infra.EdgeState{}, http.StatusAccepted},
 		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/ttl", "domainRoutes.updateTTL", e.updateDomainRouteTTL, infra.RouteTTLInput{}, infra.Route{}, http.StatusOK},
 		{http.MethodGet, "/projects/:projectId/domain-routes/:routeId/operations", "domainRoutes.history", e.domainRouteHistory, nil, DomainOperationList{}, http.StatusOK},
 		{http.MethodPost, "/projects/:projectId/domain-routes/:routeId/prepare-handoff", "domainRoutes.prepareHandoff", e.prepareDomainHandoff, infra.HandoffInput{}, infra.RouteOperation{}, http.StatusAccepted},

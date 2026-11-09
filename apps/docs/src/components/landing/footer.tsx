@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { installGuideHref } from "./install-commands";
-import { githubUrl } from "./site";
+import { cloudWaitlistUrl, githubUrl } from "./site";
 import { Wordmark } from "./wordmark";
 
 const columns = [
@@ -16,8 +16,10 @@ const columns = [
   {
     title: "Build with",
     links: [
+      { href: "/agents#built-in-agent", text: "Built-in agent" },
       { href: "/agents", text: "loomctl" },
       { href: "/agents", text: "MCP for agents" },
+      { href: "/clouds#nodes", text: "Nodes" },
       { href: "/clouds", text: "Provider plugins" },
       { href: "/self-host", text: "Self-host" },
     ],
@@ -27,11 +29,17 @@ const columns = [
     links: [
       { href: "/docs", text: "Documentation" },
       { href: installGuideHref, text: "Quick start" },
+      { href: cloudWaitlistUrl, text: "Cloud waitlist" },
     ],
   },
   {
     title: "Project",
-    links: [{ href: githubUrl, text: "GitHub" }],
+    links: [
+      { href: githubUrl, text: "GitHub" },
+      { href: "/privacy", text: "Privacy" },
+      { href: "/terms", text: "Terms" },
+      { href: "/delete-account", text: "Delete your account" },
+    ],
   },
 ];
 

@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { GenerateMenu } from "@/components/variable-import"
 import { keyValid } from "@/lib/variables"
 
 export interface VariableInput {
@@ -146,7 +147,10 @@ function VariableForm({
           )}
         </Field>
         <Field>
-          <FieldLabel htmlFor="variable-value">Value</FieldLabel>
+          <div className="flex items-center justify-between">
+            <FieldLabel htmlFor="variable-value">Value</FieldLabel>
+            <GenerateMenu keyName={trimmedKey} onPick={setValue} />
+          </div>
           <Textarea
             id="variable-value"
             className="min-h-16 font-mono text-[12.5px]"

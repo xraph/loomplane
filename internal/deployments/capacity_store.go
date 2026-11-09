@@ -82,9 +82,110 @@ func applyCapacityTransition(d *Deployment, expected int64, status string, block
 	return event, nil
 }
 
+// requestCancel records a cancel of a running deployment. It isn't cancelled
+// yet: the action that's running may be partway through a provider's change,
+// and fencing it there would strand that change. The deployment is cancelled
+// as its next action starts (stopDeployment), so it needs one that hasn't.
+// A request already made stays as it was.
+func requestCancel(d *Deployment, at time.Time) error {
+	if d.Status != StatusRunning {
+		return ErrNotRunning
+	}
+	if d.CancelRequestedAt != nil {
+		return nil
+	}
+	if !slices.ContainsFunc(d.Steps, unclaimed) {
+		return ErrNothingToCancel
+	}
+	requested := at.UTC()
+	d.CancelRequestedAt = &requested
+	return nil
+}
+
+// unclaimed reports whether a step's action hasn't started: no attempt has
+// claimed it (ClaimStep), recorded a start, or left a checkpoint.
+func unclaimed(s Step) bool {
+	return s.Status == StepPending && !s.Claimed && s.StartedAt == nil && len(s.Checkpoint) == 0
+}
+
+// claimStep is ClaimStep on the deployment as read under its row lock. It
+// marks the step started and returns false, or returns true, writing
+// nothing, when a cancel was requested before the step started. A step
+// already claimed, or settled, comes back false: its action runs as it
+// would have.
+func claimStep(d *Deployment, actionID string) (stop, changed bool, err error) {
+	if d.Status != StatusRunning {
+		return false, false, nil
+	}
+	step := d.Step(actionID)
+	if step == nil {
+		return false, false, fmt.Errorf("%w: deployment %s has no step %s", ErrNotFound, d.ID, actionID)
+	}
+	if !unclaimed(*step) {
+		return false, false, nil
+	}
+	if d.CancelRequestedAt != nil {
+		return true, false, nil
+	}
+	step.Claimed = true
+	return false, true, nil
+}
+
+// ClaimStep implements StepClaimer. It holds the row lock CancelDeployment
+// takes, so a request and an action's start can't pass each other.
+func (s *PgStore) ClaimStep(ctx context.Context, org, id, actionID string) (stop bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = rollback(tx, err) }()
+	d, err := scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM loomplane_deployments WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	stop, changed, err := claimStep(d, actionID)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return stop, tx.Commit()
+	}
+	raw, err := encodeSteps(d.Steps)
+	if err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET steps=$3 WHERE org_id=$1 AND id=$2`, org, id, raw); err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
+}
+
+// stopDeployment cancels a paused deployment, or a running one whose cancel
+// was requested, which only happens between its actions. One already
+// cancelled stays as it is.
+func stopDeployment(d *Deployment, at time.Time) (*CapacityTransition, error) {
+	switch {
+	case d.Status == StatusCancelled:
+		return nil, nil
+	case d.Status == StatusPaused:
+		return applyCapacityTransition(d, d.CapacityRevision, StatusCancelled, nil, at)
+	case d.Status != StatusRunning || d.CancelRequestedAt == nil:
+		return nil, ErrCapacityWaitConflict
+	}
+	d.CapacityRevision++
+	finished := at.UTC()
+	d.Status, d.FinishedAt = StatusCancelled, &finished
+	return &CapacityTransition{OrgID: d.OrgID, DeploymentID: d.ID, PlanID: d.PlanID, ProjectID: d.ProjectID, Revision: d.CapacityRevision, Status: StatusCancelled, CreatedAt: finished}, nil
+}
+
 // SetCapacityWait implements CapacityStore.
 func (s *PgStore) SetCapacityWait(ctx context.Context, org, id string, expected int64, blocks []cloudinfra.CapacityBlock, at time.Time) (*Deployment, error) {
-	return s.capacityTransition(ctx, org, id, expected, StatusPaused, blocks, at)
+	return s.capacityTransition(ctx, org, id, StatusPaused, func(d *Deployment) (*CapacityTransition, error) {
+		return applyCapacityTransition(d, expected, StatusPaused, blocks, at)
+	})
 }
 
 // TransitionCapacityWait implements CapacityStore.
@@ -92,9 +193,64 @@ func (s *PgStore) TransitionCapacityWait(ctx context.Context, org, id string, ex
 	if status != StatusRunning && status != StatusCancelled {
 		return nil, ErrCapacityWaitConflict
 	}
-	return s.capacityTransition(ctx, org, id, expected, status, nil, at)
+	return s.capacityTransition(ctx, org, id, status, func(d *Deployment) (*CapacityTransition, error) {
+		return applyCapacityTransition(d, expected, status, nil, at)
+	})
 }
-func (s *PgStore) capacityTransition(ctx context.Context, org, id string, expected int64, status string, blocks []cloudinfra.CapacityBlock, at time.Time) (out *Deployment, err error) {
+
+// CancelDeployment implements Canceller. A paused deployment has no action
+// in flight, so it's cancelled at once, as a capacity cancel would. A running
+// one records the request, and Run cancels it before its next action.
+func (s *PgStore) CancelDeployment(ctx context.Context, org, id string, at time.Time) (out *Deployment, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = rollback(tx, err) }()
+	// Finish, Reopen and capacity transitions take this lock before the row.
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, org); lockErr != nil {
+		return nil, lockErr
+	}
+	d, err := scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM loomplane_deployments WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch d.Status {
+	case StatusPaused:
+		if rerr := tx.Rollback(); rerr != nil {
+			return nil, rerr
+		}
+		return s.StopDeployment(ctx, org, id, at)
+	case StatusCancelled:
+		return d, tx.Commit()
+	}
+	requested := d.CancelRequestedAt
+	if requestErr := requestCancel(d, at); requestErr != nil {
+		return nil, requestErr
+	}
+	if requested == nil {
+		if readErr := tx.QueryRow(ctx, `UPDATE loomplane_deployments SET cancel_requested_at=$3 WHERE org_id=$1 AND id=$2 RETURNING cancel_requested_at`, org, id, d.CancelRequestedAt).Scan(d.CancelRequestedAt); readErr != nil {
+			return nil, readErr
+		}
+	}
+	return d, tx.Commit()
+}
+
+// StopDeployment implements Stopper, in the same transaction as a capacity
+// cancel: capacity the deployment hasn't started is released, its demands
+// are detached, and none of its actions start again.
+func (s *PgStore) StopDeployment(ctx context.Context, org, id string, at time.Time) (*Deployment, error) {
+	return s.capacityTransition(ctx, org, id, StatusCancelled, func(d *Deployment) (*CapacityTransition, error) {
+		return stopDeployment(d, at)
+	})
+}
+
+// capacityTransition moves a deployment to status with apply, which checks
+// the move and returns its event, or nil when there's nothing to write.
+func (s *PgStore) capacityTransition(ctx context.Context, org, id, status string, apply func(*Deployment) (*CapacityTransition, error)) (out *Deployment, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -126,7 +282,7 @@ func (s *PgStore) capacityTransition(ctx context.Context, org, id string, expect
 	if err != nil {
 		return nil, err
 	}
-	event, err := applyCapacityTransition(d, expected, status, blocks, at)
+	event, err := apply(d)
 	if err != nil {
 		return nil, err
 	}

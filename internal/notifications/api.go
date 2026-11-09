@@ -29,16 +29,28 @@ type Notification struct {
 	Status      string    `json:"status"`
 	EmailStatus string    `json:"email_status"`
 }
+
+// NotificationCreated is the stream event that says a new inbox item exists.
+// It carries no text: the app refetches the list.
+type NotificationCreated struct {
+	ID    string `json:"id"`
+	OrgID string `json:"org_id"`
+}
 type NotificationList struct {
 	Items       []Notification `json:"items"`
 	MailEnabled bool           `json:"mail_enabled"`
 }
 type Preferences struct {
 	DeploymentEmail bool `json:"deployment_email"`
+	AgentEmail      bool `json:"agent_email"`
 	MailEnabled     bool `json:"mail_enabled"`
 }
+
+// PreferenceInput changes the fields it carries. A nil field keeps its
+// value, so sending one switch never turns the other off.
 type PreferenceInput struct {
-	DeploymentEmail bool `json:"deployment_email"`
+	DeploymentEmail *bool `json:"deployment_email,omitempty"`
+	AgentEmail      *bool `json:"agent_email,omitempty"`
 }
 type WebhookEndpoint struct {
 	ID          string    `json:"id"`
@@ -75,17 +87,24 @@ type OK struct {
 	OK bool `json:"ok"`
 }
 
-func (s *Service) emailPreference(ctx context.Context, p security.Principal) (bool, error) {
+// emailPreference reports whether the person gets email for a notice of
+// this kind: the agent's notices have a switch of their own.
+func (s *Service) emailPreference(ctx context.Context, p security.Principal, kind string) (bool, error) {
+	column := "deployment_email"
+	if strings.HasPrefix(kind, "agent.") {
+		column = "agent_email"
+	}
 	var enabled bool
-	err := s.pg.QueryRow(ctx, `SELECT coalesce((SELECT deployment_email FROM loomplane_notification_preferences WHERE org_id=$1 AND user_id=$2),true)`, p.OrgID, p.UserID).Scan(&enabled)
+	err := s.pg.QueryRow(ctx, `SELECT coalesce((SELECT `+column+` FROM loomplane_notification_preferences WHERE org_id=$1 AND user_id=$2),true)`, p.OrgID, p.UserID).Scan(&enabled)
 	return enabled, err
 }
 func (s *Service) Preferences(ctx context.Context, p security.Principal) (Preferences, error) {
 	if err := s.member(ctx, p); err != nil {
 		return Preferences{}, err
 	}
-	enabled, err := s.emailPreference(ctx, p)
-	return Preferences{DeploymentEmail: enabled, MailEnabled: s.MailEnabled()}, err
+	out := Preferences{MailEnabled: s.MailEnabled()}
+	err := s.pg.QueryRow(ctx, `SELECT coalesce((SELECT deployment_email FROM loomplane_notification_preferences WHERE org_id=$1 AND user_id=$2),true),coalesce((SELECT agent_email FROM loomplane_notification_preferences WHERE org_id=$1 AND user_id=$2),true)`, p.OrgID, p.UserID).Scan(&out.DeploymentEmail, &out.AgentEmail)
+	return out, err
 }
 func (s *Service) SetPreferences(ctx context.Context, p security.Principal, in PreferenceInput) (Preferences, error) {
 	if p.ReadOnly {
@@ -94,8 +113,9 @@ func (s *Service) SetPreferences(ctx context.Context, p security.Principal, in P
 	if err := s.member(ctx, p); err != nil {
 		return Preferences{}, err
 	}
-	_, err := s.pg.Exec(ctx, `INSERT INTO loomplane_notification_preferences(org_id,user_id,deployment_email)VALUES($1,$2,$3) ON CONFLICT(org_id,user_id)DO UPDATE SET deployment_email=excluded.deployment_email,updated_at=clock_timestamp()`, p.OrgID, p.UserID, in.DeploymentEmail)
-	return Preferences{DeploymentEmail: in.DeploymentEmail, MailEnabled: s.MailEnabled()}, err
+	out := Preferences{MailEnabled: s.MailEnabled()}
+	err := s.pg.QueryRow(ctx, `INSERT INTO loomplane_notification_preferences(org_id,user_id,deployment_email,agent_email)VALUES($1,$2,coalesce($3::boolean,true),coalesce($4::boolean,true)) ON CONFLICT(org_id,user_id)DO UPDATE SET deployment_email=coalesce($3::boolean,loomplane_notification_preferences.deployment_email),agent_email=coalesce($4::boolean,loomplane_notification_preferences.agent_email),updated_at=clock_timestamp() RETURNING deployment_email,agent_email`, p.OrgID, p.UserID, in.DeploymentEmail, in.AgentEmail).Scan(&out.DeploymentEmail, &out.AgentEmail)
+	return out, err
 }
 func (s *Service) List(ctx context.Context, p security.Principal) (NotificationList, error) {
 	out := NotificationList{Items: []Notification{}, MailEnabled: s.MailEnabled()}
@@ -171,7 +191,11 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 	if err := s.requireReader(ctx, p, n); err != nil {
 		return err
 	}
-	return s.mailStore.MarkRead(ctx, parsed)
+	if err := s.mailStore.MarkRead(ctx, parsed); err != nil {
+		return err
+	}
+	s.withdrawRead(ctx, p.UserID, n.Metadata)
+	return nil
 }
 
 // domainNotice is a renewal or registration notice, which belongs to the
@@ -180,15 +204,21 @@ func domainNotice(n *inbox.Notification) bool {
 	return n.Metadata["kind"] == kindRenewal || n.Metadata["kind"] == kindRegistration
 }
 
+// genericNotice is a notice queued with Enqueue. Its inbox item names a
+// subject, which no other kind's does.
+func genericNotice(n *inbox.Notification) bool { return n.Metadata["subject_id"] != "" }
+
 // orgNotice is a notice that belongs to the organization rather than a
-// project: a connection notice or a domain notice.
+// project: a connection notice, a domain notice or a workspace-wide one
+// queued with Enqueue.
 func orgNotice(n *inbox.Notification) bool {
-	return n.Metadata["kind"] == kindConnection || domainNotice(n)
+	return n.Metadata["kind"] == kindConnection || domainNotice(n) || (genericNotice(n) && n.Metadata["project_id"] == "")
 }
 
 // requireReader rechecks the grant the notification was sent under. A
 // connection notice went to its connection's maker and the organization's
-// owners and admins, so it needs no further grant.
+// owners and admins, so it needs no further grant. A model's budget
+// notice needs ai:manage.
 func (s *Service) requireReader(ctx context.Context, p security.Principal, n *inbox.Notification) error {
 	if n.Metadata["kind"] == kindConnection {
 		return nil
@@ -196,15 +226,37 @@ func (s *Service) requireReader(ctx context.Context, p security.Principal, n *in
 	if domainNotice(n) {
 		return s.require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
+	if n.Metadata["kind"] == kindModelBudget {
+		// A model's budget notice went to admins only.
+		return s.require(ctx, p, security.AIManage, "")
+	}
+	if genericNotice(n) {
+		// Project read when it has a project, then the permission it
+		// was sent under.
+		if project := n.Metadata["project_id"]; project != "" {
+			if err := s.require(ctx, p, security.ProjectRead, project); err != nil {
+				return err
+			}
+		}
+		need, err := parseNeed(n.Metadata["need"])
+		if err != nil {
+			return err
+		}
+		if need == nil {
+			return s.member(ctx, p)
+		}
+		return s.require(ctx, p, *need, "")
+	}
 	return s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"])
 }
 
 // webhookEventTypes is every event a webhook endpoint hears. Endpoints made
 // before connection.sign_in_needed existed get it from the
-// cloud_sign_in_webhooks migration, and connection.keyless_refused from the
-// keyless one.
+// cloud_sign_in_webhooks migration, connection.keyless_refused from the
+// keyless one, and the model budget events from ai_model_budget_webhooks.
 func webhookEventTypes() []string {
-	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded, connectionKeylessRefused}
+	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded, connectionKeylessRefused,
+		"model.budget_" + ModelBudgetProjected, "model.budget_" + ModelBudgetCrossed}
 }
 
 func publicEndpoint(ep *endpoint.Endpoint) WebhookEndpoint {
@@ -328,12 +380,13 @@ func (s *Service) Deliveries(ctx context.Context, p security.Principal, value st
 }
 
 // RetryExhausted preserves per-channel completion flags and stable Relay
-// acceptance identity. It retries only this organization's bounded failed set.
+// acceptance identity. It retries only this organization's bounded failed set,
+// and a push older than its TTL is skipped, not sent late.
 func (s *Service) RetryExhausted(ctx context.Context, p security.Principal) error {
 	if err := s.require(ctx, p, security.MemberManage, ""); err != nil {
 		return err
 	}
-	_, err := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET attempts=0,next_attempt_at=clock_timestamp(),email_state=CASE WHEN email_state='failed' THEN 'pending' ELSE email_state END,last_error='' WHERE id IN(SELECT id FROM loomplane_notification_outbox WHERE org_id=$1 AND completed_at IS NULL AND attempts>=10 AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY created_at LIMIT 100)`, p.OrgID)
+	_, err := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET attempts=0,next_attempt_at=clock_timestamp(),email_state=CASE WHEN email_state='failed' THEN 'pending' ELSE email_state END,push_state=CASE WHEN push_state<>'failed' THEN push_state WHEN created_at>clock_timestamp()-(CASE WHEN kind LIKE 'plan.%' THEN $2::int WHEN kind='deployment' OR kind LIKE 'release.%' THEN $3::int ELSE COALESCE(NULLIF((payload->'push'->>'ttl_seconds')::int,0),$4::int) END * interval '1 second') THEN 'pending' ELSE 'skipped' END,last_error='' WHERE id IN(SELECT id FROM loomplane_notification_outbox WHERE org_id=$1 AND completed_at IS NULL AND attempts>=10 AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY created_at LIMIT 100)`, p.OrgID, planPushTTL, failedDeploymentTTL, workspaceTTL)
 	if err == nil {
 		s.recordAudit(ctx, p, "notification.retry", p.OrgID)
 	}

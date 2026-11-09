@@ -82,6 +82,8 @@ type Runs struct {
 // Provisions is one resource kind a target can provision. Loomplane
 // provisions it, whatever the target's model.
 type Provisions struct {
+	ImportOnly bool              `json:"import_only,omitempty"`
+	Settings   []ResourceSetting `json:"settings,omitempty"`
 	// Kind is a resource kind as repository analysis names it: postgres,
 	// redis and so on.
 	Kind string `json:"kind"`
@@ -97,6 +99,7 @@ type Provisions struct {
 
 // Provider describes one deployment target.
 type Provider struct {
+	Workloads *WorkloadCapabilities `json:"workloads,omitempty"`
 	// Name is how a manifest names it, such as "cloud-run".
 	Name  string `json:"name"`
 	Title string `json:"title"`
@@ -124,6 +127,10 @@ type Provider struct {
 	Available bool `json:"available"`
 	// Note says what's missing, when it isn't available.
 	Note string `json:"note,omitempty"`
+	// Unlisted keeps the target out of every list a person picks from or
+	// is pointed to: provider hints, drafts and the providers API. It is
+	// reachable only through a Cloud target, as Loomplane Cloud is.
+	Unlisted bool `json:"-"`
 }
 
 // Engine returns who manages a deployment of r: Ctrl Plane for a container

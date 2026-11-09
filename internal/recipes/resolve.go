@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // Resolve pins a composed kind's release for one architecture and target.
@@ -15,6 +17,11 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 	if !ok {
 		return nil, fmt.Errorf("%s is not a composed catalog kind", kind)
 	}
+	return resolveKind(k, version, architecture, target)
+}
+
+func resolveKind(k Kind, version, architecture, target string) (*Composition, error) {
+	kind := k.Name
 	if !slices.Contains(k.Targets, target) {
 		return nil, fmt.Errorf("%s doesn't run on %s targets", kind, target)
 	}
@@ -160,4 +167,41 @@ func (r *Registry) LookupEngine(kind, version, architecture, target string) (*Re
 		recipe.VolumeSizeMB = release.KubernetesVolumeMB
 	}
 	return recipe, nil
+}
+
+// ForGPUs is what a component placed with count GPUs runs with: r plus
+// count times its PerGPU step. The result has no step, so it's never
+// added twice.
+func (r Resources) ForGPUs(count int) Resources {
+	step := r.PerGPU
+	r.PerGPU = nil
+	if step == nil || count < 1 {
+		return r
+	}
+	r.CPUMillis += count * step.CPUMillis
+	r.MemoryMB += count * step.MemoryMB
+	r.ShmMB += count * step.ShmMB
+	return r
+}
+
+// SizeMB is the weight cache's PVC request for a resource with settings:
+// the value of SizeSetting, in MB, when it's larger than
+// KubernetesSizeMB, else KubernetesSizeMB. A value that isn't digits
+// changes nothing.
+func (w WeightCache) SizeMB(settings map[string]string) int {
+	raw := settings[w.SizeSetting]
+	if w.SizeSetting == "" || raw == "" || strings.Trim(raw, "0123456789") != "" {
+		return w.KubernetesSizeMB
+	}
+	mb, err := strconv.Atoi(raw)
+	if err != nil {
+		return w.KubernetesSizeMB
+	}
+	return max(w.KubernetesSizeMB, mb)
+}
+
+// DirectService reports whether the kind runs as one directly bound process.
+// Legacy dependency-only kinds retain their existing binding identity.
+func (k Kind) DirectService() bool {
+	return k.Placement == PlacementDependency || (k.Service != nil && len(serviceFindings(k)) == 0)
 }

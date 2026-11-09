@@ -14,22 +14,29 @@ import (
 // (database/migrations): a project or environment deleted takes its
 // variables with it.
 type PgStore struct {
-	db *pgdriver.PgDB
+	db     *pgdriver.PgDB
+	source *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
-func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
+func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db, source: db} }
+
+// NewPgStoreWithSourcePool reserves a separate pool for source transactions.
+// The caller owns both pools and must close them after service shutdown.
+func NewPgStoreWithSourcePool(db, source *pgdriver.PgDB) *PgStore {
+	return &PgStore{db: db, source: source}
+}
 
 var _ Store = (*PgStore)(nil)
 
 const variableColumns = `id, org_id, project_id, environment_id, environment, service, key, value, secret,
-	created_by, updated_by, created_at, updated_at`
+	created_by, updated_by, created_at, updated_at, source_revision, secret_identity, secret_version`
 
 func scanVariable(row pgx.Row) (*Variable, error) {
 	var v Variable
 	var projectID, envID *string
 	if err := row.Scan(&v.ID, &v.OrgID, &projectID, &envID, &v.Environment, &v.Service, &v.Key, &v.Value, &v.Secret,
-		&v.CreatedBy, &v.UpdatedBy, &v.CreatedAt, &v.UpdatedAt); err != nil {
+		&v.CreatedBy, &v.UpdatedBy, &v.CreatedAt, &v.UpdatedAt, &v.sourceRevision, &v.secretIdentity, &v.secretVersion); err != nil {
 		return nil, err
 	}
 	switch {
@@ -59,10 +66,16 @@ func nullable(s string) *string {
 
 // CreateVariable implements Store.
 func (s *PgStore) CreateVariable(ctx context.Context, v *Variable) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_variables (`+variableColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+	if _, ok := ctx.Value(sourceTransactionKey{}).(sourceTransaction); !ok {
+		return s.WithSourceTransaction(ctx, v.OrgID, func(ctx context.Context) error { return s.CreateVariable(ctx, v) })
+	}
+	if v.sourceRevision == 0 {
+		v.sourceRevision = 1
+	}
+	_, err := s.sourceDB(ctx).Exec(ctx, `INSERT INTO loomplane_variables (`+variableColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		v.ID, v.OrgID, nullable(v.ProjectID), nullable(v.environmentID), v.Environment, v.Service, v.Key, v.Value, v.Secret,
-		v.CreatedBy, v.UpdatedBy, v.CreatedAt, v.UpdatedAt)
+		v.CreatedBy, v.UpdatedBy, v.CreatedAt, v.UpdatedAt, v.sourceRevision, v.secretIdentity, v.secretVersion)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return ErrExists
@@ -75,7 +88,7 @@ func (s *PgStore) CreateVariable(ctx context.Context, v *Variable) error {
 
 // GetVariable returns the variable, or ErrNotFound.
 func (s *PgStore) GetVariable(ctx context.Context, orgID, id string) (*Variable, error) {
-	v, err := scanVariable(s.db.QueryRow(ctx, `SELECT `+variableColumns+` FROM loomplane_variables
+	v, err := scanVariable(s.sourceDB(ctx).QueryRow(ctx, `SELECT `+variableColumns+` FROM loomplane_variables
 		WHERE org_id = $1 AND id = $2`, orgID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -88,17 +101,27 @@ func (s *PgStore) GetVariable(ctx context.Context, orgID, id string) (*Variable,
 
 // UpdateVariable implements Store.
 func (s *PgStore) UpdateVariable(ctx context.Context, v *Variable) error {
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_variables SET value = $3, secret = $4, updated_by = $5, updated_at = $6
-		WHERE org_id = $1 AND id = $2`, v.OrgID, v.ID, v.Value, v.Secret, v.UpdatedBy, v.UpdatedAt)
+	if _, ok := ctx.Value(sourceTransactionKey{}).(sourceTransaction); !ok {
+		return s.WithSourceTransaction(ctx, v.OrgID, func(ctx context.Context) error { return s.UpdateVariable(ctx, v) })
+	}
+	res, err := s.sourceDB(ctx).Exec(ctx, `UPDATE loomplane_variables SET value = $3, secret = $4, updated_by = $5, updated_at = $6, source_revision=source_revision+1, secret_identity=$7, secret_version=$8
+		WHERE org_id = $1 AND id = $2`, v.OrgID, v.ID, v.Value, v.Secret, v.UpdatedBy, v.UpdatedAt, v.secretIdentity, v.secretVersion)
 	if err != nil {
 		return fmt.Errorf("update variable: %w", err)
 	}
-	return oneRow(res)
+	if rowErr := oneRow(res); rowErr != nil {
+		return rowErr
+	}
+	v.sourceRevision++
+	return nil
 }
 
 // DeleteVariable implements Store.
 func (s *PgStore) DeleteVariable(ctx context.Context, orgID, id string) error {
-	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_variables WHERE org_id = $1 AND id = $2`, orgID, id)
+	if _, ok := ctx.Value(sourceTransactionKey{}).(sourceTransaction); !ok {
+		return s.WithSourceTransaction(ctx, orgID, func(ctx context.Context) error { return s.DeleteVariable(ctx, orgID, id) })
+	}
+	res, err := s.sourceDB(ctx).Exec(ctx, `DELETE FROM loomplane_variables WHERE org_id = $1 AND id = $2`, orgID, id)
 	if err != nil {
 		return fmt.Errorf("delete variable: %w", err)
 	}
@@ -128,7 +151,7 @@ func (s *PgStore) ForEnvironment(ctx context.Context, orgID, projectID, envID, e
 
 // SecretIDs implements Store.
 func (s *PgStore) SecretIDs(ctx context.Context, orgID string) (map[string]bool, error) {
-	rows, err := s.db.Query(ctx, `SELECT id FROM loomplane_variables WHERE org_id = $1 AND secret`, orgID)
+	rows, err := s.sourceDB(ctx).Query(ctx, `SELECT id FROM loomplane_variables WHERE org_id = $1 AND secret`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("list secret variables: %w", err)
 	}
@@ -148,7 +171,7 @@ func (s *PgStore) SecretIDs(ctx context.Context, orgID string) (map[string]bool,
 }
 
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Variable, error) {
-	rows, err := s.db.Query(ctx, query, args...)
+	rows, err := s.sourceDB(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list variables: %w", err)
 	}

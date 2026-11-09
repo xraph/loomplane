@@ -67,6 +67,23 @@ describe("account recovery", () => {
     ).not.toBeInTheDocument()
   })
 
+  // The address came from sign-up or the session: the code was sent to it,
+  // so it isn't the reader's to change. Arriving with none, they type it.
+  it("keeps a known address fixed while verifying", () => {
+    const { unmount } = render(
+      <RecoveryPage mode="verify-email" email="person@example.com" />
+    )
+    const known = screen.getByLabelText("Email address")
+    expect(known).toHaveValue("person@example.com")
+    expect(known).toHaveAttribute("readonly")
+    unmount()
+
+    render(<RecoveryPage mode="verify-email" />)
+    expect(screen.getByLabelText("Email address")).not.toHaveAttribute(
+      "readonly"
+    )
+  })
+
   it("requests a reset through the Authsome client", async () => {
     render(<RecoveryPage mode="forgot-password" />)
     await userEvent.type(

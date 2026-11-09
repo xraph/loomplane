@@ -225,6 +225,29 @@ func (s *PgStore) RecentCanaries(ctx context.Context, orgID, projectID, environm
 	return out, nil
 }
 
+// LastCanary returns the newest deployment of an environment whose canary
+// ramped actionID, or nil when none did.
+func (s *PgStore) LastCanary(ctx context.Context, orgID, projectID, environmentID, actionID string) (*Deployment, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+columns+` FROM loomplane_deployments
+		WHERE org_id = $1 AND project_id = $2 AND environment_id = $3 AND canary IS NOT NULL
+		AND canary->'services' @> jsonb_build_array(jsonb_build_object('action_id', $4::text))
+		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, projectID, environmentID, actionID)
+	if err != nil {
+		return nil, fmt.Errorf("find the last canary: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	var out *Deployment
+	if rows.Next() {
+		if out, err = scan(rows); err != nil {
+			return nil, fmt.Errorf("scan deployment: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find the last canary: %w", err)
+	}
+	return out, nil
+}
+
 // RampingCanary implements CanaryStore. Planning blocks new plans with the
 // same read, so it's planning's.
 func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string) (string, error) {

@@ -2,10 +2,12 @@ package owned
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,33 +18,35 @@ import (
 )
 
 const (
-	LabelOrg                  = "loomplane.org"
-	LabelPlan                 = "loomplane.plan"
-	LabelProject              = "loomplane.project"
-	LabelEnvironment          = "loomplane.environment"
-	LabelAction               = "loomplane.action"
-	LabelService              = "loomplane.service"
-	LabelOperation            = "loomplane.operation"
-	LabelConnection           = "loomplane.connection"
-	LabelSettings             = "loomplane.target.settings"
-	LabelRuntime              = "loomplane.runtime.ref"
-	LabelImage                = "loomplane.image.ref"
-	LabelPublic               = "loomplane.public"
-	LabelHostPort             = "loomplane.host.port"
-	LabelHealth               = "loomplane.health.path"
-	LabelHostname             = "loomplane.hostname"
-	LabelIngressClass         = "loomplane.ingress.class"
-	LabelTLSSecret            = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
-	LabelReplicas             = "loomplane.replicas"
-	LabelScaleMin             = "loomplane.scale.min"
-	LabelScaleMax             = "loomplane.scale.max"
-	LabelArchitecture         = "loomplane.architecture"
-	LabelRevision             = "loomplane.revision"
-	LabelReceiptRelease       = "loomplane.runtime.receipt.release"
-	LabelReceiptServicePrefix = "loomplane.runtime.receipt.service."
-	LabelInstance             = "loomplane.instance"
-	LabelManageIngress        = "loomplane.manage.ingress"
-	LabelManageHPA            = "loomplane.manage.hpa"
+	LabelSchedulingArchitecture = "loomplane.scheduling.architecture"
+	LabelOrg                    = "loomplane.org"
+	LabelPlan                   = "loomplane.plan"
+	LabelProject                = "loomplane.project"
+	LabelEnvironment            = "loomplane.environment"
+	LabelAction                 = "loomplane.action"
+	LabelService                = "loomplane.service"
+	LabelOperation              = "loomplane.operation"
+	LabelConnection             = "loomplane.connection"
+	LabelSettings               = "loomplane.target.settings"
+	LabelRuntime                = "loomplane.runtime.ref"
+	LabelImage                  = "loomplane.image.ref"
+	LabelPublic                 = "loomplane.public"
+	LabelHostPort               = "loomplane.host.port"
+	LabelHealth                 = "loomplane.health.path"
+	LabelHostname               = "loomplane.hostname"
+	LabelIngressClass           = "loomplane.ingress.class"
+	LabelTLSSecret              = "loomplane.tls.secret" //nolint:gosec // names a selected Secret, never its value
+	LabelReplicas               = "loomplane.replicas"
+	LabelScaleMin               = "loomplane.scale.min"
+	LabelScaleMax               = "loomplane.scale.max"
+	LabelArchitecture           = "loomplane.architecture"
+	LabelManagedRevisionBase    = "loomplane.managed-revision-base"
+	LabelRevision               = "loomplane.revision"
+	LabelReceiptRelease         = "loomplane.runtime.receipt.release"
+	LabelReceiptServicePrefix   = "loomplane.runtime.receipt.service."
+	LabelInstance               = "loomplane.instance"
+	LabelManageIngress          = "loomplane.manage.ingress"
+	LabelManageHPA              = "loomplane.manage.hpa"
 )
 
 // A composed catalog resource's component carries its kind, its resource's
@@ -66,6 +70,7 @@ const (
 	LabelRuntimeFiles     = "loomplane.runtime.files"
 	LabelKubernetesRules  = "loomplane.kubernetes.rules"
 	LabelHealthProtocol   = "loomplane.health.protocol"
+	LabelHealthChecker    = "loomplane.health.checker"
 	LabelFSGroup          = "loomplane.fs.group"
 	LabelFarp             = "loomplane.farp"
 
@@ -81,6 +86,33 @@ const (
 	LabelGPU   = "loomplane.gpu"    // JSON provider.GPUPlacement
 	LabelShmMB = "loomplane.shm.mb" // decimal MiB
 )
+
+// LabelStartTimeout is how long, in seconds, the runtime waits for a
+// workload to become ready, in place of its default. A catalog component
+// sets it from its recipe's StartTimeout.
+const LabelStartTimeout = "loomplane.start.timeout" // seconds
+
+// Start timeouts a workload's LabelStartTimeout may ask for.
+const (
+	MinStartTimeout = time.Minute
+	MaxStartTimeout = 3 * time.Hour
+)
+
+// StartTimeout reads a workload's LabelStartTimeout: 0 when it has none,
+// and an error for anything but whole seconds from MinStartTimeout to
+// MaxStartTimeout.
+func StartTimeout(labels map[string]string) (time.Duration, error) {
+	raw := labels[LabelStartTimeout]
+	if raw == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.Atoi(raw)
+	timeout := time.Duration(seconds) * time.Second
+	if err != nil || strings.Trim(raw, "0123456789") != "" || timeout < MinStartTimeout || timeout > MaxStartTimeout {
+		return 0, errors.New("invalid start timeout")
+	}
+	return timeout, nil
+}
 
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)
@@ -200,6 +232,9 @@ func (p *Provider) Deploy(ctx context.Context, r cpprovider.DeployRequest) (*cpp
 		labels = map[string]string{}
 	}
 	labels[LabelRevision] = r.ReleaseID.String()
+	if base := labels[LabelManagedRevisionBase]; base != "" && inst.ProviderName == p.Key && p.Key == "kubernetes."+labels[LabelConnection] {
+		labels[LabelRevision] = base + "/" + r.ReleaseID.String()
+	}
 	result, err := p.Backend.Apply(ctx, r.InstanceID, spec, labels)
 	if err != nil {
 		return nil, err
@@ -285,8 +320,18 @@ func (*Provider) Rollback(context.Context, id.ID, id.ID) error { return ctrlplan
 func (*Provider) Resources(context.Context, id.ID) (*cpprovider.ResourceUsage, error) {
 	return nil, ctrlplane.ErrProviderUnavail
 }
-func (*Provider) Logs(context.Context, id.ID, cpprovider.LogOptions) (io.ReadCloser, error) {
-	return nil, ctrlplane.ErrProviderUnavail
+func (p *Provider) Logs(ctx context.Context, iid id.ID, options cpprovider.LogOptions) (io.ReadCloser, error) {
+	backend, ok := p.Backend.(interface {
+		Logs(context.Context, id.ID, map[string]string, cpprovider.LogOptions) (io.ReadCloser, error)
+	})
+	if !ok {
+		return nil, ctrlplane.ErrProviderUnavail
+	}
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return nil, err
+	}
+	return backend.Logs(ctx, iid, inst.Labels, options)
 }
 func (*Provider) Exec(context.Context, id.ID, cpprovider.ExecRequest) (*cpprovider.ExecResult, error) {
 	return nil, ctrlplane.ErrProviderUnavail

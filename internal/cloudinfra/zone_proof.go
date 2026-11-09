@@ -30,6 +30,10 @@ const zoneProofCheckEvery = 2 * time.Minute
 // DNS before a check looks for it at the provider.
 const zoneProofRelistAfter = 5 * time.Minute
 
+// zoneProofRecheckEvery spaces background checks of a verified zone's own
+// record, so one deleted at the provider is found and published again.
+const zoneProofRecheckEvery = 24 * time.Hour
+
 // zoneProofBatch bounds the zones one background pass checks.
 const zoneProofBatch = 50
 
@@ -81,6 +85,12 @@ func (z *Zone) proofPublished() bool {
 	return z.ProofRecord != nil && !z.ProofPublishAttempted && z.ProofRecord.Value == z.ProofValue
 }
 
+// proofLive is a proof Loomplane may still publish: a verified zone's for
+// as long as the zone stays, a pending one's until it expires.
+func (z *Zone) proofLive(now time.Time) bool {
+	return z.ownVerified() || now.Before(z.ProofExpiresAt)
+}
+
 // proofWriteInFlight is an unanswered write still inside its grace window.
 func (z *Zone) proofWriteInFlight(now time.Time) bool {
 	return z.ProofPublishAttempted && now.Sub(z.ProofPublishAttemptedAt) < zoneProofCheckEvery
@@ -98,7 +108,7 @@ func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zo
 	ctx, cancel := context.WithTimeout(ctx, zoneProofWriteTimeout)
 	defer cancel()
 	now := s.now().UTC()
-	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !now.Before(zone.ProofExpiresAt) || zone.proofWriteInFlight(now) {
+	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !zone.proofLive(now) || zone.proofWriteInFlight(now) {
 		return nil
 	}
 	if zone.ownVerified() && zone.ProofRecord == nil && zone.ProofPublishAttemptedAt.IsZero() {
@@ -323,7 +333,7 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 	now := s.now().UTC()
 	// A record written a while ago that public DNS still doesn't show may
 	// be gone at the provider. One written in this pass is just new.
-	if errors.Is(checkErr, ErrConflict) && !wrote && zone.Mode == "managed" && zone.proofPublished() && now.Before(zone.ProofExpiresAt) && now.Sub(zone.ProofPublishAttemptedAt) >= zoneProofRelistAfter {
+	if errors.Is(checkErr, ErrConflict) && !wrote && zone.Mode == "managed" && zone.proofPublished() && zone.proofLive(now) && now.Sub(zone.ProofPublishAttemptedAt) >= zoneProofRelistAfter {
 		republished, reclaimErr := s.republishMissingProof(ctx, st, zone)
 		switch {
 		case reclaimErr != nil:
@@ -334,8 +344,12 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 		}
 	}
 	zone.ProofCheckedAt = s.now().UTC()
-	if checkErr == nil {
-		zone.VerifiedAt = zone.ProofCheckedAt
+	var missing *ProofMissingError
+	switch {
+	case checkErr == nil:
+		zone.VerifiedAt, zone.ProofMissingAt, zone.ProofPublishError = zone.ProofCheckedAt, time.Time{}, ""
+	case zone.ownVerified() && zone.ProofMissingAt.IsZero() && errors.As(checkErr, &missing):
+		zone.ProofMissingAt = zone.ProofCheckedAt
 	}
 	saveErr := st.SaveZone(ctx, zone)
 	if checkErr != nil {
@@ -361,7 +375,7 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 	}
 	for _, r := range records {
 		if r.ID == zone.ProofRecord.ID {
-			zone.ProofPublishError = ""
+			zone.ProofPublishError = unservedProofMessage(zone)
 			return false, nil
 		}
 	}
@@ -371,7 +385,7 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 	}
 	if owned != nil && owned.Value == zone.ProofRecord.Value {
 		// The same record under the ID the provider rotated it to.
-		zone.ProofRecord, zone.ProofPublishError = owned, ""
+		zone.ProofRecord, zone.ProofPublishError = owned, unservedProofMessage(zone)
 		return false, st.SaveZone(ctx, zone)
 	}
 	zone.ProofRecord = nil
@@ -381,17 +395,38 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 	return zone.proofPublished(), nil
 }
 
-// zoneProofDue is a managed zone the background still checks: unverified,
-// with an unexpired proof, not checked since checkedBefore, and with no
-// write inside its grace window.
-func zoneProofDue(zone *Zone, now, checkedBefore time.Time) bool {
-	inFlight := zone.ProofPublishAttempted && zone.ProofPublishAttemptedAt.After(checkedBefore)
-	return zone.Mode == "managed" && zone.VerifiedAt.IsZero() && zone.hasControlProof() && now.Before(zone.ProofExpiresAt) && !zone.ProofCheckedAt.After(checkedBefore) && !inFlight
+// unservedProofMessage is a record the provider lists that public DNS still
+// doesn't show, a while after it was written. The provider then isn't the
+// one serving the domain's DNS, as when it moved to another Vercel team.
+func unservedProofMessage(zone *Zone) string {
+	host := dnsProviderName(zone.Provider)
+	return host + " lists the TXT record " + zone.ProofName + ", but public DNS still doesn't show it. " +
+		"Check that " + zone.Name + "'s DNS is served from the " + host + " account Loomplane connects to, then check again."
+}
+
+// zoneProofDue is a zone the background still checks, with no write inside
+// its grace window: a managed one unverified with an unexpired proof and
+// not checked since checkedBefore, or any zone verified with its own record
+// and not checked since recheckBefore, or since checkedBefore while the
+// record is missing.
+func zoneProofDue(zone *Zone, now, checkedBefore, recheckBefore time.Time) bool {
+	if zone.ProofPublishAttempted && zone.ProofPublishAttemptedAt.After(checkedBefore) {
+		return false
+	}
+	if zone.ownVerified() {
+		if zone.ProofMissingAt.IsZero() {
+			checkedBefore = recheckBefore
+		}
+		return !zone.ProofCheckedAt.After(checkedBefore)
+	}
+	return zone.Mode == "managed" && zone.VerifiedAt.IsZero() && zone.hasControlProof() && now.Before(zone.ProofExpiresAt) && !zone.ProofCheckedAt.After(checkedBefore)
 }
 
 // CheckZoneProofs retries pending publishes and checks public DNS for
 // managed zones still waiting on their proof, so a zone becomes usable
-// without anyone pressing Check again. Each zone is checked at most once
+// without anyone pressing Check again. It also rechecks every verified
+// zone's own record, so one deleted since reads as missing, and a managed
+// one is published again. Each zone is checked at most once
 // every zoneProofCheckEvery, a pass checks at most zoneProofBatch, and the
 // pass and each zone have a deadline.
 func (s *Service) CheckZoneProofs(ctx context.Context) error {
@@ -403,7 +438,13 @@ func (s *Service) CheckZoneProofs(ctx context.Context) error {
 	defer cancel()
 	now := s.now().UTC()
 	checkedBefore := now.Add(-zoneProofCheckEvery)
-	zones, err := st.ZoneProofsDue(pass, now, checkedBefore, zoneProofBatch)
+	// Every verified record once after a start, so a deploy corrects what
+	// changed while it was down, then daily.
+	recheckBefore := now.Add(-zoneProofRecheckEvery)
+	if s.started.After(recheckBefore) {
+		recheckBefore = s.started
+	}
+	zones, err := st.ZoneProofsDue(pass, now, checkedBefore, recheckBefore, zoneProofBatch)
 	if err != nil {
 		return err
 	}
@@ -412,7 +453,7 @@ func (s *Service) CheckZoneProofs(ctx context.Context) error {
 		if pass.Err() != nil {
 			break
 		}
-		if !zoneProofDue(zone, now, checkedBefore) {
+		if !zoneProofDue(zone, now, checkedBefore, recheckBefore) {
 			continue
 		}
 		if checkErr := s.checkZoneProofInBackground(pass, st, zone); checkErr != nil && ctx.Err() == nil {

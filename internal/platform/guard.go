@@ -42,7 +42,7 @@ func (g *schemaGuard) Register(app forge.App) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), guardTimeout)
 	defer cancel()
-	err := ops.CheckCompatible(ctx, g.dsn, migrations.All())
+	err := ops.CheckCompatibleWith(ctx, g.dsn, migrations.All(), migrations.OptionalVersions())
 	if errors.Is(err, ops.ErrNewerSchema) && g.warn {
 		g.Logger().Warn("starting anyway, because this is development", forge.F("error", err.Error()))
 		return nil

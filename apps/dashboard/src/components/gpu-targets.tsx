@@ -51,12 +51,18 @@ export function GpuTargets({
   count,
   onSelect,
   source,
+  refuse,
 }: {
   minMemoryGib?: number
   count?: number
   onSelect?: (t: GpuTarget) => void
   /** Only rows from this source: connected targets, or sizes to create. */
   source?: "connection" | "server_size"
+  /**
+   * Why a row that fits on memory still can't be chosen, such as a model
+   * that failed on its GPU kind. The row shows the reason and no Choose.
+   */
+  refuse?: (t: GpuTarget) => string | undefined
 }) {
   const targets = useQuery(useGpuTargetsList, params(minMemoryGib, count))
   const connections = useQuery(useConnectionsList)
@@ -105,6 +111,7 @@ export function GpuTargets({
                   target={t}
                   account={accounts.get(t.connectionId)}
                   onSelect={onSelect}
+                  refused={t.fits ? refuse?.(t) : undefined}
                 />
               ))}
             </TableBody>
@@ -124,10 +131,12 @@ function TargetRow({
   target: t,
   account,
   onSelect,
+  refused,
 }: {
   target: GPUTarget
   account?: string
   onSelect?: (t: GpuTarget) => void
+  refused?: string
 }) {
   const size = t.source === "server_size"
   const where = size
@@ -154,13 +163,14 @@ function TargetRow({
         {!t.fits && t.message && (
           <div className="mt-1 text-xs text-weld-ink">{t.message}</div>
         )}
+        {refused && <div className="mt-1 text-xs text-weld-ink">{refused}</div>}
       </TableCell>
       <TableCell className="text-right align-top text-xs whitespace-normal">
         <Price target={t} />
       </TableCell>
       {onSelect && (
         <TableCell className="align-top">
-          {t.fits && (
+          {t.fits && !refused && (
             <Button
               size="sm"
               variant="outline"

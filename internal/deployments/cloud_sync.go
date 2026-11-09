@@ -93,6 +93,9 @@ func (r *Runner) ReconcileCloudPlan(ctx context.Context, org, planID string, hea
 }
 
 func (r *Runner) authorizeSync(ctx context.Context, plan *planning.Plan) error {
+	if err := r.checkInstancePlan(ctx, plan); err != nil {
+		return err
+	}
 	if plan.CloudSyncID == "" {
 		return nil
 	}

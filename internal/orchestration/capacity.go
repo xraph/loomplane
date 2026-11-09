@@ -179,7 +179,7 @@ func capacityEffects(w *drt.Workflow, org string, started deployStarted, interva
 				input              deployInput
 				timeout, heartbeat time.Duration
 				attempts           int64
-			}{id, ActivityDeployAction, step, actionTimeout, actionHeartbeat, actionAttempts})
+			}{id, ActivityDeployAction, step, started.timeout(id), actionHeartbeat, actionAttempts})
 		}
 	}
 	for _, effect := range effects {

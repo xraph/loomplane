@@ -101,6 +101,25 @@ func TestNativeDispatchReconcilesRetainedIntentsAfterRestart(t *testing.T) {
 			time.Sleep(25 * time.Millisecond)
 		}
 	}
+	waitForDeniedJob := func(name, id string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var count, denied int
+			if readErr := f.sql.QueryRow(t.Context(), `SELECT count(*),count(*) FILTER (WHERE position($4 in last_error)>0) FROM dispatch_jobs WHERE name=$1 AND convert_from(payload,'UTF8')::jsonb->>'org_id'=$2 AND convert_from(payload,'UTF8')::jsonb->>'id'=$3 AND max_retries=0`, name, r.OrgID, id, security.ErrForbidden.Error()+" (service_restore:manage)").Scan(&count, &denied); readErr != nil {
+				t.Fatal(readErr)
+			}
+			if count == 1 && denied == 1 {
+				return
+			}
+			if time.Now().After(deadline) {
+				var jobs string
+				diagnosticErr := f.sql.QueryRow(t.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('state',state,'last_error',last_error,'retry_count',retry_count,'max_retries',max_retries)), '[]'::jsonb)::text FROM dispatch_jobs WHERE name=$1 AND convert_from(payload,'UTF8')::jsonb->>'org_id'=$2 AND convert_from(payload,'UTF8')::jsonb->>'id'=$3`, name, r.OrgID, id).Scan(&jobs)
+				t.Fatalf("native job lost its scoped, non-replaying authorization denial: name=%s id=%s count=%d denied=%d jobs=%s diagnostic_error=%v", name, id, count, denied, jobs, diagnosticErr)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
 	// No Dispatch job was submitted with this durable record. The production
 	// reconciler must discover it, then the real worker must reject the fixture's
 	// nonexistent principal before any provider operation can run.
@@ -114,6 +133,9 @@ func TestNativeDispatchReconcilesRetainedIntentsAfterRestart(t *testing.T) {
 		t.Fatal("expiry invented a manual actor or recovery proof", retired.Status)
 	}
 	cleanup := nativeCleanupStore(t, f)
+	// The restore status is saved before Dispatch records the handler's denial.
+	// Wait for both writes before shutdown cancels the worker's context.
+	waitForDeniedJob("loomplane.service.native.restore", r.ID)
 	running.stop()
 	if _, err = cleanup.RequestNativeCleanup(t.Context(), r.OrgID, r.ID, "replacement-admin", func(_ context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -136,19 +158,6 @@ func TestNativeDispatchReconcilesRetainedIntentsAfterRestart(t *testing.T) {
 	// Both jobs are durable attempts with no automatic mutation replay. Native
 	// reconciliation, checkpoints and leases govern subsequent recovery.
 	for _, name := range []string{"loomplane.service.native.restore", "loomplane.service.native.cleanup"} {
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			var count, denied int
-			if err = f.sql.QueryRow(t.Context(), `SELECT count(*),count(*) FILTER (WHERE position($4 in last_error)>0) FROM dispatch_jobs WHERE name=$1 AND convert_from(payload,'UTF8')::jsonb->>'org_id'=$2 AND convert_from(payload,'UTF8')::jsonb->>'id'=$3 AND max_retries=0`, name, r.OrgID, r.ID, security.ErrForbidden.Error()+" (service_restore:manage)").Scan(&count, &denied); err != nil {
-				t.Fatal(err)
-			}
-			if count == 1 && denied == 1 {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("native job lost its scoped, non-replaying authorization denial: %s count=%d denied=%d", name, count, denied)
-			}
-			time.Sleep(25 * time.Millisecond)
-		}
+		waitForDeniedJob(name, r.ID)
 	}
 }

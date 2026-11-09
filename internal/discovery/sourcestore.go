@@ -22,9 +22,8 @@ func scanSource(row pgx.Row) (*Source, error) {
 	return &s, nil
 }
 
-// CreateSource implements Store. The unique constraint on (project_id,
-// alias) covers removed rows too, which is what keeps an alias from being
-// reused.
+// CreateSource implements Store. The unique index on (project_id, alias)
+// covers live sources only, so removing a source frees its alias.
 func (s *PgStore) CreateSource(ctx context.Context, src *Source) error {
 	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_project_sources (`+sourceColumns+`)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -43,7 +42,8 @@ func (s *PgStore) CreateSource(ctx context.Context, src *Source) error {
 // GetSource implements Store.
 func (s *PgStore) GetSource(ctx context.Context, orgID, projectID, alias string) (*Source, error) {
 	src, err := scanSource(s.db.QueryRow(ctx, `SELECT `+sourceColumns+` FROM loomplane_project_sources
-		WHERE org_id = $1 AND project_id = $2 AND alias = $3`, orgID, projectID, alias))
+		WHERE org_id = $1 AND project_id = $2 AND alias = $3
+		ORDER BY removed_at IS NULL DESC, created_at DESC LIMIT 1`, orgID, projectID, alias))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSourceNotFound
 	}

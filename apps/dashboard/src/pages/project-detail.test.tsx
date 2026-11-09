@@ -1,13 +1,25 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import type { Environment, Project } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
-import { Resources } from "@/pages/project-detail"
+import { ProjectDetail, Resources } from "@/pages/project-detail"
 
+// What the workspace role may do; the tests that change it say so.
+const workspace = vi.hoisted(() => ({
+  can: (permission: string): boolean => permission !== "",
+}))
 vi.mock("@/lib/organization", () => ({
-  useOrganization: () => ({ can: () => true }),
+  useOrganization: () => ({ can: workspace.can }),
+}))
+vi.mock("@/components/shell", () => ({
+  useShell: () => ({ openDeploy: () => undefined }),
+  useAgentDock: () => null,
+}))
+vi.mock("@/lib/use-runs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/use-runs")>()),
+  useRuns: () => ({ runs: [] }),
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/lib/router", () => ({
@@ -30,6 +42,7 @@ vi.mock("@/lib/router", () => ({
 afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
+  workspace.can = () => true
 })
 
 const project = { id: "p", name: "Shop" } as Project
@@ -128,4 +141,87 @@ test("nothing deployed shows nothing once every environment answered", async () 
   expect(
     screen.queryByRole("region", { name: "Resources" })
   ).not.toBeInTheDocument()
+})
+
+test("a resource shows its state in every environment", async () => {
+  serve({})
+  await screen.findByRole("link", { name: /db/ })
+  const table = screen.getByRole("table", { name: "Resources" })
+  expect(table).toHaveTextContent("Live")
+  expect(table).toHaveTextContent("Not deployed")
+  expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute(
+    "href",
+    "/projects/$id/catalog/$resource"
+  )
+})
+
+test("old and unknown tabs open the page somewhere it has", async () => {
+  const { Route } = await import("@/routes/projects.$id")
+  const validate = Route.options.validateSearch as (
+    search: Record<string, unknown>
+  ) => Record<string, unknown>
+  expect(validate({ tab: "graph" })).toEqual({ tab: "overview" })
+  expect(validate({ tab: "deploy" })).toEqual({ tab: "deployments" })
+  expect(validate({ tab: "variables", environment: "staging" })).toEqual({
+    tab: "variables",
+    environment: "staging",
+  })
+  expect(validate({ tab: "nonsense" })).toEqual({})
+})
+
+test("a team grant on the project shows its buttons", async () => {
+  // The workspace role can't deploy; a team gives this project the right.
+  workspace.can = (permission) => permission !== "deployment:create"
+  const asked: string[] = []
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname
+    asked.push(path)
+    if (path === "/api/v1/projects/p")
+      return Response.json({
+        id: "p",
+        name: "Shop",
+        status: "ready",
+        repositories: [],
+      })
+    if (path === "/api/v1/projects/p/permissions")
+      return Response.json({ permissions: ["deployment:create"] })
+    return Response.json({ message: "no" }, { status: 404 })
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <ProjectDetail id="p" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByRole("link", { name: "Deploy" })
+  ).toBeInTheDocument()
+  await waitFor(() =>
+    expect(asked.filter((p) => p.endsWith("/permissions"))).toHaveLength(1)
+  )
+})
+
+test("without the team grant the button stays hidden", async () => {
+  workspace.can = (permission) => permission !== "deployment:create"
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname
+    if (path === "/api/v1/projects/p")
+      return Response.json({
+        id: "p",
+        name: "Shop",
+        status: "ready",
+        repositories: [],
+      })
+    if (path === "/api/v1/projects/p/permissions")
+      return Response.json({ permissions: ["project:read"] })
+    return Response.json({ message: "no" }, { status: 404 })
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <ProjectDetail id="p" />
+    </ClientProvider>
+  )
+  await screen.findByRole("heading", { name: /Shop/ })
+  await waitFor(() =>
+    expect(screen.queryByRole("link", { name: "Deploy" })).toBeNull()
+  )
 })

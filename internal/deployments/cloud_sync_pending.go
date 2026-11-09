@@ -148,8 +148,21 @@ func pendingCheckpointID(raw []byte, key string) (string, error) {
 }
 
 // PendingCloudResource reads the exact project created by the Vercel operation.
+// A native deploy's project is shared with the service's other environments,
+// so what it made is only its environment of that project.
 func (v *Vercel) PendingCloudResource(_ context.Context, job *Job) (string, error) {
-	return pendingCheckpointID(job.Resume, "project_id")
+	id, err := pendingCheckpointID(job.Resume, "project_id")
+	if err != nil {
+		return "", err
+	}
+	var state vercelState
+	if json.Unmarshal(job.Resume, &state) != nil || state.Mode != ModeNative {
+		return id, nil
+	}
+	if state.Target == "" {
+		return "", errors.New("the Vercel environment of this deployment is unknown; its shared project is left in place")
+	}
+	return planning.VercelRef(id, state.Target), nil
 }
 
 // PendingCloudResource reads the exact service created by the Render operation.

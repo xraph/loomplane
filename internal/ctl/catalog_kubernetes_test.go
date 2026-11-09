@@ -12,7 +12,7 @@ func TestCatalogKubernetesCLISelectsTargetProfileBeforeWrites(t *testing.T) {
 	for _, test := range []struct {
 		provider, kind string
 		valid          bool
-	}{{"kubernetes", "postgres", true}, {"kubernetes", "mysql", false}, {"kubernetes", "mariadb", false}, {"foreign", "postgres", false}} {
+	}{{"kubernetes", "postgres", true}, {"kubernetes", "falkordb", true}, {"kubernetes", "elasticsearch", true}, {"kubernetes", "opensearch", true}, {"kubernetes", "duckdb", false}, {"kubernetes", "mysql", false}, {"kubernetes", "mariadb", false}, {"foreign", "postgres", false}} {
 		t.Run(test.provider+"-"+test.kind, func(t *testing.T) {
 			requests := 0
 			app, _ := recoveryCLI(t, func(w http.ResponseWriter, r *http.Request) {
@@ -27,7 +27,7 @@ func TestCatalogKubernetesCLISelectsTargetProfileBeforeWrites(t *testing.T) {
 					var body map[string]string
 					_ = json.NewDecoder(r.Body).Decode(&body)
 					parsed, err := manifest.Parse([]byte(body["yaml"]))
-					if err != nil || parsed.Resources["database"].Provider != "kubernetes" || parsed.Resources["database"].Target != "selected" {
+					if err != nil || parsed.Resources["database"].Provider != "kubernetes" || parsed.Resources["database"].Target != "selected" || parsed.Resources["database"].Kind != test.kind {
 						t.Fatalf("incorrect cluster manifest: %s %v", body["yaml"], err)
 					}
 					w.WriteHeader(http.StatusCreated)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/azure"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
@@ -22,7 +23,7 @@ const signInTTL = 10 * time.Minute
 
 // pkceClouds sign in with PKCE: the verifier stays with Loomplane and only
 // its challenge goes to the cloud.
-var pkceClouds = map[string]bool{GCP: true, Azure: true}
+var pkceClouds = map[string]bool{GCP: true, Azure: true, Cloudflare: true}
 
 // SignInInput starts signing in to a cloud: for a new connection with
 // Name, or for an existing one with ConnectionID. Settings are the
@@ -80,6 +81,10 @@ func (s *Service) StartSignIn(ctx context.Context, p security.Principal, in Sign
 		pending.ConnectionID = c.ID
 		// Signing in again keeps the connection where it is.
 		settings = c.Details
+		if cloud == Cloudflare && in.Settings["services"] != "" {
+			settings = maps.Clone(c.Details)
+			settings["services"] = in.Settings["services"]
+		}
 	} else {
 		name, err := validName(in.Name)
 		if err != nil {
@@ -92,7 +97,7 @@ func (s *Service) StartSignIn(ctx context.Context, p security.Principal, in Sign
 		return nil, err
 	}
 	pending.Settings = settings
-	app, err := s.app(ctx, p.OrgID, cloud)
+	app, err := s.app(ctx, cloud)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +129,24 @@ func signInSettings(cloud string, in map[string]string) (map[string]string, erro
 		keys = []string{"project_id"}
 	case Azure:
 		keys = []string{"tenant_id", "subscription_id", "resource_group"}
+	case Cloudflare:
+		keys = []string{"account_id", "services"}
 	}
 	out := map[string]string{}
 	for _, k := range keys {
 		if v := strings.TrimSpace(in[k]); v != "" {
 			out[k] = v
 		}
+	}
+	if cloud == Cloudflare && !cloudflareAccountRE.MatchString(out["account_id"]) {
+		return nil, fmt.Errorf("%w: give the Cloudflare account ID, 32 lowercase hex digits", ErrInvalid)
+	}
+	if cloud == Cloudflare {
+		services, err := cloudflare.NormalizeServices(out["services"])
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		out["services"] = services
 	}
 	if cloud == GCP {
 		if out["project_id"] == "" {
@@ -179,7 +196,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	if providerErr := s.provider(pending.Cloud); providerErr != nil {
 		return nil, providerErr
 	}
-	app, err := s.app(ctx, p.OrgID, pending.Cloud)
+	app, err := s.app(ctx, pending.Cloud)
 	if err != nil {
 		return nil, err
 	}
@@ -188,21 +205,21 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	})
 	switch {
 	case errors.Is(err, oauth.ErrAppRejected):
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, s.appRejected(ctx, p.OrgID, pending.Cloud))
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, s.appRejected(ctx, pending.Cloud, app.ClientID))
 	case errors.Is(err, oauth.ErrRefused):
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	// The cloud took the app, so whatever it refused before is fixed.
-	if clearErr := s.Apps.ClearAppProblem(ctx, p.OrgID, pending.Cloud); clearErr != nil {
+	if clearErr := s.Apps.ClearAppProblem(ctx, pending.Cloud); clearErr != nil {
 		s.warn("clear the problem of a sign-in app that worked", clearErr)
 	}
 	cred, err := json.Marshal(grant) // #nosec G117 -- the grant is the credential, bound for Vault, never a response.
 	if err != nil {
 		return nil, fmt.Errorf("encode sign-in grant: %w", err)
 	}
-	checked, err := s.checkable(ctx, &Connection{OrgID: p.OrgID, Cloud: pending.Cloud, Details: pending.Settings}, grant)
+	checked, err := s.checkable(ctx, &Connection{OrgID: p.OrgID, Cloud: pending.Cloud, Details: pending.Settings, OAuthClientID: app.ClientID}, grant)
 	if err != nil {
 		return nil, err
 	}
@@ -218,9 +235,9 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 			settings = map[string]string{}
 		}
 		maps.Copy(settings, pending.Settings)
-		return s.replace(ctx, p, pending.ConnectionID, cred, checked, settings, MethodOAuth)
+		return s.replace(ctx, p, pending.ConnectionID, cred, checked, settings, MethodOAuth, app.ClientID)
 	}
-	return s.create(ctx, p, "", pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth)
+	return s.create(ctx, p, "", pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth, app.ClientID)
 }
 
 // checkable is what a check of signed-in c gets for grant g: a handout,
@@ -228,7 +245,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 // Either is a secret.
 func (s *Service) checkable(ctx context.Context, c *Connection, g oauth.Grant) ([]byte, error) {
 	if h, ok := s.Providers[c.Cloud].(Handout); ok {
-		app, err := s.app(ctx, c.OrgID, c.Cloud)
+		app, err := s.connectionApp(ctx, c)
 		if err != nil {
 			return nil, err
 		}

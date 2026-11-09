@@ -23,19 +23,22 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
 	authsome "github.com/xraph/authsome"
 	"github.com/xraph/authsome/api"
 	"github.com/xraph/authsome/app"
-	"github.com/xraph/authsome/bridge/chronicleadapter"
 	"github.com/xraph/authsome/environment"
 	authid "github.com/xraph/authsome/id"
 	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/plugins/oauth2provider"
 	"github.com/xraph/authsome/plugins/organization"
 	"github.com/xraph/authsome/plugins/password"
+	"github.com/xraph/authsome/plugins/waitlist"
 	"github.com/xraph/authsome/ratelimit"
+	"github.com/xraph/authsome/rbac"
 	"github.com/xraph/authsome/settings"
 	authstore "github.com/xraph/authsome/store"
 	authpg "github.com/xraph/authsome/store/postgres"
@@ -48,14 +51,22 @@ import (
 	groveext "github.com/xraph/grove/extension"
 	"github.com/xraph/keysmith"
 	kspg "github.com/xraph/keysmith/store/postgres"
+	vaultstore "github.com/xraph/vault/store"
+	vaultpg "github.com/xraph/vault/store/postgres"
 	"github.com/xraph/warden"
 	wardenpg "github.com/xraph/warden/store/postgres"
 
 	"github.com/xraph/loomplane/internal/apikeys"
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/currentauthority"
+	"github.com/xraph/loomplane/internal/instance"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/setuptoken"
+	"github.com/xraph/loomplane/internal/teams"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
 
@@ -70,6 +81,9 @@ const (
 	authsomeAPIPath = "/v1"
 	appSlug         = "loomplane"
 	pingTimeout     = 3 * time.Second
+	// provideWardenPriority puts the start hook that provides Warden ahead
+	// of the others, which run at Forge's default of 0.
+	provideWardenPriority = 100
 )
 
 // Guard is the middleware for organization-scoped Loomplane routes: it
@@ -82,18 +96,64 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
-	pg            *pgdriver.PgDB
-	store         *authpg.Store
-	orgs          *organization.Plugin
-	warden        *warden.Engine
-	authz         *security.Authorizer
-	audit         *chronicle.Chronicle
-	engine        *authsome.Engine
-	keys          *apikeys.Service
+	approvalAdmitter *approvalAdmitter
+	approvalVerifier *approvaladmission.Verifier
+	approvalKeys     *approvalKeyReader
+
+	pg         *pgdriver.PgDB
+	store      *authpg.Store
+	orgs       *organization.Plugin
+	warden     *warden.Engine
+	authority  *currentauthority.Coordinator
+	authz      *security.Authorizer
+	audit      *chronicle.Chronicle
+	auditStore chronstore.Store
+	// checkpoints signs auditStore's streams (checkpoints.go).
+	checkpoints *auditCheckpoints
+	smith       *keysmith.Engine
+	engine      *authsome.Engine
+	keys        *apikeys.Service
+	teams       *teams.Service
+	lockPG      *pgdriver.PgDB // the sync lock's own pool (wireTeams)
+	// joined finds the nodes a key's join tokens brought in. The nodes
+	// extension registers after this one, so it is looked up per request.
+	joined        func() JoinedNodes
 	telemetry     *telemetry.Recorder
 	notifications *notifications.Service
+	instance      *instance.Settings
+	// platformRoles reads users' platform roles in Loomplane's app.
+	// authsome's engine finds the app from the request, which Loomplane's
+	// own routes don't carry, so this asks Warden for the app directly.
+	platformRoles rbac.Store
 	resetBusy     atomic.Bool
 	router        forge.Router
+
+	// waitlist serves authsome's waitlist routes with its own gate off;
+	// gate decides who may sign up (signup_gate.go).
+	waitlist      *waitlist.Plugin
+	waitlistStore waitlist.Store
+	gate          *signupGate
+	// signupLimit is authsome's sign-up limit, which refuseSignUps runs
+	// ahead of the gate. Nil when rate limiting is off.
+	signupLimit forge.Middleware
+
+	// oauthClients is the OAuth provider's client store, where loomctl's
+	// client is seeded (cli.go).
+	oauthClients oauth2provider.Store
+
+	// consoleBase is the console's base path, once the dashboard reports
+	// it (console.go).
+	consoleBase atomic.Value
+	// consoleReg is the dashboard's contract registry, once the dashboard
+	// hands it over (console.go). The gate reads intents' kinds from it.
+	consoleReg atomic.Pointer[registryRef]
+
+	// createOrgHook stands between setup and the organization plugin when
+	// set. Only integration builds set it (export_integration.go).
+	createOrgHook setupOrgHook
+
+	// edition is what only this edition builds (edition_cloud.go).
+	edition editionState
 }
 
 // New returns the identity extension.
@@ -114,6 +174,16 @@ func (e *Extension) Dependencies() []string {
 // Forge's central migrations the schema only exists once every extension
 // has registered, so anything that reads or writes waits for Start.
 func (e *Extension) Register(fapp forge.App) error {
+	err := e.register(fapp)
+	if err != nil {
+		// Stop may never run for an extension that failed to register,
+		// so the sync lock pool wireTeams opened is closed here.
+		err = errors.Join(err, e.closeLockPool())
+	}
+	return err
+}
+
+func (e *Extension) register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
@@ -126,54 +196,132 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("identity needs notification delivery: %w", err)
 	}
 	e.pg = pgdriver.Unwrap(db)
+	e.instance = instance.New(e.pg)
 	e.store = authpg.New(db)
-	wstore := wardenpg.New(db)
-	if e.warden, err = warden.NewEngine(warden.WithStore(wstore), warden.WithLogger(e.Logger())); err != nil {
-		return fmt.Errorf("warden: %w", err)
+	wstore, err := e.initWarden(wardenpg.New(db))
+	if err != nil {
+		return err
 	}
+	e.platformRoles = rbac.NewWardenStore(e.warden)
+	e.auditStore = chronpg.New(db)
+	// Vault's store over Loomplane's database, for the checkpoint key and
+	// for whoever reads Vault from DI.
+	vault := vaultpg.New(db)
+	if e.checkpoints, err = e.newAuditCheckpoints(vault); err != nil {
+		return err
+	}
+	// Digests stay on Chronicle's plain chronicle/v4: Hallproof verifies
+	// those and rejects keyed ones, and a stream can't go back once keyed.
 	if e.audit, err = chronicle.New(
-		chronicle.WithStore(chronstore.NewAdapter(chronpg.New(db))),
+		chronicle.WithStore(chronstore.NewAdapter(e.auditStore)),
 		chronicle.WithLogger(e.Logger()),
+		chronicle.WithCheckpointSigner(e.checkpoints.signer),
 	); err != nil {
 		return fmt.Errorf("chronicle: %w", err)
 	}
+	e.scheduleCheckpoints(fapp)
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
-	smith, err := keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db))))
-	if err != nil {
+	if teamsErr := e.wireTeams(); teamsErr != nil {
+		return teamsErr
+	}
+	if e.smith, err = keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db)))); err != nil {
 		return fmt.Errorf("keysmith: %w", err)
 	}
 	e.telemetry = telemetry.New(fapp.Metrics())
-	e.keys = apikeys.New(smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
-	if e.engine, err = e.buildEngine(); err != nil {
+	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, apikeys.WithPlatformAdmins(e))
+	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
+	}
+	e.approvalKeys = &approvalKeyReader{db: e.pg}
+	e.approvalAdmitter, e.approvalVerifier, err = newApprovalAdmitter(e.cfg.SecretKey, e.cfg.Identity.AppID, e.approvalKeys.read)
+	if err != nil {
+		return fmt.Errorf("prepare group approval source: %w", err)
 	}
 	// ProvideValue keys on its type parameter, so each value goes in with
 	// its own concrete type.
 	c := fapp.Container()
+	e.joined = func() JoinedNodes {
+		svc, err := forge.InjectType[*nodes.Service](c)
+		if err != nil {
+			return nil
+		}
+		return svc
+	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue[approvaladmission.Admitter](c, e.approvalAdmitter),
+		forge.ProvideValue[approvaladmission.Verification](c, e.approvalVerifier),
+		forge.ProvideValue(c, e.teams),
 		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
+		forge.ProvideValue(c, e.keys),
 		forge.ProvideValue(c, Guard{e.guard()}),
+		forge.ProvideValue(c, PlatformUser(e.platformUser)),
+		forge.ProvideValue(c, PlatformOwner(e.platformOwner)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
+		// Keysmith and the Vault store, for readers such as Hallproof's
+		// witness. When the container starts, it calls Start on every
+		// value it holds that has one, and Stop when it stops. Keysmith's
+		// Start does nothing, nothing else starts or stops it, and the
+		// Vault store has neither, so both can go in now.
+		forge.ProvideValue(c, e.smith),
+		forge.ProvideValue[vaultstore.Store](c, vault),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
+	}
+	// Warden goes in only once the container has started. prepare starts
+	// it and Stop stops it, and the container would start it a second time
+	// (a second maintenance loop, of which Stop cancels only the last).
+	// A value provided after the container started is never started or
+	// stopped by it. The hook runs ahead of the other start hooks, so
+	// witness, which looks in one, finds Warden.
+	if err := fapp.RegisterHook(forge.PhaseAfterStart, func(context.Context, forge.App) error {
+		return forge.ProvideValue(c, e.warden)
+	}, forge.LifecycleHookOptions{Name: "loomplane-provide-warden", Priority: provideWardenPriority}); err != nil {
+		return fmt.Errorf("provide warden: %w", err)
+	}
+	if err := e.editionProvide(c); err != nil {
+		return fmt.Errorf("provide identity services: %w", err)
+	}
+	// Global, so it runs before the console's routes, which the dashboard
+	// only registers when it starts (console.go).
+	fapp.Router().UseGlobal(e.consoleGate())
+	if err := forge.OnStarted(fapp, "loomplane-console-unlisted", func(_ context.Context, a forge.App) error {
+		e.unlistConsole(a.Router())
+		return nil
+	}); err != nil {
+		return fmt.Errorf("unlist the console: %w", err)
 	}
 	return e.routes(fapp.Router())
 }
 
-func (e *Extension) buildEngine() (*authsome.Engine, error) {
+func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	// Kept: Loomplane's member and invitation routes call its service.
 	e.orgs = organization.New()
+	e.waitlistStore = waitlist.NewPostgresStore(db)
+	e.waitlist = waitlist.New(waitlist.Config{Enabled: false})
+	// The sign-up gate reads the raw store. The plugin gets the wrapper so
+	// every approval, from REST or the console, sends the email.
+	e.waitlist.SetWaitlistStore(approvalMailer{Store: e.waitlistStore, send: e.notifications.SendWaitlistApproved, log: e.Logger()})
+	e.gate = e.newSignupGate()
+	// A person who leaves the workspace leaves its teams first, and a
+	// revoke that fails afterwards goes on the sync queue.
+	memberSync := security.NewSync(e.authz)
+	memberSync.SetLeaver(e.teams.Leave)
+	memberSync.SetRequeuer(e.teams.Requeue)
 	tokens, err := security.TokenEncryptor(e.cfg.SecretKey)
 	if err != nil {
 		return nil, err
 	}
-	engine, err := authsome.NewEngine(
+	options, err := e.editionOptions(db)
+	if err != nil {
+		return nil, err
+	}
+	opts := slices.Concat([]authsome.Option{
 		authsome.WithStore(e.store),
 		authsome.WithLogger(e.Logger()),
-		authsome.WithChronicle(chronicleadapter.New(categorized{Emitter: e.audit, category: authAuditCategory})),
+		authsome.WithChronicle(e.authsomeChronicle()),
 		authsome.WithTokenEncryptor(tokens),
 		authsome.WithRateLimiter(routeLimiter{Limiter: ratelimit.NewKVLimiter(e.store)}),
 		authsome.WithWarden(e.warden),
@@ -194,8 +342,15 @@ func (e *Extension) buildEngine() (*authsome.Engine, error) {
 		authsome.WithPlugin(password.New()),
 		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
-		authsome.WithPlugin(security.NewSync(e.authz)),
-	)
+		authsome.WithPlugin(memberSync),
+		authsome.WithPlugin(notifications.NewAccountCleanup(e.notifications)),
+		authsome.WithPlugin(e.waitlist),
+		authsome.WithPlugin(e.oauthProvider(db)),
+	}, options)
+	engine, err := authsome.NewEngine(append(opts,
+		// Last, so it judges a sign-up the other plugins have accepted.
+		authsome.WithPlugin(e.gate),
+	)...)
 	if err != nil {
 		return nil, fmt.Errorf("authsome engine: %w", err)
 	}
@@ -213,11 +368,32 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := pglock.Do(ctx, e.pg, pglock.StartupSeed, e.prepare); err != nil {
 		return err
 	}
+	if e.approvalKeys != nil {
+		e.approvalKeys.prepare(ctx)
+	}
 	if err := e.mount(ctx); err != nil {
 		return err
 	}
+	if err := e.startCheckpoints(ctx); err != nil {
+		return err
+	}
+	e.logSetupLink(ctx)
 	e.MarkStarted()
 	return nil
+}
+
+// logSetupLink tells the operator, in production while setup is pending,
+// where to open setup. A failure is logged; it never stops the start.
+func (e *Extension) logSetupLink(ctx context.Context) {
+	if e.cfg.IsDevelopment() || !e.setupPending(ctx) {
+		return
+	}
+	token, err := setuptoken.Derive(e.cfg.SecretKey)
+	if err != nil {
+		e.Logger().Error("derive the setup token", forge.F("error", err.Error()))
+		return
+	}
+	e.Logger().Warn("setup is waiting", forge.F("url", setuptoken.Link(e.cfg.PublicURL, token)))
 }
 
 // setting sets one of authsome's settings for the whole engine.
@@ -236,9 +412,14 @@ func (e *Extension) setting(ctx context.Context, key string, value any) error {
 // middleware and routes stay out of Loomplane's API.
 func (e *Extension) mount(ctx context.Context) error {
 	r := forge.NewRouter()
+	// Ahead of everything, so a team route is refused before authsome
+	// looks at the session or counts the request.
+	r.Use(refuseAuthsomeTeams)
 	r.Use(rateLimitScope)
 	r.Use(e.resetFence())
 	r.Use(e.sessionMiddleware()...)
+	e.signupLimit = e.engine.RateLimitMiddleware(e.engine.Config().RateLimit.SignUpLimit)
+	r.Use(e.refuseSignUps)
 	if err := api.New(e.engine, r).RegisterRoutes(r); err != nil {
 		return fmt.Errorf("authsome routes: %w", err)
 	}
@@ -262,6 +443,7 @@ func (e *Extension) mount(ctx context.Context) error {
 // grove extension.
 func (e *Extension) Stop(ctx context.Context) error {
 	var errs []error
+	e.stopCheckpoints()
 	if e.router != nil {
 		errs = append(errs, e.router.Stop(ctx))
 	}
@@ -271,8 +453,19 @@ func (e *Extension) Stop(ctx context.Context) error {
 	if e.warden != nil {
 		errs = append(errs, e.warden.Stop(ctx))
 	}
+	errs = append(errs, e.authority.Shutdown(ctx), e.closeLockPool())
 	e.MarkStopped()
 	return errors.Join(errs...)
+}
+
+// closeLockPool closes the sync lock's pool, once.
+func (e *Extension) closeLockPool() error {
+	if e.lockPG == nil {
+		return nil
+	}
+	err := e.lockPG.Close()
+	e.lockPG = nil
+	return err
 }
 
 // Health checks authsome's store.
@@ -286,29 +479,49 @@ func (e *Extension) Health(ctx context.Context) error {
 }
 
 // middleware authenticates the authsome session (its HttpOnly cookie, or a
-// bearer token for API clients), keeps it alive (sessions.go) and resolves
-// the principal.
+// bearer token for API clients), keeps it alive (sessions.go), admits
+// loomctl's OAuth tokens (cli.go) and resolves the principal.
 func (e *Extension) middleware() []forge.Middleware {
-	return append(e.sessionMiddleware(), requirePrincipal)
+	return append(e.sessionMiddleware(), admitCLI(), e.requirePrincipal)
 }
 
-func requirePrincipal(next forge.Handler) forge.Handler {
+func (e *Extension) requirePrincipal(next forge.Handler) forge.Handler {
 	return func(c forge.Context) error {
 		ctx := c.Request().Context()
-		var userID, orgID string
-		if u, ok := authmw.UserIDFrom(ctx); ok {
-			userID = u.String()
-		}
-		if o, ok := authmw.OrgIDFrom(ctx); ok {
-			orgID = o.String()
-		}
-		p, err := security.Resolve(userID, orgID, c.Request().Header.Get(security.HeaderOrganization))
+		p, err := e.principalFor(ctx, c.Request().Header.Get(security.HeaderOrganization))
 		if err != nil {
 			return forge.NewHTTPError(security.StatusFor(err), err.Error())
 		}
+		ctx = e.captureSessionApproval(ctx, p)
 		c.WithContext(security.WithPrincipal(ctx, p))
 		return next(c)
 	}
+}
+
+// principalFor is the principal of a request authsome's middleware has
+// authenticated. Sign-up hands out a session before the email is
+// verified, and authsome only checks verification at sign-in, so when
+// it's required every request checks it here.
+func (e *Extension) principalFor(ctx context.Context, orgHeader string) (security.Principal, error) {
+	var userID, orgID string
+	if u, ok := authmw.UserIDFrom(ctx); ok {
+		userID = u.String()
+	}
+	if o, ok := authmw.OrgIDFrom(ctx); ok {
+		orgID = o.String()
+	}
+	p, err := security.Resolve(userID, orgID, orgHeader)
+	if err != nil {
+		return security.Principal{}, err
+	}
+	if e.cfg.Identity.RequireEmailVerification {
+		// The middleware loads the user for every session; one it couldn't
+		// load isn't let through as verified.
+		if u, ok := authmw.UserFrom(ctx); !ok || u == nil || !u.EmailVerified {
+			return security.Principal{}, security.ErrEmailNotVerified
+		}
+	}
+	return p, nil
 }
 
 // membership is a user's role in an organization, if they're in it. The
@@ -344,13 +557,30 @@ func (e *Extension) prepare(ctx context.Context) error {
 	if err := e.engine.Start(ctx); err != nil {
 		return fmt.Errorf("start authsome: %w", err)
 	}
+	// After authsome's bootstrap, which applies the platform roles.
+	e.grantConsoleReads(ctx)
+	if err := e.seedCLIClient(ctx); err != nil {
+		return err
+	}
+	if err := e.recordEarlierSetup(ctx); err != nil {
+		return err
+	}
+	if err := e.verifyPlatformOwners(ctx); err != nil {
+		return err
+	}
+	if err := e.ensureCheckpointKey(ctx); err != nil {
+		return err
+	}
 	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {
 		return err
 	}
 	// Global, not per app: authsome only knows a request's app when it
 	// sends the publishable key, which calls to Loomplane's own API don't.
 	// This engine holds Loomplane's app alone, so global is per app anyway.
-	return e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie)
+	if err := e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie); err != nil {
+		return err
+	}
+	return e.syncClientConfig(ctx)
 }
 
 // seed creates Loomplane's authsome app and its default environment on the

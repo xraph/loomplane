@@ -3,8 +3,8 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { DeploymentTargets } from "@/components/deployment-targets"
-import type { Manifest } from "@/client/forge/loomplane/types"
+import { PlacementPanel } from "@/components/deployment-targets"
+import type { Environment, Manifest } from "@/client/forge/loomplane/types"
 
 const permissions = vi.hoisted(() => ({ update: true }))
 vi.mock("@/lib/organization", () => ({
@@ -92,19 +92,34 @@ function mount({ denied = false, inherited = false } = {}) {
   )
   render(
     <ClientProvider client={forgeClient}>
-      <DeploymentTargets
+      <PlacementPanel
         projectId="project"
         manifest={manifest}
-        environments={[]}
+        revision={1}
+        row={{
+          section: "services",
+          name: "api",
+          kind: "http-service",
+          entry: manifest.services!.api,
+        }}
         environment="production"
-        onEnvironment={() => {}}
+        environments={[{ id: "env", name: "production" } as Environment]}
+        mode="save"
+        onClose={() => {}}
       />
     </ClientProvider>
   )
   return writes
 }
+// The route sits in the panel's "Build and network" section.
+async function openRoute(user = userEvent.setup()) {
+  await user.click(
+    await screen.findByRole("button", { name: "Build and network" })
+  )
+  return user
+}
 async function enterRoute() {
-  const user = userEvent.setup()
+  const user = await openRoute()
   const network = await screen.findByRole("textbox", {
     name: "PSC network for api",
   })
@@ -117,7 +132,7 @@ async function enterRoute() {
 it("saves the canonical application route through placement review without deploying", async () => {
   const writes = mount()
   const user = await enterRoute()
-  await user.click(screen.getByRole("button", { name: "Save api placement" }))
+  await user.click(screen.getByRole("button", { name: "Save placement" }))
   await waitFor(() =>
     expect(writes).toEqual([
       {
@@ -133,30 +148,26 @@ it("saves the canonical application route through placement review without deplo
 })
 it("refuses a partial or wrong-region route before saving", async () => {
   const writes = mount()
-  const user = userEvent.setup()
+  const user = await openRoute()
   await user.click(
     await screen.findByRole("textbox", { name: "PSC network for api" })
   )
   await user.paste(route.network)
-  expect(
-    screen.getByRole("button", { name: "Save api placement" })
-  ).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Save placement" })).toBeDisabled()
   await user.click(screen.getByRole("textbox", { name: "PSC subnet for api" }))
   await user.paste(route.subnetwork.replace("us-central1", "europe-west1"))
-  expect(
-    screen.getByRole("button", { name: "Save api placement" })
-  ).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Save placement" })).toBeDisabled()
   expect(writes).toEqual([])
 })
 it("shows inherited routes and restores inheritance with an explicit empty edit", async () => {
   const writes = mount({ inherited: true })
-  const user = userEvent.setup()
+  const user = await openRoute()
   expect(
     await screen.findByRole("textbox", { name: "PSC network for api" })
   ).toHaveValue(route.network)
   await user.clear(screen.getByRole("textbox", { name: "PSC network for api" }))
   await user.clear(screen.getByRole("textbox", { name: "PSC subnet for api" }))
-  await user.click(screen.getByRole("button", { name: "Save api placement" }))
+  await user.click(screen.getByRole("button", { name: "Save placement" }))
   await waitFor(() =>
     expect(writes).toEqual([
       {
@@ -177,20 +188,19 @@ it("shows inherited routes and restores inheritance with an explicit empty edit"
 it("retains the route after denial so the user can retry", async () => {
   mount({ denied: true })
   const user = await enterRoute()
-  await user.click(screen.getByRole("button", { name: "Save api placement" }))
+  await user.click(screen.getByRole("button", { name: "Save placement" }))
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "You cannot edit this project"
   )
   expect(
     screen.getByRole("textbox", { name: "PSC network for api" })
   ).toHaveValue(route.network)
-  expect(
-    screen.getByRole("button", { name: "Save api placement" })
-  ).toBeEnabled()
+  expect(screen.getByRole("button", { name: "Save placement" })).toBeEnabled()
 })
 it("keeps the route read-only without project update permission", async () => {
   permissions.update = false
   mount({ inherited: true })
+  await openRoute()
   expect(
     await screen.findByRole("textbox", { name: "PSC network for api" })
   ).toBeDisabled()

@@ -17,6 +17,14 @@ loomctl show <plan-id>
 
 A plan pins a lockset: one analysis and commit for each source. It composes its graph from those, so it always sees the graph it was made from, even if you push or re-analyze afterward.
 
+## Kinds of plan
+
+Most plans are releases: the current manifest and a commit of each repository you move. Two other kinds exist, and `loomctl show` says which one you're looking at.
+
+A promotion is made with `loomctl promote` (or `plan --from staging`). It pins the commits and manifest revision another environment runs, and reuses that environment's images where it can. A rollback is made with `loomctl rollback`. It restores the previous successful release's commits and manifest revision, and lists as left in place anything it won't touch, such as a resource that holds data. Both wait for approval like a release does. [Promotion and rollback](/docs/concepts/promotion-and-rollback) has the details.
+
+There's one exception to "a person approves". When a [post-deploy watch](/docs/concepts/promotion-and-rollback#watch-a-release-after-it-deploys) sees a release breach its thresholds, Loomplane plans the rollback and approves it itself, as Loomplane automation. It's marked automatic in the audit trail, and it can approve only a rollback that a watch started. Every other plan still needs a person.
+
 ## What a plan shows
 
 Every action, step by step, with its operation, name, provider and the reason it's there. Beside the actions you get two lists.

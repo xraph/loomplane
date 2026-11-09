@@ -41,12 +41,21 @@ func New(cfg *Config) (*Client, error) {
 	if cfg == nil || cfg.REST == nil || cfg.Namespace == "" {
 		return nil, ErrInvalid
 	}
+	cleanup, restricted := cfg.ManagedJournal.(interface{ ManagedCleanupScope() ManagedScope })
+	if restricted && (!cfg.journalRequired() || !managedScopeValid(cfg.ManagedScope) || cleanup.ManagedCleanupScope() != cfg.ManagedScope) {
+		return nil, ErrManagedAuthority
+	}
 	rc := rest.CopyConfig(cfg.REST)
 	rc.Timeout, rc.QPS, rc.Burst = 15*time.Second, 20, 40
 	rc.ContentType, rc.AcceptContentTypes = "application/json", "application/json"
 	httpClient, err := rest.HTTPClientFor(rc)
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes transport: %w", err)
+	}
+	if cfg.journalRequired() {
+		httpClient.Transport = &managedTransport{next: httpClient.Transport, journal: cfg.ManagedJournal, scope: cfg.ManagedScope, cleanup: restricted}
+	} else if cfg.ManagedWorkload {
+		httpClient.Transport = &managedLegacyTransport{next: httpClient.Transport, guard: cfg.ManagedLegacyGuard, identity: cfg.ManagedIdentity}
 	}
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client, err := kubeclient.NewForConfigAndClient(rc, httpClient)
@@ -96,6 +105,9 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	default:
 		out.Details["namespace_uid"] = string(ns.UID)
 	}
+	if setupErr := c.discoverManagedSetup(ctx, out); setupErr != nil {
+		return nil, setupErr
+	}
 	for _, resource := range []struct {
 		group, name string
 		verbs       []string
@@ -120,7 +132,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		{"autoscaling", "horizontalpodautoscalers", "hpa"},
 	} {
 		ready := true
-		for _, verb := range []string{"get", "create", "update", "patch", "delete"} {
+		verbs := []string{"get", "create", "update", "patch", "delete"}
+		if optional.detail == "hpa" {
+			verbs = []string{"get", "create", "update", "delete"}
+		}
+		for _, verb := range verbs {
 			allowed, checkErr := c.allowed(ctx, optional.group, optional.resource, verb)
 			if checkErr != nil {
 				return nil, checkErr
@@ -147,7 +163,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		return nil, postgresErr
 	}
 	// Routes are optional, so what they need is a detail and never Missing.
-	routes, err := c.CheckRoutePrerequisites(ctx)
+	routeClient := *c
+	routeConfig := *c.Config
+	routeConfig.Details = out.Details
+	routeClient.Config = &routeConfig
+	routes, err := routeClient.CheckRoutePrerequisites(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +182,10 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 	if err := c.checkAccessPermissions(ctx, out); err != nil {
+		return nil, err
+	}
+	c.checkBuildIsolation(ctx, out)
+	if err := c.checkManagedBuildPermissions(ctx, out); err != nil {
 		return nil, err
 	}
 	inv, gpuErr := c.GPUs(ctx)

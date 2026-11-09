@@ -32,9 +32,10 @@ secrets:
   # the chart creates none. It holds the variables below by their LOOMPLANE_
   # names: LOOMPLANE_SECRET_KEY and LOOMPLANE_DATABASE_URL at least, plus
   # LOOMPLANE_STORAGE_URL, LOOMPLANE_BACKUP_URL,
-  # LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD, LOOMPLANE_GITHUB_PRIVATE_KEY,
-  # LOOMPLANE_GITHUB_CLIENT_SECRET and LOOMPLANE_GITHUB_WEBHOOK_SECRET when
-  # you use them.
+  # LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY, LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD,
+  # LOOMPLANE_GITHUB_PRIVATE_KEY,
+  # LOOMPLANE_GITHUB_CLIENT_SECRET, LOOMPLANE_GITHUB_WEBHOOK_SECRET and
+  # LOOMPLANE_GITLAB_CLIENT_SECRET when you use them.
   existingSecret: ""
   # Otherwise the chart makes one from these values.
   #
@@ -43,10 +44,13 @@ secrets:
   secretKey: ""
   # postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require
   databaseURL: ""
+  # Sends mail through Resend (set notifications.from too). Overrides SMTP.
+  resendApiKey: ""
   smtpPassword: ""
   githubPrivateKey: ""
   githubClientSecret: ""
   githubWebhookSecret: ""
+  gitlabClientSecret: ""
 
 # ── Database ─────────────────────────────────────────────────────────────────
 database:
@@ -87,12 +91,80 @@ github:
   appSlug: ""
   clientID: ""
 
+# Private projects on gitlab.com need an OAuth application: set clientID here
+# and secrets.gitlabClientSecret, or neither (docs/gitlab.md).
+gitlab:
+  apiURL: https://gitlab.com
+  clientID: ""
+  # Whether organizations may add a self-managed GitLab of their own.
+  allowOrganizationHosts: true
+  # Where GitLab reaches the webhook, when publicURL isn't an address GitLab
+  # can reach. Empty uses publicURL.
+  webhookURL: ""
+
 notifications:
   smtpHost: ""
   smtpPort: 465
   smtpUsername: ""
   smtpTLS: true
   from: ""
+
+# Phone notifications go through a gateway. Only XRaph's gateway can reach the
+# store app. Turn push off and the app hides its push settings.
+ai:
+  enabled: false
+
+push:
+  enabled: true
+  gatewayUrl: https://push.loomplane.com
+  # Run your own gateway alongside the API and workers. Requires push
+  # credentials for the mobile app you ship. gatewayUrl is its public HTTPS
+  # address, on a different hostname from publicURL.
+  gateway:
+    enabled: false
+    image:
+      repository: ghcr.io/xraph/loomplane-push-gateway
+      # Set a published tag or digest explicitly when you enable the gateway.
+      tag: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    replicaCount: 1
+    # This Secret is mounted only into the gateway. Keys: sealing-key,
+    # fcm-service-account.json (FCM), apns-key.p8 (APNs), and
+    # previous-sealing-key (only during rotation).
+    existingSecret: ""
+    sealingKeyId: ""
+    previousSealingKeyId: ""
+    fcm:
+      enabled: true
+    apns:
+      enabled: false
+      keyId: ""
+      teamId: ""
+      bundleId: com.loomplane.app
+    serverRate: 50
+    handleRate: 30
+    resources:
+      requests:
+        cpu: 50m
+        memory: 32Mi
+      limits:
+        memory: 256Mi
+    podAnnotations: {}
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    ingress:
+      enabled: false
+      # Empty uses ingress.className from the dashboard.
+      className: ""
+      annotations: {}
+      tls: []
+    # Use a Gateway with an HTTPS listener and certificate for gatewayUrl.
+    httpRoute:
+      enabled: false
+      parentRefs: []
+      annotations: {}
 
 # Comma-separated CIDRs of the proxies in front of Loomplane, so sign-in rate
 # limits see real client addresses. Empty trusts private ranges, which covers
@@ -101,6 +173,14 @@ trustedProxies: ""
 
 # Comma-separated provider names to pause, e.g. "aws,azure".
 pausedProviders: ""
+
+# true or false forces the sign-up waitlist on or off. Empty leaves it to the
+# instance: first-run setup turns it on, and an instance that existed before
+# first-run setup keeps open sign-up.
+waitlist: ""
+
+# Where platform admins open the console: one path segment starting with __.
+consolePath: /__console
 
 # More LOOMPLANE_ settings, as plain environment variables.
 env: {}

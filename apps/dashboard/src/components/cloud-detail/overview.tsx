@@ -1,7 +1,7 @@
 // A Cloud at a glance: anything stuck, where services go, which environments
 // use it, and what changed last.
 import type { UseQueryResult } from "@forge-go/client-react"
-import { TriangleAlertIcon } from "lucide-react"
+import { AsteriskIcon, TargetIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 import type {
@@ -15,17 +15,23 @@ import type {
   Usage,
 } from "@/client/forge/loomplane/types"
 import {
+  Cell,
+  CloudCallout,
+  CloudTable,
+  CloudTableRow,
+  FactList,
+  NameCell,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
   CloudSectionHead,
-  Row,
-  Rows,
 } from "@/components/cloud-targets/infrastructure-ui"
-import { toneClass } from "@/components/runs"
+import { StatusPill } from "@/components/runs"
 import { Button } from "@/components/ui/button"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate, relative } from "@/lib/format"
 import { Link } from "@/lib/router"
 import { useNow } from "@/lib/use-runs"
-import { cn } from "@/lib/utils"
 
 import { changeTitle, syncState } from "./changes"
 import {
@@ -41,7 +47,7 @@ export type CloudTab =
   | "overview"
   | "targets"
   | "projects"
-  | "servers"
+  | "infrastructure"
   | "capacity"
   | "changes"
   | "settings"
@@ -65,7 +71,6 @@ export function Overview({
   grants,
   projects,
   onTab,
-  onChanged,
 }: {
   scope: CloudScope
   owner: string
@@ -78,7 +83,6 @@ export function Overview({
   grants?: ProjectGrant[]
   projects: Project[]
   onTab: (tab: CloudTab) => void
-  onChanged: () => void
 }) {
   const { cloud, project } = scope
   const now = useNow()
@@ -147,7 +151,7 @@ export function Overview({
         body: s.draining
           ? "Move what still runs on it before you remove it."
           : "Services can't be placed on it until it passes a health check.",
-        action: open("servers", "Open servers"),
+        action: open("infrastructure", "Open servers"),
       })
   if (!project && targets.length === 0 && !fallback)
     problems.push({
@@ -159,42 +163,34 @@ export function Overview({
 
   const running = [...placed.values()].reduce((a, b) => a + b, 0)
   const accounts = connections.filter((c) => used.has(c.id))
-  const facts: [string, ReactNode][] = [
-    ["Owner", owner],
+  const facts: { label: string; value: ReactNode }[] = [
+    { label: "Owner", value: owner },
     ...(grants
-      ? [["Projects with access", String(grants.length)] as [string, ReactNode]]
+      ? [{ label: "Projects with access", value: String(grants.length) }]
       : []),
-    ["Running services", usage.data ? String(running) : "…"],
-    [
-      "Accounts",
-      accounts.length
+    { label: "Running services", value: usage.data ? String(running) : "…" },
+    {
+      label: "Accounts",
+      value: accounts.length
         ? `${accounts.length}, on ${[...new Set(accounts.map((a) => cloudLabel(a.cloud)))].join(" and ")}`
         : "None yet",
-    ],
-    ["Created", formatDate(cloud.createdAt)],
+    },
+    { label: "Created", value: formatDate(cloud.createdAt) },
   ]
 
   return (
     <div className="grid gap-6">
       {problems.length > 0 && (
-        <section aria-label="Needs attention" className="grid gap-2">
+        <section aria-label="Needs attention" className="grid gap-2.5">
           {problems.map((p) => (
-            <div
+            <CloudCallout
               key={p.key}
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-weld-tint/60 px-4 py-3 ring-1 ring-weld/30"
+              tone="attention"
+              title={p.title}
+              action={p.action}
             >
-              <TriangleAlertIcon
-                aria-hidden="true"
-                className="size-4 shrink-0 text-weld-ink"
-              />
-              <span className="grid min-w-0 flex-[1_1_360px] gap-0.5">
-                <span className="text-[13px] font-semibold">{p.title}</span>
-                <span className="text-[12.5px] leading-relaxed text-muted-foreground">
-                  {p.body}
-                </span>
-              </span>
-              {p.action}
-            </div>
+              {p.body}
+            </CloudCallout>
           ))}
         </section>
       )}
@@ -202,153 +198,138 @@ export function Overview({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <section
           aria-label="Where services go"
-          className="grid content-start gap-3"
+          className="grid content-start gap-2.5"
         >
           <CloudSectionHead
             title="Where services go"
             description="A service names a target, or tags that pick one. Otherwise it uses the default."
           />
           {targets.length === 0 && !showDefault ? (
-            <p className="rounded-xl px-4 py-3 text-[13px] text-muted-foreground ring-1 ring-border">
+            <CloudEmpty
+              kind="list"
+              title="No targets or default yet"
+              action={!project && open("targets", "Open targets")}
+            >
               {project
                 ? "This project may not place anything on this Cloud yet."
-                : "No targets and no default yet."}{" "}
-              {!project && (
-                <Button
-                  variant="link"
-                  className="h-auto p-0"
-                  onClick={() => onTab("targets")}
-                >
-                  Add one
-                </Button>
-              )}
-            </p>
+                : "Add a target or set a default before an environment uses this Cloud."}
+            </CloudEmpty>
           ) : (
-            <Rows>
+            <CloudTable
+              label="Where services go"
+              columns="minmax(0,1fr) minmax(0,1.4fr) 96px"
+              head={["Target", "Runs on", "Services"]}
+              minWidth={480}
+            >
               {targets.map((t) => (
-                <PlacementRow
-                  key={t.id}
-                  label={t.displayName || t.name}
-                  slug={t.name}
-                  count={usage.data ? (placed.get(t.id) ?? 0) : undefined}
-                >
-                  <RunsOn target={t} connections={connections} pools={pools} />
-                </PlacementRow>
+                <CloudTableRow key={t.id}>
+                  <NameCell
+                    tile={<TargetIcon />}
+                    name={t.displayName || t.name}
+                    meta={<span className="font-mono">{t.name}</span>}
+                  />
+                  <Cell>
+                    <RunsOn
+                      target={t}
+                      connections={connections}
+                      pools={pools}
+                    />
+                  </Cell>
+                  <Cell className="text-[12.5px] text-muted-foreground">
+                    {usage.data ? serviceCount(placed.get(t.id) ?? 0) : "…"}
+                  </Cell>
+                </CloudTableRow>
               ))}
               {showDefault && fallback && (
-                <PlacementRow
-                  label="Default"
-                  slug="services with no target"
-                  count={
-                    usage.data ? (placed.get(DEFAULT_KEY) ?? 0) : undefined
-                  }
-                >
-                  <RunsOn
-                    target={{ ...fallback, runtime: "managed" }}
-                    connections={connections}
+                <CloudTableRow>
+                  <NameCell
+                    tile={<AsteriskIcon />}
+                    name="Default"
+                    meta="Services with no target"
                   />
-                </PlacementRow>
+                  <Cell>
+                    <RunsOn
+                      target={{ ...fallback, runtime: "managed" }}
+                      connections={connections}
+                    />
+                  </Cell>
+                  <Cell className="text-[12.5px] text-muted-foreground">
+                    {usage.data
+                      ? serviceCount(placed.get(DEFAULT_KEY) ?? 0)
+                      : "…"}
+                  </Cell>
+                </CloudTableRow>
               )}
-            </Rows>
+            </CloudTable>
           )}
         </section>
 
         <section
           aria-label="About this Cloud"
-          className="grid content-start gap-3"
+          className="grid content-start gap-2.5"
         >
-          <h2 className="text-[15px] font-semibold">About</h2>
-          <dl className="rounded-xl px-4 py-1 ring-1 ring-border">
-            {facts.map(([k, v]) => (
-              <div
-                key={k}
-                className="flex justify-between gap-3 border-b py-2.5 last:border-b-0"
-              >
-                <dt className="text-[12.5px] text-muted-foreground">{k}</dt>
-                <dd className="text-right text-[13px]">{v}</dd>
-              </div>
-            ))}
-          </dl>
+          <CloudSectionHead
+            title="About"
+            description="Who owns this Cloud and what it runs on."
+          />
+          <FactList facts={facts} />
         </section>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <EnvironmentsOnCloud
-          scope={scope}
           usage={usage}
           syncs={syncs}
           grants={grants}
           projects={projects}
-          onChanged={onChanged}
         />
         <section
           aria-label="Latest changes"
-          className="grid content-start gap-3"
+          className="grid content-start gap-2.5"
         >
-          <CloudSectionHead title="Latest changes">
-            <Button size="sm" variant="ghost" onClick={() => onTab("changes")}>
+          <CloudSectionHead
+            title="Latest changes"
+            description="The last three changes to this Cloud."
+          >
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onTab("changes")}
+            >
               All changes
             </Button>
           </CloudSectionHead>
           {syncs.length === 0 ? (
-            <p className="rounded-xl px-4 py-3 text-[13px] text-muted-foreground ring-1 ring-border">
+            <CloudEmpty kind="list" title="No changes yet">
               Nothing has changed on this Cloud yet.
-            </p>
+            </CloudEmpty>
           ) : (
-            <Rows>
+            <CloudTable
+              label="Latest changes"
+              columns="minmax(0,1fr) 136px"
+              head={["Change", "State"]}
+              minWidth={300}
+            >
               {syncs.slice(0, 3).map((s) => {
                 const state = syncState(s)
                 return (
-                  <Row key={s.id} className="items-start justify-start gap-2.5">
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "mt-1.5 size-1.5 shrink-0 rounded-full",
-                        toneClass[state.tone].dot
-                      )}
+                  <CloudTableRow key={s.id}>
+                    <NameCell
+                      name={
+                        changeTitle(s, cloud.id, targets, connections).title
+                      }
+                      meta={relative(Date.parse(s.createdAt), now)}
                     />
-                    <span className="grid min-w-0 gap-0.5">
-                      <span className="text-[13px] font-medium">
-                        {changeTitle(s, cloud.id, targets, connections).title}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {state.label} · {relative(Date.parse(s.createdAt), now)}
-                      </span>
-                    </span>
-                  </Row>
+                    <Cell>
+                      <StatusPill tone={state.tone}>{state.label}</StatusPill>
+                    </Cell>
+                  </CloudTableRow>
                 )
               })}
-            </Rows>
+            </CloudTable>
           )}
         </section>
       </div>
     </div>
-  )
-}
-
-function PlacementRow({
-  label,
-  slug,
-  count,
-  children,
-}: {
-  label: string
-  slug: string
-  count?: number
-  children: ReactNode
-}) {
-  return (
-    <Row className="flex-wrap gap-y-2">
-      <span className="grid min-w-0 flex-[1_1_150px] gap-0.5">
-        <span className="truncate text-[13px] font-semibold">{label}</span>
-        <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-          {slug}
-        </span>
-      </span>
-      <span className="min-w-0 flex-[2_1_240px]">{children}</span>
-      <span className="w-24 text-right text-[12.5px] text-muted-foreground">
-        {count === undefined ? "…" : serviceCount(count)}
-      </span>
-    </Row>
   )
 }

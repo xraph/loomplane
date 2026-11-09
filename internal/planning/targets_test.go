@@ -3,6 +3,7 @@ package planning
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -39,6 +40,14 @@ func infrastructureProviders(t *testing.T) *provider.Registry {
 
 func infrastructureConnection(t *testing.T, id, cloud string, details map[string]string) ConnectionOption {
 	t.Helper()
+	if cloud == "server" || cloud == "kubernetes" {
+		if details == nil {
+			details = map[string]string{}
+		}
+		if _, ok := details["build_workers"]; !ok {
+			details["build_workers"] = "dedicated"
+		}
+	}
 	data, err := json.Marshal(map[string]any{"ID": id, "Name": id, "Cloud": cloud, "Ready": true, "Details": details})
 	if err != nil {
 		t.Fatal(err)
@@ -227,5 +236,65 @@ func TestInfrastructureTargets_aliasesCannotPublishSamePhysicalServerPort(t *tes
 	result := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t), Connections: connections})
 	if result.Executable || !slices.Contains(findingCodes(result.Problems), "target-port-conflict") {
 		t.Fatalf("alias port conflict missed: %+v", result)
+	}
+}
+
+func nodeServerDetails() map[string]string {
+	return map[string]string{
+		"node_id": "node_6f1c1b8e-3f7a-4c2a-9d7e-1a2b3c4d5e6f", "identity_generation": "1",
+		"docker_socket": "/var/run/docker.sock", "advertise_host": "203.0.113.7", "build_workers": "2",
+		"architecture": "amd64", "docker_id": "daemon-a", "version": "27.3.1",
+	}
+}
+
+func TestReviewedSettingsNode(t *testing.T) {
+	details := nodeServerDetails()
+	got := ReviewedConnectionSettings("server", details)
+	want := map[string]string{
+		"docker_socket": "/var/run/docker.sock", "architecture": "amd64", "docker_id": "daemon-a",
+		"node_id": "node_6f1c1b8e-3f7a-4c2a-9d7e-1a2b3c4d5e6f", "identity_generation": "1",
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("reviewed %v, want %v", got, want)
+	}
+	// DDNS moves a node's public address; that's no reason to review again.
+	details["advertise_host"] = "198.51.100.9"
+	if moved := ReviewedConnectionSettings("server", details); !maps.Equal(moved, got) {
+		t.Fatalf("a new advertise_host changed the reviewed settings: %v", moved)
+	}
+	// An SSH server still pins its host, key and advertised address.
+	ssh := ReviewedConnectionSettings("server", map[string]string{"host": "web.example.com", "port": "22", "user": "deploy", "host_key": "ssh-ed25519 AAAA", "docker_socket": "/var/run/docker.sock", "advertise_host": "web.example.com", "architecture": "amd64", "docker_id": "daemon-b"})
+	for _, key := range []string{"host", "port", "user", "host_key", "advertise_host"} {
+		if ssh[key] == "" {
+			t.Fatalf("SSH reviewed settings lost %s: %v", key, ssh)
+		}
+	}
+	if _, ok := ssh["node_id"]; ok {
+		t.Fatalf("SSH reviewed settings name a node: %v", ssh)
+	}
+}
+
+func TestReviewedSettingsPinNodeForEveryCloud(t *testing.T) {
+	for _, cloud := range []string{"kubernetes", "firecracker"} {
+		details := map[string]string{"node_id": "node_6f1c1b8e-3f7a-4c2a-9d7e-1a2b3c4d5e6f", "identity_generation": "3", "endpoint": "https://10.0.0.5:6443", "architecture": "arm64"}
+		got := ReviewedConnectionSettings(cloud, details)
+		if got["node_id"] != details["node_id"] || got["identity_generation"] != "3" {
+			t.Fatalf("%s doesn't pin its node: %v", cloud, got)
+		}
+		if got["endpoint"] != details["endpoint"] {
+			t.Fatalf("%s lost its base keys: %v", cloud, got)
+		}
+	}
+	if public := PublicReviewedSettings(ReviewedConnectionSettings("server", nodeServerDetails())); public["node_id"] == "" || public["identity_generation"] != "1" {
+		t.Fatalf("the public plan hides the node pin: %v", public)
+	}
+}
+
+func TestGenerationChangeBreaksReview(t *testing.T) {
+	details := nodeServerDetails()
+	reviewed := ReviewedConnectionSettings("server", details)
+	details["identity_generation"] = "2"
+	if maps.Equal(reviewed, ReviewedConnectionSettings("server", details)) {
+		t.Fatal("a node that rejoined with a new key still matches its reviewed placement")
 	}
 }

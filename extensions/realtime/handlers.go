@@ -11,6 +11,8 @@ import (
 
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/publicplan"
 	store "github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -49,17 +51,36 @@ func permission(event string) security.Permission {
 	switch strings.SplitN(event, ".", 2)[0] {
 	case "environment":
 		return security.EnvironmentRead
-	case "plan", "deployment", "build", "cloud_sync", "canary_verdict":
+	case "plan", "deployment", "build", "cloud_sync", "canary_verdict", "release_watch":
 		return security.DeploymentRead
 	case "binding":
 		return security.InfrastructureRead
 	case "connection", "cloud", "cloud_target", "environment_cloud":
 		return security.CloudAccountRead
-	case "cloud_capacity":
+	case "node":
+		return security.NodeRead
+	case "cloud_capacity", "cloud_cluster":
 		return security.OrganizationCloudManage
+	case "agent_report", "release_report":
+		return security.DeploymentRead
+	case "agent_request":
+		return security.AgentUse
+	case "agent_task":
+		// A task event shows who ran a chat, its status and its tokens, so
+		// only those who manage the workspace's AI see every task. A person
+		// follows their own through the agent's Watch.
+		return security.AIManage
 	default:
 		return security.ProjectRead
 	}
+}
+
+// logger is nil when the extension has not been registered, as in unit tests.
+func (e *Extension) logger() forge.Logger {
+	if e.BaseExtension == nil {
+		return nil
+	}
+	return e.Logger()
 }
 
 func (e *Extension) checkScope(ctx context.Context, p security.Principal, sub Subscription) error {
@@ -92,6 +113,35 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 	out := []store.Event{}
 	grants := map[string]bool{}
 	for _, event := range events {
+		// A notification belongs to one person. It needs no permission, only
+		// the right recipient, and the recipient never sees the user ID.
+		if strings.HasPrefix(event.Type, "notification.") {
+			var doc map[string]json.RawMessage
+			var user string
+			malformed := json.Unmarshal(event.Data, &doc) != nil
+			if raw, ok := doc["user_id"]; !malformed && ok {
+				malformed = json.Unmarshal(raw, &user) != nil
+			}
+			if malformed {
+				// Fail closed for everyone, but never end the stream over one
+				// bad row. The payload stays out of the log.
+				if l := e.logger(); l != nil {
+					l.Warn("realtime skipped a malformed notification event", forge.F("type", event.Type), forge.F("org_id", event.OrgID))
+				}
+				continue
+			}
+			if user == "" || user != p.UserID {
+				continue
+			}
+			delete(doc, "user_id")
+			data, err := json.Marshal(doc)
+			if err != nil {
+				return nil, err
+			}
+			event.Data = data
+			out = append(out, event)
+			continue
+		}
 		if event.ProjectID != "" && len(sub.ProjectIDs) != 0 && !slices.Contains(sub.ProjectIDs, event.ProjectID) {
 			continue
 		}
@@ -119,7 +169,28 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 			allowed = err == nil
 			grants[key] = allowed
 		}
+		if allowed && strings.HasPrefix(event.Type, "agent_request.") {
+			// The same rule as reading the request: project:read on its
+			// project, or for a project-less one, the person asked, the
+			// routed team or an AI admin.
+			addressed, err := e.agentRequestReaches(ctx, p, event, grants)
+			if err != nil {
+				return nil, err
+			}
+			allowed = addressed
+		}
 		if allowed {
+			if strings.HasPrefix(event.Type, "plan.") && len(event.Data) > 0 {
+				var plan planning.Plan
+				if err := json.Unmarshal(event.Data, &plan); err != nil {
+					return nil, err
+				}
+				data, err := json.Marshal(publicplan.Project(&plan))
+				if err != nil {
+					return nil, err
+				}
+				event.Data = data
+			}
 			if event.Type == "cloud_sync.updated" && len(event.Data) > 0 {
 				managerErr := e.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 				if managerErr != nil && !errors.Is(managerErr, security.ErrForbidden) {
@@ -146,6 +217,59 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 		}
 	}
 	return out, nil
+}
+
+// agentRequestReaches says whether a request event reaches p, by the rule
+// the request's GET uses. A project's request reaches anyone who may read
+// the project, and nobody else. A project-less one reaches the person it
+// asks, the current members of the team it was routed to, and anyone who
+// manages the workspace's AI. A payload whose fields
+// can't be read reaches only managers.
+func (e *Extension) agentRequestReaches(ctx context.Context, p security.Principal, event store.Event, grants map[string]bool) (bool, error) {
+	if event.ProjectID != "" {
+		key := security.ProjectRead.Name() + ":" + event.ProjectID
+		if allowed, checked := grants[key]; checked {
+			return allowed, nil
+		}
+		err := e.authz.Require(ctx, p, security.ProjectRead, event.ProjectID)
+		if err != nil && !errors.Is(err, security.ErrForbidden) {
+			return false, err
+		}
+		grants[key] = err == nil
+		return err == nil, nil
+	}
+	var ref struct {
+		AskedFor string `json:"asked_for"`
+		TeamID   string `json:"team_id"`
+	}
+	readable := json.Unmarshal(event.Data, &ref) == nil
+	if readable && ref.AskedFor != "" && ref.AskedFor == p.UserID {
+		return true, nil
+	}
+	if readable && ref.TeamID != "" && e.teams != nil && event.OrgID == p.OrgID {
+		key := "team:" + ref.TeamID
+		member, checked := grants[key]
+		if !checked {
+			var err error
+			if member, err = e.teams.IsMember(ctx, p.OrgID, ref.TeamID, p.UserID); err != nil {
+				return false, err
+			}
+			grants[key] = member
+		}
+		if member {
+			return true, nil
+		}
+	}
+	key := security.AIManage.Name() + ":"
+	if allowed, checked := grants[key]; checked {
+		return allowed, nil
+	}
+	err := e.authz.Require(ctx, p, security.AIManage, "")
+	if err != nil && !errors.Is(err, security.ErrForbidden) {
+		return false, err
+	}
+	grants[key] = err == nil
+	return err == nil, nil
 }
 
 func (e *Extension) snapshotFor(ctx context.Context, p security.Principal, sub Subscription) (*store.Snapshot, error) {

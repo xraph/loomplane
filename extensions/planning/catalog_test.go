@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -59,13 +60,62 @@ func TestCatalogKindsRouteListsKinds(t *testing.T) {
 }
 
 func TestCatalogKindListIncludesRegisteredKinds(t *testing.T) {
-	list := catalogKindList(recipestest.Registry(t))
+	list := catalogKindList(recipestest.Registry(t), nil)
 	last := list.Kinds[len(list.Kinds)-1]
 	if last.Name != "sample" || last.Engine || last.Placement != recipes.PlacementAppProject {
 		t.Fatalf("last kind: %+v", last)
 	}
 	if len(list.Kinds) != 7 || list.Kinds[0].Name != "postgres" {
 		t.Fatalf("kinds: %+v", list.Kinds)
+	}
+}
+
+func TestCatalogKindsListHidesKindsOfAnOffFeature(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Featured()); err != nil {
+		t.Fatal(err)
+	}
+	list := func(features map[string]bool) []recipes.KindInfo {
+		t.Helper()
+		r := forge.NewRouter()
+		if err := (&Extension{catalogKinds: kinds, features: features}).routes(r, nil); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/catalog/kinds", nil)
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: "member"}))
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		if out.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", out.Code, out.Body.String())
+		}
+		var body CatalogKindList
+		if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Kinds
+	}
+	named := func(kinds []recipes.KindInfo, name string) *recipes.KindInfo {
+		i := slices.IndexFunc(kinds, func(k recipes.KindInfo) bool { return k.Name == name })
+		if i < 0 {
+			return nil
+		}
+		return &kinds[i]
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: false}} {
+		got := list(features)
+		if named(got, "featured") != nil {
+			t.Errorf("features %v: catalogKinds.list offers a kind of an off feature", features)
+		}
+		if named(got, "sample") == nil || len(got) != 7 {
+			t.Errorf("features %v: kinds %+v", features, got)
+		}
+	}
+	got := list(map[string]bool{recipes.FeatureAI: true})
+	if k := named(got, "featured"); k == nil || k.Feature != recipes.FeatureAI {
+		t.Fatalf("feature on: featured is %+v", k)
+	}
+	if len(got) != 8 {
+		t.Fatalf("feature on: %d kinds", len(got))
 	}
 }
 
@@ -334,6 +384,13 @@ func TestCheckRouteResolvesTheRequirement(t *testing.T) {
 	if !got.OK || !slices.Equal(got.Notes, []string{"Checked from Loomplane, not from inside the cluster."}) {
 		t.Fatalf("cluster result: %+v", got)
 	}
+	for _, cloud := range []string{connections.DigitalOcean, connections.Azure} {
+		dialer.clouds["native"] = cloud
+		got = result(send("admin", body("sample", "postgres", "native")))
+		if !got.OK || len(got.Notes) != 1 || !strings.Contains(got.Notes[0], "from Loomplane") || !strings.Contains(got.Notes[0], "outbound network") {
+			t.Fatalf("native check hid its network scope: %+v", got)
+		}
+	}
 
 	// What the endpoint lacks fails the check.
 	prober.report = catalogconnect.Report{Version: "15.2", Problems: []string{"PostgreSQL 15.2 is older than 16"}}
@@ -365,5 +422,57 @@ func TestCheckRouteResolvesTheRequirement(t *testing.T) {
 		if out = send(tc.user, tc.body); out.Code != tc.code || len(prober.reqs) != probes {
 			t.Fatalf("%s: %d %s (probes %d)", tc.name, out.Code, out.Body.String(), len(prober.reqs)-probes)
 		}
+	}
+}
+
+func TestFeaturesComeFromConfig(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		var cfg config.Config
+		cfg.AI.Enabled = on
+		e := New(cfg, nil, nil, nil, nil, nil)
+		if got, ok := e.features[recipes.FeatureAI]; !ok || got != on {
+			t.Errorf("ai.enabled %t: features %v", on, e.features)
+		}
+	}
+}
+
+func TestCheckRouteRefusesKindsOfAnOffFeature(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Featured()); err != nil {
+		t.Fatal(err)
+	}
+	check := func(features map[string]bool) (*httptest.ResponseRecorder, int) {
+		t.Helper()
+		prober := &recordingProber{report: catalogconnect.Report{Version: "16.4"}}
+		svc := catalogconnect.NewService(&endpointStore{rows: map[string]catalogconnect.Endpoint{}}, endpointSecrets{}, secretManagers{})
+		ext := &Extension{
+			endpoints:      svc,
+			endpointChecks: &catalogconnect.Checker{Endpoints: svc, Probers: map[string]catalogconnect.Prober{"postgres": prober}},
+			endpointDialer: &checkDialer{clouds: map[string]string{"conn_server": connections.Server}},
+			catalogKinds:   kinds,
+			features:       features,
+			checkLimit:     newCheckLimiter(100, 100),
+		}
+		r := forge.NewRouter()
+		if err := ext.routes(r, nil); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"engine":"postgres","dsn":"postgres://u:p@db.example:5432/app?sslmode=require","target":"conn_server","kind":"featured","dependency":"postgres"}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/catalog/endpoints/checks", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: "admin"}))
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		return out, len(prober.reqs)
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: false}} {
+		out, probes := check(features)
+		if out.Code != http.StatusUnprocessableEntity || probes != 0 || !strings.Contains(out.Body.String(), `no catalog kind \"featured\"`) {
+			t.Errorf("features %v: %d %s (probes %d)", features, out.Code, out.Body.String(), probes)
+		}
+	}
+	out, probes := check(map[string]bool{recipes.FeatureAI: true})
+	if out.Code != http.StatusOK || probes != 1 {
+		t.Fatalf("AI on: %d %s (probes %d)", out.Code, out.Body.String(), probes)
 	}
 }

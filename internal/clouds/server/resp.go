@@ -15,10 +15,10 @@ import (
 const respTimeout = 5 * time.Second
 
 // probeRESP sends PING to a Redis-protocol port published on the host's
-// loopback, over the pinned SSH connection, as probeServer does for HTTP.
+// loopback, through the host access, as probeServer does for HTTP.
 func probeRESP(ctx context.Context, c *Client, port int) error {
 	return pingRESP(ctx, respTimeout, func(ctx context.Context) (net.Conn, error) {
-		return c.ssh.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		return c.access.DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	})
 }
 
@@ -31,7 +31,7 @@ func pingRESP(ctx context.Context, timeout time.Duration, dial func(context.Cont
 
 // probed reports whether a workload declares a readiness probe.
 func probed(labels map[string]string) bool {
-	return labels[owned.LabelHealth] != "" || labels[owned.LabelHealthProtocol] != ""
+	return labels[owned.LabelHealth] != "" || labels[owned.LabelHealthProtocol] != "" || labels[owned.LabelHealthChecker] != ""
 }
 
 // healthProbe is the readiness probe a workload declares: a RESP PING when

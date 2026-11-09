@@ -50,7 +50,13 @@ var titleOf = func(kind string) string { return engineTitle(recipes.Default(), k
 
 func engineTitle(r *recipes.Registry, kind string) string {
 	engine, _ := r.Engine(kind)
-	return engine.Title
+	if engine.Title != "" {
+		return engine.Title
+	}
+	if k, ok := r.Kind(kind); ok {
+		return k.Title
+	}
+	return kind
 }
 
 // Protection is what recovery does for a resource's data. A database with
@@ -63,6 +69,12 @@ func Protection(cfg *planning.ResourceConfig) recipes.Protection {
 	case cfg.Provider == planning.DependencyExternal:
 		return recipes.ProtectionExternal
 	case cfg.Component != nil:
+		if cfg.Component.Protection == recipes.ProtectionNative {
+			if _, err := Describe(cfg, nil); err == nil && cfg.Provider == "server" {
+				return recipes.ProtectionNative
+			}
+			return ""
+		}
 		if cfg.Component.Protection == recipes.ProtectionRebuildable {
 			return recipes.ProtectionRebuildable
 		}
@@ -106,7 +118,7 @@ func refuseRecovery(name string, cfg *planning.ResourceConfig) error {
 	case recipes.ProtectionExternal:
 		return ErrNotManaged
 	}
-	if cfg.Provider == "kubernetes" && cfg.Catalog != nil && familyOf(cfg.Kind) != "" {
+	if cfg.Provider == "kubernetes" && ((cfg.Catalog != nil && familyOf(cfg.Kind) != "") || (cfg.Component != nil && cfg.Component.Protection == recipes.ProtectionNative)) {
 		return &namedRefusalError{"Backups for " + titleOf(cfg.Kind) + " aren't available on Kubernetes yet.", ErrNotOnKubernetes}
 	}
 	return fmt.Errorf("%w: the resource has no supported database backup adapter", ErrInvalid)

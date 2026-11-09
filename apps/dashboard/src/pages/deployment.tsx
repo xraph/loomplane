@@ -1,20 +1,7 @@
 // One deployment, start to finish: the plan, the decision on it, and each
 // step it took. A run is named by its plan's ID, because a plan exists from
 // the moment someone asks for one and a deployment only once it's approved.
-import {
-  CheckIcon,
-  ChevronRightIcon,
-  CircleIcon,
-  EllipsisIcon,
-  MinusIcon,
-  PauseIcon,
-  PencilIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  RotateCcwIcon,
-  TriangleAlertIcon,
-  XIcon,
-} from "lucide-react"
+import { LoaderCircleIcon } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -27,65 +14,55 @@ import {
   usePlansCreate,
   usePlansGet,
   usePlansList,
+  useRollbacksTarget,
 } from "@/client/forge/loomplane/hooks"
-import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
+import type {
+  Action,
+  Connection,
+  Finding,
+  Plan,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
+import { CancelDeployment } from "@/components/cancel-deployment"
+import { BuildLogPanel, type LogSource } from "@/components/build-log-panel"
 import { CanaryPanel } from "@/components/canary"
+import { providerName } from "@/components/cloud-detail/clusters"
+import {
+  Cell,
+  CloudCallout,
+  CloudPageHeader,
+  CloudTable,
+  CloudTableRow,
+  FactList,
+  NameCell,
+  PageMenu,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
+  CloudSectionHead,
+} from "@/components/cloud-targets/infrastructure-ui"
+import { FindingActions } from "@/components/deploy"
 import { DeploymentCapacityWait } from "@/components/deployment-capacity-wait"
-import { showsCanary } from "@/lib/canary"
+import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
+import { DeploymentsIcon } from "@/components/icons"
 import { Page } from "@/components/page"
+import { QueryError } from "@/components/query-error"
+import { Artifacts, Leftovers, ReleaseKind } from "@/components/release-plan"
+import { ReleaseWatchPanel } from "@/components/release-watch"
+import { RollbackDialog } from "@/components/rollback-dialog"
 import {
   Code,
   CopyButton,
-  EnvBadge,
-  PersonAvatar,
-  stateLabel,
   StatusPill,
+  type Tone,
+  toneClass,
   toneOf,
-  Thread,
-  currentStep,
 } from "@/components/runs"
 import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemSeparator,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Button } from "@/components/ui/button"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import {
@@ -96,26 +73,58 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs"
 import { commitURL, resourceLabel } from "@/lib/architecture"
+import { showsCanary } from "@/lib/canary"
 import { cloudLabel } from "@/lib/clouds"
-import { dateTime, duration, relative } from "@/lib/format"
-import { useOrganization } from "@/lib/organization"
-import { scopeBody, planConnections } from "@/lib/plans"
+import { duration, formatDate, relative } from "@/lib/format"
+import { useProjectCan } from "@/lib/project-permissions"
+import {
+  opLabel,
+  planConnections,
+  planServices,
+  planStatus,
+  scopeBody,
+} from "@/lib/plans"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link, useNavigate } from "@/lib/router"
 import {
   isLive,
+  normalizePlan,
   type Run,
+  runKindLabel,
   runLog,
-  runStatusText,
+  runStatusWord,
   type ThreadStep,
 } from "@/lib/runs"
-import { BuildLogPanel } from "@/components/build-log-panel"
+import { useUrlTab } from "@/lib/use-url-tab"
 import { useNow, usePeople, useRunFor } from "@/lib/use-runs"
 import { cn } from "@/lib/utils"
 
-export function DeploymentPage({ id }: { id: string }) {
+/** The deployment page's tabs, in order. */
+export type DeploymentTab = "changes" | "logs" | "services" | "details"
+export const deploymentTabs: DeploymentTab[] = [
+  "changes",
+  "logs",
+  "services",
+  "details",
+]
+
+export function DeploymentPage({
+  id,
+  tab,
+}: {
+  id: string
+  /** The tab the page opens on; Changes while a plan waits, else Logs. */
+  tab?: DeploymentTab
+}) {
   const plan = useQuery(usePlansGet, { path: { id } })
-  if (plan.data) return <Loaded plan={plan.data} refetch={plan.refetch} />
+  if (plan.data)
+    return (
+      <Loaded
+        plan={normalizePlan(plan.data)}
+        refetch={plan.refetch}
+        tab={tab}
+      />
+    )
   const missing = plan.status === "error" && statusOf(plan.error) === 404
   return (
     <>
@@ -125,30 +134,32 @@ export function DeploymentPage({ id }: { id: string }) {
       <Page>
         {plan.status === "error" ? (
           missing ? (
-            <Empty preview={false}>
-              <EmptyHeader>
-                <EmptyTitle>No deployment here by that ID</EmptyTitle>
-                <EmptyDescription>
-                  It may belong to another workspace, or the link is wrong.
-                </EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent>
-                <Link to="/deployments" className={buttonVariants()}>
+            <CloudEmpty
+              kind="notice"
+              icon={DeploymentsIcon}
+              title="No deployment here by that ID"
+              action={
+                <Button
+                  nativeButton={false}
+                  render={<Link to="/deployments" />}
+                >
                   All deployments
-                </Link>
-              </EmptyContent>
-            </Empty>
+                </Button>
+              }
+            >
+              It may belong to another workspace, or the link is wrong.
+            </CloudEmpty>
           ) : (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {messageOf(plan.error, "The deployment couldn't be loaded.")}
-              </AlertDescription>
-            </Alert>
+            <QueryError
+              error={plan.error}
+              fallback="The deployment couldn't be loaded."
+              retry={plan.refetch}
+            />
           )
         ) : (
           <div className="grid gap-6" aria-busy="true">
-            <Skeleton className="h-10 w-96" />
-            <Skeleton className="h-36 rounded-xl" />
+            <Skeleton className="h-12 w-96" />
+            <Skeleton className="h-16 rounded-xl" />
             <Skeleton className="h-72 rounded-xl" />
           </div>
         )}
@@ -160,21 +171,29 @@ export function DeploymentPage({ id }: { id: string }) {
 function Loaded({
   plan,
   refetch,
+  tab: wanted,
 }: {
   plan: Plan
   refetch: () => Promise<unknown>
+  tab?: DeploymentTab
 }) {
   const run = useRunFor(plan, refetch)
-  const { can } = useOrganization()
+  const can = useProjectCan(plan.projectId)
   const now = useNow()
   const person = usePeople()
   const lines = useMemo(() => runLog(run, (u) => person(u).name), [run, person])
-  const [tab, setTab] = useState<string | null>(null)
-  const [step, setStep] = useState<string | null>(null)
+  const deciding = run.status === "waiting" || run.status === "blocked"
+  const [tab, setTab] = useUrlTab<DeploymentTab>(
+    wanted,
+    deciding ? "changes" : "logs"
+  )
+  const [source, setSource] = useState("all")
   const live = isLive(run)
-  const activeTab =
-    tab ??
-    (run.status === "waiting" || run.status === "blocked" ? "plan" : "logs")
+  const sources = logSources(run)
+  const showLogs = (id: string) => {
+    setSource(sources.some((s) => s.id === id) ? id : "all")
+    setTab("logs")
+  }
   const projectName = run.project?.name ?? "Project"
 
   return (
@@ -182,16 +201,35 @@ function Loaded({
       <SiteHeader
         crumbs={[
           { label: "Deployments", to: "/deployments" },
-          { label: projectName },
+          {
+            label: projectName,
+            link: <Link to="/projects/$id" params={{ id: run.projectId }} />,
+          },
           { label: run.environment },
         ]}
       />
       <Page>
         <Heading run={run} now={now} />
-        {plan.catalog &&
+        <ProgressStrip
+          run={run}
+          now={now}
+          selected={tab === "logs" ? source : null}
+          onPick={showLogs}
+        />
+        {run.status === "waiting" && <ApprovalCard run={run} />}
+        <FailureCallout run={run} />
+        {run.status === "blocked" && <BlockedCallout run={run} />}
+        {run.deployment && (
+          <DeploymentCapacityWait deployment={run.deployment} />
+        )}
+        {((plan.catalog &&
           plan.actions.length === 1 &&
           plan.actions[0].provider === "cloud-sql" &&
-          plan.actions[0].op === "create" &&
+          plan.actions[0].op === "create") ||
+          plan.actions.some(
+            (action) =>
+              !!action.service?.clusterDemand || !!action.cleanupTargets?.length
+          )) &&
           run.deployment &&
           ["failed", "cancelled"].includes(run.deployment.status) && (
             <FailedDeploymentCleanup
@@ -200,220 +238,196 @@ function Loaded({
               onChanged={refetch}
             />
           )}
-        <Progression
-          run={run}
-          now={now}
-          selected={step}
-          onSelect={(key) => {
-            setStep((cur) => (cur === key ? null : key))
-            setTab("logs")
-          }}
-        />
         {showsCanary(run) && (
           <CanaryPanel
             deploymentId={run.deployment?.id}
             release={run.plan.release}
           />
         )}
-        {run.status === "waiting" && <ApprovalCard run={run} />}
-        {run.deployment && (
-          <DeploymentCapacityWait deployment={run.deployment} />
+        {run.deployment?.status === "succeeded" && (
+          <ReleaseWatchPanel deploymentId={run.deployment.id} />
         )}
-        {run.status === "blocked" && <BlockedAlert run={run} />}
-        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
-          <Tabs
-            value={activeTab}
-            onValueChange={(v) => setTab(String(v))}
-            className="min-w-0 gap-4"
+        <Tabs
+          value={deploymentTabs.includes(tab) ? tab : "logs"}
+          onValueChange={(v) => setTab(v as DeploymentTab)}
+          className="min-w-0"
+        >
+          <TabsList
+            variant="line"
+            aria-label="Deployment views"
+            className="mb-5 max-w-full overflow-x-auto"
           >
-            <TabsList variant="line">
-              <TabsTrigger value="logs">
-                Logs
-                {live && (
-                  <span className="size-1.5 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="plan">
-                Plan
-                <TabsCount>{run.plan.actions.length}</TabsCount>
-              </TabsTrigger>
-              <TabsTrigger value="services">Services</TabsTrigger>
-            </TabsList>
-            <TabsContent value="logs">
-              <BuildLogPanel
-                activity={lines}
-                deploymentId={run.deployment?.id}
-                live={live}
-                name={run.deployment?.id ?? run.id}
-                step={step}
-                stepName={run.thread.find((s) => s.key === step)?.name}
-                onClearStep={() => setStep(null)}
-              />
-            </TabsContent>
-            <TabsContent value="plan">
-              <PlanTab run={run} />
-            </TabsContent>
-            <TabsContent value="services">
-              <Services run={run} />
-            </TabsContent>
-          </Tabs>
-          <aside className="grid gap-4 lg:sticky lg:top-16">
-            <IdStrip run={run} now={now} />
-            <Steps
-              run={run}
-              now={now}
-              selected={step}
-              onSelect={(key) => {
-                setStep((cur) => (cur === key ? null : key))
-                setTab("logs")
-              }}
+            <TabsTrigger value="changes">
+              Changes
+              <TabsCount>{run.plan.actions.length}</TabsCount>
+            </TabsTrigger>
+            <TabsTrigger value="logs">
+              Logs
+              {live && (
+                <span
+                  aria-hidden="true"
+                  className="size-1.5 animate-pulse rounded-full bg-weld motion-reduce:animate-none"
+                />
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="services">Services</TabsTrigger>
+            <TabsTrigger value="details">Details</TabsTrigger>
+          </TabsList>
+          <TabsContent value="changes">
+            <ChangesTab run={run} />
+          </TabsContent>
+          <TabsContent value="logs">
+            <BuildLogPanel
+              activity={lines}
+              deploymentId={run.deployment?.id}
+              live={live}
+              name={run.deployment?.id ?? run.id}
+              sources={sources}
+              source={source}
+              onSource={setSource}
             />
-          </aside>
-        </div>
+          </TabsContent>
+          <TabsContent value="services">
+            <ServicesTab run={run} onLogs={showLogs} />
+          </TabsContent>
+          <TabsContent value="details">
+            <DetailsTab run={run} now={now} />
+          </TabsContent>
+        </Tabs>
       </Page>
     </>
   )
 }
 
+const plural = (n: number, one: string, many = `${one}s`) =>
+  `${n} ${n === 1 ? one : many}`
+
 function Heading({ run, now }: { run: Run; now: number }) {
-  const { can } = useOrganization()
+  const can = useProjectCan(run.projectId)
   const navigate = useNavigate()
   const person = usePeople()
   const replan = useMutation(usePlansCreate)
-  const retry = useMutation(useDeploymentsRetry)
   const invalidate = useInvalidate()
   const author = person(run.createdBy)
   const style = run.project ? projectStyle(run.project) : null
   const d = run.deployment
-  const moving = run.plan.sources.filter((s) => s.inScope)
+  const p = run.plan
+  const moving = p.sources.filter((s) => s.inScope)
+  const services = planServices(p)
+  const kind = runKindLabel(p)
+  const rollback = mayOfferRollback(run, can("deployment:create"))
+  const projectName = run.project?.name ?? "the project"
 
   const planAgain = async () => {
     try {
-      const p = await replan.mutateAsync({
+      const next = await replan.mutateAsync({
         path: { id: run.projectId },
         body: {
           environment: run.environment,
           // Planning again moves what this plan moved and holds what it held.
           ...scopeBody(
-            run.plan.sources.map((s) => s.alias),
+            p.sources.map((s) => s.alias),
             moving.map((s) => s.alias)
           ),
+          ...(services.length > 0 ? { services } : {}),
         },
       })
       invalidate(usePlansList)
-      void navigate({ to: "/deployments/$id", params: { id: p.id } })
+      void navigate({ to: "/deployments/$id", params: { id: next.id } })
       toast.success(`Planning ${run.environment} again`)
     } catch (err) {
       toast.error(messageOf(err, "The plan couldn't start."))
     }
   }
 
-  const retryDeployment = async () => {
-    if (!d) return
-    try {
-      await retry.mutateAsync({ path: { id: d.id } })
-      invalidate(useDeploymentsForPlan)
-      invalidate(useDeploymentsList)
-      toast.success("Retrying from the step that failed")
-    } catch (err) {
-      toast.error(messageOf(err, "The deployment couldn't be retried."))
-    }
-  }
-
   const api = `curl -H "Authorization: Bearer $LOOMPLANE_API_KEY" ${window.location.origin}/api/v1/plans/${run.id}`
+  const planAgainButton = !isLive(run) && can("deployment:create") && (
+    <Button
+      variant="outline"
+      disabled={replan.isPending}
+      onClick={() => void planAgain()}
+    >
+      {replan.isPending && <Spinner />}
+      Plan again
+    </Button>
+  )
 
   return (
-    <header className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
-      <div className="grid min-w-0 gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusPill tone={toneOf(run.status)}>
-            {runStatusText[run.status]}
-          </StatusPill>
-          {run.project && style && (
-            <Link
-              to="/projects/$id"
-              params={{ id: run.projectId }}
-              className={cn(
-                buttonVariants({ variant: "link", size: "sm" }),
-                "h-auto gap-1.5 px-1 text-foreground"
-              )}
-            >
-              <ProjectIcon icon={style.icon} color={style.color} size="xs" />
-              {run.project.name}
-            </Link>
+    <CloudPageHeader
+      glyph={
+        style ? (
+          <ProjectIcon
+            icon={style.icon}
+            color={style.color}
+            size="lg"
+            className="size-11"
+          />
+        ) : (
+          <DeploymentsIcon className="size-[22px]" />
+        )
+      }
+      title={`${run.project?.name ?? "Deploy"} to ${run.environment}`}
+      status={
+        <StatusPill tone={toneOf(run.status)}>{runStatusWord(run)}</StatusPill>
+      }
+      meta={
+        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          {kind && (
+            <>
+              <span className="font-medium text-foreground">{kind}</span>
+              <span aria-hidden="true">·</span>
+            </>
           )}
-          <EnvBadge env={run.environment} />
-        </div>
-        <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-2xl">
-          {run.project?.name ?? "Deploy"} to {run.environment}
-        </h1>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px] text-muted-foreground">
-          <span className="flex items-center gap-2">
-            <PersonAvatar initials={author.initials} name={author.name} />
-            <span>
-              <span className="text-foreground">{author.name}</span> planned it
-            </span>
+          <span title={formatDate(run.createdAt)}>
+            Planned by <span className="text-foreground">{author.name}</span>{" "}
+            {relative(Date.parse(run.createdAt), now)}
           </span>
-          {run.plan.sources.map((s) => (
-            <a
-              key={s.sourceId}
-              href={commitURL(s.repository, s.commitSha)}
-              target="_blank"
-              rel="noreferrer"
-              className={cn(
-                "flex items-center gap-1.5 underline-offset-4 hover:underline",
-                !s.inScope && "opacity-60"
-              )}
-              title={
-                s.inScope ? "Moves in this plan" : "Held at what's deployed"
+          {p.sources.map((s) => (
+            <span key={s.sourceId} className="contents">
+              <span aria-hidden="true">·</span>
+              <a
+                href={commitURL(s.repository, s.commitSha)}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(
+                  "underline-offset-4 hover:underline",
+                  !s.inScope && "opacity-60"
+                )}
+                title={
+                  s.inScope ? "Moves in this plan" : "Held at what's deployed"
+                }
+              >
+                {s.repository} @{" "}
+                <span className="font-mono text-foreground">
+                  {s.commitSha.slice(0, 7)}
+                </span>
+              </a>
+            </span>
+          ))}
+          <span aria-hidden="true">·</span>
+          <span>loomplane.yaml revision {p.manifestRevision}</span>
+        </span>
+      }
+      actions={
+        <>
+          {d && <CancelDeployment deployment={d} />}
+          {rollback && d ? (
+            <RollbackOffer
+              run={run}
+              deploymentId={d.id}
+              // A deployed run offers Roll back in place of Plan again.
+              fallback={run.status === "succeeded" ? planAgainButton : null}
+            />
+          ) : null}
+          {run.status !== "succeeded" || !rollback ? planAgainButton : null}
+          <PageMenu label="More deployment actions">
+            <DropdownMenuItem
+              render={
+                <Link to="/projects/$id" params={{ id: run.projectId }} />
               }
             >
-              {run.plan.sources.length > 1 && <span>{s.alias}</span>}
-              <Code className="rounded-md bg-muted px-1.5 py-0.5 text-[12px] text-foreground">
-                {s.commitSha.slice(0, 7)}
-              </Code>
-            </a>
-          ))}
-          <span title={dateTime(Date.parse(run.createdAt))}>
-            Started {relative(Date.parse(run.createdAt), now)}
-          </span>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {d?.status === "failed" && can("deployment:approve") && (
-          <Button
-            disabled={retry.isPending}
-            onClick={() => void retryDeployment()}
-          >
-            {retry.isPending ? <Spinner /> : <RotateCcwIcon />}
-            Retry
-          </Button>
-        )}
-        {!isLive(run) && can("deployment:create") && (
-          <Button
-            variant="outline"
-
-            disabled={replan.isPending}
-            onClick={() => void planAgain()}
-          >
-            {replan.isPending ? <Spinner /> : <RefreshCwIcon />}
-            Plan again
-          </Button>
-        )}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="outline"
-                size="icon"
-
-                aria-label="More"
-              />
-            }
-          >
-            <EllipsisIcon />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60">
+              Open {projectName}
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
                 void navigator.clipboard?.writeText(run.id)
@@ -430,643 +444,689 @@ function Heading({ run, now }: { run: Run; now: number }) {
             >
               Copy as API request
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              render={
-                <Link to="/projects/$id" params={{ id: run.projectId }} />
-              }
-            >
-              Open the project
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </header>
+          </PageMenu>
+        </>
+      }
+    />
   )
 }
 
-/** Progression is the run's thread across the warp, phases below. */
-const groupState = (steps: ThreadStep[]): ThreadStep["state"] =>
-  steps.some((s) => s.state === "failed")
-    ? "failed"
-    : steps.some((s) => s.state === "running")
-      ? "running"
-      : steps.some((s) => s.state === "waiting")
-        ? "waiting"
-        : steps.every((s) => s.state === "done" || s.state === "skipped")
-          ? "done"
-          : steps.some((s) => s.state === "canceled")
-            ? "canceled"
-            : "pending"
+// A deployment that has finished, one way or another. Rolling back waits
+// for a running one to end.
+const finishedStatuses = new Set(["succeeded", "failed", "cancelled"])
 
-const groupTone: Record<ThreadStep["state"], string> = {
-  done: "text-overdye-ink",
-  running: "text-flight-ink",
-  waiting: "text-weld-ink",
-  failed: "text-destructive",
-  canceled: "text-muted-foreground",
-  pending: "text-muted-foreground",
-  skipped: "text-muted-foreground",
+/**
+ * mayOfferRollback reports whether the run's deployment could be rolled
+ * back from here at all: it's finished, it isn't a rollback itself, and
+ * the person may deploy. RollbackOffer asks the server the rest.
+ */
+function mayOfferRollback(run: Run, canDeploy: boolean): boolean {
+  const d = run.deployment
+  return (
+    !!d &&
+    canDeploy &&
+    finishedStatuses.has(d.status) &&
+    run.plan.kind !== "rollback"
+  )
 }
 
 /**
- * Progression is the run's phases side by side: each one's thread, where it
- * stands and how long it took. Picking one filters the logs to its current
- * step.
+ * RollbackOffer shows Roll back when the server would roll the deployment
+ * back: it's the environment's newest release. Cloud sync and catalog
+ * deployments after it don't count, as they don't for the server. Until
+ * then, or when it wouldn't, it shows the fallback.
  */
-function Progression({
+function RollbackOffer({
+  run,
+  deploymentId,
+  fallback,
+}: {
+  run: Run
+  deploymentId: string
+  fallback?: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const target = useQuery(useRollbacksTarget, {
+    path: { id: run.projectId, environment: run.environment },
+    query: { deployment_id: deploymentId },
+  })
+  if (target.data === undefined) return fallback ?? null
+  return (
+    <>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        Roll back
+      </Button>
+      <RollbackDialog
+        open={open}
+        onOpenChange={setOpen}
+        projectId={run.projectId}
+        environment={run.environment}
+        deploymentId={deploymentId}
+      />
+    </>
+  )
+}
+
+/** The phases the progress strip draws, in order. */
+const phaseNames = ["Plan", "Approve", "Deploy"] as const
+type Phase = (typeof phaseNames)[number]
+
+/** stepTone is a thread step's state in the status tones. */
+function stepTone(state: ThreadStep["state"]): Tone {
+  switch (state) {
+    case "done":
+      return "live"
+    case "running":
+      return "flight"
+    case "waiting":
+      return "waiting"
+    case "failed":
+      return "failed"
+    default:
+      return "quiet"
+  }
+}
+
+/**
+ * phaseOf sums up one phase of a run for the progress strip: how it's
+ * doing and the few words under its name.
+ */
+function phaseOf(
+  run: Run,
+  phase: Phase,
+  now: number,
+  nameOf: (id: string) => string
+): { tone: Tone; detail: string; target: string } {
+  const p = run.plan
+  const steps = run.thread.filter((s) => s.group === phase)
+  if (phase === "Plan") {
+    const s = steps[0]
+    const took =
+      p.plannedAt && duration(Date.parse(p.plannedAt) - Date.parse(p.createdAt))
+    return {
+      tone: stepTone(s?.state ?? "pending"),
+      detail:
+        s?.state === "running"
+          ? "Working it out"
+          : s?.state === "failed"
+            ? "Planning failed"
+            : took
+              ? `Done in ${took}`
+              : "Done",
+      target: "plan",
+    }
+  }
+  if (phase === "Approve") {
+    const s = steps[0]
+    const state = s?.state ?? "pending"
+    const decided =
+      state === "done" && p.decidedAt
+        ? `${p.decidedBy ? nameOf(p.decidedBy) : "Approved"}, ${relative(Date.parse(p.decidedAt), now)}`
+        : "Approved"
+    return {
+      tone: stepTone(state),
+      detail:
+        state === "done"
+          ? decided
+          : state === "waiting"
+            ? "Waiting for you"
+            : state === "failed"
+              ? "Blocked by problems"
+              : state === "canceled"
+                ? planStatus(p.status).label
+                : "After planning",
+      target: "plan",
+    }
+  }
+  const d = run.deployment
+  const work = steps.filter((s) => s.action)
+  const n = work.length
+  const failedAt = work.findIndex((s) => s.state === "failed")
+  const runningAt = work.findIndex((s) => s.state === "running")
+  const head =
+    work[failedAt] ??
+    work[runningAt] ??
+    work.find((s) => s.state !== "done") ??
+    work.at(-1)
+  const target = head?.key ?? "all"
+  if (n === 0)
+    return {
+      tone: stepTone(steps[0]?.state ?? "pending"),
+      detail: "Nothing to change",
+      target: "all",
+    }
+  if (run.status === "paused")
+    return { tone: "waiting", detail: "Paused for capacity", target }
+  if (failedAt >= 0)
+    return {
+      tone: "failed",
+      detail: `Failed at step ${failedAt + 1} of ${n}`,
+      target,
+    }
+  if (d?.status === "cancelled")
+    return { tone: "quiet", detail: "Cancelled", target }
+  if (d?.status === "succeeded" || work.every((s) => s.state === "done")) {
+    const took =
+      d?.finishedAt &&
+      duration(Date.parse(d.finishedAt) - Date.parse(d.startedAt))
+    return { tone: "live", detail: took ? `Done in ${took}` : "Done", target }
+  }
+  if (d) {
+    const at =
+      runningAt >= 0 ? runningAt : work.findIndex((s) => s.state !== "done")
+    return {
+      tone: "flight",
+      detail: `Step ${Math.max(at, 0) + 1} of ${n} · ${duration(now - Date.parse(d.startedAt))}`,
+      target,
+    }
+  }
+  if (work.every((s) => s.state === "canceled"))
+    return { tone: "quiet", detail: "Not run", target }
+  return { tone: "quiet", detail: plural(n, "step"), target }
+}
+
+/**
+ * ProgressStrip is the run in three phases: plan, approve, deploy. Picking
+ * one opens its lines in the logs; Deploy opens the step it's on.
+ */
+function ProgressStrip({
   run,
   now,
   selected,
-  onSelect,
+  onPick,
 }: {
   run: Run
   now: number
   selected: string | null
-  onSelect: (key: string) => void
+  onPick: (source: string) => void
 }) {
-  const steps = run.thread
-  const done = steps.filter((s) => s.state === "done").length
-  const groups = [...new Set(steps.map((s) => s.group))]
+  const person = usePeople()
   return (
-    <section
-      aria-label="Steps"
-      className="overflow-hidden rounded-xl bg-card ring-1 ring-border"
+    <ol
+      aria-label="Progress"
+      className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] overflow-hidden rounded-xl bg-card ring-1 ring-border"
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b px-4 py-2.5">
-        <span className="text-[13.5px] font-semibold">
-          {run.status === "succeeded"
-            ? `All ${steps.length} steps done`
-            : `${done} of ${steps.length} steps done`}
-          <span className="ml-2 font-normal text-muted-foreground">
-            {run.phase}
-          </span>
-        </span>
-        <span className="text-[12.5px] text-muted-foreground tabular-nums">
-          <span className="font-mono text-foreground">
-            {duration(
-              (run.finishedAt ? Date.parse(run.finishedAt) : now) -
-                Date.parse(run.createdAt)
-            )}
-          </span>{" "}
-          {run.finishedAt
-            ? `in all, finished ${relative(Date.parse(run.finishedAt), now)}`
-            : "so far"}
-        </span>
-      </div>
-      <div className="flex flex-wrap">
-        {groups.map((g, i) => {
-          const inGroup = steps.filter((s) => s.group === g)
-          const state = groupState(inGroup)
-          const head = currentStep(inGroup) ?? inGroup[0]
-          const on = inGroup.some((s) => s.key === selected)
-          const first = inGroup[0]?.startedAt
-          const last = inGroup.at(-1)?.finishedAt
-          const took =
-            first && last && state === "done"
-              ? duration(Date.parse(last) - Date.parse(first))
-              : undefined
-          return (
+      {phaseNames.map((name, i) => {
+        const ph = phaseOf(run, name, now, (id) => person(id).name)
+        const t = toneClass[ph.tone]
+        const tinted =
+          ph.tone === "waiting" || ph.tone === "flight" || ph.tone === "failed"
+        return (
+          <li
+            key={name}
+            className={cn("flex", i > 0 && "border-l", tinted && t.tint)}
+          >
             <button
-              key={g}
               type="button"
-              aria-pressed={on}
-              onClick={() => head && onSelect(head.key)}
-              className={cn(
-                "flex min-w-[200px] flex-1 flex-col gap-1.5 px-4 pt-3 pb-3.5 text-left transition-colors hover:bg-subtle",
-                i > 0 && "border-l",
-                on && "bg-brand-soft shadow-[inset_0_0_0_2px_var(--brand-line)]"
-              )}
+              aria-pressed={selected === ph.target}
+              onClick={() => onPick(ph.target)}
+              className="flex w-full min-w-0 items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none aria-pressed:shadow-[inset_0_-2px_0_var(--primary)] motion-reduce:transition-none"
             >
-              <Thread steps={inGroup} size="sm" />
-              <span className="mt-1 text-[11px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
-                {g}
-                {inGroup.length > 1 && ` · ${inGroup.length} steps`}
+              <span
+                className={cn(
+                  "flex size-[22px] shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-medium",
+                  ph.tone === "quiet"
+                    ? "bg-muted text-muted-foreground"
+                    : cn(t.dot, "text-white")
+                )}
+              >
+                {i + 1}
               </span>
-              <span className="truncate text-[13px] font-medium">
-                {head?.name ?? g}
-              </span>
-              <span className={cn("text-[12.5px]", groupTone[state])}>
-                {took ? `Took ${took}` : (head?.detail ?? stateLabel[state])}
+              <span className="grid min-w-0 gap-px">
+                <span className="text-[13px] font-semibold">{name}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {ph.detail}
+                </span>
               </span>
             </button>
-          )
-        })}
-      </div>
-    </section>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
-function IdStrip({ run, now }: { run: Run; now: number }) {
-  const person = usePeople()
+/**
+ * FailureCallout names what failed: the plan, or the deployment step it
+ * stopped at, with a retry from that step.
+ */
+function FailureCallout({ run }: { run: Run }) {
+  const can = useProjectCan(run.projectId)
+  const retry = useMutation(useDeploymentsRetry)
+  const invalidate = useInvalidate()
   const connections = useQuery(useConnectionsList)
+  if (run.status !== "failed") return null
   const p = run.plan
-  const deploysWith = planConnections(p)
-    .map(({ cloud, id }) => {
-      const c = connections.data?.connections.find((x) => x.id === id)
-      return `${c?.name ?? "a removed connection"} (${cloudLabel(cloud)})`
-    })
-    .join(", ")
-  const items: { label: string; value: ReactNode; copy?: string }[] = [
-    { label: "Plan", value: <Code>{p.id}</Code>, copy: p.id },
-    {
-      label: "Deployment",
-      value: run.deployment ? (
-        <Code>{run.deployment.id}</Code>
-      ) : (
-        <span className="text-muted-foreground">Not started</span>
-      ),
-      copy: run.deployment?.id,
-    },
-    { label: "Manifest", value: `revision ${p.manifestRevision}` },
-    {
-      label: "Approval",
-      value:
-        p.decidedAt && (p.status === "approved" || run.deployment)
-          ? `${p.decidedBy ? person(p.decidedBy).name.split(" ")[0] : "Approved"}, ${relative(Date.parse(p.decidedAt), now)}`
-          : p.status === "ready"
-            ? p.expiresAt
-              ? `Waiting until ${dateTime(Date.parse(p.expiresAt))}`
-              : "Waiting"
-            : p.status === "rejected"
-              ? "Rejected"
-              : p.status === "blocked"
-                ? "Blocked"
-                : p.status === "planning"
-                  ? "After planning"
-                  : "None",
-    },
-    { label: "Deploys with", value: deploysWith || "No connection yet" },
-  ]
+  const d = run.deployment
+  if (!d)
+    return (
+      <CloudCallout tone="error" title="Planning failed">
+        <span className="wrap-anywhere">
+          {p.error || "Loomplane couldn't work out a plan."} Fix it, then plan
+          again.
+        </span>
+      </CloudCallout>
+    )
+  const failed = run.thread.find(
+    (s) => s.group === "Deploy" && s.state === "failed"
+  )
+  const notRun = run.thread
+    .filter(
+      (s) =>
+        s.group === "Deploy" &&
+        s.action &&
+        s.state !== "done" &&
+        s.state !== "failed"
+    )
+    .map((s) => s.action!.name)
+  const name = failed?.action?.name
+  const where = failed?.action
+    ? whereOf(failed.action, connections.data?.connections ?? [])
+    : ""
+
+  const retryDeployment = async () => {
+    try {
+      await retry.mutateAsync({ path: { id: d.id } })
+      invalidate(useDeploymentsForPlan)
+      invalidate(useDeploymentsList)
+      toast.success("Retrying from the step that failed")
+    } catch (err) {
+      toast.error(messageOf(err, "The deployment couldn't be retried."))
+    }
+  }
+
   return (
-    <section className="rounded-xl bg-card px-4 pt-1 pb-1.5 ring-1 ring-border">
-      <h2 className="pt-3 pb-2 text-[13px] font-semibold">Details</h2>
-      <dl className="grid">
-        {items.map((it) => (
-          <div
-            key={it.label}
-            className="grid min-w-0 grid-cols-[96px_minmax(0,1fr)] items-center gap-2 border-t py-2"
+    <CloudCallout
+      tone="error"
+      title={
+        name
+          ? `${name} failed${where ? ` on ${where}` : ""}`
+          : "The deployment failed"
+      }
+      action={
+        d.status === "failed" &&
+        can("deployment:approve") && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={retry.isPending}
+            onClick={() => void retryDeployment()}
           >
-            <dt className="text-[12.5px] text-muted-foreground">{it.label}</dt>
-            <dd className="flex min-w-0 items-center gap-1 text-[13px]">
-              <span className="truncate">{it.value}</span>
-              {it.copy && (
-                <CopyButton
-                  value={it.copy}
-                  label={`Copy the ${it.label.toLowerCase()} ID`}
-                />
-              )}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </section>
+            {retry.isPending && <Spinner />}
+            {name ? `Retry from ${name}` : "Retry"}
+          </Button>
+        )
+      }
+    >
+      <span className="wrap-anywhere">
+        {failed?.step?.message || d.error || "The provider gave no reason."}
+        {notRun.length > 0 &&
+          ` ${listOf(notRun)} didn't start, so ${run.environment} still runs the last release.`}
+      </span>
+    </CloudCallout>
   )
 }
 
-function BlockedAlert({ run }: { run: Run }) {
+/** BlockedCallout says what stops a blocked plan and where to fix it. */
+function BlockedCallout({ run }: { run: Run }) {
   const n = run.plan.problems.length
   return (
-    <Alert variant="destructive" className="rounded-xl p-4">
-      <TriangleAlertIcon />
-      <AlertTitle>
-        {n === 1 ? "One problem stops" : `${n} problems stop`} this plan from
-        being approved
-      </AlertTitle>
-      <AlertDescription>
-        <ul className="grid list-disc gap-1 pl-4">
-          {run.plan.problems.map((f, i) => (
-            <li key={`${f.code}:${i}`}>{f.message}</li>
-          ))}
-        </ul>
-        <Link
-          to="/projects/$id"
-          params={{ id: run.projectId }}
-          className="mt-2 inline-block font-medium underline underline-offset-4"
+    <CloudCallout
+      tone="error"
+      title={`${n === 1 ? "One problem stops" : `${n} problems stop`} this plan from being approved`}
+      action={
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={
+            <Link
+              to="/projects/$id"
+              params={{ id: run.projectId }}
+              search={{ tab: "deployments" }}
+            />
+          }
         >
-          Fix them in the project&apos;s Deploy tab
-        </Link>
-      </AlertDescription>
-    </Alert>
+          Fix them in the project&apos;s Deployments tab
+        </Button>
+      }
+    >
+      Each one is listed under Changes. Fix them, then plan again.
+    </CloudCallout>
   )
 }
 
-function StepIcon({ s }: { s: ThreadStep }) {
-  const box =
-    "relative z-10 flex size-5 shrink-0 items-center justify-center rounded-full ring-4 ring-card"
-  switch (s.state) {
-    case "done":
-      return (
-        <span className={cn(box, "bg-overdye text-white")}>
-          <CheckIcon className="size-3" strokeWidth={3} />
-        </span>
-      )
-    case "running":
-      return (
-        <span className={cn(box, "shuttle-glow bg-weld text-white")}>
-          <Spinner className="size-3" />
-        </span>
-      )
-    case "waiting":
-      return (
-        <span className={cn(box, "border-2 border-weld bg-card text-weld-ink")}>
-          <PauseIcon className="size-2.5" fill="currentColor" />
-        </span>
-      )
-    case "failed":
-      return (
-        <span className={cn(box, "bg-destructive text-white")}>
-          <XIcon className="size-3" strokeWidth={3} />
-        </span>
-      )
-    case "canceled":
-    case "skipped":
-      return (
-        <span className={cn(box, "bg-muted text-muted-foreground")}>
-          <MinusIcon className="size-3" strokeWidth={3} />
-        </span>
-      )
-    default:
-      return (
-        <span className={cn(box, "bg-card text-muted-foreground/40")}>
-          <CircleIcon className="size-3" />
-        </span>
-      )
-  }
+/** listOf joins names as a person would: "a", "a and b", "a, b and c". */
+function listOf(names: string[]): string {
+  if (names.length <= 1) return names.join("")
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`
 }
 
-function Steps({
-  run,
-  now,
-  selected,
-  onSelect,
-}: {
-  run: Run
-  now: number
-  selected: string | null
-  onSelect: (key: string) => void
-}) {
-  const groups = [...new Set(run.thread.map((s) => s.group))]
-  return (
-    <Card className="gap-2">
-      <CardHeader>
-        <CardTitle className="text-sm">Steps</CardTitle>
-        <CardDescription className="text-xs">
-          Pick one to filter the logs
-        </CardDescription>
-      </CardHeader>
-      <ol className="grid px-2">
-        {groups.map((g) => (
-          <li key={g} className="grid">
-            <span className="px-2 pt-3 pb-1 text-xs text-muted-foreground">
-              {g}
-            </span>
-            <ol className="relative grid">
-              <span
-                aria-hidden="true"
-                className="absolute top-4 bottom-4 left-[19px] w-px bg-border"
-              />
-              {run.thread
-                .filter((s) => s.group === g)
-                .map((s) => {
-                  const reached =
-                    s.state !== "pending" && s.state !== "canceled"
-                  const time =
-                    s.startedAt && s.finishedAt
-                      ? duration(
-                          Date.parse(s.finishedAt) - Date.parse(s.startedAt)
-                        )
-                      : s.state === "running" && s.startedAt
-                        ? duration(now - Date.parse(s.startedAt))
-                        : ""
-                  return (
-                    <li key={s.key}>
-                      <Button
-                        variant="ghost"
-                        disabled={!reached}
-                        aria-pressed={selected === s.key}
-                        onClick={() => onSelect(s.key)}
-                        title={s.detail}
-                        className="h-auto w-full justify-start gap-3 px-2 py-2 text-left font-normal disabled:text-muted-foreground disabled:opacity-100 aria-pressed:bg-muted"
-                      >
-                        <StepIcon s={s} />
-                        <span
-                          className={cn(
-                            "flex-1 truncate",
-                            (s.state === "running" || s.state === "waiting") &&
-                              "font-medium",
-                            s.state === "failed" &&
-                              "font-medium text-destructive"
-                          )}
-                        >
-                          {s.name}
-                        </span>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {time}
-                        </span>
-                      </Button>
-                    </li>
-                  )
-                })}
-            </ol>
-          </li>
-        ))}
-      </ol>
-    </Card>
-  )
+/** providerLabel names where an action runs by its brand, not its key. */
+function providerLabel(provider: string): string {
+  const label = cloudLabel(provider)
+  return label !== provider ? label : providerName(provider)
 }
 
-const opStyle: Record<
-  string,
-  { icon: typeof PlusIcon; label: string; tone: string }
-> = {
-  create: {
-    icon: PlusIcon,
-    label: "Create",
-    tone: "text-overdye-ink bg-overdye-tint",
-  },
-  update: {
-    icon: PencilIcon,
-    label: "Update",
-    tone: "text-muted-foreground bg-muted",
-  },
-  replace: {
-    icon: RefreshCwIcon,
-    label: "Replace",
-    tone: "text-weld-ink bg-weld-tint",
-  },
-  delete: {
-    icon: MinusIcon,
-    label: "Delete",
-    tone: "text-destructive bg-failed-tint",
-  },
-  keep: {
-    icon: CheckIcon,
-    label: "Keep",
-    tone: "text-muted-foreground bg-muted",
-  },
+/**
+ * whereOf is where an action runs: its account by name when it has one,
+ * else the provider, then the region.
+ */
+function whereOf(a: Action, connections: Connection[]): string {
+  const account = connections.find((c) => c.id === a.connectionId)?.name
+  return [account ?? providerLabel(a.provider), a.region]
+    .filter(Boolean)
+    .join(" · ")
 }
 
-function PlanTab({ run }: { run: Run }) {
+/** opTone is how a change reads at a glance: new, moving, kept or gone. */
+const opTone: Record<string, Tone> = {
+  create: "live",
+  update: "flight",
+  replace: "flight",
+  delete: "failed",
+  keep: "quiet",
+}
+
+/** kindOf says what an action is: a resource's kind or what it creates. */
+function kindOf(a: Action): string {
+  const kind = a.resource ? resourceLabel(a.resource.kind) : a.creates
+  return a.resource?.version ? `${kind} ${a.resource.version}` : kind
+}
+
+function ChangesTab({ run }: { run: Run }) {
+  const connections = useQuery(useConnectionsList)
   const p = run.plan
   const s = p.summary
-  if (p.status === "planning") {
+  if (p.status === "planning")
     return (
-      <Card className="py-10">
-        <p className="flex items-center justify-center gap-2 text-[13px] text-muted-foreground">
-          <Spinner />
-          Working out what {run.environment} needs
-        </p>
-      </Card>
+      <CloudEmpty
+        kind="compact"
+        icon={LoaderCircleIcon}
+        title={`Working out what ${run.environment} needs`}
+      >
+        The changes show here in a moment. Nothing changes in your clouds while
+        Loomplane plans.
+      </CloudEmpty>
     )
-  }
-  if (p.status === "failed") {
+  if (p.status === "failed")
     return (
-      <Alert variant="destructive">
-        <AlertTitle>Planning failed</AlertTitle>
-        <AlertDescription className="wrap-anywhere">{p.error}</AlertDescription>
-      </Alert>
+      <CloudEmpty kind="compact" title="No changes to show">
+        Planning failed before it worked out any changes.
+      </CloudEmpty>
     )
-  }
+  const accounts = connections.data?.connections ?? []
+  const kept = s.keep
+  // A finding that a person can fix offers the fix beside it.
+  const fix = (f: Finding) =>
+    run.project && (
+      <FindingActions
+        finding={f}
+        project={run.project}
+        environment={run.environment}
+      />
+    )
   return (
-    <div className="grid gap-4">
-      <Card className="gap-0 py-0">
-        <CardHeader className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b py-4">
-          {(["create", "update", "replace", "delete"] as const).map((op) => {
-            const Icon = opStyle[op]?.icon ?? CircleIcon
-            return (
-              <span key={op} className="flex items-center gap-2 text-[13px]">
-                <span
-                  className={cn(
-                    "flex size-5 items-center justify-center rounded-md",
-                    opStyle[op]?.tone
-                  )}
-                >
-                  <Icon className="size-3" strokeWidth={2.5} />
-                </span>
-                <span className="font-mono tabular-nums">{s[op]}</span>
-                <span className="text-muted-foreground">to {op}</span>
-              </span>
-            )
-          })}
-          <span className="ml-auto text-[13px] text-muted-foreground">
-            {s.keep} kept as they are
-          </span>
-        </CardHeader>
+    <div className="grid gap-6">
+      {(p.problems.length > 0 || p.warnings.length > 0) && (
+        <div className="grid gap-2.5">
+          {p.problems.map((f, i) => (
+            <CloudCallout
+              key={`p${i}`}
+              tone="error"
+              title={f.message}
+              action={fix(f)}
+            >
+              {f.path && <code className="font-mono text-xs">{f.path}</code>}
+            </CloudCallout>
+          ))}
+          {p.warnings.map((f, i) => (
+            <CloudCallout
+              key={`w${i}`}
+              tone="info"
+              title="Worth a look"
+              action={fix(f)}
+            >
+              {f.message}
+              {f.path && (
+                <code className="mt-0.5 block font-mono text-xs">{f.path}</code>
+              )}
+            </CloudCallout>
+          ))}
+        </div>
+      )}
+      <ReleaseKind plan={p} />
+      <section aria-label="What this plan does" className="grid gap-2.5">
+        <CloudSectionHead
+          title="What this plan does"
+          count={p.actions.length}
+          description={
+            p.actions.length === 0
+              ? undefined
+              : `${s.create} to create, ${s.update} to update, ${s.replace} to replace, ${s.delete} to delete and ${kept} kept, in the order it happens. Kept items show nothing else moves.`
+          }
+        />
         {p.actions.length === 0 ? (
-          <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">
-            Nothing to do: what&apos;s deployed already matches the manifest.
-          </p>
+          <CloudEmpty kind="compact" title="Nothing to change">
+            What&apos;s deployed already matches loomplane.yaml.
+          </CloudEmpty>
         ) : (
-          <div className="divide-y">
+          <CloudTable
+            label="Changes"
+            columns="110px minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.4fr)"
+            head={["Change", "What", "Where", "Why"]}
+            minWidth={760}
+          >
             {[...p.actions]
               .sort((a, b) => a.step - b.step)
               .map((a) => (
-                <ActionRow key={a.id} action={a} />
+                <CloudTableRow key={a.id}>
+                  <Cell>
+                    <StatusPill tone={opTone[a.op] ?? "quiet"}>
+                      {opLabel(a.op)}
+                    </StatusPill>
+                  </Cell>
+                  <NameCell name={a.name} meta={kindOf(a)} />
+                  <Cell className="text-[12.5px]">{whereOf(a, accounts)}</Cell>
+                  <Cell className="grid gap-1 text-[12.5px] leading-snug text-muted-foreground">
+                    {a.reason && <span>{a.reason}</span>}
+                    {a.changes?.map((c) => (
+                      <span key={c.field} className="font-mono text-[11.5px]">
+                        {c.field}: {c.from || "unset"} → {c.to || "unset"}
+                      </span>
+                    ))}
+                  </Cell>
+                </CloudTableRow>
               ))}
-          </div>
+          </CloudTable>
         )}
-      </Card>
-      {(p.problems.length > 0 || p.warnings.length > 0) && (
-        <Card className="gap-3">
-          <CardHeader>
-            <CardTitle className="text-sm">Findings</CardTitle>
-            <CardDescription className="text-xs">
-              Problems stop the plan from being approved; warnings are worth a
-              look. Fix them in the project&apos;s Deploy tab.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="grid gap-3">
-              {p.problems.map((f, i) => (
-                <FindingRow key={`p${i}`} finding={f} tone="bad" />
-              ))}
-              {p.warnings.map((f, i) => (
-                <FindingRow key={`w${i}`} finding={f} tone="warn" />
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
+      </section>
+      <Artifacts artifacts={p.artifacts ?? []} />
+      <Leftovers leftovers={p.leftovers ?? []} />
     </div>
   )
 }
 
-function FindingRow({
-  finding: f,
-  tone,
-}: {
-  finding: Finding
-  tone: "bad" | "warn"
-}) {
-  return (
-    <li className="flex gap-2.5">
-      <span
-        aria-hidden="true"
-        className={cn(
-          "mt-1.5 size-1.5 shrink-0 rounded-full",
-          tone === "bad" ? "bg-destructive" : "bg-weld"
-        )}
-      />
-      <div className="grid min-w-0 gap-1">
-        <p className="text-[13px]">{f.message}</p>
-        {f.path && (
-          <code className="font-mono text-xs text-muted-foreground">
-            {f.path}
-          </code>
-        )}
-      </div>
-    </li>
-  )
-}
-
-function ActionRow({ action: a }: { action: Action }) {
-  const style = opStyle[a.op] ?? opStyle.update
-  const Icon = style?.icon ?? CircleIcon
-  const facts: [string, string][] = [
-    ["provider", a.provider],
-    ...(a.region ? ([["region", a.region]] as [string, string][]) : []),
-    ...(a.service?.image
-      ? ([["image", a.service.image]] as [string, string][])
-      : []),
-    ...(a.service?.port
-      ? ([["port", String(a.service.port)]] as [string, string][])
-      : []),
-    ...(a.resource?.version
-      ? ([["version", a.resource.version]] as [string, string][])
-      : []),
+/**
+ * logSources are the log viewer's choices: every line, the plan's own
+ * record, and each step that changes a service, with how it's doing.
+ */
+function logSources(run: Run): LogSource[] {
+  return [
+    { id: "all", label: "Everything", steps: null },
+    { id: "plan", label: "Plan", steps: ["plan", "approve"] },
+    ...run.thread
+      .filter((s) => s.group === "Deploy" && s.action)
+      .map((s) => ({
+        id: s.key,
+        label: s.action!.name,
+        steps: [s.key],
+        tone: stepTone(s.state),
+      })),
   ]
-  return (
-    <Collapsible defaultOpen={a.op !== "keep" && a.op !== "update"}>
-      <CollapsibleTrigger className="group/change flex w-full items-center gap-3 px-5 py-3.5 text-left text-[13px] outline-none hover:bg-muted/50 focus-visible:bg-muted/50">
-        <span
-          className={cn(
-            "flex size-5 shrink-0 items-center justify-center rounded-md",
-            style?.tone
-          )}
-        >
-          <Icon className="size-3" strokeWidth={2.5} />
-          <span className="sr-only">{style?.label}</span>
-        </span>
-        <span className="min-w-0 flex-1 truncate">
-          <span className="text-muted-foreground">
-            {a.resource ? resourceLabel(a.resource.kind) : a.creates}
-          </span>{" "}
-          <span className="font-mono font-medium">{a.name}</span>
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {a.provider}
-          {a.region ? `, ${a.region}` : ""}
-        </span>
-        <ChevronRightIcon className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]/change:rotate-90" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mx-5 mb-4 grid gap-3">
-          {a.reason && (
-            <p className="text-xs text-muted-foreground">{a.reason}</p>
-          )}
-          <dl className="grid grid-cols-[minmax(7rem,auto)_1fr] gap-x-6 gap-y-1.5 rounded-lg bg-(--terminal) p-4 font-mono text-[12px] text-(--terminal-foreground)">
-            {facts.map(([k, v]) => (
-              <div key={k} className="contents">
-                <dt className="text-(--terminal-muted)">{k}</dt>
-                <dd className="break-all">{v}</dd>
-              </div>
-            ))}
-            {a.changes?.map((c) => (
-              <div key={c.field} className="contents">
-                <dt className="text-(--terminal-muted)">{c.field}</dt>
-                <dd className="flex flex-wrap items-center gap-x-2">
-                  <span className="text-[color-mix(in_oklch,var(--destructive)_60%,white)] line-through">
-                    {c.from || "unset"}
-                  </span>
-                  <span className="text-[color-mix(in_oklch,var(--overdye)_55%,white)]">
-                    + {c.to || "unset"}
-                  </span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  )
 }
 
-function Services({ run }: { run: Run }) {
-  const deploy = run.thread.filter((s) => s.group === "Deploy" && s.action)
-  if (deploy.length === 0) {
-    return (
-      <Card className="py-0">
-        <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">
-          This plan changes nothing, so no service moves.
-        </p>
-      </Card>
-    )
+/** serviceState names how one step of the deployment went. */
+function serviceState(s: ThreadStep): { word: string; tone: Tone } {
+  switch (s.state) {
+    case "done":
+      return {
+        word: s.action?.op === "delete" ? "Removed" : "Done",
+        tone: "live",
+      }
+    case "running":
+      return { word: s.detail ?? "Running", tone: "flight" }
+    case "failed":
+      return { word: "Failed", tone: "failed" }
+    case "skipped":
+      return { word: "Skipped", tone: "quiet" }
+    case "canceled":
+      return { word: "Not run", tone: "quiet" }
+    default:
+      return { word: "Not started", tone: "quiet" }
   }
+}
+
+function ServicesTab({
+  run,
+  onLogs,
+}: {
+  run: Run
+  onLogs: (source: string) => void
+}) {
+  const connections = useQuery(useConnectionsList)
+  const accounts = connections.data?.connections ?? []
+  const steps = new Map(
+    run.thread.filter((s) => s.action).map((s) => [s.key, s])
+  )
+  const actions = [...run.plan.actions].sort((a, b) => a.step - b.step)
   return (
-    <Card className="py-2">
-      <ItemGroup className="gap-0">
-        {deploy.map((s, i) => {
-          const a = s.action as Action
-          const state =
-            s.state === "done"
-              ? a.op === "delete"
-                ? "Removed"
-                : "Released"
-              : s.state === "running"
-                ? (s.detail ?? "Rolling out")
-                : s.state === "failed"
-                  ? "Failed"
-                  : s.state === "skipped"
-                    ? "Skipped"
-                    : s.state === "canceled"
-                      ? "Not run"
-                      : "Queued"
-          return (
-            <div key={s.key}>
-              {i > 0 && <ItemSeparator className="my-0" />}
-              <Item className="rounded-none px-5">
-                <ItemContent>
-                  <ItemTitle>{a.name}</ItemTitle>
-                  <ItemDescription className="line-clamp-1 text-xs">
-                    {a.resource ? resourceLabel(a.resource.kind) : a.creates} on{" "}
-                    {a.provider}
-                    {a.region ? `, ${a.region}` : ""}
-                  </ItemDescription>
-                  {s.step?.url && s.state === "done" && (
+    <section aria-label="Services in this deploy" className="grid gap-2.5">
+      <CloudSectionHead
+        title="Services"
+        count={actions.length}
+        description="Where each one runs, and its address."
+      />
+      {actions.length === 0 ? (
+        <CloudEmpty kind="compact" title="No services in this plan">
+          This plan changes nothing, so no service moves.
+        </CloudEmpty>
+      ) : (
+        <CloudTable
+          label="Services"
+          columns="minmax(0,1fr) 150px minmax(0,1.2fr) minmax(0,1.2fr) 80px"
+          head={["Service", "State", "Runs on", "Address", ""]}
+          minWidth={760}
+        >
+          {actions.map((a) => {
+            const s = steps.get(a.id)
+            const state = s
+              ? serviceState(s)
+              : { word: "Kept", tone: "quiet" as Tone }
+            return (
+              <CloudTableRow key={a.id}>
+                <NameCell name={a.name} meta={kindOf(a)} />
+                <Cell>
+                  <StatusPill tone={state.tone}>{state.word}</StatusPill>
+                </Cell>
+                <Cell className="text-[12.5px]">{whereOf(a, accounts)}</Cell>
+                <Cell className="text-[12.5px] text-muted-foreground">
+                  {s?.step?.url && s.state === "done" ? (
                     <ServiceAddress
                       address={s.step.url}
                       className="w-fit text-xs"
                     />
+                  ) : (
+                    "No address yet"
                   )}
-                </ItemContent>
-                <ItemActions
-                  className={cn(
-                    "gap-1.5 text-xs",
-                    s.state === "running"
-                      ? "font-medium text-weld-ink"
-                      : "text-muted-foreground"
+                </Cell>
+                <div role="cell" className="flex justify-end">
+                  {s && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Logs for ${a.name}`}
+                      onClick={() => onLogs(s.key)}
+                    >
+                      Logs
+                    </Button>
                   )}
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      s.state === "done" && "bg-overdye",
-                      s.state === "running" && "animate-pulse bg-weld",
-                      s.state === "failed" && "bg-destructive",
-                      (s.state === "pending" ||
-                        s.state === "canceled" ||
-                        s.state === "skipped") &&
-                        "bg-warp"
-                    )}
-                  />
-                  {state}
-                </ItemActions>
-              </Item>
-            </div>
-          )
-        })}
-      </ItemGroup>
-    </Card>
+                </div>
+              </CloudTableRow>
+            )
+          })}
+        </CloudTable>
+      )}
+    </section>
+  )
+}
+
+function DetailsTab({ run, now }: { run: Run; now: number }) {
+  const person = usePeople()
+  const connections = useQuery(useConnectionsList)
+  const p = run.plan
+  const services = planServices(p)
+  const deploysWith = planConnections(p)
+    .map(({ cloud, id }) => {
+      const c = connections.data?.connections.find((x) => x.id === id)
+      return `${c?.name ?? "A removed account"} (${cloudLabel(cloud)})`
+    })
+    .join(", ")
+  const id = (value: string, label: string) => (
+    <span className="inline-flex items-center gap-1">
+      <Code>{value}</Code>
+      <CopyButton value={value} label={`Copy the ${label} ID`} />
+    </span>
+  )
+  const approval =
+    p.decidedAt && (p.status === "approved" || run.deployment)
+      ? `${p.decidedBy ? person(p.decidedBy).name : "Approved"}, ${relative(Date.parse(p.decidedAt), now)}`
+      : p.status === "ready"
+        ? p.expiresAt
+          ? `Waiting until ${formatDate(p.expiresAt)}`
+          : "Waiting for you"
+        : p.status === "planning"
+          ? "After planning"
+          : planStatus(p.status).label
+  const facts: { label: string; value: ReactNode }[] = [
+    { label: "Plan", value: id(p.id, "plan") },
+    {
+      label: "Deployment",
+      value: run.deployment
+        ? id(run.deployment.id, "deployment")
+        : p.status === "ready"
+          ? "Starts on approval"
+          : "Not started",
+    },
+    { label: "loomplane.yaml", value: `revision ${p.manifestRevision}` },
+    ...p.sources.map((s) => ({
+      label: s.repository,
+      value: (
+        <span>
+          <Code>{s.commitSha.slice(0, 7)}</Code>
+          {!s.inScope && (
+            <span className="text-muted-foreground">
+              , held at what&apos;s deployed
+            </span>
+          )}
+        </span>
+      ),
+    })),
+    {
+      label: "Services",
+      value: services.length > 0 ? services.join(", ") : "Every service",
+    },
+    { label: "Approval", value: approval },
+    { label: "Cloud", value: deploysWith || "No account yet" },
+    { label: "Planned", value: formatDate(p.createdAt) },
+  ]
+  return (
+    <section aria-label="Details" className="grid max-w-[640px] gap-2.5">
+      <CloudSectionHead
+        title="Details"
+        description="IDs and inputs, for support and the API."
+      />
+      <FactList facts={facts} />
+    </section>
   )
 }

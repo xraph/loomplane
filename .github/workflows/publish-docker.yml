@@ -61,6 +61,18 @@ jobs:
           cache-from: type=gha,scope=release-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
       - run: bash scripts/test-production.sh loomplane:release-test
+      - name: Build gateway for combined smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/push-gateway/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: loomplane-push-gateway:release-test
+          build-args: VERSION=${{ inputs.tag }}
+          cache-from: type=gha,scope=push-gateway-${{ matrix.arch }}
+      - run: bash scripts/check-push-deployment.sh
+      - run: bash scripts/test-push-gateway.sh loomplane-push-gateway:release-test loomplane:release-test
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -162,9 +174,11 @@ jobs:
           printf '%s@%s\n' "$IMAGE" "$digest" > image.txt
           mkdir -p bundle
           cp deployments/production/compose.yaml deployments/production/Caddyfile deployments/production/.env.example bundle/
+          cp deployments/production/compose.push-gateway.yaml deployments/production/Caddyfile.push-gateway bundle/
           cp docs/docker-production.md bundle/README.md
           cp image.txt bundle/
           sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=${IMAGE}@${digest}|" bundle/.env.example
+          sed -i "s|^PUSH_GATEWAY_IMAGE=.*|PUSH_GATEWAY_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER}/loomplane-push-gateway:${TAG}|" bundle/.env.example
           tar -czf "loomplane-${TAG}-docker.tar.gz" -C bundle .
           sha256sum "loomplane-${TAG}-docker.tar.gz" > SHA256SUMS
           gh release upload "$TAG" "loomplane-${TAG}-docker.tar.gz" image.txt image-manifest.txt SHA256SUMS --clobber

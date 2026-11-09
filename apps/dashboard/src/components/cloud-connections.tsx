@@ -8,7 +8,7 @@ import {
   RefreshCwIcon,
   UploadIcon,
 } from "lucide-react"
-import { type FormEvent, useRef, useState } from "react"
+import { type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import {
@@ -39,7 +39,14 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { CloudflareServicesField } from "@/components/cloudflare-services-field"
+import { RegistryOperations } from "@/components/registry-operations"
+import {
+  ClusterBuildSetup,
+  clusterSetupWaiting,
+} from "@/components/cluster-build-setup"
 import { KeylessSetup } from "@/components/keyless-setup"
+import { SelfHostedConnect } from "@/components/self-hosted-connect"
 import { MetricCard } from "@/components/metric-card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -86,9 +93,11 @@ import {
   isKeyJSON,
   rolesFor,
 } from "@/lib/clouds"
+import { isSelfHosted } from "@/lib/connect-presets"
 import { formatDate } from "@/lib/format"
 import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
+import { Link } from "@/lib/router"
 import { rememberSignInCloud, rememberVercelState } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
@@ -147,7 +156,6 @@ function CloudTile({
   connections: Connection[]
   mayManage: boolean
 }) {
-  const [connecting, setConnecting] = useState(false)
   return (
     <section
       aria-label={title}
@@ -165,7 +173,10 @@ function CloudTile({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setConnecting(true)}
+            nativeButton={false}
+            render={
+              <Link to="/integrations/connect/$cloud" params={{ cloud }} />
+            }
           >
             <PlusIcon />
             {connections.length > 0 ? "Add" : "Connect"}
@@ -185,11 +196,6 @@ function CloudTile({
           ))}
         </ul>
       )}
-      <ConnectDialog
-        open={connecting}
-        onOpenChange={setConnecting}
-        cloud={cloud}
-      />
     </section>
   )
 }
@@ -256,7 +262,9 @@ function ConnectionRow({
       toast.success(
         next.status === "ready"
           ? `${c.name} is ready`
-          : `${c.name} is still ${statusLabels[next.status]?.toLowerCase() ?? next.status}`
+          : clusterSetupWaiting(next)
+            ? `${c.name} is waiting for cluster setup`
+            : `${c.name} is still ${statusLabels[next.status]?.toLowerCase() ?? next.status}`
       )
     } catch (err) {
       toast.error(messageOf(err, "The connection couldn't be checked."))
@@ -278,7 +286,9 @@ function ConnectionRow({
         <div className="grid min-w-0 flex-1 gap-0.5">
           <span className="truncate text-[13px] font-medium">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
-            {statusLabels[c.status] ?? c.status}
+            {clusterSetupWaiting(c)
+              ? "Waiting for cluster setup"
+              : (statusLabels[c.status] ?? c.status)}
             {c.account && (
               <>
                 {" · "}
@@ -327,20 +337,26 @@ function ConnectionRow({
                 <RefreshCwIcon />
                 Check again
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setReplacing(true)}>
-                Replace credential
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setRemoving(true)}
-              >
-                Remove
-              </DropdownMenuItem>
+              {c.method !== "managed_kubernetes" && (
+                <>
+                  <DropdownMenuItem onClick={() => setReplacing(true)}>
+                    Replace credential
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setRemoving(true)}
+                  >
+                    Remove
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
       </div>
+      <ClusterBuildSetup connection={c} />
+      <RegistryOperations connection={c} mayManage={mayManage} />
       {c.status === "incomplete" && c.cloud === "aws" && (
         <Alert className="border-weld/50">
           <AlertTitle>
@@ -356,27 +372,31 @@ function ConnectionRow({
           </AlertDescription>
         </Alert>
       )}
-      {c.status === "incomplete" && c.cloud !== "aws" && (
-        <Alert className="border-weld/50">
-          <AlertTitle>
-            It works, but can&apos;t do everything a deployment needs
-          </AlertTitle>
-          <AlertDescription className="grid gap-2">
-            <p>
-              Grant {email ? <code className="font-mono">{email}</code> : "it"}{" "}
-              {roles.length === 1 ? "this role" : "these roles"} on {c.account},
-              then check again:
-            </p>
-            <ul className="grid gap-1">
-              {roles.map((r) => (
-                <li key={r.role}>
-                  {r.title} <code className="font-mono text-xs">{r.role}</code>
-                </li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      )}
+      {c.status === "incomplete" &&
+        c.cloud !== "aws" &&
+        !(c.cloud === "kubernetes" && c.details.registry_hostname) && (
+          <Alert className="border-weld/50">
+            <AlertTitle>
+              It works, but can&apos;t do everything a deployment needs
+            </AlertTitle>
+            <AlertDescription className="grid gap-2">
+              <p>
+                Grant{" "}
+                {email ? <code className="font-mono">{email}</code> : "it"}{" "}
+                {roles.length === 1 ? "this role" : "these roles"} on{" "}
+                {c.account}, then check again:
+              </p>
+              <ul className="grid gap-1">
+                {roles.map((r) => (
+                  <li key={r.role}>
+                    {r.title}{" "}
+                    <code className="font-mono text-xs">{r.role}</code>
+                  </li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
       {c.status === "failed" && c.message && (
         <Alert variant="destructive">
           <AlertDescription>{c.message}</AlertDescription>
@@ -464,38 +484,85 @@ export function ConnectDialog(props: {
   ) : null
 }
 
+/**
+ * ConnectPanel is the connect form on a page of its own, for one cloud: no
+ * dialog around it and no cloud picker, since the page has its own.
+ */
+export function ConnectPanel(props: {
+  cloud: string
+  onCancel: () => void
+  onConnected: (connection: Connection) => void
+  /** Whether anything has been typed, so leaving can be confirmed. */
+  onDirtyChange?: (dirty: boolean) => void
+}) {
+  return (
+    <ConnectForm
+      key={props.cloud}
+      page
+      open
+      cloud={props.cloud}
+      onOpenChange={(open) => {
+        if (!open) props.onCancel()
+      }}
+      onConnected={props.onConnected}
+      onDirtyChange={props.onDirtyChange}
+    />
+  )
+}
+
 const linkClass =
   "text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 
+// The AWS regions most accounts deploy to, one click each. Any other can
+// still be typed.
+const awsRegions = [
+  { id: "us-east-1", label: "N. Virginia" },
+  { id: "us-west-2", label: "Oregon" },
+  { id: "eu-west-1", label: "Ireland" },
+  { id: "eu-central-1", label: "Frankfurt" },
+  { id: "ap-southeast-1", label: "Singapore" },
+  { id: "ap-northeast-1", label: "Tokyo" },
+]
+
 /** SettingFields are the inputs for the settings a cloud's form lists. */
 function SettingFields({
+  cloud,
   fields,
   values,
   onChange,
 }: {
+  cloud: string
   fields: Setting[]
   values: Record<string, string>
   onChange: (
     next: (current: Record<string, string>) => Record<string, string>
   ) => void
 }) {
-  return fields.map((st) => (
-    <Field key={st.key}>
-      <FieldLabel htmlFor={`connection-setting-${st.key}`}>
-        {st.label}
-        {/* Some labels already say so. */}
-        {!st.required && !st.label.endsWith("(optional)") && " (optional)"}
-      </FieldLabel>
-      <Input
-        id={`connection-setting-${st.key}`}
+  return fields.map((st) =>
+    cloud === "cloudflare" && st.key === "services" ? (
+      <CloudflareServicesField
+        key={st.key}
         value={values[st.key] ?? ""}
-        onChange={(e) =>
-          onChange((cur) => ({ ...cur, [st.key]: e.target.value }))
-        }
-        required={st.required}
+        onChange={(value) => onChange((cur) => ({ ...cur, [st.key]: value }))}
       />
-    </Field>
-  ))
+    ) : (
+      <Field key={st.key}>
+        <FieldLabel htmlFor={`connection-setting-${st.key}`}>
+          {st.label}
+          {/* Some labels already say so. */}
+          {!st.required && !st.label.endsWith("(optional)") && " (optional)"}
+        </FieldLabel>
+        <Input
+          id={`connection-setting-${st.key}`}
+          value={values[st.key] ?? ""}
+          onChange={(e) =>
+            onChange((cur) => ({ ...cur, [st.key]: e.target.value }))
+          }
+          required={st.required}
+        />
+      </Field>
+    )
+  )
 }
 
 function ConnectForm({
@@ -505,7 +572,11 @@ function ConnectForm({
   replacing,
   keyless: startKeyless = false,
   onConnected,
+  page = false,
+  onDirtyChange,
 }: {
+  page?: boolean
+  onDirtyChange?: (dirty: boolean) => void
   open: boolean
   onOpenChange: (open: boolean) => void
   cloud?: string
@@ -551,12 +622,19 @@ function ConnectForm({
   // cluster comes first: it connects as Loomplane's own service account, so
   // there's no kubeconfig to paste. A replaced connection keeps the kind of
   // credential it has.
-  const inClusterOffered =
-    !replacing && !!entry?.methods.includes("in_cluster")
+  const inClusterOffered = !replacing && !!entry?.methods.includes("in_cluster")
   const inClusterOn = inClusterOffered && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
+  const setupCluster =
+    cloud === "kubernetes" &&
+    !!extraSettings.registry_hostname?.trim() &&
+    extraSettings.registry_setup !== "existing" &&
+    (extraSettings.registry_setup === "automatic" ||
+      !extraSettings.storage_class ||
+      !extraSettings.architecture ||
+      !extraSettings.ingress_address)
   // What the cloud asks for before sign-in, like Google's project. Until
   // someone types, a replaced connection shows the values it already has.
   const [signInValues, setSignInValues] = useState<Record<string, string>>({})
@@ -583,6 +661,14 @@ function ConnectForm({
     createInCluster.isPending ||
     replace.isPending ||
     signInStart.isPending
+  // The region starts filled in, so it alone isn't something to lose.
+  const dirty =
+    !replacing &&
+    [name, credential, keyID, team, certificate, billingExport]
+      .concat(Object.values(extraSettings).map(String))
+      .concat(Object.values(signInValues))
+      .some((v) => v.trim() !== "")
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange])
 
   const close = (next: boolean) => {
     if (!next) {
@@ -626,6 +712,8 @@ function ConnectForm({
       rememberSignInCloud(entry?.title ?? cloudLabel(cloud))
       if (cloud === "vercel") rememberVercelState((started as SignIn).state)
       // The generated hook doesn't type this response.
+      // Leaving for the cloud's sign-in is the point, not a loss.
+      onDirtyChange?.(false)
       window.location.assign((started as SignIn).authorizeUrl)
     } catch (err) {
       setError(messageOf(err, "Sign-in couldn't be started."))
@@ -640,7 +728,8 @@ function ConnectForm({
         : `${c.name} is connected, but missing permissions`
     )
     onConnected?.(c)
-    close(false)
+    // A page moves on to the connection itself.
+    if (!page) close(false)
   }
 
   const submit = async (e: FormEvent) => {
@@ -711,411 +800,486 @@ function ConnectForm({
   }
 
   const info = (clouds as Record<string, (typeof clouds)[Cloud]>)[cloud]
+  const submitLabel = setupCluster
+    ? replacing
+      ? "Set up and replace"
+      : "Set up and connect"
+    : replacing
+      ? "Check and replace"
+      : "Check and connect"
+  const header = (
+    <DialogHeader>
+      <DialogTitle>
+        {replacing && keylessOn
+          ? `Switch ${replacing.name} to keyless`
+          : replacing
+            ? `Replace ${replacing.name}'s credential`
+            : "Connect an account"}
+      </DialogTitle>
+      <DialogDescription>
+        {replacing && keylessOn
+          ? "Loomplane checks the cloud's trust first. If the cloud refuses it, the connection stays as it is."
+          : replacing
+            ? "The new credential is checked first. If the cloud refuses it, the old one stays."
+            : "Loomplane checks the credential with the cloud before keeping it."}
+      </DialogDescription>
+    </DialogHeader>
+  )
+  const cloudPicker = (
+    <Field>
+      <FieldLabel>Cloud</FieldLabel>
+      <ToggleGroup
+        variant="outline"
+        spacing={1}
+        className="flex-wrap"
+        value={[cloud]}
+        onValueChange={(v) => {
+          if (v[0]) setCloud(v[0])
+        }}
+      >
+        <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
+        <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
+        <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
+        {extras.map((c) => (
+          <ToggleGroupItem key={c.cloud} value={c.cloud}>
+            {c.title}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </Field>
+  )
+  const form = (
+    <form onSubmit={(e) => void submit(e)} className="grid gap-5">
+      {!page && header}
+      <FieldGroup
+        className={cn(page && "rounded-[14px] bg-card p-4 ring-1 ring-border")}
+      >
+        {!replacing && (
+          <>
+            {!page && cloudPicker}
+            <Field>
+              <FieldLabel htmlFor="connection-name">Name</FieldLabel>
+              <Input
+                id="connection-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={
+                  cloud === "gcp"
+                    ? "Production project"
+                    : cloud === "aws"
+                      ? "Production account"
+                      : "Web team"
+                }
+                required
+              />
+            </Field>
+          </>
+        )}
+        {signIn &&
+          (entry?.signInSettings ?? []).map((f) =>
+            cloud === "cloudflare" && f.key === "services" ? (
+              <CloudflareServicesField
+                key={f.key}
+                value={signInValue(f.key)}
+                onChange={(value) =>
+                  setSignInValues({ ...signInValues, [f.key]: value })
+                }
+              />
+            ) : (
+              <Field key={f.key}>
+                <FieldLabel htmlFor={`sign-in-${f.key}`}>{f.label}</FieldLabel>
+                {/* The server keeps a replaced connection's own
+                      placement, so it can't be changed here. */}
+                <Input
+                  id={`sign-in-${f.key}`}
+                  value={signInValue(f.key)}
+                  onChange={(e) =>
+                    setSignInValues({
+                      ...signInValues,
+                      [f.key]: e.target.value,
+                    })
+                  }
+                  readOnly={!!replacing}
+                  autoComplete="off"
+                  required={f.required}
+                />
+              </Field>
+            )
+          )}
+        {signIn && replacing && (entry?.signInSettings ?? []).length > 0 && (
+          <FieldDescription>
+            A new sign-in keeps this connection where it is. To deploy somewhere
+            else, make a new connection.
+          </FieldDescription>
+        )}
+        {keylessOn ? (
+          <div className="grid justify-items-start gap-3">
+            <KeylessSetup
+              cloud={cloud}
+              title={entry?.title ?? cloudLabel(cloud)}
+              name={name}
+              fields={entry?.keylessSettings ?? []}
+              replacing={replacing}
+              onConnected={(c) => {
+                onConnected?.(c)
+                if (!page) close(false)
+              }}
+            />
+            {!startKeyless && (
+              <button
+                type="button"
+                className={linkClass}
+                onClick={() => setKeylessFor(null)}
+              >
+                Back
+              </button>
+            )}
+          </div>
+        ) : keylessFirst ? (
+          <div className="grid justify-items-start gap-2">
+            <Button type="button" onClick={() => setKeylessFor(cloud)}>
+              Connect keylessly
+            </Button>
+            <button
+              type="button"
+              className={linkClass}
+              onClick={() => setTokenFor(cloud)}
+            >
+              {tokenLink}
+            </button>
+          </div>
+        ) : signIn ? (
+          <div className="grid justify-items-start gap-2">
+            <Button type="submit" disabled={busy}>
+              {busy && <Spinner />}
+              Sign in with {entry?.title ?? cloud}
+            </Button>
+            {keylessOffered && (
+              <button
+                type="button"
+                className={linkClass}
+                onClick={() => setKeylessFor(cloud)}
+              >
+                Connect keylessly instead
+              </button>
+            )}
+            <button
+              type="button"
+              className={linkClass}
+              onClick={() => setTokenFor(cloud)}
+            >
+              {tokenLink}
+            </button>
+          </div>
+        ) : inClusterOn ? (
+          <>
+            <FieldDescription>
+              Loomplane runs in a Kubernetes cluster that it may deploy to. It
+              connects as its own service account, so there&apos;s no kubeconfig
+              to paste. Choose a namespace your operator gave it, never the one
+              Loomplane runs in.
+            </FieldDescription>
+            <SettingFields
+              cloud={cloud}
+              fields={entry?.inClusterSettings ?? []}
+              values={extraSettings}
+              onChange={setExtraSettings}
+            />
+            <button
+              type="button"
+              className={`${linkClass} justify-self-start`}
+              onClick={() => setTokenFor(cloud)}
+            >
+              Use a kubeconfig instead
+            </button>
+          </>
+        ) : cloud === "gcp" ? (
+          <>
+            <Field>
+              <FieldLabel htmlFor="connection-key">
+                {info.credential}
+              </FieldLabel>
+              <Textarea
+                id="connection-key"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value)}
+                placeholder='{"type": "service_account", ...}'
+                spellCheck={false}
+                className="max-h-40 min-h-24 font-mono text-xs md:text-xs"
+                required
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+
+                  onClick={() => file.current?.click()}
+                >
+                  <UploadIcon />
+                  Choose the key file
+                </Button>
+                <input
+                  ref={file}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => void load(e.target.files?.[0])}
+                />
+              </div>
+              <FieldDescription>
+                A JSON key for a service account in the project you deploy to.
+                It needs Cloud Run Admin, Cloud Build Editor, Artifact Registry
+                Administrator, Storage Admin, Secret Manager Admin, Cloud SQL
+                Admin, Cloud Memorystore Redis Admin, Service Account User and
+                Browser; Loomplane says which are missing.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="connection-billing-export">
+                Billing export table (optional)
+              </FieldLabel>
+              <Input
+                id="connection-billing-export"
+                autoComplete="off"
+                value={billingExport}
+                onChange={(e) => setBillingExport(e.target.value)}
+                placeholder="project.dataset.gcp_billing_export_v1_..."
+                spellCheck={false}
+                className="font-mono"
+              />
+              <FieldDescription>
+                Google Cloud reports cost only through a billing export to
+                BigQuery. Name its table and Loomplane reads this project&apos;s
+                spend from it, with BigQuery Job User on the project and
+                BigQuery Data Viewer on the dataset.
+              </FieldDescription>
+            </Field>
+            <CloudSQLRecoveryFields
+              value={extraSettings}
+              onChange={setExtraSettings}
+            />
+          </>
+        ) : cloud === "aws" ? (
+          <>
+            <Field>
+              <FieldLabel htmlFor="connection-key-id">Access key ID</FieldLabel>
+              <Input
+                id="connection-key-id"
+                autoComplete="off"
+                value={keyID}
+                onChange={(e) => setKeyID(e.target.value)}
+                placeholder="AKIA..."
+                spellCheck={false}
+                className="font-mono"
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="connection-secret">
+                Secret access key
+              </FieldLabel>
+              <Input
+                id="connection-secret"
+                type="password"
+                autoComplete="off"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value)}
+                required
+              />
+              <FieldDescription>
+                An access key for an IAM user Loomplane deploys as. It needs
+                ECS, ECR, CodeBuild, load balancing, IAM roles, RDS and Secrets
+                Manager; Loomplane lists any action it lacks.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="connection-region">Region</FieldLabel>
+              <Input
+                id="connection-region"
+                value={region}
+                onChange={(e) => setRegion(e.target.value)}
+                placeholder="us-east-1"
+                spellCheck={false}
+                required
+              />
+              <div
+                role="group"
+                aria-label="Common regions"
+                className="flex flex-wrap gap-1.5"
+              >
+                {awsRegions.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    aria-pressed={region.trim() === r.id}
+                    title={r.label}
+                    onClick={() => setRegion(r.id)}
+                    className="rounded-full px-2.5 py-1 font-mono text-[11.5px] text-muted-foreground ring-1 ring-border outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40 aria-pressed:bg-foreground aria-pressed:text-background aria-pressed:ring-foreground"
+                  >
+                    {r.id}
+                  </button>
+                ))}
+              </div>
+              <FieldDescription>
+                Everything Loomplane creates in this account goes here.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="connection-certificate">
+                Certificate ARN (optional)
+              </FieldLabel>
+              <Input
+                id="connection-certificate"
+                value={certificate}
+                onChange={(e) => setCertificate(e.target.value)}
+                placeholder={`arn:aws:acm:${region || "us-east-1"}:...:certificate/...`}
+                spellCheck={false}
+                className="font-mono text-xs md:text-xs"
+              />
+              <FieldDescription>
+                An ACM certificate in the same region. With one, public services
+                on ECS answer over HTTPS; without, the load balancer serves
+                plain HTTP and plans warn you.
+              </FieldDescription>
+            </Field>
+            <RDSRecoveryFields
+              value={extraSettings}
+              onChange={setExtraSettings}
+            />
+          </>
+        ) : extra ? (
+          <>
+            <Field>
+              <FieldLabel htmlFor="connection-credential">
+                {extra.credential || "Credential"}
+              </FieldLabel>
+              <Textarea
+                id="connection-credential"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+                className="max-h-40 min-h-16 font-mono text-xs md:text-xs"
+                required
+              />
+              {extra.help && !page && (
+                <FieldDescription>{extra.help}</FieldDescription>
+              )}
+            </Field>
+            <SettingFields
+              cloud={cloud}
+              fields={extra.settings ?? []}
+              values={extraSettings}
+              onChange={setExtraSettings}
+            />
+            {inClusterOffered && (
+              <button
+                type="button"
+                className={`${linkClass} justify-self-start`}
+                onClick={() => setTokenFor(null)}
+              >
+                Connect the cluster Loomplane runs in instead
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <Field>
+              <FieldLabel htmlFor="connection-token">
+                {info.credential}
+              </FieldLabel>
+              <Input
+                id="connection-token"
+                type="password"
+                autoComplete="off"
+                value={credential}
+                onChange={(e) => setCredential(e.target.value)}
+                required
+              />
+              <FieldDescription>
+                Create one under Account Settings, then Tokens, scoped to the
+                team you deploy to.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="connection-team">
+                Team ID (optional)
+              </FieldLabel>
+              <Input
+                id="connection-team"
+                value={team}
+                onChange={(e) => setTeam(e.target.value)}
+                placeholder="team_..."
+              />
+              <FieldDescription>
+                Leave it empty to deploy to your personal account.
+              </FieldDescription>
+            </Field>
+          </>
+        )}
+      </FieldGroup>
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {page ? (
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+          <span className="mr-auto text-xs text-muted-foreground">
+            The credential is stored encrypted and never shown again.
+          </span>
+          <Button type="button" variant="ghost" onClick={() => close(false)}>
+            Cancel
+          </Button>
+          {!signIn && !keylessOn && !keylessFirst && (
+            <Button type="submit" disabled={busy}>
+              {busy && <Spinner />}
+              {submitLabel}
+            </Button>
+          )}
+        </div>
+      ) : (
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => close(false)}>
+            Cancel
+          </Button>
+          {!signIn && !keylessOn && !keylessFirst && (
+            <Button type="submit" disabled={busy}>
+              {busy && <Spinner />}
+              {submitLabel}
+            </Button>
+          )}
+        </DialogFooter>
+      )}
+    </form>
+  )
+  if (page) return form
+  // What you run yourself has a form of its own, the same one its page
+  // shows, so a connection made from here asks the same.
+  if (isSelfHosted(cloud))
+    return (
+      <Dialog open={open} onOpenChange={close}>
+        <DialogContent className="sm:max-w-2xl">
+          {header}
+          {!replacing && cloudPicker}
+          <SelfHostedConnect
+            key={cloud}
+            cloud={cloud}
+            layout="dialog"
+            replacing={replacing}
+            onConnected={(c) => {
+              onConnected?.(c)
+              close(false)
+            }}
+            onCancel={() => close(false)}
+          />
+        </DialogContent>
+      </Dialog>
+    )
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="sm:max-w-lg">
-        <form onSubmit={(e) => void submit(e)} className="grid gap-5">
-          <DialogHeader>
-            <DialogTitle>
-              {replacing && keylessOn
-                ? `Switch ${replacing.name} to keyless`
-                : replacing
-                  ? `Replace ${replacing.name}'s credential`
-                  : "Connect an account"}
-            </DialogTitle>
-            <DialogDescription>
-              {replacing && keylessOn
-                ? "Loomplane checks the cloud's trust first. If the cloud refuses it, the connection stays as it is."
-                : replacing
-                  ? "The new credential is checked first. If the cloud refuses it, the old one stays."
-                  : "Loomplane checks the credential with the cloud before keeping it."}
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup>
-            {!replacing && (
-              <>
-                <Field>
-                  <FieldLabel>Cloud</FieldLabel>
-                  <ToggleGroup
-                    variant="outline"
-                    spacing={1}
-                    className="flex-wrap"
-                    value={[cloud]}
-                    onValueChange={(v) => {
-                      if (v[0]) setCloud(v[0])
-                    }}
-                  >
-                    <ToggleGroupItem value="gcp">Google Cloud</ToggleGroupItem>
-                    <ToggleGroupItem value="vercel">Vercel</ToggleGroupItem>
-                    <ToggleGroupItem value="aws">AWS</ToggleGroupItem>
-                    {extras.map((c) => (
-                      <ToggleGroupItem key={c.cloud} value={c.cloud}>
-                        {c.title}
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="connection-name">Name</FieldLabel>
-                  <Input
-                    id="connection-name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder={
-                      cloud === "gcp"
-                        ? "Production project"
-                        : cloud === "aws"
-                          ? "Production account"
-                          : "Web team"
-                    }
-                    required
-                  />
-                </Field>
-              </>
-            )}
-            {signIn &&
-              (entry?.signInSettings ?? []).map((f) => (
-                <Field key={f.key}>
-                  <FieldLabel htmlFor={`sign-in-${f.key}`}>
-                    {f.label}
-                  </FieldLabel>
-                  {/* The server keeps a replaced connection's own
-                      placement, so it can't be changed here. */}
-                  <Input
-                    id={`sign-in-${f.key}`}
-                    value={signInValue(f.key)}
-                    onChange={(e) =>
-                      setSignInValues({
-                        ...signInValues,
-                        [f.key]: e.target.value,
-                      })
-                    }
-                    readOnly={!!replacing}
-                    autoComplete="off"
-                    required={f.required}
-                  />
-                </Field>
-              ))}
-            {signIn &&
-              replacing &&
-              (entry?.signInSettings ?? []).length > 0 && (
-                <FieldDescription>
-                  A new sign-in keeps this connection where it is. To deploy
-                  somewhere else, make a new connection.
-                </FieldDescription>
-              )}
-            {keylessOn ? (
-              <div className="grid justify-items-start gap-3">
-                <KeylessSetup
-                  cloud={cloud}
-                  title={entry?.title ?? cloudLabel(cloud)}
-                  name={name}
-                  fields={entry?.keylessSettings ?? []}
-                  replacing={replacing}
-                  onConnected={(c) => {
-                    onConnected?.(c)
-                    close(false)
-                  }}
-                />
-                {!startKeyless && (
-                  <button
-                    type="button"
-                    className={linkClass}
-                    onClick={() => setKeylessFor(null)}
-                  >
-                    Back
-                  </button>
-                )}
-              </div>
-            ) : keylessFirst ? (
-              <div className="grid justify-items-start gap-2">
-                <Button type="button" onClick={() => setKeylessFor(cloud)}>
-                  Connect keylessly
-                </Button>
-                <button
-                  type="button"
-                  className={linkClass}
-                  onClick={() => setTokenFor(cloud)}
-                >
-                  {tokenLink}
-                </button>
-              </div>
-            ) : signIn ? (
-              <div className="grid justify-items-start gap-2">
-                <Button type="submit" disabled={busy}>
-                  {busy && <Spinner />}
-                  Sign in with {entry?.title ?? cloud}
-                </Button>
-                {keylessOffered && (
-                  <button
-                    type="button"
-                    className={linkClass}
-                    onClick={() => setKeylessFor(cloud)}
-                  >
-                    Connect keylessly instead
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={linkClass}
-                  onClick={() => setTokenFor(cloud)}
-                >
-                  {tokenLink}
-                </button>
-              </div>
-            ) : inClusterOn ? (
-              <>
-                <FieldDescription>
-                  Loomplane runs in a Kubernetes cluster that it may deploy to.
-                  It connects as its own service account, so there&apos;s no
-                  kubeconfig to paste. Choose a namespace your operator gave it,
-                  never the one Loomplane runs in.
-                </FieldDescription>
-                <SettingFields
-                  fields={entry?.inClusterSettings ?? []}
-                  values={extraSettings}
-                  onChange={setExtraSettings}
-                />
-                <button
-                  type="button"
-                  className={`${linkClass} justify-self-start`}
-                  onClick={() => setTokenFor(cloud)}
-                >
-                  Use a kubeconfig instead
-                </button>
-              </>
-            ) : cloud === "gcp" ? (
-              <>
-                <Field>
-                  <FieldLabel htmlFor="connection-key">
-                    {info.credential}
-                  </FieldLabel>
-                  <Textarea
-                    id="connection-key"
-                    value={credential}
-                    onChange={(e) => setCredential(e.target.value)}
-                    placeholder='{"type": "service_account", ...}'
-                    spellCheck={false}
-                    className="max-h-40 min-h-24 font-mono text-xs md:text-xs"
-                    required
-                  />
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-
-                      onClick={() => file.current?.click()}
-                    >
-                      <UploadIcon />
-                      Choose the key file
-                    </Button>
-                    <input
-                      ref={file}
-                      type="file"
-                      accept="application/json,.json"
-                      className="hidden"
-                      onChange={(e) => void load(e.target.files?.[0])}
-                    />
-                  </div>
-                  <FieldDescription>
-                    A JSON key for a service account in the project you deploy
-                    to. It needs Cloud Run Admin, Cloud Build Editor, Artifact
-                    Registry Administrator, Storage Admin, Secret Manager Admin,
-                    Cloud SQL Admin, Cloud Memorystore Redis Admin, Service
-                    Account User and Browser; Loomplane says which are missing.
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="connection-billing-export">
-                    Billing export table (optional)
-                  </FieldLabel>
-                  <Input
-                    id="connection-billing-export"
-                    autoComplete="off"
-                    value={billingExport}
-                    onChange={(e) => setBillingExport(e.target.value)}
-                    placeholder="project.dataset.gcp_billing_export_v1_..."
-                    spellCheck={false}
-                    className="font-mono"
-                  />
-                  <FieldDescription>
-                    Google Cloud reports cost only through a billing export to
-                    BigQuery. Name its table and Loomplane reads this
-                    project&apos;s spend from it, with BigQuery Job User on the
-                    project and BigQuery Data Viewer on the dataset.
-                  </FieldDescription>
-                </Field>
-                <CloudSQLRecoveryFields
-                  value={extraSettings}
-                  onChange={setExtraSettings}
-                />
-              </>
-            ) : cloud === "aws" ? (
-              <>
-                <Field>
-                  <FieldLabel htmlFor="connection-key-id">
-                    Access key ID
-                  </FieldLabel>
-                  <Input
-                    id="connection-key-id"
-                    autoComplete="off"
-                    value={keyID}
-                    onChange={(e) => setKeyID(e.target.value)}
-                    placeholder="AKIA..."
-                    spellCheck={false}
-                    className="font-mono"
-                    required
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="connection-secret">
-                    Secret access key
-                  </FieldLabel>
-                  <Input
-                    id="connection-secret"
-                    type="password"
-                    autoComplete="off"
-                    value={credential}
-                    onChange={(e) => setCredential(e.target.value)}
-                    required
-                  />
-                  <FieldDescription>
-                    An access key for an IAM user Loomplane deploys as. It needs
-                    ECS, ECR, CodeBuild, load balancing, IAM roles, RDS and
-                    Secrets Manager; Loomplane lists any action it lacks.
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="connection-region">Region</FieldLabel>
-                  <Input
-                    id="connection-region"
-                    value={region}
-                    onChange={(e) => setRegion(e.target.value)}
-                    placeholder="us-east-1"
-                    spellCheck={false}
-                    required
-                  />
-                  <FieldDescription>
-                    Everything Loomplane creates in this account goes here.
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="connection-certificate">
-                    Certificate ARN (optional)
-                  </FieldLabel>
-                  <Input
-                    id="connection-certificate"
-                    value={certificate}
-                    onChange={(e) => setCertificate(e.target.value)}
-                    placeholder={`arn:aws:acm:${region || "us-east-1"}:...:certificate/...`}
-                    spellCheck={false}
-                    className="font-mono text-xs md:text-xs"
-                  />
-                  <FieldDescription>
-                    An ACM certificate in the same region. With one, public
-                    services on ECS answer over HTTPS; without, the load
-                    balancer serves plain HTTP and plans warn you.
-                  </FieldDescription>
-                </Field>
-                <RDSRecoveryFields
-                  value={extraSettings}
-                  onChange={setExtraSettings}
-                />
-              </>
-            ) : extra ? (
-              <>
-                <Field>
-                  <FieldLabel htmlFor="connection-credential">
-                    {extra.credential || "Credential"}
-                  </FieldLabel>
-                  <Textarea
-                    id="connection-credential"
-                    value={credential}
-                    onChange={(e) => setCredential(e.target.value)}
-                    spellCheck={false}
-                    autoComplete="off"
-                    className="max-h-40 min-h-16 font-mono text-xs md:text-xs"
-                    required
-                  />
-                  {extra.help && (
-                    <FieldDescription>{extra.help}</FieldDescription>
-                  )}
-                </Field>
-                <SettingFields
-                  fields={extra.settings ?? []}
-                  values={extraSettings}
-                  onChange={setExtraSettings}
-                />
-                {inClusterOffered && (
-                  <button
-                    type="button"
-                    className={`${linkClass} justify-self-start`}
-                    onClick={() => setTokenFor(null)}
-                  >
-                    Connect the cluster Loomplane runs in instead
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                <Field>
-                  <FieldLabel htmlFor="connection-token">
-                    {info.credential}
-                  </FieldLabel>
-                  <Input
-                    id="connection-token"
-                    type="password"
-                    autoComplete="off"
-                    value={credential}
-                    onChange={(e) => setCredential(e.target.value)}
-                    required
-                  />
-                  <FieldDescription>
-                    Create one under Account Settings, then Tokens, scoped to
-                    the team you deploy to.
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="connection-team">
-                    Team ID (optional)
-                  </FieldLabel>
-                  <Input
-                    id="connection-team"
-                    value={team}
-                    onChange={(e) => setTeam(e.target.value)}
-                    placeholder="team_..."
-                  />
-                  <FieldDescription>
-                    Leave it empty to deploy to your personal account.
-                  </FieldDescription>
-                </Field>
-              </>
-            )}
-          </FieldGroup>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-
-              onClick={() => close(false)}
-            >
-              Cancel
-            </Button>
-            {!signIn && !keylessOn && !keylessFirst && (
-              <Button type="submit" disabled={busy}>
-                {busy && <Spinner />}
-                {replacing ? "Check and replace" : "Check and connect"}
-              </Button>
-            )}
-          </DialogFooter>
-        </form>
-      </DialogContent>
+      <DialogContent className="sm:max-w-lg">{form}</DialogContent>
     </Dialog>
   )
 }

@@ -58,6 +58,8 @@ func (s *PgStore) GetCapacityUsage(ctx context.Context, org, cloud string) (*Cap
 		return nil, err
 	}
 	if missing {
+		usage.Allocatable = CapacityResources{}
+		usage.Observed = CapacityResources{}
 		usage.Provisioned = CapacityResources{}
 		usage.Fresh = false
 		for i := range usage.GPUs {
@@ -84,7 +86,11 @@ func (s *PgStore) GetCapacityUsage(ctx context.Context, org, cloud string) (*Cap
 			gpuUsageFor(usage.GPUs, gpus.GPUKind).Reserved += gpus.GPUs
 		}
 		var attempted bool
-		if checkErr := tx.QueryRow(ctx, `SELECT coalesce((body->>'attempted')::boolean,false) FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, org, cloud, r.reservation.OperationID).Scan(&attempted); checkErr != nil {
+		query := `SELECT coalesce((body->>'attempted')::boolean,false) FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`
+		if r.reservation.ClusterOperationID != "" {
+			query = `SELECT EXISTS(SELECT 1 FROM jsonb_array_elements(body->'steps') step WHERE step->>'state' IN ('attempted','observed','completed')) FROM loomplane_cluster_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`
+		}
+		if checkErr := tx.QueryRow(ctx, query, org, cloud, r.reservation.OperationID).Scan(&attempted); checkErr != nil {
 			return nil, checkErr
 		}
 		if attempted {
@@ -120,7 +126,7 @@ func (s *PgStore) GetCapacityUsage(ctx context.Context, org, cloud string) (*Cap
 		}
 		usage.Headroom = CapacityResources{Servers: headroom[0], CPUMillis: headroom[1], MemoryBytes: headroom[2], StorageBytes: headroom[3]}
 	}
-	rows, err = tx.Query(ctx, `SELECT a.body FROM loomplane_cloud_capacity_accounts a WHERE a.org_id=$1 AND (EXISTS(SELECT 1 FROM loomplane_cloud_capacity_inventory i WHERE i.org_id=a.org_id AND i.cloud_id=$2 AND i.provider=a.provider AND i.account_id=a.account_id) OR EXISTS(SELECT 1 FROM loomplane_cloud_capacity_reservations r WHERE r.org_id=a.org_id AND r.cloud_id=$2 AND r.body->>'provider'=a.provider AND r.body->>'account_id'=a.account_id)) ORDER BY a.provider,a.account_id`, org, cloud)
+	rows, err = tx.Query(ctx, `SELECT a.body FROM loomplane_cloud_capacity_accounts a WHERE a.org_id=$1 AND (EXISTS(SELECT 1 FROM loomplane_cloud_capacity_inventory i WHERE i.org_id=a.org_id AND i.cloud_id=$2 AND i.provider=a.provider AND i.account_id=a.account_id) OR EXISTS(SELECT 1 FROM loomplane_managed_resources m WHERE m.org_id=a.org_id AND m.cloud_id=$2 AND m.kind='cluster' AND m.deleted_at IS NULL AND m.provider=a.provider AND m.account_id=a.account_id) OR EXISTS(SELECT 1 FROM loomplane_cloud_capacity_reservations r WHERE r.org_id=a.org_id AND r.cloud_id=$2 AND r.body->>'provider'=a.provider AND r.body->>'account_id'=a.account_id)) ORDER BY a.provider,a.account_id`, org, cloud)
 	if err != nil {
 		return nil, err
 	}

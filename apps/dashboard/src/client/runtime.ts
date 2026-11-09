@@ -73,6 +73,11 @@ let publishableKey = ""
 let authsomeAppID = ""
 let refresher: (() => Promise<boolean>) | null = null
 
+/** currentOrganization is the organization this tab acts in, or "". */
+export function currentOrganization(): string {
+  return tabOrganization
+}
+
 /** setTabOrganization records the organization this tab acts in. */
 export function setTabOrganization(orgId: string): void {
   tabOrganization = orgId

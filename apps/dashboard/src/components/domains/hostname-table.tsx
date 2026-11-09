@@ -7,6 +7,8 @@ import { useEnvironmentsList } from "@/client/forge/loomplane/hooks"
 import type { HostnameUse } from "@/client/forge/loomplane/types"
 import { useQueries } from "@/client/queries"
 import { RouteStates } from "@/components/domains/domain-states"
+import { EdgeCacheButton } from "@/components/domains/edge-cache-dialog"
+import { useOrganization } from "@/lib/organization"
 import { runsOnLabel, usedByLabel } from "@/lib/domains"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
@@ -26,6 +28,7 @@ export function HostnameTable({
   /** Names the zone a hostname is under, for a Subdomain column. */
   subdomain?: (h: HostnameUse) => string
 }) {
+  const { can } = useOrganization()
   // The overview names environments by ID; their projects name them.
   const projects = useMemo(
     () =>
@@ -88,9 +91,17 @@ export function HostnameTable({
           >
             <span
               role="cell"
-              className="truncate font-mono text-[12.5px] font-medium"
+              className="grid min-w-0 gap-1 text-[12.5px] font-medium"
             >
-              {h.hostname}
+              <span className="truncate font-mono">{h.hostname}</span>
+              <span className="justify-self-start">
+                <EdgeCacheButton
+                  projectId={h.projectId}
+                  routeId={h.routeId}
+                  hostname={h.hostname}
+                  writable={can("infrastructure:modify")}
+                />
+              </span>
             </span>
             {subdomain && (
               <span

@@ -9,7 +9,7 @@ import {
 import { EmptyIcon } from "@/components/icons"
 import { cn } from "@/lib/utils"
 
-type Variant = "panel" | "inline"
+type Variant = "panel" | "inline" | "compact" | "illustrated"
 
 // The header draws the preview on the page and only the icon inside a card.
 const VariantContext = createContext<{ variant: Variant; preview: boolean }>({
@@ -25,9 +25,12 @@ const zeroStateVariants = cva(
         // On the page: centred under a faded preview of the list that will
         // fill this space, on a soft surface that sets it apart from the
         // sections around it. Never a border.
+        illustrated: "items-start gap-3 px-4 py-5 text-left",
         panel: "items-center rounded-[14px] px-6 py-10 text-center",
         // Already inside a card, so just the content.
         inline: "items-start p-5 text-left",
+        // Centred like a panel, with less room, for a section or a dialog.
+        compact: "items-center gap-3 px-5 py-6 text-center",
       },
     },
     defaultVariants: { variant: "panel" },
@@ -92,12 +95,21 @@ function ZeroStateHeader({
       data-slot="empty-header"
       className={cn(
         "flex max-w-md flex-col gap-1.5",
-        variant === "panel" ? "items-center" : "items-start",
+        variant === "inline" || variant === "illustrated"
+          ? "items-start"
+          : "items-center",
         className
       )}
       {...props}
     >
-      {variant === "panel" && preview ? <Preview>{media}</Preview> : media}
+      {(variant === "panel" ||
+        variant === "compact" ||
+        variant === "illustrated") &&
+      preview ? (
+        <Preview compact={variant === "illustrated"}>{media}</Preview>
+      ) : (
+        media
+      )}
       {rest}
     </div>
   )
@@ -105,15 +117,24 @@ function ZeroStateHeader({
 
 // Three placeholder rows, fading out, with the state's icon leading the
 // first: where the first item will show up.
-function Preview({ children }: { children: ReactNode }) {
+function Preview({
+  children,
+  compact = false,
+}: {
+  children: ReactNode
+  compact?: boolean
+}) {
   return (
     <div
       aria-hidden="true"
-      className="mb-1 grid w-[min(320px,100%)] gap-2 [mask-image:linear-gradient(to_bottom,black_30%,transparent)]"
+      className={cn(
+        "mb-1 grid w-[min(320px,100%)] gap-2 [mask-image:linear-gradient(to_bottom,black_30%,transparent)]",
+        compact && "max-w-60"
+      )}
     >
-      <GhostRow lead={children} />
-      <GhostRow className="scale-[0.95] opacity-70" />
-      <GhostRow className="scale-[0.9] opacity-40" />
+      <GhostRow lead={children} className={compact ? "h-9" : undefined} />
+      <GhostRow className={cn("scale-[0.95] opacity-70", compact && "h-9")} />
+      {!compact && <GhostRow className="scale-[0.9] opacity-40" />}
     </div>
   )
 }

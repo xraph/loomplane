@@ -10,6 +10,9 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 )
 
+var ErrManagedCleanupReviewRequired = errors.New("managed cleanup requires a fresh review")
+var ErrManagedCleanupProtocol = errors.New("managed cleanup requires a compatible cleanup workflow")
+
 type capacityFenceError string
 
 func (e capacityFenceError) Error() string          { return "deployment capacity state: " + string(e) }
@@ -46,6 +49,9 @@ func (r *Runner) AssessWorkflowCapacity(ctx context.Context, org, id string) (or
 }
 
 func deferredPlan(plan *planning.Plan) bool {
+	if plan.RequiredRuntimeProtocol != "" {
+		return true
+	}
 	for _, a := range plan.Actions {
 		if planning.HasCapacityIntent(a) {
 			return true
@@ -54,6 +60,23 @@ func deferredPlan(plan *planning.Plan) bool {
 	return false
 }
 func legacyCapacityGuard(ctx context.Context, plan *planning.Plan) error {
+	required := plan.RequiredRuntimeProtocol
+	for _, a := range plan.Actions {
+		if len(a.CleanupTargets) > 0 && required != orchestration.ManagedCleanupProtocol {
+			return ErrManagedCleanupReviewRequired
+		}
+		if a.Service != nil && a.Service.ClusterDemand != nil && required == "" {
+			return errors.New("managed workload is missing its required execution protocol; plan again")
+		}
+	}
+	if required == orchestration.ManagedCleanupProtocol {
+		if !orchestration.IsManagedCleanupContext(ctx) {
+			return ErrManagedCleanupProtocol
+		}
+	} else if required != "" && (required != orchestration.ManagedWorkloadProtocol || !orchestration.IsManagedWorkloadContext(ctx)) {
+		return errors.New("managed workload requires a compatible journal workflow")
+	}
+
 	if deferredPlan(plan) && !orchestration.IsCapacityContext(ctx) {
 		return errors.New("deferred capacity requires a v3 workflow; plan again")
 	}

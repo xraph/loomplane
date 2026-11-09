@@ -280,11 +280,11 @@ func TestZoneProofsDueSkipsAWriteInFlight(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	checkedBefore := now.Add(-zoneProofCheckEvery)
 	zone := &Zone{Mode: "managed", Name: "acme.dev", ProofName: "_loomplane.acme.dev", ProofValue: "v", ProofExpiresAt: now.Add(time.Hour), ProofPublishAttempted: true, ProofPublishAttemptedAt: now.Add(-time.Second)}
-	if zoneProofDue(zone, now, checkedBefore) {
+	if zoneProofDue(zone, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
 		t.Fatal("zone with a write in flight is due")
 	}
 	zone.ProofPublishAttemptedAt = checkedBefore.Add(-time.Second)
-	if !zoneProofDue(zone, now, checkedBefore) {
+	if !zoneProofDue(zone, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
 		t.Fatal("settled attempt not due")
 	}
 }

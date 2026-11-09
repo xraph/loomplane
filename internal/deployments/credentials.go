@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/xraph/vault/core"
 	"github.com/xraph/vault/secret"
@@ -44,6 +45,18 @@ func ResourceKey(orgID, environmentID, resource, field string) string {
 	return orgID + "/" + environmentID + "/" + resource + "/" + field
 }
 
+// environmentKeys is what every credential an environment keeps starts
+// with, or an error when either ID would let it reach past that
+// environment's own keys.
+func environmentKeys(orgID, environmentID string) (string, error) {
+	for _, id := range []string{orgID, environmentID} {
+		if id == "" || strings.Contains(id, "/") {
+			return "", fmt.Errorf("%q can't scope an environment's credentials", id)
+		}
+	}
+	return orgID + "/" + environmentID + "/", nil
+}
+
 func resourceKey(orgID, environmentID, resource, field string) string {
 	return ResourceKey(orgID, environmentID, resource, field)
 }
@@ -65,6 +78,17 @@ func NewVaultResourceSecrets(svc *secret.Service) *VaultResourceSecrets {
 }
 
 var _ ResourceSecrets = (*VaultResourceSecrets)(nil)
+
+func (v *VaultResourceSecrets) SnapshotMetadata(ctx context.Context, key string) (identity string, version int64, err error) {
+	meta, err := v.svc.GetMeta(ctx, key, ResourceVaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return "", 0, ErrNoCredential
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	return meta.ID.String(), meta.Version, nil
+}
 
 // Put implements ResourceSecrets.
 func (v *VaultResourceSecrets) Put(ctx context.Context, key string, value []byte) error {
@@ -132,4 +156,37 @@ func (v *VaultResourceSecrets) Version(ctx context.Context, key string) (string,
 		return "", fmt.Errorf("read resource credential metadata: %w", err)
 	}
 	return fmt.Sprintf("%s/%d/%d", m.ID, m.Version, m.UpdatedAt.UnixNano()), nil
+}
+
+// ResourceSecretKeys is a ResourceSecrets that can list the keys it keeps.
+// *VaultResourceSecrets is one.
+type ResourceSecretKeys interface {
+	Keys(ctx context.Context, prefix string) ([]string, error)
+}
+
+var _ ResourceSecretKeys = (*VaultResourceSecrets)(nil)
+
+// keysPage is how many keys Keys reads from Vault at a time.
+const keysPage = 500
+
+// Keys returns every key kept that starts with prefix. Vault can't filter
+// by prefix, so this reads the metadata of every resource credential, a
+// page at a time and never a value: fine when an environment is deleted,
+// too slow for a request that runs often.
+func (v *VaultResourceSecrets) Keys(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for offset := 0; ; offset += keysPage {
+		page, err := v.svc.List(ctx, ResourceVaultAppID, secret.ListOpts{Limit: keysPage, Offset: offset})
+		if err != nil {
+			return nil, fmt.Errorf("list resource credentials: %w", err)
+		}
+		for _, m := range page {
+			if strings.HasPrefix(m.Key, prefix) {
+				keys = append(keys, m.Key)
+			}
+		}
+		if len(page) < keysPage {
+			return keys, nil
+		}
+	}
 }

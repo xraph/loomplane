@@ -162,6 +162,8 @@ upgrade.
 | `database.poolSize` | `16` | Connections each pod keeps open |
 | `configFile` | | `config.local.yaml` for settings only config carries, like provider plugins |
 | `trustedProxies` | private ranges | Proxies whose `X-Forwarded-For` sign-in rate limits believe |
+| `waitlist` | | `true` or `false` forces the sign-up waitlist on or off; empty leaves it to the instance ([Running Loomplane](operations.md#who-can-sign-up)) |
+| `consolePath` | `/__console` | Where platform admins open the console ([Running Loomplane](operations.md#the-console)) |
 | `ingress.blockInternalPaths` | `true` | Sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods |
 | `metrics.serviceMonitor.enabled` | `false` | Prometheus Operator scraping for both processes |
 | `extraVolumes`, `extraVolumeMounts` | | The SPIRE socket and signing keys for [federation](federation-agent.md) |
@@ -254,3 +256,13 @@ seconds to finish requests. A worker's unfinished jobs go back on the queue.
 header lists what to change. `make k8s-manifest` regenerates it after a chart
 change, and CI fails when it's stale. Each release attaches the same file
 pinned to that release's image.
+
+## Optional push gateway
+
+Set `push.gateway.enabled=true` to deploy a gateway alongside the API and
+workers. Supply its own Secret, a published gateway image version and a
+public HTTPS hostname in `push.gatewayUrl`. The chart can create an Ingress
+or HTTPRoute that publishes only the two push routes. See the
+[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane)
+for a configuration example, TLS and key rotation. Hosting a gateway requires
+push credentials for the mobile app you ship.

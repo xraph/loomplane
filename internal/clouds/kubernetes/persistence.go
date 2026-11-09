@@ -113,7 +113,7 @@ func (c *Client) checkBoundVolume(ctx context.Context, claim *corev1.PersistentV
 	return nil
 }
 
-func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (result *cpprovider.ProvisionResult, err error) {
+func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string, start time.Duration) (result *cpprovider.ProvisionResult, err error) {
 	if checkErr := validatePersistentSpec(spec, labels); checkErr != nil {
 		return nil, checkErr
 	}
@@ -215,7 +215,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	}
 	values := owned.RuntimeValues{}
 	if r.Values != nil {
-		values, err = r.Values(ctx, labels)
+		values, err = r.Values(owned.WithRuntimeIdentity(ctx, owned.RuntimeIdentity{Instance: iid, Provider: "kubernetes", Namespace: c.Config.Namespace}), owned.InstanceLabels(labels, iid))
 		if err != nil {
 			return nil, err
 		}
@@ -231,6 +231,13 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	pulls := []corev1.LocalObjectReference{}
 	if pull := c.Config.Details["image_pull_secret"]; pull != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: pull})
+	}
+	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
+	if err != nil {
+		return nil, err
+	}
+	if pullSecret != nil {
+		pulls = append(pulls, corev1.LocalObjectReference{Name: pullSecret.Name})
 	}
 	rules, err := accessRules(labels)
 	if err != nil {
@@ -255,19 +262,23 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 		automount := false
 		template.Spec.AutomountServiceAccountToken = &automount
 	}
-	port, err := healthPort(spec, labels)
-	if err != nil {
-		return nil, err
-	}
-	template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
-	switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
-	case database != "":
-		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
-	case labels[owned.LabelHealthProtocol] == "redis":
-		// A RESP port keeps the TCP probe.
-	case health != "":
-		// A catalog component declares an HTTP readiness probe.
-		template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
+	// Fixed authenticated probes already rendered by runtimePod also govern
+	// StatefulSets. Legacy database probes keep their recorded behavior.
+	if labels[owned.LabelHealthChecker] == "" {
+		port, portErr := healthPort(spec, labels)
+		if portErr != nil {
+			return nil, portErr
+		}
+		template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt(port)}}, PeriodSeconds: 2, TimeoutSeconds: 2, FailureThreshold: 30}
+		switch database, health := labels[nativepg.LabelDatabase], labels[owned.LabelHealth]; {
+		case database != "":
+			template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", database}}}
+		case labels[owned.LabelHealthProtocol] == "redis":
+			// A RESP port keeps the TCP probe.
+		case health != "":
+			// A catalog component declares an HTTP readiness probe.
+			template.Spec.Containers[0].ReadinessProbe.ProbeHandler = corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: health, Port: intstr.FromInt(port)}}
+		}
 	}
 	for i, v := range spec.Volumes {
 		template.Spec.Volumes = append(template.Spec.Volumes, corev1.Volume{Name: v.Name, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claims[i].Name}}})
@@ -311,6 +322,11 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	}
 	// Claims have no owner references and are never rolled back or deleted here.
 	mutated = true
+	if pullSecret != nil {
+		if pullErr := c.applyManagedPull(ctx, pullSecret, old.pull); pullErr != nil {
+			return nil, pullErr
+		}
+	}
 	if old.runtime != nil {
 		secret.ResourceVersion = old.runtime.ResourceVersion
 		_, err = c.Kube.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{})
@@ -350,7 +366,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if r.WaitReady != nil {
 		err = r.WaitReady(ctx, c, name)
 	} else {
-		err = r.waitPersistent(ctx, c, set)
+		err = r.waitPersistent(ctx, c, set, r.readyWait(start))
 	}
 	if err != nil {
 		return nil, err
@@ -383,11 +399,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 func persistentReady(set *appsv1.StatefulSet) bool {
 	return set.Spec.Replicas != nil && *set.Spec.Replicas == 1 && set.Status.ObservedGeneration >= set.Generation && set.Status.ReadyReplicas == 1 && set.Status.UpdatedReplicas == 1 && set.Status.CurrentRevision != "" && set.Status.CurrentRevision == set.Status.UpdateRevision
 }
-func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1.StatefulSet) error {
-	wait := r.Wait
-	if wait <= 0 {
-		wait = 3 * time.Minute
-	}
+func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1.StatefulSet, wait time.Duration) error {
 	deadline := time.Now().Add(wait)
 	for {
 		current, err := c.Kube.AppsV1().StatefulSets(c.Config.Namespace).Get(ctx, applied.Name, metav1.GetOptions{})

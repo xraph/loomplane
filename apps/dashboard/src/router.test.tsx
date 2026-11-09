@@ -1,5 +1,5 @@
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router"
-import { act, cleanup, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -20,6 +20,7 @@ vi.mock("@/pages/projects", async () => {
 })
 vi.mock("@/pages/members", () => ({ Members: () => <h1>Members</h1> }))
 vi.mock("@/pages/overview", () => ({ Overview: () => <h1>Overview</h1> }))
+vi.mock("@/pages/api-keys", () => ({ ApiKeys: () => <h1>API keys</h1> }))
 vi.mock("@/pages/deployments", () => ({
   runFilters: [
     { value: "all" },
@@ -192,6 +193,22 @@ describe("dashboard routes", () => {
     await open(`/domains/${"z".repeat(65)}`)
     expect(
       await screen.findByRole("heading", { name: "Domain" })
+    ).toBeInTheDocument()
+  })
+
+  it("sends someone who has a workspace home from onboarding", async () => {
+    const { history } = await open("/onboarding")
+    await waitFor(() => expect(history.location.pathname).toBe("/"))
+    expect(await screen.findByText("Overview")).toBeInTheDocument()
+  })
+
+  it("opens API keys under settings and moves the old address there", async () => {
+    const { history } = await open("/api-keys")
+    await waitFor(() =>
+      expect(history.location.pathname).toBe("/settings/api-keys")
+    )
+    expect(
+      await screen.findByRole("heading", { name: "API keys" })
     ).toBeInTheDocument()
   })
 

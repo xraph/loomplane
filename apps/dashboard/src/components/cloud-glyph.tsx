@@ -9,6 +9,7 @@ import { cloudLabel } from "@/lib/clouds"
 const products: Record<string, ProductKey> = {
   vercel: "vercel",
   aws: "aws",
+  azure: "azure",
   gcp: "gcp",
   render: "render",
   digitalocean: "digitalocean",

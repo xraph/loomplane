@@ -1,4 +1,5 @@
 {{- include "loomplane.validate" . -}}
+{{- include "loomplane.validatePushGateway" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -26,19 +27,36 @@ data:
   {{- with .Values.github.clientID }}
   LOOMPLANE_GITHUB_CLIENT_ID: {{ . | quote }}
   {{- end }}
-  {{- if .Values.notifications.smtpHost }}
+  LOOMPLANE_GITLAB_API_URL: {{ .Values.gitlab.apiURL | quote }}
+  {{- with .Values.gitlab.clientID }}
+  LOOMPLANE_GITLAB_CLIENT_ID: {{ . | quote }}
+  {{- end }}
+  LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS: {{ .Values.gitlab.allowOrganizationHosts | toString | quote }}
+  {{- with .Values.gitlab.webhookURL }}
+  LOOMPLANE_GITLAB_WEBHOOK_URL: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.secrets.resendApiKey }}
+  LOOMPLANE_NOTIFICATIONS_FROM: {{ .Values.notifications.from | quote }}
+  {{- else if .Values.notifications.smtpHost }}
   LOOMPLANE_NOTIFICATIONS_SMTP_HOST: {{ .Values.notifications.smtpHost | quote }}
   LOOMPLANE_NOTIFICATIONS_SMTP_PORT: {{ .Values.notifications.smtpPort | toString | quote }}
   LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME: {{ .Values.notifications.smtpUsername | quote }}
   LOOMPLANE_NOTIFICATIONS_SMTP_TLS: {{ .Values.notifications.smtpTLS | toString | quote }}
   LOOMPLANE_NOTIFICATIONS_FROM: {{ .Values.notifications.from | quote }}
   {{- end }}
+  LOOMPLANE_AI_ENABLED: {{ .Values.ai.enabled | toString | quote }}
+  LOOMPLANE_PUSH_ENABLED: {{ .Values.push.enabled | toString | quote }}
+  LOOMPLANE_PUSH_GATEWAY_URL: {{ .Values.push.gatewayUrl | quote }}
   {{- if .Values.inCluster.enabled }}
   LOOMPLANE_KUBERNETES_IN_CLUSTER: "true"
   {{- end }}
   {{- with .Values.pausedProviders }}
   LOOMPLANE_PAUSED_PROVIDERS: {{ . | quote }}
   {{- end }}
+  {{- if ne (toString .Values.waitlist) "" }}
+  LOOMPLANE_WAITLIST_ENABLED: {{ .Values.waitlist | toString | quote }}
+  {{- end }}
+  LOOMPLANE_CONSOLE_PATH: {{ .Values.consolePath | quote }}
   {{- with .Values.trustedProxies }}
   AUTHSOME_TRUSTED_PROXIES: {{ . | quote }}
   {{- end }}

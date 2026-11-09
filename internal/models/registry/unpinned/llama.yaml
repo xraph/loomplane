@@ -1,0 +1,281 @@
+# Entries waiting for their first pin. registry-pin -write moves each one
+# into data/ once it can read the repo; these are gated, so that needs a
+# Hugging Face token whose account accepted the license (-hf-token-env).
+family: llama
+entries:
+  - id: meta-llama/Llama-3.2-1B-Instruct
+    title: Llama 3.2 1B Instruct
+    publisher: Meta
+    summary: Meta's smallest Llama 3.2 chat model, quick enough for a CPU.
+    revision: ""
+    license:
+      id: llama3.2
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama3_json
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Llama-3.2-1B-Instruct-GGUF
+        file: Llama-3.2-1B-Instruct-Q4_K_M.gguf
+        weight_bytes: 0
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Llama-3.2-1B-Instruct-GGUF
+        file: Llama-3.2-1B-Instruct-Q8_0.gguf
+        weight_bytes: 0
+  - id: meta-llama/Llama-3.2-3B-Instruct
+    title: Llama 3.2 3B Instruct
+    publisher: Meta
+    summary: A small Llama 3.2 chat model that handles everyday chat and simple tool calls.
+    revision: ""
+    license:
+      id: llama3.2
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama3_json
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Llama-3.2-3B-Instruct-GGUF
+        file: Llama-3.2-3B-Instruct-Q4_K_M.gguf
+        weight_bytes: 0
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Llama-3.2-3B-Instruct-GGUF
+        file: Llama-3.2-3B-Instruct-Q8_0.gguf
+        weight_bytes: 0
+  - id: meta-llama/Llama-3.1-8B-Instruct
+    title: Llama 3.1 8B Instruct
+    publisher: Meta
+    summary: Meta's general 8B chat model with a 128K context and tool calling.
+    revision: ""
+    license:
+      id: llama3.1
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - code
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama3_json
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: fp8
+        engine: vllm
+        repo: RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8
+        weight_bytes: 0
+      - id: awq-int4
+        engine: vllm
+        repo: hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4
+        weight_bytes: 0
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Meta-Llama-3.1-8B-Instruct-GGUF
+        file: Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+        weight_bytes: 0
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Meta-Llama-3.1-8B-Instruct-GGUF
+        file: Meta-Llama-3.1-8B-Instruct-Q8_0.gguf
+        weight_bytes: 0
+  - id: meta-llama/Llama-3.1-70B-Instruct
+    title: Llama 3.1 70B Instruct
+    publisher: Meta
+    summary: Meta's large Llama 3.1 chat model for harder questions and longer answers.
+    revision: ""
+    license:
+      id: llama3.1
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - code
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama3_json
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: fp8
+        engine: vllm
+        repo: RedHatAI/Meta-Llama-3.1-70B-Instruct-FP8
+        weight_bytes: 0
+      - id: awq-int4
+        engine: vllm
+        repo: hugging-quants/Meta-Llama-3.1-70B-Instruct-AWQ-INT4
+        weight_bytes: 0
+  - id: meta-llama/Llama-3.3-70B-Instruct
+    title: Llama 3.3 70B Instruct
+    publisher: Meta
+    summary: A 70B chat model that matches much larger Llama releases on most tasks.
+    revision: ""
+    license:
+      id: llama3.3
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - code
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama3_json
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+      - id: fp8
+        engine: vllm
+        repo: RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic
+        weight_bytes: 0
+  - id: meta-llama/Llama-4-Scout-17B-16E-Instruct
+    title: Llama 4 Scout 17B 16E Instruct
+    publisher: Meta
+    summary: A mixture of experts model that reads text and images with 17B active parameters.
+    revision: ""
+    license:
+      id: llama4
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - vision
+    parameters: 0
+    active_parameters: 17000000000
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama4_pythonic
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
+    title: Llama 4 Maverick 17B 128E Instruct FP8
+    publisher: Meta
+    summary: Meta's larger Llama 4 mixture of experts model for text and images, shipped in FP8.
+    revision: ""
+    license:
+      id: llama4
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - vision
+    parameters: 0
+    active_parameters: 17000000000
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama4_pythonic
+    quantizations:
+      - id: fp8
+        engine: vllm
+        weight_bytes: 0
+  - id: meta-llama/Llama-Guard-3-8B
+    title: Llama Guard 3 8B
+    publisher: Meta
+    summary: A safety classifier that labels prompts and replies as safe or unsafe by hazard category.
+    revision: ""
+    license:
+      id: llama3.1
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 0
+  - id: meta-llama/Llama-3.1-405B-Instruct-FP8
+    title: Llama 3.1 405B Instruct FP8
+    publisher: Meta
+    summary: Meta's largest Llama 3.1 model in FP8, for a full node of large GPUs.
+    revision: ""
+    license:
+      id: llama3.1
+      commercial: true
+    gated: true
+    tasks:
+      - chat
+      - code
+    parameters: 0
+    context_length: 0
+    architecture:
+      name: ""
+      layers: 0
+      attention_heads: 0
+      kv_heads: 0
+      head_dim: 0
+    tool_parser: llama3_json
+    quantizations:
+      - id: fp8
+        engine: vllm
+        weight_bytes: 0

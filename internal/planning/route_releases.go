@@ -11,22 +11,33 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
-// ReleaseRoutes returns the exact route review used by a release plan.
-func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment string) ([]cloudinfra.Route, error) {
+// ReleaseRoutes returns the exact route review used by a release plan. A
+// route whose handoff a release still holds blocks it, unless the handoff
+// is one plan allowHeldBy prepared: a rollback of that plan may plan while
+// it holds them. "" allows none.
+func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment, allowHeldBy string) ([]cloudinfra.Route, error) {
 	routes, err := cloudinfra.NewPgStore(s.db).Routes(ctx, org, project)
 	if err != nil {
 		return nil, err
+	}
+	allowed := map[string]bool{}
+	if allowHeldBy != "" {
+		held, getErr := s.GetPlan(ctx, org, allowHeldBy)
+		if getErr != nil {
+			return nil, fmt.Errorf("read the plan of the release to roll back: %w", getErr)
+		}
+		allowed = heldBy(held)
 	}
 	out := []cloudinfra.Route{}
 	for _, route := range routes {
 		if route.Input.EnvironmentID != environment || route.Status == "removed" {
 			continue
 		}
-		var held bool
-		if checkErr := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_route_handoffs WHERE org_id=$1 AND route_id=$2 AND NOT released)`, org, route.ID).Scan(&held); checkErr != nil {
+		var handoff string
+		if checkErr := s.db.QueryRow(ctx, `SELECT coalesce((SELECT id FROM loomplane_route_handoffs WHERE org_id=$1 AND route_id=$2 AND NOT released LIMIT 1), '')`, org, route.ID).Scan(&handoff); checkErr != nil {
 			return nil, checkErr
 		}
-		if held {
+		if handoff != "" && !allowed[handoff] {
 			return nil, fmt.Errorf("finish the retained route handoff for %s before another release", route.Input.Hostname)
 		}
 		out = append(out, *route)
@@ -34,14 +45,28 @@ func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment s
 	return out, nil
 }
 
+// heldBy returns the route handoffs plan's routed releases prepare, by ID.
+func heldBy(plan *Plan) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range plan.Actions {
+		for _, r := range a.Routes {
+			out[cloudinfra.ReleasePrepareID(plan.ID+"/"+a.ID, r.ID)] = true
+		}
+	}
+	return out
+}
+
 func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.Route, error) {
 	reader, ok := s.store.(interface {
-		ReleaseRoutes(context.Context, string, string, string) ([]cloudinfra.Route, error)
+		ReleaseRoutes(ctx context.Context, org, project, environment, allowHeldBy string) ([]cloudinfra.Route, error)
 	})
 	if !ok {
 		return nil, nil
 	}
-	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+	// A rollback waits for the handoffs the release it undoes holds, like
+	// any plan, until a rollback can restore a held route release; it
+	// passes Rollback.TargetPlanID then.
+	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, "")
 }
 
 // ProjectZones returns the verified DNS zones granted to a project, which
@@ -77,9 +102,18 @@ func (p *planner) routedReplacements() bool {
 		// A Kubernetes route reaches its Service by name, so an update in
 		// place keeps serving it with no handoff. A new runtime would leave
 		// the route on a Service that goes away.
-		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes {
+		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes || route.Binding.BackendName() == cloudinfra.RouteBackendFirecracker {
 			if a.Op != Update {
-				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on Kubernetes. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on this connection. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+			}
+			continue
+		}
+		// An App Platform route reaches the service's app by its address, and
+		// an update in place keeps that app and its domains. A new app would
+		// leave the route on one that goes away.
+		if route.Binding.BackendName() == cloudinfra.RouteBackendPlatform {
+			if a.Op != Update {
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new App Platform app, which %s doesn't follow. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
 			}
 			continue
 		}
@@ -232,8 +266,9 @@ func (s *PgStore) CurrentReleaseRoutes(ctx context.Context, org, project, enviro
 	}
 	var out []cloudinfra.Route
 	for _, r := range routes {
-		// Releases never carry Kubernetes routes; see routedReplacements.
-		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() != cloudinfra.RouteBackendKubernetes {
+		// Releases only carry server routes; Kubernetes and App Platform
+		// routes stay with their service. See routedReplacements.
+		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() == cloudinfra.RouteBackendServer {
 			out = append(out, *r)
 		}
 	}

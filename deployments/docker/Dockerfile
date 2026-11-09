@@ -30,7 +30,10 @@ WORKDIR /src/apps/dashboard
 COPY apps/dashboard ./
 RUN --mount=type=cache,id=loomplane-pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir /pnpm/store
-RUN pnpm build
+# Empty for the public image. The private Cloud image sets it to cloud.
+ARG LOOMPLANE_EDITION=
+RUN if [ -n "${LOOMPLANE_EDITION}" ]; then export VITE_LOOMPLANE_EDITION="${LOOMPLANE_EDITION}"; fi && pnpm build \
+ && if [ -z "${LOOMPLANE_EDITION}" ]; then pnpm check:oss-bundle; fi
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS api
 WORKDIR /src
@@ -44,21 +47,23 @@ COPY extensions ./extensions
 COPY internal ./internal
 COPY pkg ./pkg
 ARG VERSION=dev
+# Go build tags. Empty for the public image; the private Cloud image uses cloud.
+ARG GO_TAGS=
 ARG TARGETOS
 ARG TARGETARCH
 # Bound compiler memory on small builders that also build the dashboard.
 ARG GO_BUILD_PARALLELISM=2
 RUN --mount=type=cache,id=loomplane-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=loomplane-gobuild,target=/root/.cache/go-build \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -p ${GO_BUILD_PARALLELISM} -trimpath \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -p ${GO_BUILD_PARALLELISM} -trimpath -tags "${GO_TAGS}" \
       -ldflags "-s -w -X github.com/xraph/loomplane/internal/buildinfo.Version=${VERSION}" \
       -o /out/ ./cmd/loomplane ./cmd/loomplane-worker
 
 FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates tzdata \
  && adduser -D -H -u 10001 loomplane \
- && mkdir -p /var/lib/loomplane \
- && chown loomplane:loomplane /var/lib/loomplane
+ && mkdir -p /var/lib/loomplane /var/lib/loomplane-work \
+ && chown loomplane:loomplane /var/lib/loomplane /var/lib/loomplane-work
 COPY --from=api /out/loomplane /out/loomplane-worker /usr/local/bin/
 COPY --from=dashboard /src/apps/dashboard/dist /usr/share/loomplane/dashboard
 COPY --chmod=0755 deployments/docker/entrypoint.sh /usr/local/bin/loomplane-entrypoint

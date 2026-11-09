@@ -104,6 +104,55 @@ it("refreshes the graph projection when analysis completes", async () => {
   live.stop()
 })
 
+it("tells the release report listeners when a report changes", () => {
+  const cache = new QueryCache({
+    entities,
+    transport: { execute: async () => ({}) },
+  })
+  const connection = new Connection()
+  const live = new LoomplaneRealtime({
+    cache,
+    orgId: "org_one",
+    connect: () => connection,
+  })
+  live.start()
+  const changed = vi.fn()
+  const stop = live.onReleaseReport(changed)
+  const report = {
+    id: "rrep_1",
+    org_id: "org_one",
+    project_id: "proj_one",
+    state: "reviewing",
+  }
+  connection.message({
+    event: "release_report.updated",
+    cursor: "org_one:1",
+    data: report,
+  })
+  expect(changed).toHaveBeenCalledTimes(1)
+  // Another workspace's event never reaches the page.
+  connection.message({
+    event: "release_report.updated",
+    cursor: "org_one:2",
+    data: { ...report, org_id: "org_two" },
+  })
+  expect(changed).toHaveBeenCalledTimes(1)
+  connection.message({
+    event: "release_report.deleted",
+    cursor: "org_one:3",
+    data: report,
+  })
+  expect(changed).toHaveBeenCalledTimes(2)
+  stop()
+  connection.message({
+    event: "release_report.updated",
+    cursor: "org_one:4",
+    data: report,
+  })
+  expect(changed).toHaveBeenCalledTimes(2)
+  live.stop()
+})
+
 class Connection implements StreamConnection {
   message: (frame: unknown) => void = () => {}
   dropped: () => void = () => {}

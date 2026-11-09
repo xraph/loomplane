@@ -75,3 +75,15 @@ For a managed DNS zone, use `loomctl dns-zones create --file zone.json` with `mo
 Routes use reviewed server ingress and retain exact provider DNS receipts. DNS, TLS and backend status are reported independently. Follow route history and any drain deadline before removing old capacity, and supply the maximum previously served external TTL when you manage DNS yourself. The new record's TTL does not tell you what clients still have cached.
 
 Stop older app and worker binaries before upgrading the database. Pending mixed managed/server attempts without provider quiescence proof and legacy unfenced attempts require reconciliation; they are not repaired by blindly retrying. Fixture-backed provider and ACME checks do not qualify your DigitalOcean account, DNS propagation or public certificate issuance. Verify those with your own authorized live scope before a production move.
+
+## Managed Kubernetes worker clusters
+
+Open a Cloud's Infrastructure tab and choose Clusters to discover, create or adopt DOKS clusters. Setup has four stages: account and location, fixed node pools, project runtime prerequisites, and review. Saving a review does not buy a cluster. Apply accepts its exact digest, and the saved operation survives reloads and worker restarts.
+
+Creation is off by default. An operator must configure the qualification organization, operator, verified account identity, region, node limit, node-hour ceiling and current management-path evidence. The server checks those limits and current authority again before effects. General purchases stay disabled until Plan 02 cleanup qualification passes.
+
+New DOKS clusters support digest-pinned private workers. Loomplane installs no ingress or cert-manager addons. Adoption can verify existing ingress and TLS prerequisites through the typed CLI preview. Persistent storage and builds are unsupported for these managed namespace targets; existing static Kubernetes connections keep their separate behavior.
+
+Provider running, verified runtime access and workload health mean different things. Runtime connections belong to the reviewed project and renew their scoped credentials. You cannot replace or remove them through generic account controls. Cancellation retains any provider resource whose cleanup needs a separate review.
+
+Node estimates come from live size options. Unknown node prices and additional charges remain unknown, including control-plane charges, network egress, load balancers and persistent storage. A local fake-provider check does not qualify a live DigitalOcean account.

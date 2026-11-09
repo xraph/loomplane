@@ -118,3 +118,39 @@ it("does not treat denied status as an absent cleanup", async () => {
   await screen.findByRole("alert")
   expect(screen.queryByRole("button", { name: "Review cleanup" })).toBeNull()
 })
+
+it("cancels only the accepted managed review and offers a fresh scoped review", async () => {
+  let cancelled = false
+  const writes: unknown[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        writes.push(JSON.parse(String(init.body)))
+        cancelled = true
+      }
+      return Response.json({
+        deployment_id: "dep",
+        revision: "digest",
+        review_id: "current-review",
+        variant: "managed_workload",
+        status: cancelled ? "cancelled" : "pending",
+        attempt: 1,
+      })
+    }
+  )
+  render(
+    <ClientProvider client={forgeClient}>
+      <FailedDeploymentCleanup id="dep" canApprove onChanged={async () => {}} />
+    </ClientProvider>
+  )
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole("button", { name: "Cancel current cleanup review" })
+  )
+  expect(writes).toEqual([{ expected_review_id: "current-review" }])
+  expect(
+    await screen.findByRole("button", { name: "Review cleanup" })
+  ).toBeInTheDocument()
+  expect(screen.getByText(/Resources stay reserved/)).toBeInTheDocument()
+})

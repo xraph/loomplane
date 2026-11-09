@@ -1,4 +1,4 @@
 import type { Codec } from '../codec-runtime';
-import { codec_Evidence } from './Evidence';
+import { codec_DiscoveryEvidence } from './DiscoveryEvidence';
 
-export const codec_Finding_evidence: Codec = {"kind": "array", "items": () => codec_Evidence};
+export const codec_Finding_evidence: Codec = {"kind": "array", "items": () => codec_DiscoveryEvidence};

@@ -29,6 +29,8 @@ type fakeRender struct {
 	canceled []string
 	polls    map[string]int
 	stores   map[string]map[string]any
+	projects map[string]map[string]any // ID → project
+	envs     map[string]map[string]any // ID → environment
 }
 
 func newFakeRender(t *testing.T, key string) *fakeRender {
@@ -36,6 +38,7 @@ func newFakeRender(t *testing.T, key string) *fakeRender {
 	f := &fakeRender{
 		key: key, services: map[string]map[string]any{}, env: map[string]map[string]string{},
 		deploys: map[string][]string{}, polls: map[string]int{}, stores: map[string]map[string]any{},
+		projects: map[string]map[string]any{}, envs: map[string]map[string]any{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -82,7 +85,7 @@ func (f *fakeRender) serve(w http.ResponseWriter, r *http.Request) {
 		name := body["name"].(string)
 		id := fmt.Sprintf("srv-%d", len(f.services)+1)
 		s := map[string]any{"id": id, "name": name, "slug": name + "-x1", "type": body["type"], "repo": body["repo"],
-			"rootDir": body["rootDir"], "spec": body["serviceDetails"], "serviceDetails": map[string]any{}}
+			"rootDir": body["rootDir"], "spec": body["serviceDetails"], "serviceDetails": map[string]any{}, "environmentId": body["environmentId"]}
 		if body["type"] == "web_service" {
 			s["serviceDetails"] = map[string]any{"url": f.srv.URL + "/site/" + name}
 		}
@@ -138,7 +141,7 @@ func (f *fakeRender) serve(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, out)
 	case (parts[0] == "postgres" || parts[0] == "key-value") && len(parts) == 1 && r.Method == http.MethodPost:
 		id := "dpg-" + fmt.Sprint(len(f.stores)+1)
-		d := map[string]any{"id": id, "name": body["name"], "status": "creating", "kind": parts[0], "version": body["version"], "region": body["region"]}
+		d := map[string]any{"id": id, "name": body["name"], "status": "creating", "kind": parts[0], "version": body["version"], "region": body["region"], "environmentId": body["environmentId"]}
 		f.stores[id] = d
 		reply(http.StatusCreated, d)
 	case (parts[0] == "postgres" || parts[0] == "key-value") && len(parts) == 2 && r.Method == http.MethodGet:
@@ -151,9 +154,88 @@ func (f *fakeRender) serve(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, d)
 	case (parts[0] == "postgres" || parts[0] == "key-value") && len(parts) == 3 && parts[2] == "connection-info":
 		reply(http.StatusOK, map[string]string{"internalConnectionString": "postgres://shop:pw@" + parts[1] + "-a/shop"})
+	case r.Method == http.MethodGet && r.URL.Path == "/projects":
+		out := []any{}
+		for _, p := range f.projects {
+			if p["name"] == r.URL.Query().Get("name") {
+				out = append(out, map[string]any{"project": p})
+			}
+		}
+		reply(http.StatusOK, out)
+	case r.Method == http.MethodPost && r.URL.Path == "/projects":
+		id := fmt.Sprintf("prj-%d", len(f.projects)+1)
+		p := map[string]any{"id": id, "name": body["name"]}
+		f.projects[id] = p
+		envs, _ := body["environments"].([]any)
+		for _, e := range envs {
+			f.addEnvironment(id, e.(map[string]any)["name"])
+		}
+		reply(http.StatusCreated, p)
+	case len(parts) == 2 && parts[0] == "projects" && r.Method == http.MethodDelete:
+		delete(f.projects, parts[1])
+		for id, e := range f.envs {
+			if e["projectId"] == parts[1] {
+				delete(f.envs, id)
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && r.URL.Path == "/environments":
+		out := []any{}
+		for _, e := range f.envs {
+			if e["projectId"] == r.URL.Query().Get("projectId") && e["name"] == r.URL.Query().Get("name") {
+				out = append(out, map[string]any{"environment": e})
+			}
+		}
+		reply(http.StatusOK, out)
+	case r.Method == http.MethodPost && r.URL.Path == "/environments":
+		reply(http.StatusCreated, f.addEnvironment(body["projectId"], body["name"]))
+	case len(parts) == 3 && parts[0] == "environments" && parts[2] == "resources" && r.Method == http.MethodPost:
+		ids, _ := body["resourceIds"].([]any)
+		for _, id := range ids {
+			if s, ok := f.services[id.(string)]; ok {
+				s["environmentId"] = parts[1]
+			}
+			if d, ok := f.stores[id.(string)]; ok {
+				d["environmentId"] = parts[1]
+			}
+		}
+		reply(http.StatusOK, map[string]any{})
+	case len(parts) == 2 && parts[0] == "environments" && r.Method == http.MethodGet:
+		e, ok := f.envs[parts[1]]
+		if !ok {
+			reply(http.StatusNotFound, map[string]string{"message": "not found"})
+			return
+		}
+		services, databases := []string{}, []string{}
+		for id, s := range f.services {
+			if s["environmentId"] == parts[1] {
+				services = append(services, id)
+			}
+		}
+		for id, d := range f.stores {
+			if d["environmentId"] == parts[1] {
+				databases = append(databases, id)
+			}
+		}
+		out := map[string]any{"serviceIds": services, "databasesIds": databases}
+		for k, v := range e {
+			out[k] = v
+		}
+		reply(http.StatusOK, out)
+	case len(parts) == 2 && parts[0] == "environments" && r.Method == http.MethodDelete:
+		delete(f.envs, parts[1])
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		reply(http.StatusNotFound, map[string]string{"message": "no route " + r.Method + " " + r.URL.Path})
 	}
+}
+
+// addEnvironment makes an environment in a project. The caller holds mu.
+func (f *fakeRender) addEnvironment(projectID, name any) map[string]any {
+	id := fmt.Sprintf("evm-%d", len(f.envs)+1)
+	e := map[string]any{"id": id, "name": name, "projectId": projectID}
+	f.envs[id] = e
+	return e
 }
 
 const renderManifest = `version: 1
@@ -189,11 +271,7 @@ func TestDeploy_aGatewayReachesItsPrivateAPIAndPostgresOnRender(t *testing.T) {
 	defer r.stop()
 
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

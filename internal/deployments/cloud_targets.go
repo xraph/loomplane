@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -39,7 +40,13 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if r.cloudProfiles == nil {
 		return stale("cannot be revalidated because the Cloud resolver is unavailable")
 	}
-	if pin.AccountIdentity == "" || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
+	// A Loomplane Cloud pin names no connection, so it has no account
+	// identity to verify; its target and room are checked below.
+	platform := pin.Platform != nil
+	if platform && (a.Provider != platformProvider || pin.Provider != platformProvider || pin.Default || pin.ConnectionID != "" || a.ConnectionID != "" || pin.PoolID != "" || pin.Platform.Region != pin.Region) {
+		return stale("is not a Loomplane Cloud placement")
+	}
+	if pin.AccountIdentity == "" && !platform || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
 		return stale("has no verified identity or revision")
 	}
 	if pin.Provider != a.Provider || reviewed.provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || reviewed.region != a.Region {
@@ -64,6 +71,17 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if assignment == nil || assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID || assignment.CloudID != pin.CloudID || assignment.CloudRevision != pin.CloudRevision || assignment.Revision != pin.AssignmentRevision || !retained && (pin.GrantRevision > 0 && assignment.GrantRevision != pin.GrantRevision || pin.GrantRevision == 0 && assignment.GrantRevision > 1) {
 		return stale("assignment changed since review or is outside this scope")
 	}
+	if !retained && pin.LocationReview != nil {
+		reader, ok := r.cloudProfiles.(interface {
+			ValidateLocationReview(context.Context, string, string, *cloudprofiles.LocationReview, time.Time) error
+		})
+		if !ok {
+			return stale("location review cannot be revalidated")
+		}
+		if checkErr := reader.ValidateLocationReview(ctx, plan.OrgID, plan.ProjectID, pin.LocationReview, time.Now()); checkErr != nil {
+			return stale("location evidence or policy changed")
+		}
+	}
 	if pin.Default {
 		// The Cloud revision already pins its default; check it is still reachable.
 		d := assignment.DefaultPlacement
@@ -76,9 +94,16 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 			return stale("is missing from the assigned Cloud")
 		}
 		target := assignment.Targets[i]
-		if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID {
+		if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID || target.LocationID != pin.LocationID || target.ManagedResourceID != pin.ManagedResourceID {
 			return stale("changed since review or is outside this scope")
 		}
+		if platform != (target.Runtime == platformProvider) || platform && target.Region != pin.Region {
+			return stale("changed since review or is outside this scope")
+		}
+	}
+	if platform {
+		// The platform places it when it deploys, under its own limits.
+		return nil
 	}
 	if pin.PoolID != "" && (a.Compensation == nil || !a.Compensation.Retained) {
 		validator, ok := r.plans.(interface {
@@ -139,7 +164,7 @@ func (r *Runner) adoptCloudPlacement(ctx context.Context, d *Deployment, plan *p
 		if !planning.MatchesCloudAdoption(b, a.CloudAdoption) {
 			ref := a.CloudAdoption
 			applied := appliedPlacement(b.Config, a)
-			if ref == nil || ref.BindingID != b.ID || ref.ExternalID != b.ExternalID || ref.Revision != b.Revision || ref.PlanID != b.PlanID || applied == nil || *applied != *pin {
+			if ref == nil || ref.BindingID != b.ID || ref.ExternalID != b.ExternalID || ref.Revision != b.Revision || ref.PlanID != b.PlanID || applied == nil || !reflect.DeepEqual(applied, pin) {
 				return fmt.Errorf("serving binding for %s changed since this metadata adoption was reviewed; plan again", a.Name)
 			}
 			step.URL = b.URL

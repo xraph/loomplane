@@ -89,6 +89,7 @@ type UpdateInput struct {
 
 // CreateTargetInput selects the initial placement of a new immutable slug.
 type CreateTargetInput struct {
+	LocationID   string `json:"location_id,omitempty"`
 	Runtime      string `json:"runtime"`
 	PoolID       string `json:"pool_id,omitempty"`
 	Name         string `json:"name"`
@@ -133,6 +134,19 @@ func name(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" || utf8.RuneCountInString(value) > maxName {
 		return "", fmt.Errorf("%w: use a name of 1 to %d characters", ErrInvalid, maxName)
+	}
+	return value, nil
+}
+
+// cloudName is name for a Cloud the organization owns, which can't take a
+// name the platform-owned Loomplane Cloud uses.
+func cloudName(value string) (string, error) {
+	value, err := name(value)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(value, PlatformCloudName) || strings.EqualFold(value, PlatformCloudFallbackName) {
+		return "", fmt.Errorf("%w: %q is reserved for the Cloud this instance runs, so choose another name", ErrExists, value)
 	}
 	return value, nil
 }
@@ -185,6 +199,19 @@ func (s *Service) record(ctx context.Context, p security.Principal, projectID, a
 	}
 }
 
+// writable reads a Cloud the caller is about to change and refuses the
+// platform-owned Loomplane Cloud, which only the control plane writes.
+func (s *Service) writable(ctx context.Context, orgID, projectID, id string) (*Profile, error) {
+	c, err := s.store.GetProfile(ctx, orgID, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if c.PlatformOwned {
+		return nil, ErrPlatformOwned
+	}
+	return c, nil
+}
+
 // List returns the project's Clouds ordered by name and ID.
 func (s *Service) List(ctx context.Context, p security.Principal, projectID string) ([]*Profile, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountRead); err != nil {
@@ -198,7 +225,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	value, err := name(in.Name)
+	value, err := cloudName(in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -232,14 +259,14 @@ func (s *Service) Update(ctx context.Context, p security.Principal, projectID, i
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	c, err := s.writable(ctx, p.OrgID, projectID, id)
 	if err != nil {
 		return nil, err
 	}
 	if in.Revision != c.Revision {
 		return nil, ErrConflict
 	}
-	value, err := name(in.Name)
+	value, err := cloudName(in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +288,7 @@ func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal,
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	c, err := s.writable(ctx, p.OrgID, projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -286,6 +313,9 @@ func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal,
 // Delete removes an unassigned Cloud and its targets.
 func (s *Service) Delete(ctx context.Context, p security.Principal, projectID, id string) error {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
+		return err
+	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, id); err != nil {
 		return err
 	}
 	if err := s.store.DeleteProfile(ctx, p.OrgID, projectID, id); err != nil {
@@ -319,7 +349,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.GetProfile(ctx, p.OrgID, projectID, cloudID); err != nil {
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
 		return nil, err
 	}
 	in.Name = strings.TrimSpace(in.Name)
@@ -338,13 +368,29 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if in.Runtime == "" {
 		in.Runtime = "managed"
 	}
+	if platformErr := refusePlatformProvider(in); platformErr != nil {
+		return nil, platformErr
+	}
 	if in.PoolID != "" && (in.Runtime != "server" || in.Provider != "server" || in.ConnectionID != "") {
 		return nil, ErrInvalid
 	}
 	if in.PoolID == "" && in.Runtime != "managed" {
 		return nil, ErrInvalid
 	}
-	if placementErr := s.placement(ctx, p.OrgID, in); placementErr != nil {
+	if in.LocationID != "" {
+		st, locationErr := s.locationStore()
+		if locationErr != nil {
+			return nil, locationErr
+		}
+		location, locationErr := st.GetLocation(ctx, p.OrgID, "", cloudID, in.LocationID)
+		if locationErr != nil {
+			return nil, locationErr
+		}
+		if location.Provider != in.Provider || location.ConnectionID != in.ConnectionID || location.Region != in.Region {
+			return nil, ErrInvalid
+		}
+	}
+	if placementErr := s.placement(ctx, p.OrgID, in, projectID); placementErr != nil {
 		return nil, placementErr
 	}
 	tags, err := normalizeTags(in.Tags)
@@ -356,14 +402,17 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 		return nil, fmt.Errorf("generate target id: %w", err)
 	}
 	now := s.now().UTC()
-	target := &Target{Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Tags: tags, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	target := &Target{LocationID: in.LocationID, Runtime: in.Runtime, PoolID: in.PoolID, ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, CloudID: cloudID, Name: in.Name, DisplayName: display, Provider: in.Provider, ConnectionID: in.ConnectionID, Region: in.Region, Tags: tags, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.store.CreateTarget(ctx, target); err != nil {
 		return nil, err
 	}
 	s.record(ctx, p, projectID, "cloud_target.create", map[string]any{"cloud_id": cloudID, "target_id": target.ID, "revision": target.Revision, "tags": tags})
 	return target, nil
 }
-func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput) error {
+func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput, projectIDs ...string) error {
+	if err := refusePlatformProvider(in); err != nil {
+		return err
+	}
 	if in.PoolID != "" {
 		return nil
 	}
@@ -383,6 +432,13 @@ func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetIn
 	}
 	for _, c := range all {
 		if c.ID == in.ConnectionID && c.OrgID == orgID && c.Cloud == capability.Cloud && c.Status == connections.StatusReady {
+			projectID := ""
+			if len(projectIDs) > 0 {
+				projectID = projectIDs[0]
+			}
+			if !connections.ManagedProjectAllowed(c, projectID) {
+				return ErrInvalid
+			}
 			return nil
 		}
 	}
@@ -394,6 +450,9 @@ func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetIn
 // advances the revision so plans approved against the old tags go stale.
 func (s *Service) UpdateTarget(ctx context.Context, p security.Principal, projectID, cloudID, id string, in UpdateTargetInput) (*Target, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
+		return nil, err
+	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
 		return nil, err
 	}
 	target, err := s.store.GetTarget(ctx, p.OrgID, projectID, cloudID, id)
@@ -432,6 +491,9 @@ func (s *Service) DeleteTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return err
 	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
+		return err
+	}
 	if err := s.store.DeleteTarget(ctx, p.OrgID, projectID, cloudID, id); err != nil {
 		return err
 	}
@@ -451,4 +513,14 @@ func (s *Service) EnvironmentCloud(ctx context.Context, p security.Principal, pr
 		return nil, 0, fmt.Errorf("%w: assignment storage unavailable", ErrInvalid)
 	}
 	return reader.EnvironmentCloud(ctx, p.OrgID, projectID, environmentID)
+}
+
+// refusePlatformProvider refuses a Loomplane Cloud target or default on a
+// Cloud a workspace runs. The instance makes those targets on its own
+// Loomplane Cloud, and no connection of the workspace's reaches them.
+func refusePlatformProvider(in CreateTargetInput) error {
+	if strings.TrimSpace(in.Provider) == "platform" || in.Runtime == "platform" {
+		return fmt.Errorf("%w: Loomplane Cloud targets are created by this instance on its own Loomplane Cloud; choose a provider you connect", ErrInvalid)
+	}
+	return nil
 }

@@ -96,8 +96,12 @@ Some refusals block the plan instead, and the plan shows them as problems you ha
 
 Two more only show up when the canary starts, and the deployment fails with a message that says which:
 
-- An earlier canary couldn't roll back and left the traffic split on a Cloud Run service or an Azure container app. The new canary can't tell which revision is the real one to compare against. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
+- An earlier canary couldn't roll back and left the traffic split on a Cloud Run service or an Azure container app. The new canary can't tell which revision is the real one to compare against. Retry that deployment, or release once with `direct`, which gives the latest revision all of the traffic. A rollback plan is refused while a canary's revert or promotion has failed, so fix the split first.
 - On Azure Container Apps, the release changes the registry the app pulls from or the identity it pulls as. Those are app-wide like ingress, but Loomplane only knows them once it has set the release up. Release that change with `direct` or `blue_green` first.
+
+## After the canary
+
+A canary judges a release while it ramps. A service it ramped isn't judged again afterward. The services it didn't ramp, and the environments that don't use canaries at all, can get a [post-deploy watch](/docs/concepts/promotion-and-rollback#watch-a-release-after-it-deploys) that reads the same cloud monitoring. It needs the Requests and 5xx columns of the table at the top of this page, so Cloud Run, ECS, Azure Container Apps and Render can be watched, including Render, which has no canary. A canary that fails reverts by itself. A rollback never ramps as a canary.
 
 ## One canary per environment
 

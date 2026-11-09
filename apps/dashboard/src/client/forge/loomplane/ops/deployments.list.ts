@@ -4,9 +4,9 @@ import { codec_DeploymentList } from '../codecs/DeploymentList';
 export const op_deployments_list = {
   method: 'GET',
   path: '/api/v1/projects/{id}/deployments',
-  entity: 'Deployment',
+  entity: 'DeploymentsDeployment',
   rootType: 'DeploymentList',
-  provides: ['Deployment:{id}', 'Deployment[]'],
+  provides: ['DeploymentsDeployment:{id}', 'DeploymentsDeployment[]'],
   invalidates: [],
   responseCodec: codec_DeploymentList,
 } as const satisfies OperationMeta;

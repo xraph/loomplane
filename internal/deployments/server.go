@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +31,9 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/infrastructure"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -43,10 +46,20 @@ const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
 const labelImage = owned.LabelImage
 
+// labelPlatformRegistry marks a service whose image Loomplane Cloud built,
+// pulled from the platform registry rather than a workspace connection.
+const labelPlatformRegistry = "loomplane.registry.platform"
+
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
-	RouteGuard RuntimeRemovalGuard
+	ExistingResources    planning.ExistingProjectResourceResolver
+	RouteGuard           RuntimeRemovalGuard
+	FirecrackerAuthority fc.Issuer
+
+	// Gate refuses a customer build the workspace may not run yet. Nil
+	// means metering.AllowAll.
+	Gate metering.Gate
 
 	Cloud       string
 	Ctrl        CtrlPlane
@@ -58,15 +71,19 @@ type OwnedTarget struct {
 	// serializes it within this process only.
 	GPULocks    server.GPULocks
 	Controllers ControllerReceipts
-	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
-	Backend     func(string, string) owned.Backend
+	// NodeStreams reach joined nodes, for server connections that are a
+	// node's. Nil reaches only SSH servers.
+	NodeStreams server.NodeStreams
+	// ServerConnect replaces server.Connect, for tests. Nil is server.Connect.
+	ServerConnect func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error)
+	Backend       func(string, string) owned.Backend
 
 	// Kinds is the catalog composed resources' components are checked
 	// against. Nil is recipes.Default().
 	Kinds *recipes.Registry
 	// Hooks are composed kinds' hooks, by kind. A kind without any gets
 	// NoHooks.
-	Hooks map[string]CatalogHooks
+	Hooks CatalogHookMap
 	// Endpoints reads the external endpoints composed resources connect,
 	// and Checker checks them again from the target on each release.
 	Endpoints EndpointResolver
@@ -95,9 +112,19 @@ type OwnedTarget struct {
 	// endpointDial dials from a target for an endpoint check. Nil is
 	// TargetDial.
 	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+	// reconnect is how long a deploy waits for an offline node. The zero
+	// value is nodeReconnectWindow; tests shorten it.
+	reconnect nodeReconnect
 	// componentDial reaches a component's port for its composition's
 	// hooks. Nil is ComponentTransport.
 	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
+	// providerKey, when set, is the one Ctrl Plane provider key this
+	// target registers, whatever the connection: a Loomplane Cloud region's.
+	providerKey string
+	// platformRegistry is the Loomplane Cloud registry an image built there
+	// is pulled from, in the workspace's own repository. Nil refuses such
+	// an image.
+	platformRegistry func(ctx context.Context, orgID string) (*registry.Config, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
@@ -122,6 +149,9 @@ func (e *OwnedTarget) connection(ctx context.Context, org, connection string, la
 	if c == nil || c.ID != connection || c.OrgID != org || c.Cloud != e.Cloud || c.Status != connections.StatusReady {
 		return nil, nil, errors.New("the recorded target connection is not ready")
 	}
+	if !connections.ManagedProjectAllowed(c, labels[owned.LabelProject]) {
+		return nil, nil, errors.New("the managed namespace belongs to another project")
+	}
 	var reviewed map[string]string
 	if checkErr := json.Unmarshal([]byte(labels[owned.LabelSettings]), &reviewed); checkErr != nil {
 		return nil, nil, errors.New("the target has no reviewed placement")
@@ -138,24 +168,26 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		if err != nil {
 			return nil, err
 		}
-		cfg, err := server.ParseConfig(raw, c.Details)
+		client, node, err := serverClientFor(ctx, c, raw, e.NodeStreams, e.ServerConnect, e.reconnect)
 		if err != nil {
 			return nil, err
 		}
-		recorded := cfg.RecordedDetails(c.Details)
-		dial := e.ServerDial
-		if dial == nil {
-			dial = server.Dial
-		}
-		client, err := dial(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
+		recorded := client.Config.RecordedDetails(c.Details)
+		client.RequestsGPUs = labels[owned.LabelGPU] != ""
 		details, missing, err := client.Check(ctx)
 		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, recorded)) {
 			_ = client.Close()
+			if unreachable := node.unreachable(); unreachable != nil {
+				return nil, unreachable
+			}
 			if err != nil {
 				return nil, err
+			}
+			if slices.Contains(missing, "docker:runtimes") {
+				return nil, errors.New("the container engine doesn't name its runtimes, so it can't run GPU work; use Docker with the NVIDIA Container Toolkit")
+			}
+			if client.Config.Node != nil {
+				return nil, errors.New("the node or its Docker identity changed; check the connection and plan again")
 			}
 			return nil, errors.New("the SSH server or Docker identity changed; check the connection and plan again")
 		}
@@ -194,6 +226,24 @@ func (e *OwnedTarget) ComponentTransport(ctx context.Context, b *planning.Bindin
 	}
 	labels := owned.ForOperation(inst.Labels, "read")
 	switch e.Cloud {
+	case connections.Firecracker:
+		client, sessionErr := e.firecrackerSession(ctx, b.OrgID, b.ConnectionID, labels)
+		if sessionErr != nil {
+			return nil, nil, sessionErr
+		}
+		record, readErr := client.Inspect(ctx, fcScope(iid, labels))
+		if readErr != nil {
+			client.Close()
+			return nil, nil, readErr
+		}
+		if record.Current == nil || record.Current.Spec.Port != port {
+			client.Close()
+			return nil, nil, fc.ErrInvalid
+		}
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return client.DialService(ctx, readFirecracker(record))
+		}}
+		return transport, closerFunc(func() error { transport.CloseIdleConnections(); client.Close(); return nil }), nil
 	case connections.Server:
 		client, sessionErr := e.serverSession(b.OrgID, b.ConnectionID)(ctx, labels)
 		if sessionErr != nil {
@@ -242,13 +292,16 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 			return values, checkErr
 		}
 		if labels[owned.LabelRuntimeFiles] == "true" {
-			if filesErr := e.runtimeFiles(ctx, ref, &values); filesErr != nil {
+			if filesErr := e.runtimeFiles(ctx, ref, labels, &values); filesErr != nil {
 				return values, filesErr
 			}
 		}
 	}
 	connection := labels[labelRegistry]
 	if connection == "" {
+		if labels[labelPlatformRegistry] == "true" {
+			return e.platformPull(ctx, labels, values)
+		}
 		return values, nil
 	}
 	if e.Credentials == nil {
@@ -302,6 +355,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 // Register restores a connection-specific provider without opening credentials.
 func (e *OwnedTarget) Register(org, connection string) string {
 	key := e.Cloud + "." + connection
+	if e.providerKey != "" {
+		key = e.providerKey
+	}
 	if _, err := e.Ctrl.Providers.Get(key); err == nil {
 		return key
 	}
@@ -311,6 +367,8 @@ func (e *OwnedTarget) Register(org, connection string) string {
 		backend = e.Backend(org, connection)
 	case e.Cloud == connections.Server:
 		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
+	case e.Cloud == connections.Firecracker:
+		backend = e.orgFirecracker(org, connection)
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -443,7 +501,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Dial: e.ServerDial}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, Gate: e.Gate, reconnect: e.reconnect}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"
@@ -454,6 +512,14 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	image, err := builder.Build(ctx, job, &state.Image, save)
 	if err != nil {
 		return nil, err
+	}
+	if verifyErr := builder.verifyPodGroup(ctx, job, &state.Image); verifyErr != nil {
+		return nil, verifyErr
+	}
+	if job.Action.Service.PodGroup != nil {
+		if saveErr := save(); saveErr != nil {
+			return nil, saveErr
+		}
 	}
 	if state.RuntimeRef == "" {
 		ref, refErr := typeid.Generate("runtime")
@@ -486,12 +552,13 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	sp, labels := ownedSpec(job, image, state)
 	// Resolve and validate credentials before persisting any changed instance spec.
-	if _, err = e.values(ctx, labels); err != nil {
+	if _, err = e.values(owned.RuntimePreflight(ctx), labels); err != nil {
 		return nil, err
 	}
 	if checkErr := e.validateTarget(ctx, labels); checkErr != nil {
 		return nil, checkErr
 	}
+	var expectedRevision string
 	var previousServices []cpprovider.ServiceSpec
 	var previousLabels map[string]string
 	if inst != nil {
@@ -531,8 +598,25 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		if _, err = e.Ctrl.Instances.Update(ctx, inst.ID, instance.UpdateRequest{Services: []cpprovider.ServiceSpec{sp}, Labels: labels}); err != nil {
 			return nil, err
 		}
-		_, err = e.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: sp.Env}}, CommitSHA: job.CommitSHA, Notes: "Plan " + job.Plan.ID})
+		notes := "Plan " + job.Plan.ID
+		if base := labels[owned.LabelManagedRevisionBase]; base != "" {
+			notes = "Managed workload " + job.Plan.ID + "/" + base
+		}
+		var applied *deploy.Deployment
+		applied, err = e.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: sp.Env}}, CommitSHA: job.CommitSHA, Notes: notes})
+		if err == nil && labels[owned.LabelManagedRevisionBase] != "" {
+			if applied == nil || applied.InstanceID != inst.ID || applied.TenantID != job.Deployment.OrgID || applied.State != deploy.DeploySucceeded {
+				return nil, kubernetes.ErrManagedAuthority
+			}
+			expectedRevision = labels[owned.LabelManagedRevisionBase] + "/" + applied.ReleaseID.String()
+		}
 		if err != nil {
+			// Ctrl Plane's deploy error is ErrDeploymentFailed alone, so a
+			// node that went offline mid-deploy is named by the restore
+			// below: its Apply opens a new session, which finds the node
+			// offline and returns the hub's error, typed, in backendErr.
+			// The preflight session above has already caught a node that
+			// was offline before the deploy started.
 			restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			backend, backendErr := e.registeredBackend(key)
@@ -555,6 +639,18 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if err != nil {
 		return nil, err
 	}
+	if expectedRevision != "" {
+		if inst.Labels[owned.LabelRevision] != expectedRevision {
+			return nil, kubernetes.ErrManagedAuthority
+		}
+		store, ok := e.Controllers.(*kubernetes.ControllerStore)
+		if !ok {
+			return nil, kubernetes.ErrManagedAuthority
+		}
+		if checkErr := store.CheckServingUpdate(ctx, job.Deployment.OrgID, inst.ID.String(), job.Plan.ID, job.Connection.ID, inst.Labels[owned.LabelRevision]); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	state.Committed = true
 	if saveErr := save(); saveErr != nil {
 		return nil, saveErr
@@ -576,6 +672,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	labels = map[string]string{owned.LabelOrg: job.Deployment.OrgID, owned.LabelProject: job.Deployment.ProjectID, owned.LabelEnvironment: job.Deployment.EnvironmentID, owned.LabelAction: job.Action.ID, owned.LabelService: job.Action.Name, owned.LabelConnection: job.Connection.ID, owned.LabelRuntime: state.RuntimeRef, owned.LabelPublic: strconv.FormatBool(cfg.Public), owned.LabelHealth: cfg.HealthPath, owned.LabelArchitecture: state.Image.Architecture, owned.LabelRevision: job.Deployment.ID + "/" + job.Action.ID}
 	if len(job.Action.Routes) > 0 {
 		labels[labelReleaseAttempt] = job.Deployment.ID + "/" + job.Action.ID
+	}
+	if d := cfg.ClusterDemand; d != nil && d.Mode == "guaranteed" && d.ProfileArchitecture && d.Profile != nil {
+		labels[owned.LabelSchedulingArchitecture] = d.Profile.Architecture
 	}
 	labels[owned.LabelPlan] = job.Deployment.PlanID
 	if cfg.CloudPlacement != nil && cfg.CloudPlacement.PoolID != "" {
@@ -618,7 +717,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if job.Action.Provider == "server" && cfg.Component == nil {
+	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker" || job.Action.Provider == platformProvider) && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
@@ -641,6 +740,14 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		if sp.Resources.CPUMillis == 0 {
 			sp.Resources.CPUMillis = 100
 		}
+	}
+	if job.Action.Provider == "kubernetes" {
+		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedMainResources(cfg)
+	}
+	if cfg.PodGroup != nil {
+		raw, _ := json.Marshal(cfg.PodGroup) //nolint:errcheck // the contract contains only strings, integers and slices
+		labels[owned.LabelPodGroup] = string(raw)
+		labels[owned.LabelWorkloadCapability] = cfg.WorkloadCapabilityRevision
 	}
 	labels[owned.LabelManageIngress] = strconv.FormatBool(cfg.Public)
 	if cfg.Farp != nil && job.Connection.Cloud == connections.Kubernetes {
@@ -667,12 +774,18 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[labelRegistry] = cfg.BuildTarget.Registry
 		registrySettings, _ := json.Marshal(cfg.BuildTarget.RegistrySettings) //nolint:errcheck // string maps always encode
 		labels[labelRegistrySettings] = string(registrySettings)
+		if platformSourceBuild(cfg.BuildTarget) {
+			labels[labelPlatformRegistry] = "true"
+		}
 	}
 	if len(job.files) > 0 {
 		// The rendered bytes are part of the revision, so a changed file
 		// starts another container. Only their digest is a label.
 		labels[owned.LabelRuntimeFiles] = "true"
 		labels[owned.LabelRevision] += "/" + job.filesRevision
+	}
+	if cfg.ClusterDemand != nil && job.Action.Provider == "kubernetes" {
+		labels[owned.LabelManagedRevisionBase] = labels[owned.LabelRevision]
 	}
 	return sp, labels
 }
@@ -699,6 +812,13 @@ func (e *OwnedTarget) validateTarget(ctx context.Context, labels map[string]stri
 			return err
 		}
 		return c.Close()
+	}
+	if e.Cloud == connections.Firecracker {
+		c, err := e.firecrackerSession(ctx, org, connection, labels)
+		if c != nil {
+			c.Close()
+		}
+		return err
 	}
 	_, err := e.kubernetesSession(org, connection)(ctx, labels)
 	return err
@@ -768,16 +888,43 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 		return err
 	}
 	ref := state.Removals[b.ExternalID]
+	proof, hasRetiredRemoval := ctx.Value(retiredRemovalKey{}).(*retiredRemoval)
+	var retiredFiles bool
+	if hasRetiredRemoval && proof != nil {
+		if inst == nil && !errors.Is(err, ctrlplane.ErrNotFound) {
+			return kubernetes.ErrManagedAuthority
+		}
+		g := proof.grants[0]
+		if g.Target.Scope.Instance != b.ExternalID || g.Target.Scope.Org != b.OrgID || g.Target.Scope.Connection != b.ConnectionID {
+			return kubernetes.ErrManagedAuthority
+		}
+		recorded, files, readErr := proof.store.RetiredRuntimeRef(ctx, g)
+		if readErr != nil {
+			return readErr
+		}
+		if ref != "" && ref != recorded {
+			return kubernetes.ErrManagedAuthority
+		}
+		ref, retiredFiles = recorded, files
+	}
 	if refErr := validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref); refErr != nil {
 		return refErr
 	}
 	// A component's files go with its runtime values, whether its instance
 	// says so or, once it's gone, its binding.
-	files := declaresFiles(b)
+	files := retiredFiles || declaresFiles(b)
 	if inst != nil {
 		files = files || inst.Labels[owned.LabelRuntimeFiles] == "true"
 		if inst.ProviderName != key || inst.TenantID != b.OrgID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID {
 			return errors.New("the binding does not own this infrastructure instance")
+		}
+		if proof != nil {
+			if ref != inst.Labels[owned.LabelRuntime] {
+				return kubernetes.ErrManagedAuthority
+			}
+			if checkErr := proof.verifiedProvider(ctx, e, key, iid); checkErr != nil {
+				return checkErr
+			}
 		}
 		ref = inst.Labels[owned.LabelRuntime]
 		if refErr := validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref); refErr != nil {
@@ -795,10 +942,26 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 		if deleteErr := e.Ctrl.Instances.Delete(ctx, iid); deleteErr != nil {
 			return deleteErr
 		}
+		if proof != nil {
+			if checkErr := proof.verifyGone(ctx, e, iid, inst.State); checkErr != nil {
+				return checkErr
+			}
+		}
 	}
 	if ref != "" {
 		if e.Secrets == nil {
 			return ErrNoCredential
+		}
+		token := ""
+		if proof != nil {
+			var beginErr error
+			token, beginErr = proof.store.BeginRetiredRuntimeRemoval(ctx, proof.grants[0])
+			if beginErr != nil {
+				return beginErr
+			}
+			if token == "" {
+				return nil
+			}
 		}
 		if files {
 			if deleteErr := e.deleteRuntimeFiles(ctx, b.OrgID, b.EnvironmentID, b.Name, map[string]string{owned.LabelRuntime: ref, owned.LabelRuntimeFiles: "true"}); deleteErr != nil {
@@ -807,6 +970,13 @@ func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.
 		}
 		if deleteErr := e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, b.Name, ref); deleteErr != nil {
 			return deleteErr
+		}
+		if proof != nil {
+			resolution, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if resolveErr := proof.store.ResolveRetiredRuntimeRemoval(resolution, proof.grants[0], token); resolveErr != nil {
+				return resolveErr
+			}
 		}
 		delete(state.Removals, b.ExternalID)
 		return save()

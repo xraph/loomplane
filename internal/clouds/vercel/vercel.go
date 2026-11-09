@@ -44,7 +44,7 @@ type Client struct {
 // New returns a Client. An empty endpoint means Vercel's own; any other
 // is a test's fake, which answers at once, so it's polled often.
 func New(endpoint string) *Client {
-	c := &Client{endpoint: DefaultEndpoint, http: &http.Client{Timeout: requestTimeout}, poll: 5 * time.Second}
+	c := &Client{endpoint: DefaultEndpoint, http: &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, poll: 5 * time.Second}
 	if endpoint != "" {
 		c.endpoint, c.poll = strings.TrimRight(endpoint, "/"), 100*time.Millisecond
 	}

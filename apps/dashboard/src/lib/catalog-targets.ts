@@ -1,5 +1,5 @@
 import type { Connection, Recipe } from "@/client/forge/loomplane/types"
-import type { DatabaseKind } from "@/lib/catalog-recipes"
+import { isComposedDatabase, type DatabaseKind } from "@/lib/catalog-recipes"
 import type { ManagedDatabaseProvider } from "@/lib/managed-catalog"
 
 export type DatabaseProvider = "server" | "kubernetes" | ManagedDatabaseProvider
@@ -23,14 +23,15 @@ export function databaseTargetProvider(
   if (connection.cloud === "server") return "server"
   if (
     connection.cloud === "kubernetes" &&
-    kind === "postgres" &&
+    (kind === "postgres" || isComposedDatabase(kind)) &&
     details.namespace &&
     details.namespace_uid &&
     details.storage_class &&
     details.storage_class_uid &&
     details.storage_reclaim === "Retain" &&
     details.persistent_storage === "ready" &&
-    details.postgres_recovery_permissions === "ready"
+    (isComposedDatabase(kind) ||
+      details.postgres_recovery_permissions === "ready")
   )
     return "kubernetes"
 }

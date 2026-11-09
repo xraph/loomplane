@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -23,7 +24,14 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	Routes []cloudinfra.Route
+	// Server-derived applied actions for explicit unconstrained pool moves.
+	appliedMoves           map[string]Action
+	appliedMoveProblems    []Finding
+	ResourceEndpoints      map[string]EndpointPin
+	ExistingResources      map[string]ExistingResourceCheck
+	ExistingResourceChecks map[string]EndpointCheck
+	ProjectID              string
+	Routes                 []cloudinfra.Route
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone
@@ -58,6 +66,10 @@ type Input struct {
 	// Held are the aliases of repositories this plan doesn't move: their
 	// services stay as deployed.
 	Held map[string]bool
+	// Only are the manifest services this plan moves, by name. Nil or
+	// empty moves every one. A service it leaves out is kept as it runs, like a held
+	// one, and one that runs nowhere yet isn't created.
+	Only map[string]bool
 	// Excluded are the graph services the project excludes, by ID, each
 	// true when what's deployed of it stays running as it is. An excluded
 	// service is never created or changed; one that's deployed and not
@@ -76,6 +88,23 @@ type Input struct {
 	// the organization's other environments connect as their Postgres, each
 	// with one that does. A Fabriq here can't connect them too.
 	FabriqPostgres map[string]FabriqUser
+	// Features are the server features that are on, by name. A kind of a
+	// feature that's off, or missing, is refused; nil has every feature
+	// off, and a kind without a feature ignores them.
+	Features map[string]bool
+	// Inputs are digests of what composed resources' kinds render from
+	// outside the manifest, by resource and then component. Each lands on
+	// its component's ComponentConfig, so a change plans an update.
+	Inputs map[string]map[string]string
+	// NativeMoves are the Vercel services, by action ID, that run on a
+	// project of their own with no fallback record keeping them there.
+	// Each is replaced by a deploy into its shared Vercel project.
+	NativeMoves map[string]bool
+	// RenderMoves are the Render services and datastores, by action ID,
+	// that run standalone with no record of the environment on Render.
+	// Each unchanged one is updated, which moves it into the environment's
+	// Render environment in place.
+	RenderMoves map[string]bool
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -119,7 +148,7 @@ type ConnectionHost struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry", platformRuntime: "Loomplane Cloud"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {
@@ -161,6 +190,7 @@ func Compute(in Input) *Result {
 		bindings:  map[string]*Binding{},
 		heldNew:   map[string]string{},
 		held:      map[string]string{},
+		unpicked:  map[string]bool{},
 		excluded:  map[string]bool{},
 		retained:  map[string]*Action{},
 		keptFor:   map[string][]string{},
@@ -172,6 +202,7 @@ func Compute(in Input) *Result {
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
 	}
+	p.problems = append(p.problems, in.appliedMoveProblems...)
 	p.planResources()
 	p.planLinks()
 	p.planServices()
@@ -227,6 +258,10 @@ type planner struct {
 	// held are the held services kept as they're deployed, by manifest
 	// name, with the alias of the repository that holds them.
 	held map[string]string
+	// unpicked are the services in held and heldNew that are there because
+	// the plan doesn't name them, not because their repository is held, so
+	// what's said about them names the service rather than the repository.
+	unpicked map[string]bool
 	// excluded are the manifest services the project excludes, by name.
 	excluded map[string]bool
 	// retained are keep actions, by action ID, for what held services use
@@ -333,7 +368,9 @@ func servicePath(a *Action) string {
 func (p *planner) connect() map[string]string {
 	out := map[string]string{}
 	for _, cloud := range slices.Sorted(maps.Keys(p.clouds)) {
-		if p.allCloudActionsPinned(cloud) {
+		// Loomplane Cloud runs on hosts this Loomplane holds, never through
+		// one of the organization's connections.
+		if cloud == platformRuntime || p.allCloudActionsPinned(cloud) {
 			continue
 		}
 		title := cloudTitle(cloud)
@@ -446,13 +483,27 @@ func couldUse(ps []*provider.Provider) string {
 	}
 	names := make([]string, 0, len(ps))
 	for _, p := range ps {
-		names = append(names, p.Name)
+		// An unlisted target, such as Loomplane Cloud, is never suggested.
+		if !p.Unlisted {
+			names = append(names, p.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "No provider Loomplane knows can."
 	}
 	return "These can: " + strings.Join(names, ", ") + "."
 }
 
 // place settles the region, warning about one the provider doesn't list.
 func (p *planner) place(subject Subject, name, path string, prov *provider.Provider, region string) string {
+	// Loomplane Cloud's regions are its targets', so a service runs in the
+	// region its target previewed.
+	if prov.Cloud == platformRuntime {
+		if pin, ok := p.in.CloudPlacements[name]; ok && pin.Platform != nil && subject == ServiceSubject {
+			return pin.Platform.Region
+		}
+		return ""
+	}
 	if !prov.Placed() {
 		if region != "" {
 			p.warn(Finding{
@@ -491,10 +542,18 @@ func (p *planner) planResources() {
 	m := p.in.Manifest
 	var composed []string
 	for _, name := range m.ResourceNames() {
-		r := m.Resources[name]
+		r := p.resource(name)
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
-		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
+		if !p.resourceOn(name) || p.noLinkKind(name, base, r) {
+			continue
+		}
+		if r.ExistingResource != "" {
+			p.planExistingResource(name, base, r)
+			continue
+		}
+		if ExistingResourceBinding(p.bindings[actionID(ResourceSubject, name)]) {
+			p.problem(Finding{Code: "resource-ownership-change", Subject: ResourceSubject, Name: name, Path: base, Message: "Create a separate managed resource. An external attachment cannot take lifecycle ownership in place."})
 			continue
 		}
 		if r.CloudSQLPSC != nil && (r.Kind != "postgres" || set.Provider != "cloud-sql" || r.Version != "17" || !r.CloudSQLPSC.Valid(set.Region)) {
@@ -551,12 +610,14 @@ func (p *planner) planResources() {
 		cfg := &ResourceConfig{
 			Provider: prov.Name, Region: p.place(ResourceSubject, name, base+".region", prov, set.Region),
 			Kind: r.Kind, Version: version,
+			Settings: p.providerResourceSettings(name, base, r, offer),
 		}
 		a := &Action{
 			ID: actionID(ResourceSubject, name), Subject: ResourceSubject, Name: name,
 			Provider: prov.Name, Region: cfg.Region, Engine: provider.ResourceEngine, Creates: offer.Creates,
 			Resource: cfg, Step: 1,
 		}
+		p.configureEdgeResource(name, base, r, cfg, a, prov)
 		p.configureCatalog(name, base, r, cfg, a)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
 		p.resources[name] = a
@@ -583,6 +644,20 @@ func (p *planner) planServices() {
 		if alias, ok := p.heldBinding(b); ok {
 			p.keep(name, alias, b)
 			held = append(held, name)
+			continue
+		}
+		if move, ok := p.in.appliedMoves[name]; ok {
+			if prov, err := p.in.Providers.Get(move.Provider); err == nil {
+				p.use(prov)
+			}
+			p.services[name] = &move
+			p.actions = append(p.actions, &move)
+			continue
+		}
+		if len(p.in.Only) > 0 && !p.in.Only[name] {
+			if p.leaveOut(name, base, s, set, b) {
+				held = append(held, name)
+			}
 			continue
 		}
 		repo, ok := p.repoOf(name, base, s)
@@ -646,6 +721,8 @@ func (p *planner) planServices() {
 		case a == nil:
 		case isHeld:
 			p.linkHeld(a)
+		case p.in.appliedMoves[name].Service != nil:
+			p.linkAppliedMove(a)
 		default:
 			p.link(name, a)
 		}
@@ -690,6 +767,13 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, set.Build, gs, cfg)
+	if prov.Name == "cloudflare-workers" {
+		cfg.Source = gs.Path
+		if cfg.Source == "" {
+			cfg.Source = "."
+		}
+		cfg.Build, cfg.Image, cfg.Context = "", "", ""
+	}
 	cfg.CapacityIntent = p.in.CapacityIntents[name]
 	p.configureTarget(name, base, prov, set, cfg)
 	if placement, ok := p.in.CloudPlacements[name]; ok {
@@ -699,6 +783,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	p.checkRender(name, base, cfg)
 	p.checkAzure(name, base, cfg)
+	p.checkViteRSC(name, base, cfg, gs.Requires)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -725,6 +810,49 @@ func (p *planner) keep(name, alias string, b *Binding) {
 	p.actions = append(p.actions, a)
 }
 
+// leaveOut plans a service this plan doesn't name, and reports whether it
+// runs on as it's deployed. One that runs here gets a keep action, as a
+// held service does, so nothing deletes it and whatever needs it still
+// gets its address. One that runs nowhere yet isn't created, and a warning
+// says so. Nothing the manifest says about it is checked, so a problem
+// with it can't block a plan that leaves it out, but the graph service it
+// names is the manifest's and isn't reported as left out.
+func (p *planner) leaveOut(name, base string, s manifest.Service, set manifest.Settings, b *Binding) bool {
+	problems, warnings := p.problems, p.warnings
+	repo, ok := p.repoOf(name, base, s)
+	var gs *graph.Service
+	if ok {
+		gs = p.match(name, base, repo, s)
+	}
+	p.problems, p.warnings = problems, warnings
+	excluded := false
+	if gs != nil {
+		p.matched[gs.ID] = true
+		_, excluded = p.in.Excluded[gs.ID]
+	}
+	p.unpicked[name] = true
+	if b != nil {
+		if repo == "" {
+			repo = p.deployedRepo(b)
+		}
+		a := p.kept(b, "Not part of this deploy.")
+		p.held[name] = repo
+		p.services[name] = a
+		p.actions = append(p.actions, a)
+		return true
+	}
+	// An excluded service that runs nowhere has nothing to say.
+	if excluded || !manifest.On(set.Enabled) {
+		return false
+	}
+	p.heldNew[name] = repo
+	p.warn(Finding{
+		Code: "not-in-deploy", Subject: ServiceSubject, Name: name, Path: base,
+		Message: fmt.Sprintf("%s isn't part of this deploy, and nothing runs it in %s yet, so it isn't created.", name, p.in.Environment),
+	})
+	return false
+}
+
 // readdress deploys again what this plan moves and leaves unchanged but
 // uses something that gets a new address: what it replaces, or creates
 // again over a binding. A service's variables name what it uses, not the
@@ -740,6 +868,7 @@ func (p *planner) readdress() {
 			continue
 		}
 		var moved []string
+		accessChanged := false
 		for _, e := range a.Service.Env {
 			for _, dep := range p.linkTargets(e) {
 				if slices.Contains(moved, dep.Name) {
@@ -747,8 +876,13 @@ func (p *planner) readdress() {
 				}
 				if _, ok := p.readdressed(dep, e, a.Provider); ok {
 					moved = append(moved, dep.Name)
+					accessChanged = accessChanged || (dep.Op == Update && dep.Resource != nil && dep.Resource.ExistingResource != nil)
 				}
 			}
+		}
+		if len(moved) > 0 && accessChanged {
+			a.Op, a.Reason = Update, fmt.Sprintf("%s gets newly reviewed resource access from %s.", name, strings.Join(moved, ", "))
+			continue
 		}
 		switch len(moved) {
 		case 0:
@@ -769,6 +903,8 @@ func (p *planner) readdress() {
 func (p *planner) readdressed(dep *Action, e EnvLink, target string) (string, bool) {
 	var how string
 	switch {
+	case dep.Op == Update && dep.Resource != nil && dep.Resource.ExistingResource != nil:
+		how = "updates the approved access to " + dep.Name
 	case dep.Op == Replace:
 		how = "replaces " + dep.Name
 	case dep.Op == Create && p.bindings[dep.ID] != nil:
@@ -862,12 +998,15 @@ func (p *planner) heldAddresses() {
 		// kept is true for a service retained for a held service rather
 		// than held itself.
 		kept bool
-		env  []EnvLink
+		// unpicked is true for a service kept because the plan doesn't
+		// name it, rather than because its repository is held.
+		unpicked bool
+		env      []EnvLink
 	}
 	var users []user
 	for name, alias := range p.held {
 		a := p.services[name]
-		users = append(users, user{name: name, provider: a.Provider, aliases: []string{alias}, env: a.Service.Env})
+		users = append(users, user{name: name, provider: a.Provider, aliases: []string{alias}, unpicked: p.unpicked[name], env: a.Service.Env})
 	}
 	for id, a := range p.retained {
 		if a.Service != nil {
@@ -891,6 +1030,8 @@ func (p *planner) heldAddresses() {
 		unknown := len(u.aliases) == 0 || slices.Contains(u.aliases, "")
 		var who string
 		switch {
+		case u.unpicked:
+			who, scope = u.name+", which isn't part of this deploy", fmt.Sprintf("Add %s to this deploy.", u.name)
 		case !u.kept:
 			who = heldLabel(u.name, u.aliases[0]) + ", which this plan holds back"
 		case unknown:
@@ -1429,13 +1570,18 @@ func (p *planner) waits(name string) {
 	if !changed && len(found) == 0 {
 		return
 	}
+	code := "held"
 	msg := fmt.Sprintf("%s is in %s, which this plan holds back, so its manifest changes wait for a plan that moves %s.", name, alias, alias)
-	if from := p.deployedRepo(p.bindings[actionID(ServiceSubject, name)]); from != "" && alias != "" && from != alias {
+	switch from := p.deployedRepo(p.bindings[actionID(ServiceSubject, name)]); {
+	case p.unpicked[name]:
+		code, moved = "not-in-deploy", false
+		msg = fmt.Sprintf("%s isn't part of this deploy, so its manifest changes wait for a deploy that includes it.", name)
+	case from != "" && alias != "" && from != alias:
 		// It was deployed from a repository this plan moves, and the
 		// manifest now puts it in one that the plan holds back.
 		msg = movedIntoHeld(name, from, alias)
 	}
-	if alias == "" {
+	if alias == "" && !p.unpicked[name] {
 		msg = fmt.Sprintf("Nothing records which repository %s was deployed from, and this plan holds some back, so its manifest changes wait for a plan that moves every repository.", name)
 	}
 	if moved && alias != "" {
@@ -1444,7 +1590,7 @@ func (p *planner) waits(name string) {
 	if len(found) > 0 {
 		msg += " Its manifest also has a problem to fix first: " + found[0].Message
 	}
-	p.warn(Finding{Code: "held", Subject: ServiceSubject, Name: name, Path: base, Message: msg})
+	p.warn(Finding{Code: code, Subject: ServiceSubject, Name: name, Path: base, Message: msg})
 }
 
 // match finds the graph service a manifest service names: in repo, which
@@ -1553,7 +1699,9 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 		Build: gs.Commands.Build, Start: gs.Commands.Start,
 		Public:     runs.Workload != provider.Worker,
 		HealthPath: set.HealthPath,
+		Worker:     p.workerSettings(name, base, set, prov),
 	}
+	p.podGroupSettings(name, base, set, prov, cfg)
 	if cfg.HealthPath == "" && cfg.Framework == "forge" {
 		cfg.HealthPath = "/_/health"
 	}
@@ -1601,6 +1749,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 	}
 	if prov.Scaling || prov.Cloud == "server" {
 		cfg.Scale, cfg.Size = set.Scale, set.Size
+		cfg.CapacityMode = set.CapacityMode
 	} else if set.Scale != nil || set.Size != nil {
 		p.warn(Finding{
 			Code: "scaling-ignored", Subject: ServiceSubject, Name: name, Path: base,
@@ -1675,6 +1824,14 @@ func (p *planner) deployedWith(id, need, key string) bool {
 	return slices.ContainsFunc(cfg.Env, func(e EnvLink) bool { return e.From == need && e.Key == key })
 }
 
+// orList is "A", "A or B", or "A, B or C".
+func orList(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " or " + items[len(items)-1]
+}
+
 // link gives a service the variables for what it needs, and orders it
 // after them.
 func (p *planner) link(name string, a *Action) {
@@ -1718,7 +1875,28 @@ func (p *planner) link(name string, a *Action) {
 		if r, ok := m.Resources[need]; ok {
 			dep := p.resources[need]
 			if dep == nil {
-				if !manifest.On(r.For(p.in.Environment, m.Defaults).Enabled) {
+				switch {
+				case p.resourceOn(need):
+				case r.ExistingResource != "" || p.kinds().EnvironmentOptIn(r.Kind):
+					// It runs only where it's enabled, so a service that
+					// needs it elsewhere runs without it, and the other
+					// environments keep deploying.
+					missing := []string{key}
+					if composed[i] {
+						missing = missing[:0]
+						for _, o := range outputs[i] {
+							missing = append(missing, outputKey(need, o, count))
+						}
+					}
+					advice := p.kinds().OptInAdvice(r.Kind, need, p.in.Environment)
+					if advice == "" {
+						advice = fmt.Sprintf("Enable it with resources.%s.environments.%s.enabled: true.", need, p.in.Environment)
+					}
+					p.warn(Finding{
+						Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
+						Message: fmt.Sprintf("%s gets no %s in %s: %s doesn't run there. %s", name, orList(missing), p.in.Environment, need, advice),
+					})
+				default:
 					p.problem(Finding{
 						Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
 						Message: fmt.Sprintf("%s needs %s, which is off in %s.", name, need, p.in.Environment),
@@ -1736,6 +1914,13 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if p.linkEdgeResource(name, a, need, base, dep) {
+				continue
+			}
+			if dep.Resource != nil && dep.Resource.ExistingResource != nil {
+				p.linkExistingResource(name, a, need, key, base, dep)
+				continue
 			}
 			if r.GatewayIn(p.in.Environment) {
 				// The service reaches it through the database gateway's
@@ -1776,10 +1961,11 @@ func (p *planner) link(name string, a *Action) {
 		dep := p.services[need]
 		if dep == nil {
 			if alias, held := p.heldNew[need]; held {
-				p.problem(Finding{
-					Code: "need-held", Subject: ServiceSubject, Name: name, Path: base,
-					Message: fmt.Sprintf("%s needs %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, need, alias, alias, need, p.in.Environment, alias),
-				})
+				msg := fmt.Sprintf("%s needs %s, which is in %s. This plan holds %s back and nothing runs %s in %s yet, so add %s to the scope.", name, need, alias, alias, need, p.in.Environment, alias)
+				if p.unpicked[need] {
+					msg = fmt.Sprintf("%s needs %s, which isn't part of this deploy and doesn't run in %s yet, so add %s to this deploy.", name, need, p.in.Environment, need)
+				}
+				p.problem(Finding{Code: "need-held", Subject: ServiceSubject, Name: name, Path: base, Message: msg})
 				continue
 			}
 			if s, ok := m.Services[need]; ok && !manifest.On(s.For(p.in.Environment, m.Defaults).Enabled) {
@@ -1961,7 +2147,7 @@ func (p *planner) order() {
 // needs, or for a held service, what it was deployed against. Those can
 // form a cycle validation never saw, which order cuts at step 2.
 func (p *planner) needs(name string, a *Action) []string {
-	if _, held := p.held[name]; !held {
+	if _, held := p.held[name]; !held && p.in.appliedMoves[name].Service == nil {
 		return p.in.Manifest.Services[name].Needs
 	}
 	var out []string
@@ -2004,6 +2190,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		a.Reason = fmt.Sprintf("%s moves from %s to %s. A region can't change in place, so the new one starts there first, and the old one is removed once it's up.", a.Name, b.Region, region)
 	default:
 		p.connectionMoves(a, b, providerName)
+		p.nativeMove(a, b, providerName)
 	}
 	if a.Op == Replace {
 		if a.Subject == ResourceSubject {
@@ -2030,13 +2217,16 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 	case b.Drift == DriftChanged:
 		a.Op = Update
 		a.Reason = fmt.Sprintf("%s was changed outside Loomplane (%s), so it's deployed as planned again.", a.Name, b.DriftMessage)
+	case p.renderMove(a, providerName):
+		a.Op = Update
+		a.Reason = fmt.Sprintf("Moves into the %s Render environment", p.in.Environment)
 	default:
 		a.Op = Keep
 		a.Reason = "Unchanged."
 		if a.Service != nil && a.Service.CloudPlacement != nil {
 			var previous ServiceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
-				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Service.CloudPlacement
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || !reflect.DeepEqual(previous.CloudPlacement, a.Service.CloudPlacement)
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2047,7 +2237,7 @@ func (p *planner) diff(a *Action, cfg any, providerName, region string) {
 		if a.Resource != nil && a.Resource.CloudPlacement != nil {
 			var previous ResourceConfig
 			if json.Unmarshal(b.Config, &previous) == nil {
-				a.AdoptCloudPlacement = previous.CloudPlacement == nil || *previous.CloudPlacement != *a.Resource.CloudPlacement
+				a.AdoptCloudPlacement = previous.CloudPlacement == nil || !reflect.DeepEqual(previous.CloudPlacement, a.Resource.CloudPlacement)
 				if a.AdoptCloudPlacement {
 					a.CloudAdoption = ReviewCloudAdoption(b)
 				}
@@ -2207,7 +2397,7 @@ func (p *planner) checkFindings() {
 	for _, name := range m.ServiceNames() {
 		// A held service's manifest entry waits, so what it says about
 		// its needs isn't worth a warning in this plan.
-		if _, held := p.held[name]; p.services[name] == nil || held {
+		if _, held := p.held[name]; p.services[name] == nil || held || p.in.appliedMoves[name].Service != nil {
 			continue
 		}
 		gs := p.graphServices[name]
@@ -2355,17 +2545,29 @@ func (p *planner) planDeletes() {
 			if of.last {
 				step = last + 3
 			}
-			if !of.stateless {
+			if !of.stateless && !ExistingResourceBinding(b) {
 				p.warn(Finding{
 					Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
 					Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
 				})
 			}
 		}
-		connectionID := p.deleteThrough(b)
+		connectionID := b.ConnectionID
+		if !ExistingResourceBinding(b) {
+			connectionID = p.deleteThrough(b)
+		}
+		var resource *ResourceConfig
+		if ExistingResourceBinding(b) {
+			resource = &ResourceConfig{}
+			if err := json.Unmarshal(b.Config, resource); err != nil {
+				p.problem(Finding{Code: "existing-resource-invalid", Subject: b.Subject, Name: b.Name, Path: "resources", Message: "The saved external attachment cannot be read. Its cloud resource remains unchanged."})
+				continue
+			}
+			reason += " Disconnect the attachment; the resource remains in its provider account."
+		}
 		p.actions = append(p.actions, &Action{
 			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region, ConnectionID: connectionID,
-			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
+			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step, Resource: resource,
 		})
 	}
 }
@@ -2578,8 +2780,8 @@ func (p *planner) wanted(b *Binding) (wanted, on bool) {
 	if l, ok := m.Links[b.Name]; ok {
 		return true, manifest.On(l.For(p.in.Environment).Enabled)
 	}
-	r, ok := m.Resources[b.Name]
-	return ok, ok && manifest.On(r.For(p.in.Environment, m.Defaults).Enabled)
+	_, ok := m.Resources[b.Name]
+	return ok, ok && p.resourceOn(b.Name)
 }
 
 // creates names what a binding's provider made, for a delete's

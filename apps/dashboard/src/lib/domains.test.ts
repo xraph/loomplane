@@ -33,6 +33,7 @@ import {
   runsOnLabel,
   sameHosting,
   stateTone,
+  subdomainLabel,
   subdomainName,
   usedByLabel,
   validSubdomainLabel,
@@ -91,6 +92,7 @@ function zone(
       projectIds: [],
       proofCheckedAt: "0001-01-01T00:00:00Z",
       proofExpiresAt: "2026-10-02T00:00:00Z",
+      proofMissingAt: "0001-01-01T00:00:00Z",
       proofName: "_loomplane.acme.dev",
       proofPublishAttemptedAt: "0001-01-01T00:00:00Z",
       proofValue: "loomplane=zone-token",
@@ -247,6 +249,10 @@ describe("zones", () => {
     const legacy = zone({}, false)
     legacy.zone = { ...legacy.zone!, proofName: undefined }
     expect(zoneDNSLabel(legacy)).toBe("Awaiting verification")
+    // Verified, but a check found the record gone since.
+    expect(zoneDNSLabel(zone({ state: "proof_missing" }))).toBe(
+      "TXT record missing"
+    )
   })
 
   it("follows the TXT record Loomplane publishes for a managed zone", () => {
@@ -682,6 +688,15 @@ describe("adding and removing", () => {
       "api.eu.loomplane.com"
     )
     expect(subdomainName("  App ", "Loomplane.com")).toBe("app.loomplane.com")
+    // The whole name typed in the label field isn't doubled.
+    expect(subdomainName("app.loomplane.com", "loomplane.com")).toBe(
+      "app.loomplane.com"
+    )
+    expect(subdomainLabel("API.eu.Loomplane.com ", "loomplane.com")).toBe(
+      "api.eu"
+    )
+    // The domain on its own leaves no label, which isn't a subdomain.
+    expect(subdomainLabel("loomplane.com", "loomplane.com")).toBe("")
     for (const ok of ["app", "api.eu", "a1-b", "x"])
       expect(validSubdomainLabel(ok)).toBe(true)
     for (const bad of [

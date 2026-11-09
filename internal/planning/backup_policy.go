@@ -28,7 +28,7 @@ func (s *Service) checkBackupDecision(ctx context.Context, plan *Plan, d orchest
 	if !hasBackupPolicies(plan.Actions) {
 		return nil
 	}
-	p := security.Principal{OrgID: plan.OrgID, UserID: d.By}
+	p := security.ActorPrincipal(plan.OrgID, d.By)
 	if d.Actor != nil {
 		p = *d.Actor
 	}
@@ -39,7 +39,7 @@ func (s *Service) checkBackupDecision(ctx context.Context, plan *Plan, d orchest
 }
 
 func (s *Service) checkBackupPreview(ctx context.Context, plan *Plan, result *Result) {
-	p := security.Principal{OrgID: plan.OrgID, UserID: plan.CreatedBy}
+	p := security.ActorPrincipal(plan.OrgID, plan.CreatedBy)
 	if err := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, result.Actions); err != nil {
 		result.Problems = append(result.Problems, Finding{Code: "backup-policy-permission", Message: "Backup management permission is required to create the default backup schedule."})
 		result.Executable = false

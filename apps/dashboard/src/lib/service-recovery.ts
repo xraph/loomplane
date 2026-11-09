@@ -101,10 +101,21 @@ export function protectionOf(
   if (!config) return undefined
   if (config.provider === "external" || binding.provider === "external")
     return view("external")
-  if (isRecord(config.component))
+  if (isRecord(config.component)) {
+    if (
+      config.component.protection === "native" &&
+      ["falkordb", "elasticsearch", "opensearch", "duckdb"].includes(
+        String(config.kind)
+      )
+    ) {
+      if (binding.provider === "server") return view("native")
+      if (binding.provider === "kubernetes") return kubernetesNotYet
+      return view("")
+    }
     return view(
       config.component.protection === "rebuildable" ? "rebuildable" : "none"
     )
+  }
   if (isRecord(config.composition)) return view("none")
   if (
     hasNativeBackups(config.kind) &&

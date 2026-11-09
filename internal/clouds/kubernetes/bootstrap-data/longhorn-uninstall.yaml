@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: longhorn-uninstall
+  namespace: loomplane-system
+  labels:
+    app.kubernetes.io/name: longhorn
+    helm.sh/chart: longhorn-1.13.0
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: loomplane-longhorn
+    app.kubernetes.io/version: v1.13.0
+spec:
+  activeDeadlineSeconds: 900
+  backoffLimit: 1
+  template:
+    metadata:
+      name: longhorn-uninstall
+      labels:
+        app.kubernetes.io/name: longhorn
+        helm.sh/chart: longhorn-1.13.0
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/instance: loomplane-longhorn
+        app.kubernetes.io/version: v1.13.0
+    spec:
+      containers:
+      - name: longhorn-uninstall
+        image: docker.io/longhornio/longhorn-manager:v1.13.0@sha256:7372f3c59239e9a67c0017b3af32fabdf08c4dcc0631140161da9a47e3b142f0
+        imagePullPolicy: IfNotPresent
+        command:
+        - longhorn-manager
+        - uninstall
+        env:
+        - name: LONGHORN_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+      restartPolicy: Never
+      priorityClassName: longhorn-critical
+      serviceAccountName: longhorn-service-account

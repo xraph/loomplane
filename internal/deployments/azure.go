@@ -96,7 +96,8 @@ func azureSession(ctx context.Context, client *azure.Client, conn *connections.C
 }
 
 // Apply implements Executor.
-func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+func (a *Azure) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
+	defer nativeDeliveryBoundary(job)(&err)
 	cfg := job.Action.Service
 	if cfg == nil {
 		return nil, fmt.Errorf("%w: azure container apps runs services, not %s", ErrNoExecutor, job.Action.Subject)
@@ -642,6 +643,9 @@ func azureTemplate(job *Job, cfg *planning.ServiceConfig, image string) (azure.T
 	var secrets []azure.Secret
 	c := azure.Container{Name: azureContainer, Image: image, Resources: azureResources(cfg.Size)}
 	for _, k := range slices.Sorted(maps.Keys(job.Env)) {
+		if omitEmptyResourceToken(k, job.Env, cfg.Env) {
+			continue
+		}
 		if !job.Secrets[k] {
 			c.Env = append(c.Env, azure.EnvVar{Name: k, Value: job.Env[k]})
 			continue

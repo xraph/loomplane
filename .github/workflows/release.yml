@@ -10,7 +10,7 @@ name: Release
 #       target "all" tags the commit you ran it from, which must be on
 #       main, and publishes everything. No PAT is needed: the tag, the
 #       GitHub release and every publish job happen in this one run.
-#       target "cli", "docker" or "helm" re-publishes one part of a release
+#       target "cli", "docker", "helm", "digitalocean" or "push-gateway" re-publishes one part of a release
 #       that already exists, from its tag, wherever you run it from.
 #
 # What a release publishes:
@@ -20,12 +20,18 @@ name: Release
 #   cli       GoReleaser through xraph/workflows go-binary-release.yml:
 #             loomctl for macOS, Linux and Windows with Homebrew and Scoop,
 #             and the loomplane_* server archives with the dashboard
+#   sign-checksums  cosign keyless signature over binaries-checksums.txt,
+#             uploaded as binaries-checksums.txt.sigstore.json
 #   docker    publish-docker.yml: smoke-tested AMD64 and ARM64 images on
 #             GHCR (and Docker Hub with its secrets), plus the deployment
 #             bundle on the release
 #   helm      publish-helm.yml, after docker: the Kubernetes chart on GHCR
 #             (oci://ghcr.io/xraph/charts/loomplane) and on the release,
 #             with the plain manifest for that version
+#   digitalocean  publish-digitalocean.yml, after docker: the DigitalOcean
+#             Marketplace 1-Click snapshot, for stable tags when the
+#             DIGITALOCEAN_TOKEN secret is set
+#   push-gateway  publish-push-gateway.yml: the push gateway image XRaph runs at push.loomplane.com
 #
 # Lint, unit and integration tests gate all of it unless you tick
 # skip-tests, which is for re-publishing a tag that passed them already.
@@ -42,11 +48,11 @@ on:
         required: true
         type: string
       target:
-        description: all cuts a new release. cli, docker or helm re-publishes one part of an existing one.
+        description: all cuts a new release. cli, docker, helm, digitalocean or push-gateway re-publishes one part of an existing one.
         required: true
         type: choice
         default: all
-        options: [all, cli, docker, helm]
+        options: [all, cli, docker, helm, digitalocean, push-gateway]
       skip-tests:
         description: Skip lint and tests (only for a tag that passed them)
         required: false
@@ -72,6 +78,8 @@ jobs:
       cli: ${{ steps.plan.outputs.cli }}
       docker: ${{ steps.plan.outputs.docker }}
       helm: ${{ steps.plan.outputs.helm }}
+      digitalocean: ${{ steps.plan.outputs.digitalocean }}
+      push-gateway: ${{ steps.plan.outputs.push-gateway }}
       skip-tests: ${{ steps.plan.outputs.skip-tests }}
     steps:
       - uses: actions/checkout@v7
@@ -129,12 +137,14 @@ jobs:
             exit 1
           fi
 
-          cli=false docker=false helm=false
+          cli=false docker=false helm=false digitalocean=false push_gateway=false
           case "$target" in
-            all) cli=true docker=true helm=true ;;
+            all) cli=true docker=true helm=true digitalocean=true push_gateway=true ;;
             cli) cli=true ;;
             docker) docker=true ;;
             helm) helm=true ;;
+            digitalocean) digitalocean=true ;;
+            push-gateway) push_gateway=true ;;
           esac
           {
             echo "tag=$tag"
@@ -143,6 +153,8 @@ jobs:
             echo "cli=$cli"
             echo "docker=$docker"
             echo "helm=$helm"
+            echo "digitalocean=$digitalocean"
+            echo "push-gateway=$push_gateway"
             echo "skip-tests=$SKIP_TESTS"
           } | tee -a "$GITHUB_OUTPUT"
           {
@@ -155,6 +167,8 @@ jobs:
             echo "| CLI and archives | $cli |"
             echo "| Docker | $docker |"
             echo "| Helm chart | $helm |"
+            echo "| DigitalOcean 1-Click | $digitalocean |"
+            echo "| Push gateway | $push_gateway |"
             echo "| Tests | $([ "$SKIP_TESTS" = true ] && echo skipped || echo run) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -271,6 +285,9 @@ jobs:
     with:
       ref: ${{ needs.plan.outputs.tag }}
       go-version-file: go.mod
+      # The loomctl image (.goreleaser.yaml dockers) needs QEMU, Buildx and a
+      # GHCR login.
+      docker: true
       # The server archives carry the built dashboard.
       node-version: "24"
       pnpm-directory: apps/dashboard
@@ -279,6 +296,52 @@ jobs:
       # Without it the archives still publish.
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       SCOOP_BUCKET_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  # Signs the checksums here, not inside go-binary-release.yml. Keyless
+  # signing puts the workflow that ran cosign into the certificate, and a
+  # reusable workflow would put its own path there. In this job the identity
+  # is this file, which is what loomctl node verify-release and node.sh pin
+  # (internal/node/release).
+  #
+  # GoReleaser uploads binaries-checksums.txt before this job signs it, so
+  # for a minute or two a release has checksums and no signature. node.sh
+  # and node update fetch the bundle and fail closed in that window; a node
+  # that retries a little later gets the signed release.
+  #
+  # The certificate names the ref the run started from. A tag push signs as
+  # refs/tags/<tag> and a dispatch from main as refs/heads/main, the two
+  # identities the verifier accepts. Any other ref signs as an identity it
+  # rejects, so the job refuses to sign from one.
+  sign-checksums:
+    name: Sign checksums
+    needs: [plan, cli]
+    if: always() && needs.cli.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the ref the certificate will name
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/*) want="refs/tags/$TAG" ;;
+            *) want=refs/heads/main ;;
+          esac
+          if [ "$GITHUB_REF" != "$want" ]; then
+            echo "::error::This run is on $GITHUB_REF, so its signature would name that ref. Releases are signed from $want only."
+            exit 1
+          fi
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download the checksums
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern binaries-checksums.txt --clobber
+      - name: Sign them
+        run: cosign sign-blob --yes --bundle binaries-checksums.txt.sigstore.json binaries-checksums.txt
+      - name: Upload the bundle
+        run: gh release upload "$TAG" binaries-checksums.txt.sigstore.json --repo "$GITHUB_REPOSITORY" --clobber
 
   docker:
     name: Docker
@@ -313,5 +376,39 @@ jobs:
       contents: write
       packages: write
     uses: ./.github/workflows/publish-helm.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+
+  digitalocean:
+    name: DigitalOcean 1-Click
+    # After docker, so the image bakes in a release whose images exist.
+    needs: [plan, checks, release, docker]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.digitalocean == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish-digitalocean.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+    secrets:
+      DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+
+  push-gateway:
+    name: Push gateway image
+    needs: [plan, checks, integration, release]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.push-gateway == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.integration.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result)
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-push-gateway.yml
     with:
       tag: ${{ needs.plan.outputs.tag }}

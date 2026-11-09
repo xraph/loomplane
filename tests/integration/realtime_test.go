@@ -91,11 +91,7 @@ func TestRealtime_slowWebSocketReleasesItsSubscription(t *testing.T) {
 func realtimeUser(t *testing.T, cfg config.Config, r *running) (*client, string) {
 	t.Helper()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "stream@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "stream@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}
@@ -227,11 +223,7 @@ func TestRealtime_authenticatedSSEReplaysTheCommittedCursor(t *testing.T) {
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 	c.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/realtime/snapshot", nil, nil)
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "live@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "live@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

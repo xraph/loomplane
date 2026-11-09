@@ -87,8 +87,10 @@ type DeploymentInput struct {
 
 // Decision is an approval or a rejection, as the signal carries it.
 type Decision struct {
-	Actor   *security.Principal `json:"actor,omitempty"`
-	Approve bool                `json:"approve"`
+	RequestID      string              `json:"request_id,omitempty"`
+	GroupAdmission string              `json:"group_admission,omitempty"`
+	Actor          *security.Principal `json:"actor,omitempty"`
+	Approve        bool                `json:"approve"`
 	// Revision is the plan revision the decider reviewed.
 	Revision string `json:"revision"`
 	By       string `json:"by"`
@@ -128,6 +130,32 @@ type Deployer interface {
 type deployStarted struct {
 	DeploymentID string     `json:"deployment_id"`
 	Steps        [][]string `json:"steps"`
+	// Timeouts are the actions that get longer than actionTimeout, by
+	// action ID. A run started before they existed has none.
+	Timeouts map[string]time.Duration `json:"timeouts,omitempty"`
+}
+
+// timeout is how long an action's step may run: actionTimeout, or longer
+// when the deployer says the action needs it.
+func (s deployStarted) timeout(actionID string) time.Duration {
+	return max(actionTimeout, s.Timeouts[actionID])
+}
+
+// ActionTimeouts is a Deployer that knows which of a deployment's actions
+// need longer than a step usually gets, such as a catalog component that
+// takes hours to become ready.
+type ActionTimeouts interface {
+	ActionTimeouts(ctx context.Context, orgID, deploymentID string) (map[string]time.Duration, error)
+}
+
+// actionTimeouts asks dep for a deployment's longer action timeouts, when
+// it knows any.
+func actionTimeouts(ctx context.Context, dep Deployer, orgID, deploymentID string) (map[string]time.Duration, error) {
+	t, ok := dep.(ActionTimeouts)
+	if !ok || deploymentID == "" {
+		return nil, nil
+	}
+	return t.ActionTimeouts(ctx, orgID, deploymentID)
 }
 
 type deployInput struct {
@@ -168,6 +196,7 @@ type Deployments struct {
 	failedCleanups FailedCleanupRunner
 	cloudSync      CloudReconciler
 	infrastructure InfrastructureReconciler
+	cluster        ClusterReconciler
 	mu             sync.RWMutex
 	planner        Planner
 	deployer       Deployer
@@ -211,11 +240,11 @@ func (d *Deployments) Options(owner string, concurrency int) drt.Options {
 	return drt.Options{
 		Namespace: DurableNamespace, Queue: DurableQueue, BuildID: DeploymentBuild, Owner: owner,
 		Concurrency: concurrency,
-		Workflows:   map[string]drt.WorkflowFunc{failedCleanupWorkflow: d.cleanupWorkflow, WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, infrastructureWorkflow: d.infrastructureRun, resumeReleaseWorkflow: d.resumeRelease, routeWorkflow: d.routeRun, registrationWorkflow: d.registrationRun},
+		Workflows:   map[string]drt.WorkflowFunc{failedCleanupWorkflow: d.cleanupWorkflow, WorkflowDeployment: d.workflow, WorkflowRetry: d.retry, cloudSyncWorkflow: d.syncWorkflow, infrastructureWorkflow: d.infrastructureRun, clusterWorkflow: d.clusterRun, resumeReleaseWorkflow: d.resumeRelease, routeWorkflow: d.routeRun, registrationWorkflow: d.registrationRun},
 		Activities: map[string]drt.ActivityFunc{
 			failedCleanupActivity: d.cleanupActivity,
 			ActivityPlan:          d.plan,
-			cloudSyncActivity:     d.syncActivity, infrastructureActivity: d.infrastructureReconcile, releaseAvailableActivity: d.releaseAvailable, routeActivity: d.routeReconcile, registrationActivity: d.registrationReconcile,
+			cloudSyncActivity:     d.syncActivity, infrastructureActivity: d.infrastructureReconcile, clusterActivity: d.clusterReconcile, releaseAvailableActivity: d.releaseAvailable, routeActivity: d.routeReconcile, registrationActivity: d.registrationReconcile,
 			ActivityDecide: d.decide,
 			ActivityExpire: d.expire,
 			ActivityFail:   d.fail,
@@ -320,7 +349,7 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 		for _, id := range group {
 			step := dep
 			step.ActionID = id
-			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, actionTimeout, actionHeartbeat, actionAttempts, nil); err != nil {
+			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, started.timeout(id), actionHeartbeat, actionAttempts, nil); err != nil {
 				reason = err.Error()
 				break
 			}
@@ -333,10 +362,11 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 
 // retryInput restarts a failed deployment's remaining steps.
 type retryInput struct {
-	OrgID             string        `json:"org_id"`
-	DeploymentID      string        `json:"deployment_id"`
-	Steps             [][]string    `json:"steps"`
-	ReconcileInterval time.Duration `json:"reconcile_interval,omitempty"`
+	OrgID             string                   `json:"org_id"`
+	DeploymentID      string                   `json:"deployment_id"`
+	Steps             [][]string               `json:"steps"`
+	Timeouts          map[string]time.Duration `json:"timeouts,omitempty"`
+	ReconcileInterval time.Duration            `json:"reconcile_interval,omitempty"`
 }
 
 // retry is the retry workflow: the deployment was reopened before it
@@ -347,7 +377,7 @@ func (d *Deployments) retry(w *drt.Workflow, input []byte) ([]byte, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, fmt.Errorf("decode retry input: %w", err)
 	}
-	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps}); err != nil {
+	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})
@@ -372,6 +402,13 @@ func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID st
 	// A retry keeps its plan's build: the steps it runs again are that
 	// build's.
 	in := retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps}
+	dep, err := d.boundDeployer()
+	if err != nil {
+		return err
+	}
+	if in.Timeouts, err = actionTimeouts(ctx, dep, orgID, deploymentID); err != nil {
+		return err
+	}
 	if build != DeploymentBuild {
 		in.ReconcileInterval = capacityInterval
 	}
@@ -517,6 +554,17 @@ func (d *Deployments) Start(ctx context.Context, orgID, planID string, window ti
 	interval := time.Duration(0)
 	if d.runs != nil {
 		build = CurrentBuild
+		if source, ok := d.runs.(interface {
+			NeedsCleanupExecutor(context.Context, string, string) (bool, error)
+		}); ok {
+			needed, readErr := source.NeedsCleanupExecutor(ctx, orgID, planID)
+			if readErr != nil {
+				return readErr
+			}
+			if needed {
+				build = ManagedCleanupBuild
+			}
+		}
 		interval = capacityInterval
 	}
 	raw, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window, ReconcileInterval: interval})
@@ -528,6 +576,9 @@ func (d *Deployments) Start(ctx context.Context, orgID, planID string, window ti
 
 // Decide delivers approval to the build and run stored for this plan.
 func (d *Deployments) Decide(ctx context.Context, planID, requestID string, dec Decision) error {
+	if (dec.RequestID != "" && dec.RequestID != requestID) || (dec.GroupAdmission != "" && dec.RequestID == "") {
+		return errors.New("decision request does not match its durable signal")
+	}
 	e, err := d.planRun(ctx, planID)
 	if errors.Is(err, durable.ErrNotFound) {
 		return ErrNotRunning
@@ -588,7 +639,11 @@ func (d *Deployments) deployStart(ctx context.Context, _ drt.ActivityInfo, input
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps})
+	timeouts, err := actionTimeouts(ctx, dep, in.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps, Timeouts: timeouts})
 }
 
 func (d *Deployments) deploySource(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {

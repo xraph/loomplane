@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // CatalogHooks is what a composed catalog kind does beyond its recipe.
@@ -21,6 +22,12 @@ type CatalogHooks interface {
 	// generated secrets go.
 	Removed(ctx context.Context, res ComposedResource) error
 }
+
+// CatalogHookMap holds composed kinds' hooks, by kind: the one map the
+// owned targets and the runner share. The planning extension provides it
+// through Forge DI, and an extension adds its kinds' hooks during its own
+// Register, never later.
+type CatalogHookMap map[string]CatalogHooks
 
 // NoHooks does nothing. A kind's hooks embed it to implement only what
 // they need.
@@ -41,6 +48,8 @@ func (NoHooks) Removed(context.Context, ComposedResource) error { return nil }
 
 // ComponentRun is one component of a composed resource as it's applied.
 type ComponentRun struct {
+	// Recovery renders a private inspection copy with independently generated credentials.
+	Recovery                                                           bool
 	OrgID, ProjectID, EnvironmentID, Environment, PlanID, DeploymentID string
 	// Resource is the composed resource's manifest name.
 	Resource string
@@ -66,6 +75,12 @@ type ComponentRun struct {
 	// component runs with, such as a cluster's "namespace". They're a
 	// copy: changing them changes nothing.
 	TargetSettings map[string]string
+	// Settings are the resource's settings, by name, defaults filled in,
+	// as the plan reviewed them. They're a copy.
+	Settings map[string]string
+	// GPU is the component's reviewed GPU placement, or nil without one.
+	// It's a copy.
+	GPU *provider.GPUPlacement
 }
 
 // ConsumerBinder is implemented by the hooks of a kind with an Output that
@@ -148,3 +163,18 @@ var (
 	_ EndpointResolver = (*catalogconnect.Service)(nil)
 	_ EndpointChecker  = (*catalogconnect.Checker)(nil)
 )
+
+// SecretGeneration carries stable resource identity and previously loaded
+// credentials to an optional structured generator. Values stay in process.
+type SecretGeneration struct {
+	OrgID, EnvironmentID, Resource, Kind string
+	Secret                               recipes.GeneratedSecret
+	Secrets                              map[string][]byte
+}
+
+// StructuredSecretGenerator runs only on a missing first-use secret and validates
+// every reused bundle. Validation must never repair or rotate existing material.
+type StructuredSecretGenerator interface {
+	GenerateSecret(context.Context, SecretGeneration) ([]byte, error)
+	ValidateSecret(context.Context, SecretGeneration, []byte) error
+}

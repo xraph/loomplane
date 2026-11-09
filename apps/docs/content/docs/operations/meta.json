@@ -4,9 +4,11 @@
     "production-on-docker",
     "production-on-kubernetes",
     "miget",
+    "digitalocean",
     "upgrades-and-releases",
     "backing-up-loomplane",
     "monitoring",
+    "push-notifications",
     "security-model"
   ]
 }

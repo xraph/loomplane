@@ -1,20 +1,25 @@
-// A repository field: type or paste any GitHub repository, or pick one the
-// organization's connected GitHub accounts let Loomplane read, from a list
-// grouped by account. New project and Add a repository both use it.
+// A repository field: type or paste any GitHub, GitLab or Bitbucket
+// repository, or pick one the organization's connected GitHub accounts,
+// GitLab connections and Bitbucket workspaces let Loomplane read, from a
+// list grouped by account, namespace or workspace. New project and Add a
+// repository both use it. The field holds the key a source stores:
+// owner/name for GitHub, host/path for anything else.
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import { GitBranchIcon, LockIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 import {
-  useGithubRepositories,
+  useBitbucketStatus,
   useGithubStatus,
+  useGitlabStatus,
 } from "@/client/forge/loomplane/hooks"
-import type {
-  ConnectedRepository,
-  GitHubInstallation,
-} from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
+import { HostMark } from "@/components/host-mark"
 import { QueryError } from "@/components/query-error"
+import {
+  type Listing,
+  RepositoryListings,
+} from "@/components/repository-listings"
 import {
   InputGroup,
   InputGroupAddon,
@@ -22,16 +27,22 @@ import {
   InputGroupText,
 } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
-import { githubRepo } from "@/lib/format"
-import { type RepositoryChoice, repositoryChoices } from "@/lib/integrations"
+import { repositoryKey, startsWithHost } from "@/lib/format"
+import {
+  canReadBitbucket,
+  type PickerRepository,
+  pickerGroupLabel,
+  type RepositoryChoice,
+  repositoryChoices,
+} from "@/lib/integrations"
 import { cn } from "@/lib/utils"
 
 type FieldProps = {
   id?: string
-  /** owner/name, or whatever's been typed so far. */
+  /** A repository's key, or whatever's been typed so far. */
   value: string
   onChange: (value: string) => void
-  /** Repositories already chosen elsewhere in the form, as owner/name. */
+  /** Repositories already chosen elsewhere in the form, as keys. */
   exclude?: string[]
   placeholder?: string
   autoFocus?: boolean
@@ -43,17 +54,43 @@ type FieldProps = {
   className?: string
 }
 
-/** A pasted URL becomes owner/name, which is what the field holds. */
+/** A pasted URL becomes the key the field holds. */
 function normalize(typed: string): string {
-  return githubRepo(typed) || typed.trim()
+  return repositoryKey(typed) || typed.trim()
+}
+
+/** The github.com/ addon belongs to owner/name, not to another host's key. */
+function HostAddon({ value }: { value: string }) {
+  if (startsWithHost(value)) return null
+  return (
+    <InputGroupAddon>
+      <InputGroupText>github.com/</InputGroupText>
+    </InputGroupAddon>
+  )
 }
 
 export function RepositoryPicker(props: FieldProps) {
   const github = useQuery(useGithubStatus)
+  const gitlab = useQuery(useGitlabStatus)
+  const bitbucket = useQuery(useBitbucketStatus)
   const installations = github.data?.installations ?? []
-  // The list asks GitHub, so it's only there once an account is connected.
-  if (installations.length === 0) return <PlainField {...props} />
-  return <Picker {...props} installations={installations} />
+  const hasGitHub = installations.length > 0
+  const hasGitLab = (gitlab.data?.connections.length ?? 0) > 0
+  const hasBitbucket = canReadBitbucket(bitbucket.data)
+  // The lists ask the hosts, so they're only there once an account is
+  // connected.
+  if (!hasGitHub && !hasGitLab && !hasBitbucket)
+    return <PlainField {...props} />
+  const label = pickerGroupLabel(installations, bitbucket.data?.workspaces)
+  return (
+    <RepositoryListings
+      github={hasGitHub}
+      gitlab={hasGitLab}
+      bitbucket={hasBitbucket}
+    >
+      {(listings) => <Picker {...props} label={label} listings={listings} />}
+    </RepositoryListings>
+  )
 }
 
 function PlainField({
@@ -70,9 +107,7 @@ function PlainField({
 }: FieldProps) {
   return (
     <InputGroup className={className}>
-      <InputGroupAddon>
-        <InputGroupText>github.com/</InputGroupText>
-      </InputGroupAddon>
+      <HostAddon value={value} />
       <InputGroupInput
         id={id}
         autoFocus={autoFocus}
@@ -102,12 +137,17 @@ function Picker({
   onFocus,
   end,
   className,
-  installations,
+  label,
+  listings,
   ...rest
-}: FieldProps & { installations: GitHubInstallation[] }) {
-  const repos = useQuery(useGithubRepositories)
-  const all = repos.data?.repositories ?? []
-  const groups = repositoryChoices(all, installations, value, exclude)
+}: FieldProps & {
+  label: ReturnType<typeof pickerGroupLabel>
+  listings: Listing[]
+}) {
+  const all = listings.flatMap((l) => l.repositories)
+  const loading = listings.some((l) => l.loading)
+  const failed = listings.find((l) => l.error)
+  const groups = repositoryChoices(all, label, value, exclude)
 
   return (
     <div className="grid min-w-0 gap-2">
@@ -116,13 +156,11 @@ function Picker({
         filteredItems={groups}
         value={value}
         onValueChange={(v) => onChange(normalize(v))}
-        itemToStringValue={(c: RepositoryChoice) => c.repository.fullName}
+        itemToStringValue={(c: RepositoryChoice) => c.repository.key}
         openOnInputClick
       >
         <Autocomplete.InputGroup render={<InputGroup className={className} />}>
-          <InputGroupAddon>
-            <InputGroupText>github.com/</InputGroupText>
-          </InputGroupAddon>
+          <HostAddon value={value} />
           <Autocomplete.Input
             id={id}
             autoFocus={autoFocus}
@@ -135,14 +173,14 @@ function Picker({
             autoComplete="off"
             spellCheck={false}
           />
-          {!repos.data && repos.status !== "error" && (
+          {loading && (
             <InputGroupAddon align="inline-end">
               <Spinner className="text-muted-foreground" />
             </InputGroupAddon>
           )}
           {end}
         </Autocomplete.InputGroup>
-        {repos.data && all.length > 0 && (
+        {all.length > 0 && (
           <Autocomplete.Portal>
             <Autocomplete.Positioner sideOffset={6} className="isolate z-50">
               <Autocomplete.Popup className="max-h-[min(22rem,var(--available-height))] w-(--anchor-width) origin-(--transform-origin) overflow-y-auto overscroll-contain rounded-xl bg-popover p-1 text-[13px] text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0">
@@ -167,10 +205,15 @@ function Picker({
                           <span className="size-4 rounded-[4px] border bg-muted" />
                         )}
                         {group.account}
+                        <HostMark
+                          provider={group.provider}
+                          host={group.host}
+                          className="size-3 shrink-0"
+                        />
                       </Autocomplete.GroupLabel>
                       <Autocomplete.Collection>
                         {(c: RepositoryChoice) => (
-                          <Choice key={c.repository.fullName} choice={c} />
+                          <Choice key={c.repository.key} choice={c} />
                         )}
                       </Autocomplete.Collection>
                     </Autocomplete.Group>
@@ -181,11 +224,13 @@ function Picker({
           </Autocomplete.Portal>
         )}
       </Autocomplete.Root>
-      {repos.status === "error" && (
+      {failed && (
         <QueryError
-          error={repos.error}
+          error={failed.error}
           fallback="The repositories couldn't be loaded. You can still type a repository."
-          retry={repos.refetch}
+          retry={() =>
+            Promise.all(listings.filter((l) => l.error).map((l) => l.retry?.()))
+          }
           label="Retry repositories"
         />
       )}
@@ -230,7 +275,8 @@ function Choice({
   )
 }
 
-/** name is a repository's name without its owner, which the group shows. */
-function name(r: ConnectedRepository): string {
+/** name is a repository's name without its owner or namespace, which the group shows. */
+function name(r: PickerRepository): string {
+  if (r.provider === "gitlab") return r.key.split("/").pop() ?? r.key
   return r.fullName.split("/").slice(1).join("/") || r.fullName
 }

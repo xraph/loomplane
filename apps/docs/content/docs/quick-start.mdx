@@ -87,7 +87,7 @@ Each GitHub release carries `loomctl_<version>_<os>_<arch>` archives for macOS, 
 
 ### Create a project
 
-In the dashboard choose **New project** and give it a GitHub URL. Any public monorepo works as is. Private ones need a GitHub App, which [Private repositories](/docs/guides/private-repositories) sets up.
+In the dashboard choose **New project** and give it a GitHub or GitLab URL. Any public monorepo works as is. Private ones need a GitHub App or a GitLab sign-in, which [Private repositories](/docs/guides/private-repositories) and [GitLab repositories](/docs/guides/gitlab-repositories) set up.
 
 </Step>
 <Step>
@@ -120,17 +120,29 @@ Plan an environment. You see every action in order, anything in the way, and any
 </Step>
 </Steps>
 
-The same flow works from a terminal or CI. Make an API key under **Settings, API keys**, then:
+The same flow works from a terminal. Sign in, approve the code in the browser tab it opens, then:
 
 ```bash
-loomctl login --url https://loomplane.example.com --key -
+loomctl login --url https://loomplane.example.com
 loomctl analyze mono
 loomctl manifest save mono -f loomplane.yaml
 loomctl plan mono --env production
 loomctl approve <plan-id>
 ```
 
-`--key -` reads the key from standard input, so it stays out of your shell history. See [CI with loomctl](/docs/guides/ci-with-loomctl) for pipelines.
+CI has nobody to approve a code, so it uses an API key from **Settings, API keys** instead. See [CI with loomctl](/docs/guides/ci-with-loomctl) for pipelines.
+
+## Join a machine as a node
+
+Got a machine you'd rather use than a cloud, even one behind a router? Join it as a node. With `loomctl` logged in, run this on the machine:
+
+```bash
+sudo loomctl node join --allow probe
+```
+
+The machine may not have `loomctl` yet. Then add a node in the dashboard (**Nodes**, **Add node**), tick what Loomplane may use, and paste the one line it gives you. Either way the node dials out, so there's no port to open, and it shows under **Nodes** once it connects.
+
+Today a node reports what the machine has and takes signed updates. Deploying to it comes next. [Nodes](/docs/clouds/nodes) covers the rest, including why allowing `docker` hands over root on that machine.
 
 ## Develop Loomplane locally
 

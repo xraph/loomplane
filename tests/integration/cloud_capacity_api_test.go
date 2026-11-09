@@ -5,10 +5,12 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -317,6 +319,18 @@ func TestCapacityAPIGPUFields(t *testing.T) {
 // workflow would, and returns it at wait revision 1.
 func (a *capacityAPI) pausedDeployment(t *testing.T, org, id string) *deployments.Deployment {
 	t.Helper()
+	a.runningDeployment(t, org, id)
+	d, err := a.deploys.SetCapacityWait(t.Context(), org, id, 0, []cloudinfra.CapacityBlock{{Reason: "hard_limit", Resource: "gpus:nvidia-l4", CloudID: a.cloud, Limit: 2, Counted: 2, Requested: 1, PolicyRevision: 1}}, time.Now())
+	if err != nil || d.Status != deployments.StatusPaused || d.CapacityWait.Revision != 1 {
+		t.Fatalf("seed paused deployment: %+v %v", d, err)
+	}
+	return d
+}
+
+// runningDeployment seeds an approved plan's deployment, running, with one
+// step that hasn't started.
+func (a *capacityAPI) runningDeployment(t *testing.T, org, id string) {
+	t.Helper()
 	var envs struct {
 		Environments []struct {
 			ID   string `json:"id"`
@@ -340,11 +354,128 @@ func (a *capacityAPI) pausedDeployment(t *testing.T, org, id string) *deployment
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := a.deploys.SetCapacityWait(t.Context(), org, id, 0, []cloudinfra.CapacityBlock{{Reason: "hard_limit", Resource: "gpus:nvidia-l4", CloudID: a.cloud, Limit: 2, Counted: 2, Requested: 1, PolicyRevision: 1}}, time.Now())
-	if err != nil || d.Status != deployments.StatusPaused || d.CapacityWait.Revision != 1 {
-		t.Fatalf("seed paused deployment: %+v %v", d, err)
+}
+
+func TestDeploymentCancelAPI(t *testing.T) {
+	a := capacityAPISetup(t)
+	a.runningDeployment(t, a.org, "dep-run")
+	base := "/api/v1/deployments/dep-run"
+	// An environment runs one deployment at a time, so each case settles
+	// its own before the next starts.
+	settle := func(id, status string) {
+		t.Helper()
+		if _, err := a.sql.Exec(t.Context(), `UPDATE loomplane_deployments SET status=$3, finished_at=now() WHERE org_id=$1 AND id=$2`, a.org, id, status); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return d
+
+	// Another organization's deployment doesn't exist from here.
+	a.runningDeployment(t, "other-org", "dep-elsewhere")
+	a.c.must(http.StatusNotFound, http.MethodPost, "/api/v1/deployments/dep-elsewhere/cancel", nil, nil)
+	a.c.must(http.StatusNotFound, http.MethodPost, "/api/v1/deployments/missing/cancel", nil, nil)
+
+	// A running deployment records the request and keeps running: nothing
+	// is fenced until its next action starts.
+	var d deployments.Deployment
+	a.c.must(http.StatusOK, http.MethodPost, base+"/cancel", nil, &d)
+	if d.Status != deployments.StatusRunning || d.CancelRequestedAt == nil || d.FinishedAt != nil {
+		t.Fatalf("requested %+v", d)
+	}
+	if n := a.capacityEvents(t, "dep-run", 1); n != 0 {
+		t.Fatalf("the request wrote %d capacity events", n)
+	}
+	again := deployments.Deployment{}
+	a.c.must(http.StatusOK, http.MethodPost, base+"/cancel", nil, &again)
+	if again.CancelRequestedAt == nil || !again.CancelRequestedAt.Equal(*d.CancelRequestedAt) {
+		t.Fatalf("requested again %+v", again)
+	}
+
+	// The next action's claim says to stop rather than start, and the
+	// runner stops it in the capacity cancel's transaction, with one
+	// durable event for the workflow.
+	stop, err := a.deploys.ClaimStep(t.Context(), a.org, "dep-run", "service:api")
+	if err != nil || !stop {
+		t.Fatalf("claim after a request: %v %v", stop, err)
+	}
+	stopped, err := a.deploys.StopDeployment(t.Context(), a.org, "dep-run", time.Now())
+	if err != nil || stopped.Status != deployments.StatusCancelled || stopped.FinishedAt == nil || stopped.Steps[0].Status != deployments.StepPending {
+		t.Fatalf("stopped %+v %v", stopped, err)
+	}
+	if n := a.capacityEvents(t, "dep-run", 1); n != 1 {
+		t.Fatalf("the stop wrote %d capacity events", n)
+	}
+	a.c.must(http.StatusOK, http.MethodPost, base+"/cancel", nil, nil)
+	a.c.must(http.StatusConflict, http.MethodPost, base+"/retry", nil, nil)
+	a.c.must(http.StatusConflict, http.MethodPost, base+"/capacity/resume", map[string]int64{"expected_revision": 1}, nil)
+
+	// Stopping one nobody asked to cancel changes nothing.
+	a.runningDeployment(t, a.org, "dep-unasked")
+	if _, err = a.deploys.StopDeployment(t.Context(), a.org, "dep-unasked", time.Now()); !errors.Is(err, deployments.ErrCapacityWaitConflict) {
+		t.Fatalf("stopped without a request: %v", err)
+	}
+	settle("dep-unasked", "failed")
+
+	// A paused deployment has nothing in flight and cancels at once.
+	a.pausedDeployment(t, a.org, "dep-paused")
+	d = deployments.Deployment{}
+	a.c.must(http.StatusOK, http.MethodPost, "/api/v1/deployments/dep-paused/cancel", nil, &d)
+	if d.Status != deployments.StatusCancelled || d.CapacityWait != nil || a.capacityEvents(t, "dep-paused", 2) != 1 {
+		t.Fatalf("cancelled paused %+v", d)
+	}
+
+	// Once its last action has claimed its step, before any effect, a
+	// deployment has no next action to stop before.
+	a.runningDeployment(t, a.org, "dep-last")
+	if stop, err = a.deploys.ClaimStep(t.Context(), a.org, "dep-last", "service:api"); err != nil || stop {
+		t.Fatalf("claim: %v %v", stop, err)
+	}
+	if claimed, readErr := a.deploys.GetDeployment(t.Context(), a.org, "dep-last"); readErr != nil || !claimed.Steps[0].Claimed || claimed.Steps[0].StartedAt != nil || claimed.Steps[0].Status != deployments.StepPending {
+		t.Fatalf("claimed %+v %v", claimed, readErr)
+	}
+	status, body := capacityPost(t, a.c, "/api/v1/deployments/dep-last/cancel", nil)
+	if status != http.StatusConflict || !strings.Contains(body, "finishes on its own") {
+		t.Fatalf("cancel during the last step: %d %s", status, body)
+	}
+	settle("dep-last", "failed")
+
+	// One that finished has nothing to stop.
+	a.runningDeployment(t, a.org, "dep-done")
+	settle("dep-done", "succeeded")
+	status, body = capacityPost(t, a.c, "/api/v1/deployments/dep-done/cancel", nil)
+	if status != http.StatusConflict || !strings.Contains(body, "only a running deployment can be cancelled") {
+		t.Fatalf("cancel finished: %d %s", status, body)
+	}
+
+	// A retry forgets a request the failed run never reached.
+	a.runningDeployment(t, a.org, "dep-retry")
+	a.c.must(http.StatusOK, http.MethodPost, "/api/v1/deployments/dep-retry/cancel", nil, nil)
+	settle("dep-retry", "failed")
+	if ok, reopenErr := a.deploys.Reopen(t.Context(), a.org, "dep-retry"); !ok || reopenErr != nil {
+		t.Fatalf("reopen: %v %v", ok, reopenErr)
+	}
+	reopened, err := a.deploys.GetDeployment(t.Context(), a.org, "dep-retry")
+	if err != nil || reopened.CancelRequestedAt != nil {
+		t.Fatalf("reopened %+v %v", reopened, err)
+	}
+
+	// The dashboard's client is generated from the committed spec, which is
+	// grafted by hand, so it must say what's served.
+	var raw json.RawMessage
+	a.c.must(http.StatusOK, http.MethodGet, "/openapi.json", nil, &raw)
+	committedRaw, err := os.ReadFile("../../apps/dashboard/specs/loomplane.openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The spec script names the served Deployment schema DeploymentsDeployment.
+	served := openAPIDoc(t, bytes.ReplaceAll(raw, []byte(`"#/components/schemas/Deployment"`), []byte(`"#/components/schemas/DeploymentsDeployment"`)))
+	committed := openAPIDoc(t, committedRaw)
+	if path := "/api/v1/deployments/{id}/cancel"; !jsonEqual(served.Paths[path], committed.Paths[path]) {
+		t.Errorf("the committed spec's %s differs from the served one: %s", path, served.Paths[path])
+	}
+	field := "cancel_requested_at"
+	if want := property(t, served, "Deployment", field); !jsonEqual(want, property(t, committed, "DeploymentsDeployment", field)) {
+		t.Errorf("the committed spec's DeploymentsDeployment.%s differs from the served one: %s", field, want)
+	}
 }
 
 func (a *capacityAPI) capacityEvents(t *testing.T, id string, revision int64) int {
@@ -461,6 +592,13 @@ func scalingPoolSetup(t *testing.T) *scalingPoolAPI {
 			_, _ = w.Write([]byte(`{"sizes":[{"slug":"gpu-l4x1-24gb","memory":16384,"vcpus":4,"disk":100,"available":true,"price_hourly":0.85,"price_monthly":632.4,"regions":["tor1"],"gpu_info":{"count":1,"model":"nvidia_l4","vram":{"amount":24,"unit":"gib"}}}],"links":{}}`))
 		case "/v2/images":
 			_, _ = w.Write([]byte(`{"images":[{"id":1,"slug":"gpu-h100x1-base","name":"AI/ML Ready","distribution":"Ubuntu","public":true,"regions":["tor1"],"min_disk_size":50}],"links":{}}`))
+		case "/v2/databases":
+			if r.Method != http.MethodGet {
+				t.Error("background inventory must not mutate databases")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			_, _ = w.Write([]byte(`{"databases":[],"links":{},"meta":{"total":0}}`))
 		default:
 			t.Errorf("asked DigitalOcean %s", r.URL)
 			w.WriteHeader(http.StatusNotFound)

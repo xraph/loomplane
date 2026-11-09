@@ -41,6 +41,9 @@ func TestDockerPostgresPersistentLifecycle(t *testing.T) {
 	}}
 	defer transport.CloseIdleConnections()
 	client := &Client{Config: &Config{Details: map[string]string{"docker_id": "integration"}}, HTTP: &http.Client{Transport: transport}}
+	if testAccess(t) == "node" {
+		client = nodeFixture(t, socket)
+	}
 	iid := id.New(id.PrefixInstance)
 	labels := map[string]string{owned.LabelOrg: "test", owned.LabelProject: iid.String(), owned.LabelEnvironment: iid.String(), owned.LabelConnection: "test", owned.LabelRevision: "first", LabelDatabase: "postgres"}
 	runtime := Runtime{Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }, Wait: time.Minute}

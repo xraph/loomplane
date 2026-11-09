@@ -16,6 +16,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -29,8 +30,9 @@ var ErrConflict = errors.New("another plan for this environment was just started
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	frontendWake cloudinfra.CapacityCloudWakeup
-	db           *pgdriver.PgDB
+	groupAcceptance GroupAcceptanceAuthority
+	frontendWake    cloudinfra.CapacityCloudWakeup
+	db              *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
@@ -39,21 +41,31 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
-	manifest_id, manifest_revision, result, executable, error,
+	coalesce(manifest_id,''), manifest_revision, result, executable, error,
 	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog,
-	kind, from_environment, from_environment_id, rollback`
+	kind, from_environment, from_environment_id, rollback, services,
+ coalesce((SELECT i.id FROM loomplane_fleet_instances i WHERE i.org_id=loomplane_plans.org_id AND i.environment_id=loomplane_plans.environment_id),'')`
 
 // open lists the statuses of a plan that hasn't been settled.
 const open = `('planning', 'ready')`
 
 func scanPlan(row pgx.Row) (*Plan, error) {
 	var p Plan
-	var result, rollbackSpec []byte
+	var result, rollbackSpec, services []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
 		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
 		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog,
-		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec); err != nil {
+		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec, &services, &p.ManagedInstanceID); err != nil {
 		return nil, err
+	}
+	if len(services) > 0 {
+		if err := json.Unmarshal(services, &p.Services); err != nil {
+			return nil, fmt.Errorf("decode plan services: %w", err)
+		}
+		// A plan of every service reads as nil, however it was stored.
+		if len(p.Services) == 0 {
+			p.Services = nil
+		}
 	}
 	if len(rollbackSpec) > 0 {
 		if err := json.Unmarshal(rollbackSpec, &p.Rollback); err != nil {
@@ -91,6 +103,10 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	fleetInput, ownershipErr := checkPlanOwnership(ctx, tx, p)
+	if ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	superseded, err = supersede(ctx, tx, p)
 	if err != nil {
 		return nil, err
@@ -104,17 +120,29 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 			return nil, fmt.Errorf("encode plan rollback: %w", err)
 		}
 	}
+	// The column is never null: a plan of every service stores [].
+	services := []byte("[]")
+	if len(p.Services) > 0 {
+		if services, err = json.Marshal(p.Services); err != nil {
+			return nil, fmt.Errorf("encode plan services: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
-		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback, services)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, p.Kind, p.From, p.FromEnvironmentID, rollbackSpec, services)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict
 	}
 	if err != nil {
 		return nil, fmt.Errorf("insert plan: %w", err)
+	}
+	if len(fleetInput) > 0 {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_plan_inputs(plan_id,org_id,fleet_id,instance_id,snapshot) VALUES($1,$2,$3,$4,$5)`, p.ID, p.OrgID, p.FleetInput.Authority.Scope.FleetID, p.ManagedInstanceID, string(fleetInput)); err != nil {
+			return nil, err
+		}
 	}
 	for _, ps := range p.Sources {
 		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_plan_sources
@@ -162,6 +190,9 @@ func (s *PgStore) GetPlan(ctx context.Context, orgID, id string) (*Plan, error) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get plan: %w", err)
+	}
+	if err := s.withFleetInput(ctx, p); err != nil {
+		return nil, err
 	}
 	if err := s.withSources(ctx, p); err != nil {
 		return nil, err
@@ -397,6 +428,33 @@ func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string
 	return id, nil
 }
 
+// RolledBackPlans implements Store. Plans never succeed themselves, so a
+// rollback counts once its deployment has finished, succeeded or failed:
+// a failed one still undid some of its target, and one refused as stale
+// still says its target was judged bad, so no later rollback restores it.
+func (s *PgStore) RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT p.rollback->>'target_plan_id'
+		FROM loomplane_plans p JOIN loomplane_deployments d ON d.org_id = p.org_id AND d.plan_id = p.id
+		WHERE p.org_id = $1 AND p.kind = 'rollback' AND p.environment_id = $2 AND d.status IN ('succeeded', 'failed')
+			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list rolled back plans: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan rolled back plan: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list rolled back plans: %w", err)
+	}
+	return out, nil
+}
+
 // FailPlanning implements Store.
 func (s *PgStore) FailPlanning(ctx context.Context, orgID, id, reason string, now time.Time) error {
 	if _, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = 'failed', error = $3, planned_at = $4
@@ -413,8 +471,34 @@ func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string
 		return false, err
 	}
 	defer func() { err = rollback(tx, err) }()
+	if status == StatusApproved {
+		if sourceErr := environments.LockRuntimeSourcesTx(ctx, tx); sourceErr != nil {
+			return false, sourceErr
+		}
+		if s.groupAcceptance != nil {
+			if authorityErr := s.groupAcceptance.LockGroupAuthorityTx(ctx, tx); authorityErr != nil {
+				return false, authorityErr
+			}
+		}
+	}
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, orgID); checkErr != nil {
 		return false, checkErr
+	}
+	if status == StatusApproved {
+		var raw []byte
+		var project string
+		if readErr := tx.QueryRow(ctx, `SELECT project_id,result FROM loomplane_plans WHERE org_id=$1 AND id=$2 FOR UPDATE`, orgID, id).Scan(&project, &raw); readErr != nil {
+			return false, readErr
+		}
+		var result Result
+		if len(raw) > 0 {
+			if decodeErr := json.Unmarshal(raw, &result); decodeErr != nil {
+				return false, decodeErr
+			}
+		}
+		if checkErr := validateLocationActionsTx(ctx, tx, orgID, project, result.Actions, now); checkErr != nil {
+			return false, ErrStale
+		}
 	}
 	if actor, ok := security.PrincipalFrom(ctx); ok {
 		raw, marshalErr := json.Marshal(actor)
@@ -425,9 +509,17 @@ func (s *PgStore) Decide(ctx context.Context, orgID, id, status, by, note string
 			return false, err
 		}
 	}
+	if status == StatusApproved {
+		if groupErr := s.acceptPlacementGroupsTx(ctx, tx, orgID, id, now); groupErr != nil {
+			return false, groupErr
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_plans SET status = $3, decided_by = $4, decision_note = $5, decided_at = $6
  WHERE org_id = $1 AND id = $2 AND status = 'ready'`, orgID, id, status, by, note, now)
 	if err != nil {
+		if cloudprofiles.IsStaleCleanupReview(err) {
+			return false, ErrStale
+		}
 		return false, fmt.Errorf("decide plan: %w", err)
 	}
 	changed, err = affected(tag)
@@ -448,7 +540,7 @@ func affected(r driver.Result) (bool, error) {
 
 const bindingColumns = `id, org_id, project_id, environment_id, subject, name, provider, region, engine,
 	external_id, config, url, connection_id, revision, commit_sha, drift, drift_message, observed_at,
-	plan_id, created_at, updated_at, replaced, physical_id, owned_resources`
+	plan_id, created_at, updated_at, replaced, physical_id, owned_resources, alias`
 
 // ListBindings implements Store.
 func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string) ([]*Binding, error) {
@@ -490,7 +582,7 @@ func scanBinding(row pgx.Row) (*Binding, error) {
 	var cfg, replaced []byte
 	if err := row.Scan(&b.ID, &b.OrgID, &b.ProjectID, &b.EnvironmentID, &b.Subject, &b.Name, &b.Provider, &b.Region,
 		&b.Engine, &b.ExternalID, &cfg, &b.URL, &b.ConnectionID, &b.Revision, &b.CommitSHA, &b.Drift, &b.DriftMessage,
-		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced, &b.PhysicalID, &b.OwnedResources); err != nil {
+		&b.ObservedAt, &b.PlanID, &b.CreatedAt, &b.UpdatedAt, &replaced, &b.PhysicalID, &b.OwnedResources, &b.Alias); err != nil {
 		return nil, fmt.Errorf("scan binding: %w", err)
 	}
 	b.Config = cfg
@@ -617,7 +709,7 @@ func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
 		return err
 	}
 	_, err = db.Exec(ctx, `INSERT INTO loomplane_bindings (`+bindingColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 		ON CONFLICT (environment_id, subject, name) DO UPDATE SET
 			provider = EXCLUDED.provider, region = EXCLUDED.region, engine = EXCLUDED.engine,
 			external_id = EXCLUDED.external_id, config = EXCLUDED.config, url = EXCLUDED.url,
@@ -627,9 +719,28 @@ func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
 		WHERE loomplane_bindings.org_id = EXCLUDED.org_id`,
 		b.ID, b.OrgID, b.ProjectID, b.EnvironmentID, b.Subject, b.Name, b.Provider, b.Region, b.Engine,
 		b.ExternalID, cfg, b.URL, b.ConnectionID, b.Revision, b.CommitSHA, b.Drift, b.DriftMessage, b.ObservedAt,
-		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced, b.PhysicalID, owned)
+		b.PlanID, b.CreatedAt, b.UpdatedAt, replaced, b.PhysicalID, owned, b.Alias)
 	if err != nil {
 		return fmt.Errorf("put binding: %w", err)
+	}
+	return nil
+}
+
+// SetBindingAlias implements Store. The update above leaves alias alone,
+// so this is the only write that changes it.
+func (s *PgStore) SetBindingAlias(ctx context.Context, orgID, id, alias string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE loomplane_bindings SET alias = $3 WHERE org_id = $1 AND id = $2`, orgID, id, alias)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		return ErrAliasTaken
+	}
+	if err != nil {
+		return fmt.Errorf("set binding alias: %w", err)
+	}
+	if ok, err := affected(tag); err != nil {
+		return err
+	} else if !ok {
+		return ErrNotFound
 	}
 	return nil
 }

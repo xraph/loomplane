@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,11 +16,13 @@ import (
 
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/store/memory"
+	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/security/securitytest"
 )
 
 const (
@@ -187,7 +190,7 @@ func (m *memStore) CreateSource(_ context.Context, s *Source) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, x := range m.sources {
-		if x.ProjectID == s.ProjectID && x.Alias == s.Alias {
+		if x.ProjectID == s.ProjectID && x.Alias == s.Alias && x.RemovedAt == nil {
 			return ErrAliasTaken
 		}
 	}
@@ -197,12 +200,16 @@ func (m *memStore) CreateSource(_ context.Context, s *Source) error {
 }
 
 func (m *memStore) findSource(orgID, projectID, alias string, live bool) *Source {
+	var found *Source
 	for _, x := range m.sources {
-		if x.OrgID == orgID && x.ProjectID == projectID && x.Alias == alias && (!live || x.RemovedAt == nil) {
-			return x
+		if x.OrgID != orgID || x.ProjectID != projectID || x.Alias != alias || (live && x.RemovedAt != nil) {
+			continue
+		}
+		if found == nil || (found.RemovedAt != nil && x.RemovedAt == nil) || (found.RemovedAt != nil == (x.RemovedAt != nil) && x.CreatedAt.After(found.CreatedAt)) {
+			found = x
 		}
 	}
-	return nil
+	return found
 }
 
 func (m *memStore) GetSource(_ context.Context, orgID, projectID, alias string) (*Source, error) {
@@ -566,6 +573,10 @@ func TestRunner_failures(t *testing.T) {
 		reason     string
 	}{
 		{"permanent", repositories.ErrNotFound, 3, false, repositories.ErrNotFound.Error()},
+		{
+			"lapsed GitLab sign-in", &repositories.GitLabSignInLapsedError{Username: "alice", Host: "gitlab.example.com"},
+			3, false, "The GitLab sign-in for alice on gitlab.example.com needs signing in again",
+		},
 		{"transient, then out of attempts", errors.New("connection reset"), 2, true, "the analysis failed: connection reset"},
 	}
 	for _, tt := range tests {
@@ -640,15 +651,28 @@ func TestSources_lifecycle(t *testing.T) {
 	if len(list) != 1 || list[0].Alias != "web" {
 		t.Fatalf("after removing mono: %+v", list)
 	}
-	// An alias is never reused, so an old plan's "mono" still means acme/mono.
+	// An alias never moves to another repository, so an old plan's "mono"
+	// still means acme/mono.
 	if _, err = f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/other", Alias: "mono"}); !errors.Is(err, ErrAliasTaken) {
-		t.Fatalf("re-adding a removed alias: %v", err)
+		t.Fatalf("another repository taking a removed alias: %v", err)
+	}
+	// The same repository can come back under it, and the live source wins the lookup.
+	again, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/mono", Alias: "mono"})
+	if err != nil {
+		t.Fatalf("re-adding a removed source: %v", err)
+	}
+	got, err := f.svc.store.GetSource(ctx, dev.OrgID, "proj_bare", "mono")
+	if err != nil || got.ID != again.ID {
+		t.Fatalf("GetSource after re-adding: %v, %+v", err, got)
+	}
+	if _, err = f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "acme/mono", Alias: "mono"}); !errors.Is(err, ErrAliasTaken) {
+		t.Fatalf("taking a live alias: %v", err)
 	}
 	actions := make([]string, 0, len(f.audit.events))
 	for _, e := range f.audit.events {
 		actions = append(actions, e.Action)
 	}
-	if !slices.Equal(actions, []string{"source.add", "source.add", "source.update", "source.remove"}) {
+	if !slices.Equal(actions, []string{"source.add", "source.add", "source.update", "source.remove", "source.add"}) {
 		t.Fatalf("audit %v", actions)
 	}
 }
@@ -668,7 +692,7 @@ func TestSources_refusals(t *testing.T) {
 	}{
 		{"viewer", viewer, "proj_bare", AddSourceInput{Repository: "acme/site"}, security.ErrForbidden},
 		{"another org's project", dev, "proj_elsewhere", AddSourceInput{Repository: "acme/site"}, projects.ErrNotFound},
-		{"not GitHub", dev, "proj_bare", AddSourceInput{Repository: "https://gitlab.com/acme/site"}, ErrInvalidSource},
+		{"a host nothing reads", dev, "proj_bare", AddSourceInput{Repository: "https://git.example.com/acme/site"}, ErrInvalidSource},
 		{"reserved alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "go"}, ErrAliasReserved},
 		{"bad alias", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Alias: "Web"}, ErrInvalidSource},
 		{"root climbs out", dev, "proj_bare", AddSourceInput{Repository: "acme/site", Root: "../x"}, ErrInvalidSource},
@@ -702,7 +726,7 @@ func TestSources_attachingANewProjectsRepositorySaysWhatsWrongWithIt(t *testing.
 		name, url string
 		want      error
 	}{
-		{"not GitHub", "https://gitlab.com/acme/site", ErrInvalidSource},
+		{"a host nothing reads", "https://git.example.com/acme/site", ErrInvalidSource},
 		{"alias taken", "acme/platform", ErrAliasTaken},
 		{"overlapping root", "acme/mono", ErrRootsOverlap},
 	}
@@ -855,4 +879,136 @@ func TestService_projectGraphComposesEverySource(t *testing.T) {
 	if err != nil || known[view.Graph.Services[0].ID] == "" {
 		t.Fatalf("catalog %v, %v", known, err)
 	}
+}
+
+// Reading an analysis or its graph checks the analysis's project, so a
+// team's grant there counts and nowhere else.
+func TestAnalysisReadsCheckTheProject(t *testing.T) {
+	ctx := context.Background()
+	w := securitytest.New(t, org)
+	rec := securitytest.NewRecorder(w.Authz)
+	store := newMemStore()
+	svc := NewService(store, fakeProjects{}, rec, &queue{}, &audits{})
+	projA, projB := typeid.MustGenerate("proj").String(), typeid.MustGenerate("proj").String()
+	for id, projectID := range map[string]string{"an_a": projA, "an_b": projB} {
+		if err := store.CreateAnalysis(ctx, &Analysis{ID: id, OrgID: org, ProjectID: projectID, Status: StatusQueued}); err != nil {
+			t.Fatal(err)
+		}
+		store.graphs[id] = &graph.Graph{}
+	}
+	workspace := w.Workspace(t, "ausr_viewer", security.RoleViewer)
+	grant := w.ProjectOnly(t, "ausr_grace", security.RoleDeveloper, projA)
+
+	calls := []struct {
+		name string
+		run  func(p security.Principal, id string) error
+	}{
+		{"Get", func(p security.Principal, id string) error { _, err := svc.Get(ctx, p, id); return err }},
+		{"Graph", func(p security.Principal, id string) error { _, err := svc.Graph(ctx, p, id); return err }},
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			rec.Reset()
+			if err := c.run(workspace, "an_a"); err != nil {
+				t.Fatalf("workspace viewer on A: %v", err)
+			}
+			if got, want := rec.Checks(), []string{"project:read " + projA}; !slices.Equal(got, want) {
+				t.Fatalf("checks %v, want %v", got, want)
+			}
+			if err := c.run(workspace, "an_b"); err != nil {
+				t.Fatalf("workspace viewer on B: %v", err)
+			}
+			if err := c.run(grant, "an_a"); err != nil {
+				t.Fatalf("project grant on A: %v", err)
+			}
+			if err := c.run(grant, "an_b"); !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("project grant on B: %v, want ErrForbidden", err)
+			}
+		})
+	}
+}
+
+func TestAddSource_mixedCaseDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "bb", "bitbucket.org/Acme/API", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same Bitbucket repository in another case: %v", err)
+	}
+}
+
+func TestAddSource_mixedCaseGitLabDuplicateOverlaps(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	f.source(t, "proj_bare", "gl", "gitlab.com/acme/api", "")
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://GitLab.com/Acme/API", Alias: "again"})
+	if !errors.Is(err, ErrRootsOverlap) {
+		t.Fatalf("the same GitLab project in another case: %v", err)
+	}
+}
+
+func TestRunner_unparseableKeyFailsPermanently(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 3)
+	now := time.Now().UTC()
+	err := f.store.CreateAnalysis(ctx, &Analysis{
+		ID: "anl_bad", OrgID: org, ProjectID: project, Source: "bb", Status: StatusQueued,
+		Repository: "bitbucket.org/acme", CreatedBy: "ausr_seed", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.Run(ctx, org, "anl_bad"); err != nil {
+		t.Fatalf("an unparseable key was retried: %v", err)
+	}
+	got, _ := f.store.GetAnalysis(ctx, org, "anl_bad")
+	if got.Status != StatusFailed || got.Error != repositories.ErrInvalidURL.Error() {
+		t.Fatalf("analysis %+v", got)
+	}
+}
+
+func TestAddSource_aHostNothingReadsIsAnInvalidSource(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	// The URL parses, since Bitbucket is a static host, but the wired
+	// readers only know GitHub.
+	f.svc.SetAccess(Access{
+		Fetcher: repositories.Readers{Static: map[string]repositories.Reader{"github.com": &fakeReader{}}},
+	})
+
+	_, err := f.svc.AddSource(ctx, dev, "proj_bare", AddSourceInput{Repository: "https://bitbucket.org/acme/api"})
+	if !errors.Is(err, ErrInvalidSource) || !errors.Is(err, repositories.ErrUnsupportedHost) {
+		t.Fatalf("AddSource: %v", err)
+	}
+	_, _, err = f.svc.AttachRepository(ctx, dev, &projects.Project{ID: "proj_bare", OrgID: org}, projects.RepositoryInput{Repository: "https://bitbucket.org/acme/api"})
+	if !errors.Is(err, projects.ErrRepository) {
+		t.Fatalf("AttachRepository: %v", err)
+	}
+	// Changing the branch of a stored source on such a host is refused the same way.
+	f.source(t, "proj_bare", "bb", "bitbucket.org/acme/api", "")
+	ref := "main"
+	if _, err = f.svc.UpdateSource(ctx, dev, "proj_bare", "bb", UpdateSourceInput{Ref: &ref}); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("UpdateSource: %v", err)
+	}
+}
+
+// fakeReader is a Reader that finds every repository.
+type fakeReader struct{}
+
+func (*fakeReader) Resolve(context.Context, repositories.Repository, string, string) (string, error) {
+	return commit, nil
+}
+
+func (*fakeReader) Fetch(context.Context, repositories.Repository, string, string, string) (repositories.Stats, error) {
+	return repositories.Stats{}, nil
+}
+
+func (*fakeReader) Download(context.Context, repositories.Repository, string, string, io.Writer) (int64, error) {
+	return 0, nil
 }

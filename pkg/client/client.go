@@ -48,8 +48,12 @@ func (c *Client) WithHTTPClient(h *http.Client) *Client {
 
 // Error is a response Loomplane refused, with its status and message.
 type Error struct {
-	Status  int
-	Message string
+	Code       string   `json:"code,omitempty"`
+	Retryable  bool     `json:"retryable,omitempty"`
+	Resource   string   `json:"resource,omitempty"`
+	Categories []string `json:"categories,omitempty"`
+	Status     int
+	Message    string
 }
 
 func (e *Error) Error() string {
@@ -87,7 +91,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -102,7 +108,13 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return err
 	}
 	if res.StatusCode >= 300 {
-		return &Error{Status: res.StatusCode, Message: message(data)}
+		out := &Error{Status: res.StatusCode}
+		if decodeErr := json.Unmarshal(data, out); decodeErr != nil {
+			out = &Error{}
+		}
+		out.Status = res.StatusCode
+		out.Message = message(data)
+		return out
 	}
 	if out == nil || len(data) == 0 {
 		return nil
@@ -168,6 +180,9 @@ type Project struct {
 	Repositories []string  `json:"repositories,omitempty"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
+	// ResponsibleTeamID is the team that gets the project's requests and
+	// notices, empty for none.
+	ResponsibleTeamID string `json:"responsible_team_id"`
 }
 
 // NewProject is a project to create.
@@ -398,6 +413,7 @@ type Change struct {
 
 // Action is one thing a plan would do.
 type Action struct {
+	CleanupTargets []CleanupTarget `json:"cleanup_targets,omitempty"`
 	// Resource preserves the complete provider request for JSON plan review.
 	Resource json.RawMessage `json:"resource,omitempty"`
 	ID       string          `json:"id"`
@@ -416,12 +432,20 @@ type Action struct {
 // whose watch or canary failed, is named wherever it acts.
 const AutomationName = "Loomplane automation"
 
+// AgentName is how the workspace's built-in agent is named wherever it
+// acts, such as on a plan it approved.
+const AgentName = "Loomplane agent"
+
 // ActorName is how to show a created_by, decided_by or started_by, such as
 // Plan.DecidedBy: "Loomplane automation" for the organization's automation
-// (loomplane:<org>), else the ID as given.
+// (loomplane:<org>), "Loomplane agent" for its built-in agent (agent:<org>),
+// else the ID as given.
 func ActorName(id string) string {
 	if org, ok := strings.CutPrefix(id, "loomplane:"); ok && org != "" {
 		return AutomationName
+	}
+	if org, ok := strings.CutPrefix(id, "agent:"); ok && org != "" {
+		return AgentName
 	}
 	return id
 }
@@ -556,6 +580,195 @@ func (c *Client) Approve(ctx context.Context, planID, revision, note string) (*P
 func (c *Client) Reject(ctx context.Context, planID, note string) (*Plan, error) {
 	var p Plan
 	return &p, c.do(ctx, http.MethodPost, "/api/v1/plans/"+esc(planID)+"/reject", map[string]string{"note": note}, &p)
+}
+
+// ReleaseRef names one release of an environment: its deployment and the
+// plan it carried out.
+type ReleaseRef struct {
+	DeploymentID string    `json:"deployment_id"`
+	PlanID       string    `json:"plan_id"`
+	Kind         string    `json:"kind"`
+	Status       string    `json:"status"`
+	FinishedAt   time.Time `json:"finished_at"`
+}
+
+// RollbackCommit is what a rollback does to one repository: From is the
+// commit the release it undoes deployed, empty when that release didn't
+// know the repository, and To the commit it restores.
+type RollbackCommit struct {
+	Alias string `json:"alias"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+}
+
+// RollbackTarget is what rolling an environment back would undo, the
+// release it would restore, and each repository's commits.
+type RollbackTarget struct {
+	Environment string           `json:"environment"`
+	Target      ReleaseRef       `json:"target"`
+	Restore     ReleaseRef       `json:"restore"`
+	Commits     []RollbackCommit `json:"commits"`
+}
+
+// RollbackTarget says what rolling the environment back would do, without
+// changing anything. deploymentID, when set, must be the environment's
+// newest deployment, which is the default.
+func (c *Client) RollbackTarget(ctx context.Context, projectID, environment, deploymentID string) (*RollbackTarget, error) {
+	path := "/api/v1/projects/" + esc(projectID) + "/environments/" + esc(environment) + "/rollback-target"
+	if deploymentID != "" {
+		path += "?deployment_id=" + url.QueryEscape(deploymentID)
+	}
+	var t RollbackTarget
+	return &t, c.do(ctx, http.MethodGet, path, nil, &t)
+}
+
+// NewRollback asks to roll an environment back to its previous release.
+type NewRollback struct {
+	Environment string `json:"environment"`
+	// Reason says why, for the audit trail and whoever approves it.
+	Reason string `json:"reason"`
+	// DeploymentID is the deployment to undo: the environment's newest,
+	// which is the default.
+	DeploymentID string `json:"deployment_id,omitempty"`
+}
+
+// CreateRollback plans the environment back to its previous release. It's
+// a plan like any other: read it until Planning is false, and a person
+// approves it.
+func (c *Client) CreateRollback(ctx context.Context, projectID string, in NewRollback) (*Plan, error) {
+	var p Plan
+	return &p, c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(projectID)+"/rollbacks", in, &p)
+}
+
+// SoakService is how one service built from a soak's commits has done.
+type SoakService struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	// Verdict is pass, fail or inconclusive.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+}
+
+// Soak says how long a promotion's source environment has run exactly the
+// commits the plan moves, and whether it ran them healthily.
+type Soak struct {
+	Environment string `json:"environment"`
+	// Running is true when the environment runs every commit the plan moves.
+	Running bool      `json:"running"`
+	Since   time.Time `json:"since"`
+	// Duration is how long, in nanoseconds; 0 unless Running.
+	Duration time.Duration `json:"duration"`
+	Healthy  bool          `json:"healthy"`
+	// Unverified is true when the evidence is missing, such as low traffic
+	// or no metrics. A failure is evidence and isn't unverified.
+	Unverified bool          `json:"unverified"`
+	Reasons    []string      `json:"reasons"`
+	Services   []SoakService `json:"services"`
+}
+
+// Soak reads how the promotion plan's source environment has run the
+// commits it moves. Only a promotion has one.
+func (c *Client) Soak(ctx context.Context, planID string) (*Soak, error) {
+	var s Soak
+	return &s, c.do(ctx, http.MethodGet, "/api/v1/plans/"+esc(planID)+"/soak", nil, &s)
+}
+
+// Plan kinds, as Plan.Kind says.
+const (
+	KindRelease   = "release"
+	KindPromotion = "promotion"
+	KindRollback  = "rollback"
+)
+
+// RollbackTriggerManual is Rollback.Trigger for a rollback a person asked
+// for. Any other trigger is Loomplane automation.
+const RollbackTriggerManual = "manual"
+
+// Release watch statuses.
+const (
+	WatchWatching        = "watching"
+	WatchPassed          = "passed"
+	WatchInconclusive    = "inconclusive"
+	WatchSuperseded      = "superseded"
+	WatchRollingBack     = "rolling_back"
+	WatchRolledBack      = "rolled_back"
+	WatchRollbackBlocked = "rollback_blocked"
+	WatchRollbackFailed  = "rollback_failed"
+)
+
+// WatchedService is one service a release watch judges.
+type WatchedService struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	// Verdict is pass, fail or inconclusive; empty before the first check.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+}
+
+// UnwatchedService is a changed service a watch can't judge, and why.
+type UnwatchedService struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	Reason   string `json:"reason"`
+}
+
+// ReleaseWatch is how a deployment is watched after it finishes: the
+// verdict on each changed service and any automatic rollback.
+type ReleaseWatch struct {
+	ID           string `json:"id"`
+	DeploymentID string `json:"deployment_id"`
+	PlanID       string `json:"plan_id"`
+	Environment  string `json:"environment"`
+	Status       string `json:"status"`
+	// Verdict is pass, fail or inconclusive; empty while undecided.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+	// Unverified is missing evidence: a changed service wasn't watched, or
+	// the watch ended without enough to judge by.
+	Unverified     bool               `json:"unverified"`
+	RollbackPlanID string             `json:"rollback_plan_id"`
+	Services       []WatchedService   `json:"services,omitempty"`
+	Unwatched      []UnwatchedService `json:"unwatched,omitempty"`
+	StartsAt       time.Time          `json:"starts_at"`
+	EndsAt         time.Time          `json:"ends_at"`
+	BoundAt        time.Time          `json:"bound_at"`
+	SettledAt      *time.Time         `json:"settled_at"`
+}
+
+// Open reports whether the watch still has work to do.
+func (w *ReleaseWatch) Open() bool {
+	return w.Status == WatchWatching || w.Status == WatchRollingBack
+}
+
+// ReleaseWatch reads a deployment's post-deploy watch. A deployment with
+// none answers ErrNotFound.
+func (c *Client) ReleaseWatch(ctx context.Context, deploymentID string) (*ReleaseWatch, error) {
+	var w ReleaseWatch
+	return &w, c.do(ctx, http.MethodGet, "/api/v1/deployments/"+esc(deploymentID)+"/watch", nil, &w)
+}
+
+// WatchCoverage is what a release in an environment would be watched for.
+type WatchCoverage struct {
+	Environment string `json:"environment"`
+	// Duration is how long, in nanoseconds; 0 arms no watch.
+	Duration time.Duration `json:"duration"`
+	// Canary are the services a canary would ramp, which the watch leaves
+	// to it.
+	Canary   []string `json:"canary,omitempty"`
+	Services []struct {
+		Name      string `json:"name"`
+		Provider  string `json:"provider"`
+		Watchable bool   `json:"watchable"`
+		Reason    string `json:"reason,omitempty"`
+	} `json:"services,omitempty"`
+	Unverified bool `json:"unverified"`
+}
+
+// WatchCoverage reads what a release in the environment would be watched
+// for.
+func (c *Client) WatchCoverage(ctx context.Context, projectID, environment string) (*WatchCoverage, error) {
+	var w WatchCoverage
+	return &w, c.do(ctx, http.MethodGet, "/api/v1/projects/"+esc(projectID)+"/environments/"+esc(environment)+"/watch-coverage", nil, &w)
 }
 
 // --- Deployments ---
@@ -739,6 +952,13 @@ func (c *Client) DeploymentForPlan(ctx context.Context, planID string) (*Deploym
 func (c *Client) Retry(ctx context.Context, deploymentID string) (*Deployment, error) {
 	var d Deployment
 	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/retry", nil, &d)
+}
+
+// Cancel cancels a running deployment, or one paused for capacity. The
+// action that's running finishes and nothing after it starts.
+func (c *Client) Cancel(ctx context.Context, deploymentID string) (*Deployment, error) {
+	var d Deployment
+	return &d, c.do(ctx, http.MethodPost, "/api/v1/deployments/"+esc(deploymentID)+"/cancel", nil, &d)
 }
 
 // Binding is what runs a service or resource in an environment now.

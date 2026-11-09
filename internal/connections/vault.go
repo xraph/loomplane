@@ -7,6 +7,8 @@ import (
 
 	"github.com/xraph/vault/core"
 	"github.com/xraph/vault/secret"
+
+	"github.com/xraph/loomplane/internal/repositories"
 )
 
 // VaultAppID is the Vault app cloud credentials are kept under, apart
@@ -33,16 +35,16 @@ type VaultSecrets struct {
 // NewVaultSecrets returns VaultSecrets over a Vault secret service.
 func NewVaultSecrets(svc *secret.Service) *VaultSecrets { return NewVaultSecretsFor(svc, VaultAppID) }
 
-// OAuthAppsVaultAppID is the Vault app sign-in app secrets are kept under.
-const OAuthAppsVaultAppID = "loomplane-oauth-apps"
-
 // NewVaultSecretsFor returns VaultSecrets that keep their secrets under
 // the given Vault app ID.
 func NewVaultSecretsFor(svc *secret.Service, appID string) *VaultSecrets {
 	return &VaultSecrets{svc: svc, appID: appID}
 }
 
-var _ Secrets = (*VaultSecrets)(nil)
+var (
+	_ Secrets              = (*VaultSecrets)(nil)
+	_ repositories.Secrets = (*VaultSecrets)(nil)
+)
 
 func vaultKey(orgID, connectionID string) string { return orgID + "/" + connectionID }
 
@@ -58,7 +60,7 @@ func (v *VaultSecrets) Put(ctx context.Context, orgID, connectionID string, cred
 func (v *VaultSecrets) Reveal(ctx context.Context, orgID, connectionID string) ([]byte, error) {
 	sec, err := v.svc.Get(ctx, vaultKey(orgID, connectionID), v.appID)
 	if errors.Is(err, core.ErrSecretNotFound) {
-		return nil, ErrNotFound
+		return nil, secretNotFoundError{}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read credential: %w", err)
@@ -66,11 +68,93 @@ func (v *VaultSecrets) Reveal(ctx context.Context, orgID, connectionID string) (
 	return sec.Value, nil
 }
 
+// secretNotFoundError is Reveal's error for a secret that isn't kept. It
+// reads as ErrNotFound, and is both ErrNotFound and
+// repositories.ErrSecretNotFound, so the repositories package can tell a
+// missing secret from Vault failing without importing this one.
+type secretNotFoundError struct{}
+
+func (secretNotFoundError) Error() string { return ErrNotFound.Error() }
+
+func (secretNotFoundError) Is(target error) bool {
+	return target == ErrNotFound || target == repositories.ErrSecretNotFound
+}
+
 // Delete implements Secrets. One that's already gone is not an error.
 func (v *VaultSecrets) Delete(ctx context.Context, orgID, connectionID string) error {
 	err := v.svc.Delete(ctx, vaultKey(orgID, connectionID), v.appID)
 	if err != nil && !errors.Is(err, core.ErrSecretNotFound) {
 		return fmt.Errorf("delete credential: %w", err)
+	}
+	return nil
+}
+
+// PlatformOAuthAppsVaultAppID is the Vault app the platform's sign-in app
+// secrets are kept under, apart from credentials, with one key per cloud.
+const PlatformOAuthAppsVaultAppID = "loomplane-platform-oauth-apps"
+
+// VaultAppSecrets keeps the platform's sign-in app secrets in Vault. The
+// svc it is given should be scoped to PlatformOAuthAppsVaultAppID.
+type VaultAppSecrets struct {
+	svc   *secret.Service
+	appID string
+}
+
+// PlatformCloudVaultAppID is the Vault app the platform Cloud keeps its host
+// credentials and registry credential under.
+const PlatformCloudVaultAppID = "loomplane-platform-cloud"
+
+// NewVaultAppSecrets returns VaultAppSecrets over a Vault secret service.
+func NewVaultAppSecrets(svc *secret.Service) *VaultAppSecrets {
+	return NewVaultAppSecretsFor(svc, PlatformOAuthAppsVaultAppID)
+}
+
+// NewVaultAppSecretsFor returns VaultAppSecrets that keep their secrets
+// under the given Vault app ID. svc should be scoped to the same app.
+func NewVaultAppSecretsFor(svc *secret.Service, appID string) *VaultAppSecrets {
+	return &VaultAppSecrets{svc: svc, appID: appID}
+}
+
+var _ AppSecrets = (*VaultAppSecrets)(nil)
+
+// Put implements AppSecrets.
+func (v *VaultAppSecrets) Put(ctx context.Context, cloud string, value []byte) error {
+	if _, err := v.svc.Set(ctx, cloud, value, v.appID); err != nil {
+		return fmt.Errorf("store app secret: %w", err)
+	}
+	return nil
+}
+
+// Reveal implements AppSecrets.
+func (v *VaultAppSecrets) Reveal(ctx context.Context, cloud string) ([]byte, error) {
+	sec, err := v.svc.Get(ctx, cloud, v.appID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read app secret: %w", err)
+	}
+	return sec.Value, nil
+}
+
+// Exists reports whether a secret is stored under key, without decrypting
+// it.
+func (v *VaultAppSecrets) Exists(ctx context.Context, key string) (bool, error) {
+	_, err := v.svc.GetMeta(ctx, key, v.appID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read app secret: %w", err)
+	}
+	return true, nil
+}
+
+// Delete implements AppSecrets. One that's already gone is not an error.
+func (v *VaultAppSecrets) Delete(ctx context.Context, cloud string) error {
+	err := v.svc.Delete(ctx, cloud, v.appID)
+	if err != nil && !errors.Is(err, core.ErrSecretNotFound) {
+		return fmt.Errorf("delete app secret: %w", err)
 	}
 	return nil
 }

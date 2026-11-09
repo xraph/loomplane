@@ -39,7 +39,9 @@ func Draft(g *graph.Graph, reg *provider.Registry) *manifest.Manifest {
 		name := unique(nameOf(gs.Name, "service"), taken)
 		names[gs.ID] = name
 		s := manifest.Service{Source: gs.Local()}
-		if able := reg.Running(provider.Workload(gs.Kind)); len(able) > 0 {
+		// A draft never preselects an unlisted target such as Loomplane Cloud.
+		able := slices.DeleteFunc(reg.Running(provider.Workload(gs.Kind)), func(p *provider.Provider) bool { return p.Unlisted })
+		if len(able) > 0 {
 			s.Provider = able[0].Name
 			clouds[able[0].Cloud]++
 		}

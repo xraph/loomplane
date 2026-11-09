@@ -17,9 +17,12 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/buildpolicy"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	fc "github.com/xraph/loomplane/internal/firecracker"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -84,7 +87,28 @@ type ImageArtifact struct {
 }
 
 type ImageBuilder struct {
-	Dial func(context.Context, *server.Config) (*server.Client, error)
+	FirecrackerAuthority fc.Issuer
+	// NodeStreams reach joined nodes, for a builder that is a node's. Nil
+	// reaches only SSH builders.
+	NodeStreams server.NodeStreams
+	// Connect replaces server.Connect, for tests. Nil is server.Connect.
+	Connect func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error)
+	// reconnect is how long a build waits for an offline node. The zero
+	// value is nodeReconnectWindow; tests shorten it.
+	reconnect nodeReconnect
+	// Platform builds services that build from source on Loomplane Cloud.
+	// Nil refuses them.
+	Platform PlatformHosts
+	// Gate refuses a customer source build the workspace may not run yet.
+	// Nil means metering.AllowAll.
+	Gate metering.Gate
+}
+
+func (b *ImageBuilder) gate() metering.Gate {
+	if b.Gate == nil {
+		return metering.AllowAll
+	}
+	return b.Gate
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -98,7 +122,7 @@ func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud strin
 	if c == nil || c.ID != id || c.OrgID != job.Deployment.OrgID || c.Cloud != cloud || (c.Status != connections.StatusReady && (!pull || !connections.RegistryPullReady(c))) {
 		return nil, nil, errors.New("the reviewed build connection is not ready in this organization")
 	}
-	if !reflect.DeepEqual(settings, planning.ReviewedConnectionSettings(c.Cloud, c.Details)) {
+	if !reflect.DeepEqual(settings, planning.ReviewedBuildSettings(c.Cloud, c.Details)) {
 		return nil, nil, errors.New("build connection settings changed since review; plan again")
 	}
 	return c, raw, nil
@@ -109,6 +133,11 @@ func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud strin
 func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact, save func() error) (reference string, err error) {
 	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || state == nil || save == nil {
 		return "", errors.New("the service needs reviewed remote build settings")
+	}
+	// Managed Kubernetes builds run on the workspace's own cluster, and the
+	// deploy gates refuse first, so they aren't gated here.
+	if job.Action.Service.ManagedKubernetesBuild() {
+		return b.buildInKubernetes(ctx, job, state, save)
 	}
 	target := job.Action.Service.BuildTarget
 	reused := reusedReference(job.Action.Service) != ""
@@ -131,6 +160,20 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 		if !reflect.DeepEqual(target.RegistrySettings, planning.ReviewedConnectionSettings(connections.Registry, registryConfig.Details)) {
 			return "", errors.New("registry trust settings changed since review; plan again")
 		}
+	}
+	if platformSourceBuild(target) {
+		// Loomplane Cloud builds into, and reuses from, the workspace's own
+		// repository in the platform registry. It never goes through the
+		// workspace's connections.
+		if b.Platform == nil {
+			return "", errors.New("Loomplane Cloud builds aren't available here") //nolint:staticcheck // Loomplane Cloud is a product name.
+		}
+		registryConfig, err = b.Platform.Registry(ctx, job.Deployment.OrgID)
+		if err != nil {
+			return "", err
+		}
+		collector.addCredential([]byte(registryConfig.Password))
+		collector.addCredential([]byte(registryConfig.Token))
 	}
 	if target.Image != "" || reused {
 		image, what := target.Image, "pinned"
@@ -162,6 +205,17 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", saveErr
 		}
 		return state.Reference, nil
+	}
+	if platformSourceBuild(target) {
+		return b.buildOnPlatform(ctx, job, state, save, registryConfig)
+	}
+	// Platform Cloud gates its own builds when it places them. A build on
+	// the workspace's own builder is gated here, before anything connects.
+	if gateErr := b.gate().CanRun(ctx, job.Deployment.OrgID, metering.KindBuild, false); gateErr != nil {
+		return "", gateErr
+	}
+	if target.BuilderCloud == connections.Firecracker {
+		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
 	}
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")
@@ -376,22 +430,29 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	config, err := server.ParseConfig(raw, builder.Details)
+	pooled := false
+	if reader, ok := job.BuildCredentials.(interface {
+		BuildWorkerShared(context.Context, string, string) (bool, error)
+	}); ok {
+		pooled, err = reader.BuildWorkerShared(ctx, job.Deployment.OrgID, builder.ID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	if checkErr := buildpolicy.Check(builder.Details, false, pooled); checkErr != nil {
+		return nil, nil, nil, checkErr
+	}
+	client, node, err := serverClientFor(ctx, builder, raw, b.NodeStreams, b.Connect, b.reconnect)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	recorded := config.RecordedDetails(builder.Details)
-	dial := b.Dial
-	if dial == nil {
-		dial = server.Dial
-	}
-	client, err := dial(ctx, config)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	recorded := client.Config.RecordedDetails(builder.Details)
 	details, missing, err := client.Check(ctx)
-	if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(connections.Server, recorded), planning.ReviewedConnectionSettings(connections.Server, details)) {
+	if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedBuildSettings(connections.Server, recorded), planning.ReviewedBuildSettings(connections.Server, details)) {
 		_ = client.Close()
+		if unreachable := node.unreachable(); unreachable != nil {
+			return nil, nil, nil, unreachable
+		}
 		return nil, nil, nil, errors.New("the builder identity or Docker capabilities changed; restore the recorded connection")
 	}
 	client.Config.Details = details

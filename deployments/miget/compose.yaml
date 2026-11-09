@@ -20,6 +20,9 @@ x-environment: &environment
   # It must be 32 random bytes, base64: openssl rand -base64 32
   LOOMPLANE_SECRET_KEY: ${LOOMPLANE_SECRET_KEY}
   LOOMPLANE_DATABASE_URL: postgres://loomplane:loomplane-local-only@db:5432/loomplane?sslmode=disable
+  # Empty leaves the waitlist to the instance; true or false forces it.
+  LOOMPLANE_WAITLIST_ENABLED: ${LOOMPLANE_WAITLIST_ENABLED:-}
+  LOOMPLANE_CONSOLE_PATH: ${LOOMPLANE_CONSOLE_PATH:-/__console}
 
 services:
   loomplane:

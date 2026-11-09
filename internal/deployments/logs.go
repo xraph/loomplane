@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/realtime"
 )
 
@@ -147,12 +148,24 @@ func (c *Collector) safeError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// A node's failure keeps its type, so the runner can record it in its
+	// own words and tell offline from refused. Those words hold only the
+	// connection's name, the endpoint, a time and the node's short reason
+	// for a refusal, which the hub keeps to printable text and the runner
+	// bounds, so need no redaction.
+	if _, ok := nodeOfflineMessage(err); ok {
+		return nodeFailed(err)
+	}
 	message, _ := c.message(err.Error())
 	if errors.Is(err, context.Canceled) {
 		return fmt.Errorf("%s: %w", message, context.Canceled)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: %w", message, context.DeadlineExceeded)
+	}
+	if errors.Is(err, metering.ErrBlocked) {
+		// A gate's refusal keeps its type, so the API answers 402.
+		return &metering.BlockedError{Reason: message}
 	}
 	return errors.New(message)
 }

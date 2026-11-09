@@ -430,3 +430,54 @@ func findSize(list *GPUTargetList, size string) GPUTarget {
 	}
 	return GPUTarget{}
 }
+
+// storedList is the connections store: by organization, no principal.
+type storedList []*connections.Connection
+
+func (s storedList) ListConnections(_ context.Context, org string) ([]*connections.Connection, error) {
+	if org != "org" {
+		return nil, nil
+	}
+	return s, nil
+}
+
+// ConnectedTargets is for Loomplane's own background work: it reads the
+// stored connections with no principal and no permission check, prices
+// servers as Targets does, and never asks a provider for its sizes.
+func TestConnectedTargetsReadsNoPrincipalAndNoSizes(t *testing.T) {
+	servers := fakeServers(&cloudinfra.Server{ID: "srv-1", RuntimeConnectionID: "priced", Ownership: "managed", Status: "ready", HourlyUSD: 0.76, HourlyPriceKnown: true})
+	options := &askedOptions{}
+	do := &connections.Connection{ID: "do", Cloud: connections.DigitalOcean, Status: connections.StatusReady}
+	svc := NewService(Deps{
+		Stored: storedList{serverWithTwoL4("priced"), serverWithTwoL4("unpriced"), do}, Bindings: fakeBindings(map[string]map[string]int{"priced": {"nvidia-l4": 1}}),
+		Servers: servers, Options: options, Authz: denyAuthz{denied: security.InfrastructureRead},
+	})
+	rows, err := svc.ConnectedTargets(t.Context(), "org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := &GPUTargetList{Targets: rows}
+	if len(rows) != 2 {
+		t.Fatalf("rows %+v", rows)
+	}
+	if row := find(list, "priced"); row.HourlyUSD != 0.76 || !row.HourlyPriceKnown || row.Free != 1 || row.Accelerator.Count != 2 {
+		t.Errorf("priced: %+v", row)
+	}
+	if row := find(list, "unpriced"); row.HourlyPriceKnown {
+		t.Errorf("unpriced: %+v", row)
+	}
+	if options.asked != 0 {
+		t.Errorf("asked a provider %d times", options.asked)
+	}
+	if rows, err = NewService(Deps{}).ConnectedTargets(t.Context(), "org"); err == nil {
+		t.Errorf("without a store: %+v", rows)
+	}
+}
+
+// askedOptions counts what it's asked.
+type askedOptions struct{ asked int }
+
+func (a *askedOptions) AccountServerOptions(context.Context, string, string) (provider.ServerOptions, error) {
+	a.asked++
+	return provider.ServerOptions{}, nil
+}

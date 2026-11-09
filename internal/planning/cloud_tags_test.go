@@ -111,7 +111,7 @@ func TestCloudTagsOverridesAndManifestDefaults(t *testing.T) {
 func TestCloudTagsSkipHeldServices(t *testing.T) {
 	a, c := taggedFixture()
 	m := parse(t, "version: 1\nservices:\n  web: {source: cmd/api, cloud_tags: [gpu]}\n")
-	_, pins, err := resolveCloudPlacements(m, "production", a, c, nil, map[string]bool{"web": true})
+	_, pins, err := resolveCloudPlacements(m, "production", a, c, nil, nil, map[string]bool{"web": true})
 	if err != nil || len(pins) != 0 {
 		t.Fatalf("held service was resolved: %+v %v", pins, err)
 	}

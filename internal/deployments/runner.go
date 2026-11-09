@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	drt "github.com/xraph/dispatch/durable/runtime"
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -25,9 +26,12 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/metering"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -65,6 +69,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	nativeOutputs    *nativeOutputInventory
 	cleanupCheck     func(context.Context) error
 	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
@@ -133,6 +138,11 @@ type Job struct {
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool
+	// record is the provider environment record of a binding whose
+	// environment has been deleted, read before the deletion's cascade
+	// took it. Render's Remove reads it in place of the store's. It's nil
+	// otherwise.
+	record *ProviderEnvironment
 	// warn adds a warning to the step, or is nil.
 	warn func(error)
 }
@@ -218,8 +228,14 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
-	capacity CapacityResolver
-	routes   ReleaseRoutes
+	gate              metering.Gate
+	instances         planning.InstanceVerifier
+	managedCleanup    *ManagedCleanupExecution
+	existingResources planning.ExistingResourceResolver
+	existingEndpoints planning.EndpointChecker
+	existingDialer    planning.TargetDialer
+	capacity          CapacityResolver
+	routes            ReleaseRoutes
 
 	cloudSyncAuth  CloudSyncAuthorizer
 	cloudProfiles  cloudprofiles.Resolver
@@ -230,12 +246,15 @@ type Runner struct {
 	sources        Sources
 	providers      *provider.Registry
 	executors      map[string]Executor
-	catalogHooks   map[string]CatalogHooks
+	catalogHooks   CatalogHookMap
 	observers      []ReleaseObserver
 	authz          Authorizer
 	backupPolicies BackupPolicyInstaller
 	resources      ResourceSecrets
 	health         releasehealth.Reader
+	watches        WatchHook
+	warn           func(msg string)
+	history        LatestRelease
 	dbGateways     DatabaseGatewayStore
 	dbTrust        func() ([]plane.TrustKey, error)
 	publicURL      string
@@ -249,6 +268,14 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	// Gate refuses a deployment the workspace may not run yet. Nil means
+	// metering.AllowAll.
+	Gate              metering.Gate
+	Instances         planning.InstanceVerifier
+	ManagedCleanup    *ManagedCleanupExecution
+	ExistingResources planning.ExistingResourceResolver
+	ExistingEndpoints planning.EndpointChecker
+	ExistingDialer    planning.TargetDialer
 	// Authz and BackupPolicies recheck and install reviewed backup defaults.
 	Authz          Authorizer
 	BackupPolicies BackupPolicyInstaller
@@ -283,13 +310,29 @@ type RunnerDeps struct {
 	Telemetry *telemetry.Recorder
 	// CatalogHooks are composed catalog kinds' hooks, by kind: the same
 	// ones the owned targets run.
-	CatalogHooks map[string]CatalogHooks
+	CatalogHooks CatalogHookMap
 	// Observers hear of each service binding a deployment writes or
 	// deletes. What they fail at only warns.
 	Observers []ReleaseObserver
 	// Health reads a service's health from its cloud's own monitoring,
 	// which a canary is judged on. It may be nil when nothing ramps.
 	Health releasehealth.Reader
+	// Watches arms a post-deploy watch for each deployment that succeeds.
+	// It may be nil: then nothing is watched.
+	Watches WatchHook
+	// Warn logs what the runner carries on past, such as a watch it
+	// couldn't prepare. It may be nil.
+	Warn func(msg string)
+	// History tells a rollback whether the release it undoes is still the
+	// environment's newest when it starts. It may be nil: then a rollback
+	// starts unchecked.
+	History LatestRelease
+}
+
+// LatestRelease reads an environment's newest deployment, leaving out
+// Cloud sync and catalog plans. *History is the real one.
+type LatestRelease interface {
+	Latest(ctx context.Context, orgID, environmentID string) (*planning.ReleaseRecord, error)
 }
 
 // Release is a service binding a deployment step wrote, or deleted
@@ -314,11 +357,16 @@ type ReleaseObserver interface {
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
-	return &Runner{
+	gate := d.Gate
+	if gate == nil {
+		gate = metering.AllowAll
+	}
+	return &Runner{gate: gate, instances: d.Instances, managedCleanup: d.ManagedCleanup,
+		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, watches: d.Watches, warn: d.Warn, history: d.History, telemetry: d.Telemetry, logs: d.Logs,
 		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -329,6 +377,10 @@ func NewRunner(d RunnerDeps) *Runner {
 // run. A plan that isn't executable deploys nothing, and Start returns no
 // deployment: approving it recorded a decision.
 func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID string, steps [][]string, err error) {
+	// Each step the deployment workflow runs is marked, so a deployment
+	// the agent approved may change infrastructure as the agent, and
+	// nothing else the agent does may.
+	ctx = security.WithDeploymentRun(ctx)
 	plan, err := r.plans.GetPlan(ctx, orgID, planID)
 	if err != nil {
 		return "", nil, err
@@ -361,6 +413,16 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 			return "", nil, fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, action.Subject)
 		}
 	}
+	stale, err := r.staleRollback(ctx, plan)
+	if err != nil {
+		return "", nil, err
+	}
+	// A teardown runs nothing, so it is never refused for billing.
+	if !plan.TeardownOnly() {
+		if gateErr := r.gate.CanRun(ctx, orgID, metering.KindDeploy, false); gateErr != nil {
+			return "", nil, gateErr
+		}
+	}
 	id, err := typeid.Generate("dep")
 	if err != nil {
 		return "", nil, fmt.Errorf("generate deployment id: %w", err)
@@ -388,13 +450,86 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 		}
 		order[len(order)-1] = append(order[len(order)-1], a.ID)
 	}
+	if stale {
+		// Recorded failed, so people and the watch see why it didn't
+		// deploy; the workflow gets no deployment to carry out.
+		now := r.now().UTC()
+		d.Status, d.Error, d.FinishedAt = StatusFailed, StaleRollback, &now
+		for i := range d.Steps {
+			d.Steps[i].Status, d.Steps[i].Message = StepSkipped, StaleRollback
+		}
+		if _, err = r.store.CreateDeployment(ctx, d); err != nil {
+			return "", nil, err
+		}
+		return "", nil, nil
+	}
 	if d.Canary, err = r.newCanary(ctx, plan, d); err != nil {
 		return "", nil, err
 	}
 	if d, err = r.store.CreateDeployment(ctx, d); err != nil {
 		return "", nil, err
 	}
+	// An earlier start refused it; that refusal stands.
+	if d.Status == StatusFailed && d.Error == StaleRollback {
+		return "", nil, nil
+	}
 	return d.ID, order, nil
+}
+
+// StaleRollback is why a rollback deploys nothing: a newer release
+// deployed after it was approved, and it would undo that one too.
+const StaleRollback = planning.StaleRollback
+
+// staleRollback reports whether plan is a rollback whose target isn't the
+// environment's newest release any more. Approved rollbacks can queue
+// behind a Cloud sync or a catalog deployment while another release goes
+// first. Its own deployment, from an earlier start, counts as current.
+func (r *Runner) staleRollback(ctx context.Context, plan *planning.Plan) (bool, error) {
+	if r.history == nil || plan.Kind != planning.KindRollback || plan.Rollback == nil {
+		return false, nil
+	}
+	latest, err := r.history.Latest(ctx, plan.OrgID, plan.EnvironmentID)
+	if errors.Is(err, planning.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the environment's newest release: %w", err)
+	}
+	return latest.DeploymentID != plan.Rollback.TargetDeploymentID && latest.PlanID != plan.ID, nil
+}
+
+// startGrace is what a step gets on top of its component's start timeout:
+// time to pull the image and apply before the runtime starts waiting.
+const startGrace = 15 * time.Minute
+
+// ActionTimeouts are how long each of the deployment's actions that waits
+// for a catalog component's start timeout may run: that timeout plus
+// startGrace. The workflow gives every other action its usual time, and
+// never less than that to one listed here.
+func (r *Runner) ActionTimeouts(ctx context.Context, orgID, deploymentID string) (map[string]time.Duration, error) {
+	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
+	if err != nil {
+		return nil, err
+	}
+	return actionTimeouts(plan.Actions), nil
+}
+
+func actionTimeouts(actions []planning.Action) map[string]time.Duration {
+	var out map[string]time.Duration
+	for _, a := range actions {
+		if a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Component.StartTimeout <= 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string]time.Duration{}
+		}
+		out[a.ID] = a.Resource.Component.Component.StartTimeout + startGrace
+	}
+	return out
 }
 
 // inScope returns the repositories a plan moves, in alias order.
@@ -432,6 +567,7 @@ func SourceKey(orgID, projectID, alias, sha string) string {
 // FetchSource stores the commit of each repository the deployment moves as
 // an artifact, once. A retry skips what an earlier attempt stored.
 func (r *Runner) FetchSource(ctx context.Context, orgID, deploymentID string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
@@ -536,6 +672,7 @@ func (r *Runner) retainsCheckpoint(providerName string) bool {
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
 func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) (runErr error) {
+	ctx = security.WithDeploymentRun(ctx)
 	// A guard can reject work after the initial deployment read. Report the
 	// durable wait state to workflow callers without converting it to Retry.
 	defer func() {
@@ -578,14 +715,29 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if step.Status == StepSucceeded || step.Status == StepRamping {
 		return nil
 	}
+	// The action is claimed before it has any effect, so a requested cancel
+	// lands only here, with nothing in flight for its fences to cut off. A
+	// retry of an attempt that claimed it, or a compensation's inner Run,
+	// finds it claimed and runs on.
+	if claimer, ok := r.store.(StepClaimer); ok && resume == nil && unclaimed(*step) {
+		stop, claimErr := claimer.ClaimStep(ctx, orgID, deploymentID, actionID)
+		if claimErr != nil {
+			return claimErr
+		}
+		if stop {
+			return r.stopRequested(ctx, orgID, deploymentID)
+		}
+		// Every step write replaces the step, so keep the claim in this one.
+		step.Claimed = true
+	}
 	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
 	if err != nil {
 		return err
 	}
+	if guardErr := legacyCapacityGuard(ctx, plan); guardErr != nil {
+		return guardErr
+	}
 	if deferredPlan(plan) {
-		if checkErr := legacyCapacityGuard(ctx, plan); checkErr != nil {
-			return checkErr
-		}
 		wait, checkErr := r.AssessCapacity(ctx, orgID, deploymentID)
 		if checkErr != nil {
 			return checkErr
@@ -710,6 +862,11 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			return errors.Join(ErrCapacityCancelled, err)
 		}
 		if blocks, blockErr := capacityBlocks(err); blockErr == nil && len(blocks) > 0 {
+			// Capacity refused the action before its effects, so a
+			// requested cancel needn't wait for room.
+			if current.CancelRequestedAt != nil {
+				return r.stopRequested(ctx, orgID, d.ID)
+			}
 			st, ok := r.store.(CapacityStore)
 			if !ok {
 				return errors.New("capacity wait store is unavailable")
@@ -725,6 +882,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		if current.Status == StatusPaused {
 			return errors.Join(ErrCapacityPaused, err)
 		}
+		// A node that is offline or refused a stream says so in its own
+		// words, which the action records in place of the raw error.
+		err = nodeFailed(err)
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -741,6 +901,89 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
+}
+
+// maxRefusalReason bounds how much of a node's reason for refusing a
+// stream an action records.
+const maxRefusalReason = 200
+
+// nodeOfflineMessage says why an action couldn't reach its node, when err
+// is the hub's: the node is offline, it doesn't allow the endpoint a
+// stream asked for, or it refused the stream for a reason of its own.
+// Anything else is false.
+func nodeOfflineMessage(err error) (string, bool) {
+	var refused *endpointRefusedError
+	if errors.As(err, &refused) {
+		if refused.notAllowed {
+			return fmt.Sprintf("node %s doesn't allow %s; allow it on the machine with: loomctl node allow %s", refused.node, refused.endpoint, refused.endpoint), true
+		}
+		reason, _ := nodes.RefusalReason(err)
+		if len(reason) > maxRefusalReason {
+			reason = strings.ToValidUTF8(reason[:maxRefusalReason], "") + "..."
+		}
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return fmt.Sprintf("node %s refused a %s stream: %s", refused.node, refused.endpoint, reason), true
+	}
+	var off nodes.ErrNodeOffline
+	if !errors.As(err, &off) {
+		return "", false
+	}
+	if off.Since.IsZero() {
+		return fmt.Sprintf("node %s is offline; its apps keep running. Run the deploy again once it reconnects", off.Name), true
+	}
+	return fmt.Sprintf("node %s is offline since %s; its apps keep running. Run the deploy again once it reconnects", off.Name, off.Since.UTC().Format("15:04 UTC")), true
+}
+
+// nodeFailed is err in nodeOfflineMessage's words, or err itself.
+func nodeFailed(err error) error {
+	if already := (*nodeFailureError)(nil); errors.As(err, &already) {
+		return err
+	}
+	message, ok := nodeOfflineMessage(err)
+	if !ok {
+		return err
+	}
+	var refused *endpointRefusedError
+	return &nodeFailureError{message: message, err: err, final: errors.As(err, &refused) && refused.notAllowed}
+}
+
+// nodeFailureError is a node's failure as the action records it. An offline
+// node is retried within the activity's attempts, since it may reconnect,
+// and so is a stream the node refused for a reason of its own, such as a
+// dial target that wasn't up yet; an endpoint the node doesn't allow is
+// final, since only someone on the machine can allow it.
+type nodeFailureError struct {
+	message string
+	err     error
+	final   bool
+}
+
+func (e *nodeFailureError) Error() string { return e.message }
+func (e *nodeFailureError) Unwrap() error { return e.err }
+
+// As makes a final failure the durable runtime's non-retryable one.
+func (e *nodeFailureError) As(target any) bool {
+	failure, ok := target.(**drt.ApplicationError)
+	if !ok || !e.final {
+		return false
+	}
+	*failure = &drt.ApplicationError{Type: "node_endpoint_refused", Message: e.message, NonRetryable: true}
+	return true
+}
+
+// stopRequested cancels a deployment whose cancel was requested, at a point
+// where none of its actions has effects in flight, and reports it cancelled.
+func (r *Runner) stopRequested(ctx context.Context, orgID, deploymentID string) error {
+	stopper, ok := r.store.(Stopper)
+	if !ok {
+		return errors.New("deployment cancellation is unavailable")
+	}
+	if _, err := stopper.StopDeployment(ctx, orgID, deploymentID, r.now().UTC()); err != nil {
+		return err
+	}
+	return ErrCapacityCancelled
 }
 
 // Preserve the boundary's rejection before consulting mutable deployment
@@ -777,6 +1020,26 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if a.Subject != planning.ServiceSubject && a.Subject != planning.ResourceSubject {
 		return fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, a.Subject)
 	}
+	around, err := r.environmentBindings(ctx, d, a.ID)
+	if err != nil {
+		return err
+	}
+	current, resources := around.current, around.resources
+	if a.Op == planning.Delete && len(a.CleanupTargets) > 0 {
+		var handled bool
+		ctx, handled, err = r.managedDelete(ctx, d, plan, a, current, step, resume, heartbeat)
+		if handled || err != nil {
+			return err
+		}
+	}
+	if a.Op == planning.Delete && len(a.CleanupTargets) == 0 && current != nil {
+		if checkErr := r.guardUnreviewedRemoval(ctx, current); checkErr != nil {
+			return checkErr
+		}
+	}
+	if (a.Resource != nil && a.Resource.ExistingResource != nil) || planning.ExistingResourceBinding(current) {
+		return r.runExistingResource(ctx, d, plan, a, current, step, progress)
+	}
 	if a.Op == planning.Keep && a.AdoptCloudPlacement {
 		return r.adoptCloudPlacement(ctx, d, plan, a, step, heartbeat)
 	}
@@ -788,36 +1051,46 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	around, err := r.environmentBindings(ctx, d, a.ID)
-	if err != nil {
-		return err
-	}
-	current, resources := around.current, around.resources
 	deleting := a.Op == planning.Delete
 	if deleting && current == nil {
 		return nil
 	}
-	connID := planConnection(plan, a, prov.Cloud)
-	if deleting && current.ConnectionID != "" {
-		// What's deleted goes through the connection that deployed it,
-		// which needn't be the one the environment deploys with now. Only
-		// a binding from before bindings recorded their connection is
-		// taken to be on the plan's.
-		connID = current.ConnectionID
-	}
-	if connID == "" {
-		if deleting {
-			return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
-				a.Name, prov.Cloud, d.Environment)
+	var connID string
+	var conn *connections.Connection
+	var cred []byte
+	var unreachable bool
+	if prov.Cloud == platformProvider {
+		// Loomplane Cloud runs on the platform's own hosts, through no
+		// connection of the organization's.
+		if a.ConnectionID != "" || deleting && current.ConnectionID != "" {
+			return fmt.Errorf("%s runs on Loomplane Cloud, which deploys through no connection; plan again", a.Name)
 		}
-		return fmt.Errorf("the plan names no %s connection", prov.Cloud)
+	} else {
+		connID = planConnection(plan, a, prov.Cloud)
+		if deleting && current.ConnectionID != "" {
+			// What's deleted goes through the connection that deployed it,
+			// which needn't be the one the environment deploys with now. Only
+			// a binding from before bindings recorded their connection is
+			// taken to be on the plan's.
+			connID = current.ConnectionID
+		}
+		if connID == "" {
+			if deleting {
+				return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
+					a.Name, prov.Cloud, d.Environment)
+			}
+			return fmt.Errorf("the plan names no %s connection", prov.Cloud)
+		}
+		conn, cred, err = r.credentials.Credential(ctx, d.OrgID, connID)
+		// A delete whose connection is gone can't reach what it deletes. That
+		// fails nothing: deleteBound stops tracking it and says so.
+		unreachable = deleting && errors.Is(err, connections.ErrNotFound)
+		if err != nil && !unreachable {
+			return err
+		}
 	}
-	conn, cred, err := r.credentials.Credential(ctx, d.OrgID, connID)
-	// A delete whose connection is gone can't reach what it deletes. That
-	// fails nothing: deleteBound stops tracking it and says so.
-	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
-	if err != nil && !unreachable {
-		return err
+	if targetErr := checkExternalResourceTarget(d.OrgID, a, conn); targetErr != nil {
+		return targetErr
 	}
 	if checkErr := checkAdmittedDaemon(ctx, a, conn); checkErr != nil {
 		return checkErr
@@ -829,9 +1102,17 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		if a.Service != nil && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
 			return fmt.Errorf("the target settings for %s changed since this plan was reviewed; plan again", a.Name)
 		}
+		if a.Resource != nil && a.Resource.AccountIdentity != "" && a.Resource.AccountIdentity != connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details) {
+			return fmt.Errorf("the reviewed account for %s changed; check the connection and plan again", a.Name)
+		}
 	}
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
 		return validationErr
+	}
+	if !deleting {
+		if accessErr := r.verifyExistingServiceAccess(ctx, &Job{Deployment: d, Plan: plan, Action: a, Connection: conn}, resources); accessErr != nil {
+			return accessErr
+		}
 	}
 	if captureErr := r.captureAppliedVariables(ctx, d, &a, around.services, resources); captureErr != nil {
 		return captureErr
@@ -890,7 +1171,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if routeErr := r.validateReleaseRoutes(ctx, job, current); routeErr != nil {
 		return routeErr
 	}
-	moving := moves(current, a, connID) || len(a.Routes) > 0
+	// A native move deploys into the shared Vercel project, on the same
+	// provider, region and connection, so only the plan says it moves.
+	moving := moves(current, a, connID) || len(a.Routes) > 0 || a.NativeMove
 	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something
@@ -942,8 +1225,10 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
 		return authErr
 	}
-	if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
-		return effectErr
+	if a.Service == nil || a.Service.ClusterDemand == nil {
+		if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
+			return effectErr
+		}
 	}
 	if _, fenced := server.EffectFenceFrom(ctx); fenced {
 		if fenceErr := preparePoolEffects(ctx, exec, job); fenceErr != nil {
@@ -979,6 +1264,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	}
 	if err != nil {
 		return err
+	}
+	if outputErr := job.finishNativeOutputs(ctx); outputErr != nil {
+		return outputErr
 	}
 	step.URL, step.Image, step.Revision = out.URL, out.Image, out.Revision
 	step.Warnings = append(step.Warnings, applyWarnings...)
@@ -1108,6 +1396,9 @@ func (r *Runner) newJob(ctx context.Context, d *Deployment, plan *planning.Plan,
 		},
 		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
 	}
+	if outputErr := r.trackNativeOutputs(ctx, job); outputErr != nil {
+		return nil, outputErr
+	}
 	// A gateway is built from the source Loomplane generates for its
 	// routes, and the database gateway from the program Loomplane ships,
 	// not from the repository.
@@ -1138,6 +1429,12 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 	if a.Service == nil {
 		return nil
 	}
+	if err := r.verifyExistingServiceAccess(ctx, job, around.resources); err != nil {
+		return err
+	}
+	if err := r.verifyExistingSnapshotAccess(ctx, job, around.resources); err != nil {
+		return err
+	}
 	if !a.Service.Generated() {
 		job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
 			return r.appliedSource(ctx, d, a)
@@ -1153,7 +1450,7 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 		return err
 	}
 	for _, link := range a.Service.Env {
-		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
+		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil && !planning.ExistingResourceBinding(b) {
 			job.Attach = append(job.Attach, b)
 		}
 	}
@@ -1303,6 +1600,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		if err := r.confirmFrontendRemoval(ctx, exec, job, bound); err != nil {
 			return err
 		}
+		if job.nativeOutputs != nil {
+			if forgetErr := job.Forget(ctx); forgetErr != nil {
+				return forgetErr
+			}
+		}
 	}
 	// The database gateway's cloud service is gone, or out of reach for
 	// good, so its record and keys go too, while the binding still says
@@ -1310,7 +1612,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 	if err := r.removeDatabaseGateway(ctx, job.Deployment, bound); err != nil {
 		return err
 	}
-	if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
+	if state, ok := ctx.Value(managedActionCleanupKey{}).(*managedActionCleanup); ok {
+		if _, removeErr := r.managedCleanup.Store.GuardManagedDeleteBinding(ctx, state.selection, bound, true); removeErr != nil {
+			return removeErr
+		}
+	} else if err := r.plans.DeleteBinding(ctx, job.Deployment.OrgID, bound.ID); err != nil {
 		return err
 	}
 	step.Warnings = append(step.Warnings, warnings...)
@@ -1336,18 +1642,27 @@ type unreachableRemover interface {
 func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *planning.Binding, warn func(error),
 	rc *replaceCheckpoint, heartbeat func([]byte) error,
 ) error {
+	ctx, managed, cleanupErr := r.ensureManagedActionCleanup(ctx, job.Deployment, job.Plan, job.Action, job.Resume, heartbeat)
+	if cleanupErr != nil {
+		return cleanupErr
+	}
 	left := slices.Clone(bound.Replaced)
 	var errs []error
 	for _, old := range bound.Replaced {
 		if c := job.Action.Compensation; c != nil && c.Retained && (old.PlanID != c.Candidate.PlanID || bindingIdentity(&old) != bindingIdentity(&c.Candidate)) {
 			continue
 		}
+		if managed == nil || !managed.reviewed(&old) {
+			if checkErr := r.guardUnreviewedRemoval(ctx, &old); checkErr != nil {
+				return checkErr
+			}
+		}
 		done := true
 		same, identityErr := r.sameBindingResource(ctx, job.Deployment.OrgID, &old, bound)
 		if identityErr != nil {
 			return identityErr
 		}
-		if !same {
+		if !same && (managed == nil || !managed.removed(&old)) {
 			var err error
 			done, err = r.removeOne(ctx, job, &old, rc, heartbeat)
 			mine := own != nil && bindingIdentity(own) == bindingIdentity(&old)
@@ -1365,7 +1680,16 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 		left = slices.DeleteFunc(left, func(b planning.Binding) bool {
 			return bindingIdentity(&b) == bindingIdentity(&old)
 		})
-		if err := r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left); err != nil {
+		var err error
+		if managed != nil {
+			err = r.managedCleanup.Store.SetReviewedReplaced(ctx, managed.selection, bound, left)
+			if err == nil {
+				bound.Replaced = slices.Clone(left)
+			}
+		} else {
+			err = r.plans.SetReplaced(ctx, job.Deployment.OrgID, bound.ID, left)
+		}
+		if err != nil {
 			return errors.Join(append(errs, err)...)
 		}
 	}
@@ -1377,6 +1701,9 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 // done reports whether to stop recording it: it's gone, or nothing here
 // could ever reach it.
 func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding, rc *replaceCheckpoint, heartbeat func([]byte) error) (done bool, err error) {
+	if planning.ExistingResourceBinding(old) {
+		return true, nil
+	}
 	a := job.Action
 	exec, ok := r.executors[old.Provider]
 	// Deleting the action deletes the binding that tracks the old one, so
@@ -1398,8 +1725,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if !ok {
 		return false, notYet(fmt.Errorf("%w: %s, which ran %s before it moved", ErrNoExecutor, old.Provider, a.Name))
 	}
+	// Loomplane Cloud ran it on the platform's own hosts, through no
+	// connection of the organization's.
+	onPlatform := old.Provider == platformProvider && old.ConnectionID == ""
 	oldConnID := old.ConnectionID
-	if oldConnID == "" {
+	if oldConnID == "" && !onPlatform {
 		// A binding from before bindings recorded their connection was
 		// deployed with the plan's connection to its cloud.
 		prov, perr := r.providers.Get(old.Provider)
@@ -1410,7 +1740,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 			return false, notYet(fmt.Errorf("the plan names no %s connection, which %s ran on before it moved", prov.Cloud, a.Name))
 		}
 	}
-	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	var conn *connections.Connection
+	var cred []byte
+	if !onPlatform {
+		conn, cred, err = r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	}
 	if errors.Is(err, connections.ErrNotFound) && (job.Plan.CloudSyncID != "" || poolBinding(old)) {
 		return false, err
 	}
@@ -1427,7 +1761,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if err != nil {
 		return false, err
 	}
-	if job.Plan.CloudSyncID != "" {
+	if job.Plan.CloudSyncID != "" && !onPlatform {
 		var cfg planning.ServiceConfig
 		if err := json.Unmarshal(old.Config, &cfg); err != nil {
 			return false, err
@@ -1538,7 +1872,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 		if secret == nil {
 			secret = map[string]bool{}
 		}
-	} else if env, secret, err = r.variables.Values(ctx, d.OrgID, d.ProjectID, d.Environment, a.Service.Service); err != nil {
+	} else if env, secret, err = r.deploymentVariables(ctx, d, a.Service.Service); err != nil {
 		return nil, nil, fmt.Errorf("resolve variables: %w", err)
 	}
 	for _, link := range a.Service.Env {
@@ -1748,6 +2082,24 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	if err := r.plans.PutBinding(ctx, b); err != nil {
 		return nil, err
 	}
+	if a.Service != nil && a.Service.ClusterDemand != nil && a.Service.ClusterDemand.Mode == "guaranteed" {
+		st, ok := r.store.(*PgStore)
+		if !ok {
+			return nil, errors.New("managed workload receipt requires durable storage")
+		}
+		tx, err := st.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		bindErr := cloudinfra.NewPgStore(st.db).BindClusterWorkloadReceipt(ctx, tx, a.Service.ClusterDemand.Input, b.ID)
+		if bindErr == nil {
+			bindErr = tx.Commit()
+		}
+		_ = tx.Rollback() //nolint:errcheck // no-op after commit
+		if bindErr != nil {
+			return nil, bindErr
+		}
+	}
 	return b, nil
 }
 
@@ -1758,6 +2110,7 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 // as what the environment runs; a repository the plan held keeps what it
 // had.
 func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
@@ -1768,7 +2121,9 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if d.Status == StatusPaused || d.Status == StatusCancelled {
 		return nil
 	}
+	var watch WatchDecision
 	if reason == "" && d.Status != StatusFailed {
+		watch = r.prepareWatch(ctx, d)
 		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
 			return cleanupErr
 		}
@@ -1809,7 +2164,10 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if settled.Status != StatusSucceeded {
 		return nil
 	}
-	return r.recordDeployed(ctx, d, now)
+	if recordErr := r.recordDeployed(ctx, d, now); recordErr != nil {
+		return recordErr
+	}
+	return r.armWatch(ctx, settled, watch)
 }
 
 // recordDeployed records the commit of each repository a deployment's plan
@@ -1823,7 +2181,7 @@ func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" || plan.Catalog {
+	if plan.CloudSyncID != "" || plan.Catalog || plan.Kind == planning.KindInstance {
 		return nil
 	}
 	release := &planning.DeployedRelease{

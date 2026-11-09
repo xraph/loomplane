@@ -36,6 +36,33 @@ func testCA(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.Certificate().Raw})
 }
 
+func TestConfigManagedRegistryAcceptsHostnameOnly(t *testing.T) {
+	raw := kubeconfig(t, "https://cluster.example.com", testCA(t))
+	settings := map[string]string{"registry_hostname": "images.example.com", "storage_class": "retained", "architecture": "arm64", "ingress_address": "203.0.113.10"}
+	c, err := ParseConfig(raw, settings)
+	if err != nil || c.Details["registry_hostname"] != settings["registry_hostname"] {
+		t.Fatalf("managed registry setup lost: %v", err)
+	}
+	for _, key := range []string{"storage_class", "architecture", "ingress_address"} {
+		value := settings[key]
+		delete(settings, key)
+		if _, err = ParseConfig(raw, settings); err != nil {
+			t.Fatalf("hostname-only setup rejected without %s: %v", key, err)
+		}
+		settings[key] = value
+	}
+	minimal, err := ParseConfig(raw, map[string]string{"registry_hostname": "images.example.com"})
+	if err != nil || minimal.Details["registry_setup"] != "automatic" {
+		t.Fatalf("automatic setup: %v", err)
+	}
+	for _, host := range []string{"http://images.example.com", "*.example.com", "images.example.com/repository", "images"} {
+		settings["registry_hostname"] = host
+		if _, err = ParseConfig(raw, settings); err == nil {
+			t.Fatalf("invalid registry hostname accepted: %s", host)
+		}
+	}
+}
+
 func TestConfig_isExplicitAndSelfContained(t *testing.T) {
 	raw := kubeconfig(t, "https://cluster.example.com:6443", testCA(t))
 	c, err := ParseConfig(raw, map[string]string{"namespace": "preview", "image_pull_secret": "existing-pull"})

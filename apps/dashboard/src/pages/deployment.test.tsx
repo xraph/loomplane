@@ -1,9 +1,10 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
-import { DeploymentPage } from "@/pages/deployment"
+import { DeploymentPage, type DeploymentTab } from "@/pages/deployment"
+import { Route } from "@/routes/deployments.$id"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => true }),
@@ -40,21 +41,33 @@ const plan = (release?: object, status = "ready") => ({
   ...(release ? { release } : {}),
 })
 
-function serve(p: object) {
+function serve(
+  p: object,
+  more: Record<string, unknown> = {},
+  tab?: DeploymentTab
+) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost").pathname
-    const body = url.endsWith("/plans/plan_1")
-      ? p
-      : url.endsWith("/projects/proj_1")
-        ? { id: "proj_1", name: "Shop", slug: "shop" }
-        : {}
+    const extra = Object.entries(more).find(([suffix]) => url.endsWith(suffix))
+    const body = extra
+      ? extra[1]
+      : url.endsWith("/plans/plan_1")
+        ? p
+        : url.endsWith("/projects/proj_1")
+          ? { id: "proj_1", name: "Shop", slug: "shop" }
+          : {}
+    if (extra && typeof extra[1] === "number")
+      return new Response(JSON.stringify({ message: "refused" }), {
+        status: extra[1],
+        headers: { "Content-Type": "application/json" },
+      })
     return new Response(JSON.stringify(body), {
       headers: { "Content-Type": "application/json" },
     })
   })
   render(
     <ClientProvider client={forgeClient}>
-      <DeploymentPage id="plan_1" />
+      <DeploymentPage id="plan_1" tab={tab} />
     </ClientProvider>
   )
 }
@@ -62,7 +75,7 @@ function serve(p: object) {
 test("a plan without a release shows no canary panel", async () => {
   serve(plan())
   expect(
-    await screen.findByRole("region", { name: "Steps" })
+    await screen.findByRole("list", { name: "Progress" })
   ).toBeInTheDocument()
   expect(
     screen.queryByRole("heading", { name: "Canary" })
@@ -99,9 +112,414 @@ test.each([
 ])("%s shows no canary panel", async (_, p) => {
   serve(p)
   expect(
-    await screen.findByRole("region", { name: "Steps" })
+    await screen.findByRole("list", { name: "Progress" })
   ).toBeInTheDocument()
   expect(
     screen.queryByRole("heading", { name: "Canary" })
   ).not.toBeInTheDocument()
+})
+
+test("a promotion shows its source, how long it soaked and its images", async () => {
+  serve(
+    {
+      ...plan(),
+      kind: "promotion",
+      from_environment: "staging",
+      artifacts: [
+        { service: "web", reused: true, from: "staging", revision: "" },
+        {
+          service: "api",
+          reused: false,
+          reason: "staging's registry is in another account",
+        },
+      ],
+    },
+    {
+      "/plans/plan_1/soak": {
+        environment: "staging",
+        running: true,
+        since: "2026-10-29T09:00:00Z",
+        duration: 3 * 3600 * 1e9,
+        healthy: true,
+        unverified: false,
+        reasons: [],
+        services: [],
+      },
+    }
+  )
+  expect(await screen.findByText("Promoted from staging")).toBeInTheDocument()
+  expect(await screen.findByText("Reuses staging's image")).toBeInTheDocument()
+  expect(
+    screen.getByText("Builds again: staging's registry is in another account")
+  ).toBeInTheDocument()
+  expect(
+    await screen.findByText("staging has run these commits for 3h 00m, healthy")
+  ).toBeInTheDocument()
+  expect(screen.queryByText("Unverified")).not.toBeInTheDocument()
+})
+
+test("a promotion whose soak lacks evidence is marked unverified", async () => {
+  serve(
+    { ...plan(), kind: "promotion", from_environment: "staging" },
+    {
+      "/plans/plan_1/soak": {
+        environment: "staging",
+        running: true,
+        since: "2026-10-29T11:00:00Z",
+        duration: 40 * 60 * 1e9,
+        healthy: false,
+        unverified: true,
+        reasons: ["web: 30 requests, fewer than the 200 a verdict needs."],
+        services: [],
+      },
+    }
+  )
+  expect(
+    await screen.findByText(
+      "staging has run these commits for 40m 00s, not healthy: web: 30 requests, fewer than the 200 a verdict needs."
+    )
+  ).toBeInTheDocument()
+  expect(screen.getByText("Unverified")).toBeInTheDocument()
+})
+
+test("an automatic rollback names the automation and lists its leftovers", async () => {
+  serve({
+    ...plan(),
+    kind: "rollback",
+    created_by: "loomplane:org_1",
+    rollback: {
+      reason:
+        "api: 4.1% of the candidate's requests failed; the ceiling is 1%.",
+      restore_deployment_id: "dep_1",
+      restore_finished_at: "2026-10-29T08:00:00Z",
+      restore_plan_id: "plan_0",
+      target_deployment_id: "dep_2",
+      target_plan_id: "plan_2",
+      trigger: "watch",
+    },
+    leftovers: [
+      {
+        name: "orders-db",
+        subject: "postgres",
+        op: "delete",
+        data_bearing: true,
+        reason: "It holds data, so the rollback keeps it.",
+      },
+      {
+        name: "cache",
+        subject: "redis",
+        op: "update",
+        data_bearing: false,
+        reason: "",
+      },
+    ],
+  })
+  expect(await screen.findByText("Automatic rollback")).toBeInTheDocument()
+  expect(screen.getAllByText("Loomplane automation").length).toBeGreaterThan(0)
+  const leftovers = await screen.findByRole("list", { name: "Leftovers" })
+  const db = within(leftovers).getByText("orders-db").closest("li")!
+  expect(within(db).getByText("Data")).toBeInTheDocument()
+  const cache = within(leftovers).getByText("cache").closest("li")!
+  expect(within(cache).queryByText("Data")).not.toBeInTheDocument()
+})
+
+const finished = (id: string, startedAt: string) => ({
+  id,
+  org_id: "org_1",
+  project_id: "proj_1",
+  plan_id: id === "dep_1" ? "plan_1" : "plan_9",
+  environment: "production",
+  environment_id: "env_1",
+  status: "succeeded",
+  steps: [],
+  sources: [],
+  commit_sha: "",
+  error: "",
+  retries: 0,
+  started_at: startedAt,
+  started_by: "usr_1",
+  finished_at: startedAt,
+})
+
+const target = {
+  environment: "production",
+  target: {
+    deployment_id: "dep_1",
+    plan_id: "plan_1",
+    kind: "release",
+    status: "succeeded",
+  },
+  restore: {
+    deployment_id: "dep_0",
+    plan_id: "plan_0",
+    kind: "release",
+    status: "succeeded",
+  },
+  commits: [],
+}
+
+test("the newest finished deployment offers a rollback", async () => {
+  serve(
+    { ...plan(undefined, "approved"), environment_id: "env_1" },
+    {
+      "/plans/plan_1/deployment": finished("dep_1", "2026-10-29T10:00:00Z"),
+      "/projects/proj_1/deployments": {
+        deployments: [finished("dep_1", "2026-10-29T10:00:00Z")],
+      },
+      "/environments/production/rollback-target": target,
+      "/deployments/dep_1/watch": 404,
+    }
+  )
+  expect(
+    await screen.findByRole("button", { name: "Roll back" })
+  ).toBeInTheDocument()
+})
+
+test("an older deployment offers no rollback", async () => {
+  serve(
+    { ...plan(undefined, "approved"), environment_id: "env_1" },
+    {
+      "/plans/plan_1/deployment": finished("dep_1", "2026-10-29T10:00:00Z"),
+      "/projects/proj_1/deployments": {
+        deployments: [
+          finished("dep_9", "2026-10-29T11:00:00Z"),
+          finished("dep_1", "2026-10-29T10:00:00Z"),
+        ],
+      },
+      // The server refuses: dep_1 isn't the newest release.
+      "/environments/production/rollback-target": 422,
+      "/deployments/dep_1/watch": 404,
+    }
+  )
+  expect(await screen.findByText("Deployed")).toBeInTheDocument()
+  await new Promise((r) => setTimeout(r, 50))
+  expect(
+    screen.queryByRole("button", { name: "Roll back" })
+  ).not.toBeInTheDocument()
+})
+
+// A Cloud sync or catalog deployment after it isn't a release, so the
+// server still rolls dep_1 back, and the page offers it.
+test("a newer Cloud sync deployment doesn't hide the rollback", async () => {
+  serve(
+    { ...plan(undefined, "approved"), environment_id: "env_1" },
+    {
+      "/plans/plan_1/deployment": finished("dep_1", "2026-10-29T10:00:00Z"),
+      "/projects/proj_1/deployments": {
+        deployments: [
+          finished("dep_sync", "2026-10-29T11:00:00Z"),
+          finished("dep_1", "2026-10-29T10:00:00Z"),
+        ],
+      },
+      "/environments/production/rollback-target": target,
+      "/deployments/dep_1/watch": 404,
+    }
+  )
+  expect(
+    await screen.findByRole("button", { name: "Roll back" })
+  ).toBeInTheDocument()
+})
+
+test("renders historical null plan collections and the managed cleanup route", async () => {
+  serve(
+    {
+      ...plan(undefined, "approved"),
+      problems: null,
+      warnings: null,
+      sources: null,
+      actions: [
+        {
+          id: "service:api",
+          name: "api",
+          op: "create",
+          provider: "kubernetes",
+          service: {
+            provider: "kubernetes",
+            cluster_demand: {
+              mode: "best_effort",
+              maximum: { cpu_millis: 100, memory_bytes: 100 },
+            },
+          },
+        },
+      ],
+    },
+    {
+      "/deployment": {
+        id: "dep",
+        plan_id: "plan_1",
+        status: "cancelled",
+        steps: [],
+        started_at: "2026-11-01T00:00:00Z",
+      },
+      "/cleanup": {
+        deployment_id: "dep",
+        status: "cancelled",
+        variant: "managed_workload",
+        review_id: "review",
+        revision: "digest",
+      },
+    }
+  )
+  expect(await screen.findByText("Deployment cleanup")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("button", { name: "Review cleanup" })
+  ).toBeInTheDocument()
+})
+
+const api = (op = "replace") => ({
+  id: "service:api",
+  name: "api",
+  op,
+  step: 1,
+  provider: "cloudrun",
+  creates: "Cloud Run service",
+  subject: "service",
+  reason: "4 commits since the running release.",
+})
+
+test("a waiting plan opens on Changes with the one approval box", async () => {
+  serve({
+    ...plan(),
+    actions: [api(), { ...api("keep"), id: "service:worker", name: "worker" }],
+    summary: { create: 0, delete: 0, keep: 1, replace: 1, update: 0 },
+    warnings: [{ code: "slow", message: "api restarts briefly." }],
+  })
+  const box = await screen.findByRole("region", { name: "Approve this plan" })
+  expect(
+    within(box).getByText("Approve to deploy 1 service to production")
+  ).toBeInTheDocument()
+  expect(
+    within(box).getByText(/Replaces api and keeps worker as it is\./)
+  ).toBeInTheDocument()
+  expect(
+    within(box)
+      .getAllByRole("button")
+      .map((b) => b.textContent)
+  ).toEqual(["Reject", "Approve and deploy"])
+  expect(screen.getByRole("tab", { name: /Changes/ })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  const changes = screen.getByRole("table", { name: "Changes" })
+  expect(within(changes).getByText("Replace")).toBeInTheDocument()
+  expect(within(changes).getByText("Keep")).toBeInTheDocument()
+  expect(screen.getByText("api restarts briefly.")).toBeInTheDocument()
+  // The header and the Approve phase both say so.
+  expect(screen.getAllByText("Waiting for you").length).toBe(2)
+})
+
+test("rejecting asks first", async () => {
+  serve({ ...plan(), actions: [api()] })
+  const box = await screen.findByRole("region", { name: "Approve this plan" })
+  within(box).getByRole("button", { name: "Reject" }).click()
+  expect(await screen.findByText("Reject this plan?")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Reject plan" })).toBeEnabled()
+})
+
+test("a blocked plan says where to fix its problems", async () => {
+  serve({
+    ...plan(undefined, "blocked"),
+    problems: [{ code: "no-connection", message: "No AWS account" }],
+  })
+  expect(
+    await screen.findByText("One problem stops this plan from being approved")
+  ).toBeInTheDocument()
+  const fix = screen.getByRole("link", {
+    name: "Fix them in the project's Deployments tab",
+  })
+  expect(fix).toHaveAttribute("href", "/projects/$id")
+  expect(
+    screen.queryByRole("region", { name: "Approve this plan" })
+  ).not.toBeInTheDocument()
+})
+
+const failedDeployment = {
+  id: "dep_1",
+  plan_id: "plan_1",
+  project_id: "proj_1",
+  environment: "production",
+  status: "failed",
+  error: "",
+  retries: 0,
+  sources: [],
+  commit_sha: "",
+  started_at: "2026-10-29T10:00:00Z",
+  started_by: "usr_1",
+  finished_at: "2026-10-29T10:02:00Z",
+  steps: [
+    {
+      action_id: "service:api",
+      status: "failed",
+      name: "api",
+      op: "replace",
+      order: 0,
+      provider: "cloudrun",
+      subject: "service",
+      image: "",
+      url: "",
+      message: "The task role can't read the db secret.",
+      started_at: "2026-10-29T10:00:00Z",
+      finished_at: "2026-10-29T10:02:00Z",
+    },
+  ],
+}
+
+test("a failed deployment names the step and retries from it", async () => {
+  serve(
+    { ...plan(undefined, "approved"), actions: [api()] },
+    {
+      "/plans/plan_1/deployment": failedDeployment,
+      "/environments/production/rollback-target": 422,
+      "/deployments/dep_1/watch": 404,
+    }
+  )
+  expect(await screen.findByText("api failed on cloudrun")).toBeInTheDocument()
+  expect(
+    screen.getAllByText(/The task role can't read the db secret\./).length
+  ).toBeGreaterThan(0)
+  expect(
+    screen.getByRole("button", { name: "Retry from api" })
+  ).toBeInTheDocument()
+  // Retry lives in the failure callout only, not the header.
+  expect(
+    within(screen.getByRole("banner")).queryByRole("button", { name: /Retry/ })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText("Failed at step 1 of 1")).toBeInTheDocument()
+  // The logs open by default, with a source per service.
+  const from = screen.getByRole("tablist", { name: "Show lines from" })
+  expect(
+    within(from)
+      .getAllByRole("tab")
+      .map((t) => t.textContent)
+  ).toEqual(["Everything", "Plan", "api"])
+})
+
+test("a service's Logs button opens its lines", async () => {
+  serve(
+    { ...plan(undefined, "approved"), actions: [api()] },
+    {
+      "/plans/plan_1/deployment": failedDeployment,
+      "/environments/production/rollback-target": 422,
+      "/deployments/dep_1/watch": 404,
+    },
+    "services"
+  )
+  const table = await screen.findByRole("table", { name: "Services" })
+  expect(await within(table).findByText("Failed")).toBeInTheDocument()
+  within(table).getByRole("button", { name: "Logs for api" }).click()
+  const from = await screen.findByRole("tablist", { name: "Show lines from" })
+  expect(within(from).getByRole("tab", { name: "api" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+})
+
+test("old and unknown tabs fall back", () => {
+  const validate = Route.options.validateSearch as (
+    s: Record<string, unknown>
+  ) => { tab?: string }
+  expect(validate({ tab: "plan" })).toEqual({ tab: "changes" })
+  expect(validate({ tab: "logs" })).toEqual({ tab: "logs" })
+  expect(validate({ tab: "nope" })).toEqual({})
+  expect(validate({})).toEqual({})
 })

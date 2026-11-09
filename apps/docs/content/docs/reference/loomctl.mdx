@@ -3,7 +3,7 @@ title: loomctl
 description: Every loomctl command, grouped by what it does, with its main flags.
 ---
 
-`loomctl` is Loomplane's command-line client and MCP server. It calls the API with an API key through `pkg/client`, so anything it does, a script can do the same way. Run `loomctl --help`, or `loomctl <command> --help`, for the flags on your version.
+`loomctl` is Loomplane's command-line client and MCP server. It calls the API through `pkg/client`, signed in as you or with an API key, so anything it does, a script can do the same way. Run `loomctl --help`, or `loomctl <command> --help`, for the flags on your version.
 
 ## Install
 
@@ -15,13 +15,26 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 
 ## Connect to Loomplane
 
-`loomctl` finds the server and key in `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`, which suit CI, or in the file `loomctl login` writes (`loomctl.json` under `loomplane` in your user config directory, readable only by you). The environment wins over the saved login.
+On your own machine, sign in as yourself:
+
+```bash
+loomctl login --url https://loomplane.example.com
+```
+
+It prints a short code and opens the dashboard's **/device** page with the code filled in. Sign in there if you aren't already, check the code matches the one in your terminal, and approve it. `loomctl` picks up the sign-in a few seconds later. If you belong to more than one organization it asks which one to act in, or you can name it up front with `--org`. On a machine with no browser, add `--no-browser` and open the address it prints on your phone or laptop instead.
+
+The sign-in is your own account, with your role in each organization, so you don't make or paste a key for it. loomctl renews it while you use it, and `loomctl logout` ends the session on the server as well as forgetting it here.
+
+CI wants an API key instead, since nobody is there to approve a code. `loomctl` finds the server and key in `LOOMPLANE_URL` and `LOOMPLANE_API_KEY`, or in the file `loomctl login` writes (`loomctl.json` under `loomplane` in your user config directory, readable only by you). The environment wins over the saved login.
 
 | Command | What it does |
 |---|---|
-| `login --url URL --key KEY` | Checks the key and saves where Loomplane is. `--key -` reads the key from standard input |
-| `logout` | Forgets the saved key. It still works until you revoke it |
-| `whoami [--json]` | Who the key acts as and what it may do |
+| `login --url URL [--org ORG] [--no-browser]` | Signs you in through the browser and saves the sign-in |
+| `login --url URL --key KEY` | Checks an API key and saves it in place of a sign-in. `--key -` reads the key from standard input |
+| `organizations [--json]` | Lists the organizations your sign-in can act in, with a `*` by the current one |
+| `organizations use ORG` | Acts in another of your organizations, by slug, name or ID. An API key stays in its own |
+| `logout` | Forgets the saved login. A sign-in's session ends with it; a key still works until you revoke it |
+| `whoami [--json]` | Who loomctl acts as and what it may do |
 
 ## Projects and analysis
 
@@ -35,17 +48,72 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 | `vars PROJECT [--json]` | Lists variables. Secrets show no value |
 | `vars set PROJECT KEY=VALUE [--env E] [--service S] [--secret]` | Sets a variable. `KEY=-` reads the value from standard input |
 
+## Teams
+
+| Command | What it does |
+|---|---|
+| `teams [--json]` | Lists teams with their member counts and roles, such as `developer on checkout-api` or `admin on the workspace` |
+| `teams show TEAM [--json]` | Shows a team's description, roles and members. `TEAM` is a slug, name or ID |
+| `teams create NAME [--description TEXT]` | Creates a team |
+| `teams delete TEAM --yes` | Deletes a team. Without `--yes` nothing is sent |
+| `teams add TEAM EMAIL` | Adds a workspace member, found by email |
+| `teams remove TEAM EMAIL` | Takes a person out of a team |
+| `teams grant TEAM viewer\|developer\|admin [--project P]` | Gives the team a role on a project, or on the whole workspace without `--project` |
+| `teams revoke TEAM [--project P]` | Removes the team's role on that project, or on the workspace |
+| `projects team PROJECT TEAM` | Names the team responsible for a project |
+| `projects team PROJECT --none` | Clears it |
+
+Managing teams needs `member:manage`. Setting a project's team needs `project:update` on it. See [Teams](/docs/concepts/teams).
+
+## The built-in agent
+
+These need the agent on. On a server with `ai.enabled` off they print "This Loomplane doesn't run the agent (ai.enabled is off)." and exit 1.
+
+| Command | What it does |
+|---|---|
+| `agent [--project REF] [--conversation ID]` | Opens a chat at a `you> ` prompt. Each line is a message, and the answer streams in as the agent writes it. When the agent asks a question you can answer, it asks it right there (`agent asks: ...`, options numbered): type the text or an option's number, or press Enter to leave it pending. Other requests print how to answer them. `/new` starts a new conversation, `/stop` stops the agent's task, `/follow` watches a task you left pending, and `/quit` or the end of input leaves. Ctrl-C while the agent answers stops its task and takes you back to the prompt. At the prompt it leaves. `--conversation` carries on one you started, picking up the agent where it waits |
+| `agent ask PROMPT [--project REF] [--conversation ID] [--json] [--no-wait]` | Asks one thing and prints the answer. Text goes to standard output as it comes. Each tool the agent uses goes to standard error as `· name (risk)`, then `  ok`, `  failed: why` or `  refused: why`. A question for a person prints with how to answer it. `--json` prints each event as one JSON line on standard output and nothing else. With `--no-wait`, a task that waits for a person exits 3 and tells you the `loomctl agent --conversation ID` to carry on with. Ctrl-C stops the task and exits 130 |
+| `agent conversations [--project REF] [--json]` | Lists your conversations: ID, project, title, status and when they were last updated |
+| `agent conversations rename ID TITLE` | Renames one of your conversations (up to 120 characters) |
+| `agent conversations delete ID` | Deletes one of your conversations, and stops the agent if it's still on it |
+| `agent requests [--all] [--mine] [--json]` | Lists what the agent is asking people for: ID, kind, project, question, who it was sent to, who it's asked for, and its age. `--all` includes settled requests. `--mine` keeps what's asked of you, your teams or, for admins, the workspace. A plan to approve adds the line `approve with: loomctl approve PLAN --revision REV` |
+| `agent requests answer ID TEXT...` | Answers a question |
+| `agent requests provide ID` | Sets the secret the agent asked for. The value comes from standard input, hidden on a terminal, and a value given as an argument is refused. It's never printed |
+| `agent requests done ID` | Says you connected GitHub or a cloud account |
+| `agent requests decline ID [--reason TEXT]` | Turns a request down. The agent sees the reason |
+| `agent reports [--all \| --status resolved\|closed] [--project REF] [--json]` | Lists what the watcher found: ID, severity, project, environment, title, how often and how long ago it was seen, and its GitHub issue. You get the open reports unless you pass `--all` or a `--status` |
+| `agent reports show ID [--json]` | Shows one report: its facts, what the agent's investigation found (summary, likely cause, suggestions and how sure it is) and the issue link |
+| `agent reports close ID [--reason TEXT]` | Closes a report. The reason is kept with it |
+| `agent watcher [--json]` | Says whether the watcher is watching or paused, and why if it's paused. It also lists each GitHub installation and whether it has accepted the Issues permission, so you can see why an issue hasn't been opened |
+
+`agent ask` exits 0 when the agent finishes, 1 when it fails, is stopped, or refuses the message (a 409: it's still on your last one, it's off for your workspace, or the budget is spent), 3 when `--no-wait` met a request, and 130 after Ctrl-C. A run Loomplane's safety checks stopped prints "Loomplane's safety checks stopped this answer." and exits 1.
+
+See [What needs a person](/docs/agents/what-needs-a-person#requests) for who is asked and who can answer.
+
+### Releases
+
+| Command | What it does |
+|---|---|
+| `release prepare PROJECT [--from ENV] [--to ENV] [--scope ALIAS] [--replace] [--wait] [--json]` | Asks for a release. Loomplane plans the promotion, collects evidence and has the agent review it. It prints the report's ID and path. Without `--from` and `--to` it uses the project's only staging and production environments. `--scope` takes aliases and is repeatable or comma separated. `--replace` replaces a production plan someone else has open. With `--wait` it follows the report every 3 seconds until it finishes or waits for a person, then prints it |
+| `release report ID [--json]` | Shows a release report: its state and reason, the seven gates as `pass` or `FAIL` with their details, each source's direction, commits and migrations, the soak, canaries, coverage, images and budget, and the agent's concerns under "From the agent". Text from outside Loomplane is printed in quotation marks. A report waiting for a person ends with `approve with: loomctl approve PLAN --revision REV` |
+| `release list PROJECT [--json]` | Lists a project's release reports: ID, environments, state, how many gates passed and its age |
+| `release cancel ID` | Stops a preparation that's still going |
+
+Preparing needs `deployment:create` and `agent:use` on the project. `loomctl mcp` has no tool that prepares a release, so a model can't start one through it. See [Release preparation](/docs/agents/release-preparation).
+
 ## Plans and deployments
 
 | Command | What it does |
 |---|---|
-| `plan PROJECT [--env production] [--scope ALIAS] [--catalog] [--no-wait] [--json]` | Plans a manifest for an environment. `--scope` is repeatable. `--catalog` plans standalone resources |
+| `plan PROJECT [--env production] [--from ENV] [--scope ALIAS] [--catalog] [--no-wait] [--json]` | Plans a manifest for an environment. `--from` pins the commits another environment runs, which makes it a promotion. `--scope` is repeatable. `--catalog` plans standalone resources |
+| `promote PROJECT [--from staging] [--to production] [--scope ALIAS] [--no-wait] [--json]` | Plans `--to` to run what `--from` runs, reusing its images where it can. Prints a `Soak:` line with how long `--from` has run those commits and whether it was healthy |
+| `rollback PROJECT --reason TEXT [--env production] [--deployment ID] [--no-wait] [--json]` | Plans an environment back to its previous successful release. `--reason` is required. It prints which deployment it undoes and which it restores, and the plan lists what it leaves in place. `--deployment` has to name the environment's newest |
 | `plans PROJECT [--json]` | Lists a project's plans |
-| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy |
-| `approve PLAN_ID [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment |
+| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy. A promotion or rollback adds a line saying what it moves, which images it reuses and, for a rollback, what it leaves in place |
+| `approve PLAN_ID [--revision REV] [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment. `--revision` approves only if the plan is still at that revision |
 | `reject PLAN_ID [--note TEXT]` | Rejects a plan |
 | `deployments PROJECT [--json]` | Lists a project's deployments |
-| `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives |
+| `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives. A deployment with a post-deploy watch adds a `Watch:` section with the status, each service's verdict and the services it can't watch. The `--watch` flag follows the deployment, and the Watch section is the release watch, which is a different thing |
 | `retry DEPLOYMENT_ID [--no-wait]` | Retries a failed deployment from the step that failed |
 | `status PROJECT [--json]` | What runs each service and resource, with addresses and drift |
 
@@ -82,11 +150,30 @@ Recovery commands that wait take `--wait` and `--timeout` (45 minutes by default
 
 Most of these review before they act and apply only with `--yes`. Many take `--wait`, `--timeout` and `--request-id`. [Cloud targets](/docs/clouds/cloud-targets), [Adopting and moving services](/docs/clouds/adopting-and-moving) and [Your own servers](/docs/clouds/your-own-servers) show them in context.
 
+## Nodes
+
+`loomctl node` joins and manages machines that connect to Loomplane. `loomplane node` has the same subcommands. See [Nodes](/docs/clouds/nodes).
+
+| Command | What it does |
+|---|---|
+| `node join [--token TOKEN] [--name NAME] [--label K=V] [--allow ENDPOINTS] [--cloud ID] [--builder dedicated] [--edge] [--foreground] [--state-dir DIR]` | Joins this machine and installs the service. Reads the token from `LOOMPLANE_JOIN_TOKEN` too. Without a token it mints one with your login, and under `sudo` that is the login of the user who ran `sudo`. Needs root on Linux |
+| `node run [--state-dir DIR] [--root-allowlist]` | Runs the node in the foreground. `--root-allowlist` trusts only a root-owned `allow.json`; the systemd unit sets it |
+| `node status [--json]` | Shows this node's config, key fingerprint, endpoints and whether it runs |
+| `node allow ENDPOINT...` | Widens what Loomplane may use here: `docker`, `dial`, `probe`, `kube` or `firecracker`. Writes `allow.json`, then tells the running node. Needs root on Linux |
+| `node leave [--purge] [--purge-volumes [--yes-delete-volumes=NAME]]` | Revokes this node, stops its service and removes its config. The next join makes a fresh key. `--purge` also removes the containers and networks Loomplane made on this machine's Docker. `--purge-volumes` deletes its volumes and their data too, and asks you to type the node's name first; `--yes-delete-volumes=NAME` answers for you in a script |
+| `node drain NAME-OR-ID [--yes]` | Stops new placements on the node's server, after listing what runs there and warning about databases with no backups. Asks first unless you pass `--yes`. Moving what runs there is a reviewed move each, in the dashboard |
+| `node list [--json]` | Lists the organization's nodes |
+| `node revoke NAME-OR-ID` | Stops Loomplane trusting a node |
+| `node update --release TAG` | Replaces the node's binary with a signed release, and rolls back if the service won't start or stops within five seconds |
+| `node verify-release --release TAG --archive FILE --checksums FILE --bundle FILE` | Checks a downloaded release against its signature |
+
+`join`, `list`, `revoke` and `drain` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
+
 ## AI agents
 
 | Command | What it does |
 |---|---|
-| `mcp [--allow-deploy]` | Serves Loomplane's tools over MCP on standard input and output. `--allow-deploy` also offers `approve_plan` and `retry_deployment`. See [MCP server](/docs/agents/mcp-server) |
+| `mcp [--allow-deploy]` | Serves Loomplane's tools over MCP on standard input and output. `--allow-deploy` also offers `approve_plan`, `retry_deployment` and `create_rollback`. See [MCP server](/docs/agents/mcp-server) |
 
 ## Server commands
 

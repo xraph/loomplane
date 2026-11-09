@@ -1,35 +1,44 @@
-import { PlusIcon, Trash2Icon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
+import { messageOf, statusOf } from "@/client/errors"
 import {
   useBindingsList,
   useEnvironmentsCreate,
   useEnvironmentsDelete,
   useEnvironmentsList,
+  useProviderEnvironmentsList,
+  useProviderEnvironmentsRetry,
   useVariablesResolve,
 } from "@/client/forge/loomplane/hooks"
-import type { Environment, Project } from "@/client/forge/loomplane/types"
+import type {
+  Binding,
+  Environment,
+  Project,
+  ProviderEnvironment,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { ServiceAddress } from "@/components/service-address"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { aliasOf } from "@/components/binding-alias"
+import { providerName } from "@/components/cloud-detail/clusters"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { isReady } from "@/lib/projects"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Card } from "@/components/ui/card"
+  ActionsCell,
+  Cell,
+  CloudConfirm,
+  CloudTable,
+  CloudTableRow,
+  NameCell,
+  RowMenu,
+} from "@/components/cloud-targets/cloud-page"
+import {
+  CloudEmpty,
+  CloudSectionHead,
+} from "@/components/cloud-targets/infrastructure-ui"
 import { Choice } from "@/components/cloud-targets/target-editor"
+import { QueryError } from "@/components/query-error"
+import { StatusPill, toneOf } from "@/components/runs"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -39,29 +48,24 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
+import {
   Field,
   FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { StatusPill, Thread, toneOf } from "@/components/runs"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { relative } from "@/lib/format"
+import { isReady } from "@/lib/projects"
 import { Link } from "@/lib/router"
 import { isLive, type Run, runStatusText } from "@/lib/runs"
-import { useNow } from "@/lib/use-runs"
-import { cn } from "@/lib/utils"
+import { useNow, usePeople } from "@/lib/use-runs"
 import { environmentKinds, kindFor } from "@/lib/variables"
-
-// Every new project starts with these. They stand in while the real list
-// loads.
-const defaultEnvironments = ["production", "preview"]
 
 /** AddEnvironment adds an environment, such as staging, to a project. */
 export function AddEnvironment({ project }: { project: Project }) {
@@ -100,19 +104,8 @@ export function AddEnvironment({ project }: { project: Project }) {
 
   return (
     <>
-      <Button
-        variant="outline"
-        onClick={() => setOpen(true)}
-        aria-label="Add environment"
-        className="h-auto min-h-[120px] flex-col gap-1.5 rounded-[14px] border-dashed bg-transparent text-[13.5px] whitespace-normal shadow-none hover:bg-subtle"
-      >
-        <span className="flex size-[30px] items-center justify-center rounded-lg bg-brand-tint text-brand-ink">
-          <PlusIcon />
-        </span>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         Add environment
-        <span className="text-xs font-normal text-muted-foreground">
-          Staging, preview or development
-        </span>
       </Button>
       <Dialog open={open} onOpenChange={close}>
         <DialogContent className="sm:max-w-md">
@@ -193,265 +186,518 @@ export function AddEnvironment({ project }: { project: Project }) {
 }
 
 /**
- * EnvironmentCards shows where a project deploys, one card each, and lets
- * someone who may add environments and remove all but the last.
+ * Environments lists where a project deploys and what each is doing now:
+ * its state, its last deploy and where its services run. A row waiting on
+ * a plan offers Review; the rest offer Deploy.
  */
-export function EnvironmentCards({
+export function Environments({
   project,
   environments,
-  loading,
+  error,
+  retry,
   mayManage,
+  mayDeploy,
+  mayClouds = false,
   runs = [],
+  onOpen,
 }: {
   project: Project
-  environments: Environment[]
-  /** Stands in the defaults every project starts with while the list loads. */
-  loading: boolean
+  /** Undefined while the list loads. */
+  environments?: Environment[]
+  error?: unknown
+  retry: () => Promise<unknown>
   mayManage: boolean
-  /** The project's runs, newest first; each card shows its environment's latest. */
+  mayDeploy: boolean
+  /** Whether the row menu offers the environment's Cloud. */
+  mayClouds?: boolean
+  /** The project's runs, newest first. */
   runs?: Run[]
+  /** Opens another tab of the project page on one environment. */
+  onOpen: (
+    tab: "deployments" | "variables" | "cloud",
+    environment: string
+  ) => void
 }) {
   const now = useNow(30_000)
-  const cards = loading
-    ? defaultEnvironments.map((name) => ({ id: name, name, kind: name }))
-    : environments
-  const count = cards.length + (mayManage ? 1 : 0)
+  const providerEnvironments = useQuery(useProviderEnvironmentsList, {
+    path: { id: project.id },
+  })
+  const fallbacks = (
+    providerEnvironments.data?.providerEnvironments ?? []
+  ).filter((p) => p.mode === "fallback")
+  const [deleting, setDeleting] = useState<Environment | null>(null)
+  const list = environments ?? []
   return (
-    <div
-      className={cn(
-        "grid gap-3",
-        count > 1 && "md:grid-cols-2",
-        count > 2 && "xl:grid-cols-3"
+    <section aria-label="Environments" className="grid gap-2.5">
+      <CloudSectionHead
+        title="Environments"
+        count={environments ? list.length : undefined}
+        description={`Where ${project.name} runs, and what each one is doing now.`}
+      >
+        {mayManage && environments && <AddEnvironment project={project} />}
+      </CloudSectionHead>
+      {error !== undefined && !environments ? (
+        <QueryError
+          error={error}
+          fallback="The environments couldn't be loaded."
+          retry={retry}
+        />
+      ) : !environments ? (
+        <Skeleton className="h-32 rounded-xl" />
+      ) : list.length === 0 ? (
+        <CloudEmpty
+          kind="compact"
+          title="No environments yet"
+          action={mayManage && <AddEnvironment project={project} />}
+        >
+          Add one, such as production or staging, to deploy {project.name}{" "}
+          somewhere.
+        </CloudEmpty>
+      ) : (
+        <CloudTable
+          label="Environments"
+          columns="minmax(0,1fr) 160px minmax(0,1.2fr) minmax(0,1fr) 130px"
+          head={["Environment", "State", "Last deploy", "Runs on", ""]}
+          minWidth={760}
+        >
+          {list.map((env) => (
+            <EnvironmentRow
+              key={env.id}
+              project={project}
+              environment={env}
+              runs={runs.filter((r) => r.environment === env.name)}
+              now={now}
+              mayManage={mayManage}
+              mayDeploy={mayDeploy}
+              mayClouds={mayClouds}
+              fallbacks={fallbacks.filter((f) => f.environmentId === env.id)}
+              last={list.length === 1}
+              onOpen={onOpen}
+              onDelete={() => setDeleting(env)}
+            />
+          ))}
+        </CloudTable>
       )}
-    >
-      {cards.map((env) => {
-        const real = environments.find((e) => e.id === env.id)
-        const run = runs.find((r) => r.environment === env.name)
-        const settingUp = loading || !isReady(project.status)
-        return (
-          <Card
-            key={env.id}
-            size="sm"
-            className="min-w-0 gap-0 rounded-[14px] py-0"
-          >
-            <div className="flex min-w-0 items-center gap-2 px-3.5 pt-3 pb-2">
-              <h3 className="truncate text-[14px] font-semibold">{env.name}</h3>
-              <Badge
-                variant="outline"
-                className="h-5 rounded-md px-1.5 text-[11.5px] font-normal text-muted-foreground"
-              >
-                {environmentKinds.find((k) => k.value === env.kind)?.label ??
-                  env.kind}
-              </Badge>
-              <span className="flex-1" />
-              {!settingUp && run && (
-                <StatusPill tone={toneOf(run.status)}>
-                  {runStatusText[run.status]}
-                </StatusPill>
-              )}
-              {mayManage && real && (
-                <DeleteEnvironment
-                  project={project}
-                  environment={real}
-                  last={environments.length === 1}
-                />
-              )}
-            </div>
-            {settingUp ? (
-              <span className="flex items-center gap-2 px-3.5 pb-3 text-[12.5px] text-muted-foreground">
-                <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
-                Setting up
-              </span>
-            ) : (
-              <>
-                <LatestRun run={run} now={now} />
-                <div className="border-t px-3.5 pt-2 pb-3">
-                  <Deployed project={project} environment={env.name} />
-                </div>
-              </>
-            )}
-          </Card>
-        )
-      })}
-      {mayManage && !loading && <AddEnvironment project={project} />}
-    </div>
+      <DeleteEnvironment
+        project={project}
+        environment={deleting}
+        onDone={() => setDeleting(null)}
+      />
+    </section>
   )
 }
 
-function DeleteEnvironment({
+function EnvironmentRow({
   project,
   environment,
+  runs,
+  now,
+  mayManage,
+  mayDeploy,
+  mayClouds,
+  fallbacks,
   last,
+  onOpen,
+  onDelete,
 }: {
   project: Project
   environment: Environment
+  /** This environment's runs, newest first. */
+  runs: Run[]
+  now: number
+  mayManage: boolean
+  mayDeploy: boolean
+  mayClouds: boolean
+  /** This environment's provider environments that fell back. */
+  fallbacks: ProviderEnvironment[]
   last: boolean
+  onOpen: (
+    tab: "deployments" | "variables" | "cloud",
+    environment: string
+  ) => void
+  onDelete: () => void
+}) {
+  const people = usePeople()
+  const moveToNative = useMutation(useProviderEnvironmentsRetry)
+  const invalidate = useInvalidate()
+  const bindings = useQuery(useBindingsList, {
+    path: { id: project.id },
+    query: { environment: environment.name },
+  })
+  const services = (bindings.data?.bindings ?? []).filter(
+    (b) => b.subject === "service"
+  )
+  const settingUp = !isReady(project.status)
+  const latest = runs[0]
+  const waiting = runs.filter((r) => r.status === "waiting")
+  const kind =
+    environmentKinds.find((k) => k.value === environment.kind)?.label ??
+    environment.kind
+  const providers = [...new Set(services.map((b) => providerName(b.provider)))]
+
+  const state = (() => {
+    if (settingUp) return <StatusPill tone="flight">Setting up</StatusPill>
+    if (latest && (isLive(latest) || latest.status === "failed"))
+      return (
+        <StatusPill tone={toneOf(latest.status)}>
+          {runStatusText[latest.status]}
+        </StatusPill>
+      )
+    if (!bindings.data && bindings.status !== "error")
+      return <Skeleton className="h-5 w-20 rounded-full" />
+    if (services.some((b) => b.drift))
+      return <StatusPill tone="waiting">Changed outside</StatusPill>
+    if (services.length > 0) return <StatusPill tone="live">Live</StatusPill>
+    return <StatusPill tone="quiet">Not deployed</StatusPill>
+  })()
+
+  const vercelServices = services.filter((b) => b.provider === "vercel").length
+  const vercelFallbacks = fallbacks.filter(
+    (f) => f.provider === "vercel"
+  ).length
+  const separate =
+    fallbacks.length === 0
+      ? ""
+      : vercelFallbacks < fallbacks.length || vercelFallbacks >= vercelServices
+        ? "Separate project"
+        : `${vercelFallbacks} of ${vercelServices} services on separate projects`
+  const fallbackReasons = fallbacks
+    .map((f) => `${f.scope || f.provider}: ${f.reason}`)
+    .join("\n")
+  const retryable = fallbacks.some((f) => !f.permanent)
+
+  const tryNativeAgain = async () => {
+    try {
+      await moveToNative.mutateAsync({
+        path: { id: project.id, environmentId: environment.id },
+      })
+      // Try again cleared the fallbacks, so the row's note goes.
+      invalidate(useProviderEnvironmentsList)
+      toast.success(`A plan to move ${environment.name} is ready to review`)
+      onOpen("deployments", environment.name)
+    } catch (err) {
+      toast.error(messageOf(err, "The environment wasn't planned again."))
+    }
+  }
+
+  const lastDeploy = waiting.length
+    ? `${waiting.length} ${waiting.length === 1 ? "plan" : "plans"} to approve · planned ${relative(Date.parse(waiting[0].createdAt), now)}`
+    : latest
+      ? `${relative(Date.parse(latest.finishedAt ?? latest.createdAt), now)} by ${people(latest.createdBy).name}`
+      : "Never"
+
+  return (
+    <CloudTableRow>
+      <NameCell name={environment.name} meta={kind} mono />
+      <Cell className="flex-wrap gap-x-2">
+        {state}
+        {separate && (
+          <span
+            title={fallbackReasons}
+            className="truncate text-xs text-muted-foreground"
+          >
+            {separate}
+          </span>
+        )}
+      </Cell>
+      <Cell className="truncate text-muted-foreground">
+        {latest ? (
+          <Link
+            to="/deployments/$id"
+            params={{ id: (waiting[0] ?? latest).id }}
+            className="underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {lastDeploy}
+          </Link>
+        ) : (
+          lastDeploy
+        )}
+      </Cell>
+      <Cell className="truncate text-muted-foreground">
+        {bindings.status === "error"
+          ? "Couldn't be read"
+          : providers.length > 0
+            ? providers.join(", ")
+            : bindings.data
+              ? "Nothing yet"
+              : ""}
+      </Cell>
+      <ActionsCell>
+        {environment.instanceId ? (
+          <Button
+            size="sm"
+            variant="outline"
+            nativeButton={false}
+            render={
+              <Link
+                to="/projects/$id/fleet/instances/$instanceId"
+                params={{ id: project.id, instanceId: environment.instanceId }}
+              />
+            }
+          >
+            View instance
+          </Button>
+        ) : waiting[0] ? (
+          <Button
+            size="sm"
+            nativeButton={false}
+            render={
+              <Link to="/deployments/$id" params={{ id: waiting[0].id }} />
+            }
+          >
+            Review
+          </Button>
+        ) : (
+          mayDeploy &&
+          !settingUp && (
+            <Button
+              size="sm"
+              variant="outline"
+              nativeButton={false}
+              render={
+                <Link
+                  to="/deployments/new"
+                  search={{
+                    project: project.id,
+                    environment: environment.name,
+                  }}
+                />
+              }
+            >
+              Deploy
+            </Button>
+          )
+        )}
+        <RowMenu label={`More actions for ${environment.name}`}>
+          <DropdownMenuItem
+            onClick={() => onOpen("deployments", environment.name)}
+          >
+            Where services run
+          </DropdownMenuItem>
+          {!environment.instanceId && (
+            <DropdownMenuItem
+              onClick={() => onOpen("variables", environment.name)}
+            >
+              Variables
+            </DropdownMenuItem>
+          )}
+          {mayClouds && !environment.instanceId && (
+            <DropdownMenuItem onClick={() => onOpen("cloud", environment.name)}>
+              Cloud
+            </DropdownMenuItem>
+          )}
+          {mayDeploy && retryable && (
+            <DropdownMenuItem onClick={() => void tryNativeAgain()}>
+              Try native environment again
+            </DropdownMenuItem>
+          )}
+          {mayManage && !environment.instanceId && (
+            <>
+              <DropdownMenuSeparator />
+              {/* A project needs at least one environment. */}
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={last}
+                onClick={onDelete}
+              >
+                {last
+                  ? "Can't delete the only environment"
+                  : "Delete environment"}
+              </DropdownMenuItem>
+            </>
+          )}
+        </RowMenu>
+      </ActionsCell>
+    </CloudTableRow>
+  )
+}
+
+/** Whether Loomplane deletes what a binding runs with its environment. */
+function removedWithEnvironment(b: Binding): boolean {
+  if (b.provider !== "vercel" && b.provider !== "render") return false
+  // A database gateway has its own clean up, and an existing resource
+  // isn't Loomplane's to delete.
+  const config: unknown = b.config
+  return !(
+    typeof config === "object" &&
+    config !== null &&
+    ("database_gateway" in config || "existing_resource" in config)
+  )
+}
+
+/**
+ * DeleteEnvironment asks before an environment goes. It stays mounted
+ * once opened, on the last environment asked about, so it can close
+ * without losing its contents.
+ */
+function DeleteEnvironment({
+  project,
+  environment,
+  onDone,
+}: {
+  project: Project
+  environment: Environment | null
+  onDone: () => void
+}) {
+  const [shown, setShown] = useState(environment)
+  if (environment && environment.id !== shown?.id) setShown(environment)
+  if (!shown) return null
+  return (
+    <ConfirmDeleteEnvironment
+      project={project}
+      environment={shown}
+      open={!!environment}
+      onDone={onDone}
+    />
+  )
+}
+
+function ConfirmDeleteEnvironment({
+  project,
+  environment,
+  open,
+  onDone,
+}: {
+  project: Project
+  environment: Environment
+  open: boolean
+  onDone: () => void
 }) {
   const remove = useMutation(useEnvironmentsDelete)
   const invalidate = useInvalidate()
-  // Controlled: Base UI's AlertDialogAction doesn't close the dialog.
-  const [open, setOpen] = useState(false)
+  const bindings = useQuery(useBindingsList, {
+    path: { id: project.id },
+    query: { environment: environment.name },
+  })
+  const removable = (bindings.data?.bindings ?? []).filter(
+    removedWithEnvironment
+  )
+  // Deleting removes what Loomplane made on Vercel and Render, so it waits
+  // until the list of what can be kept has loaded.
+  const unread = !bindings.data
+  const [keep, setKeep] = useState<string[]>([])
+  const [error, setError] = useState("")
+  const kept = (id: string) => keep.includes(id)
+  const toggle = (id: string, on: boolean) =>
+    setKeep((ids) => (on ? [...ids, id] : ids.filter((k) => k !== id)))
+  const databases = removable.filter((b) => b.subject === "resource")
 
-  if (last) {
-    // aria-disabled, not disabled: a disabled button never shows the
-    // tooltip that says why.
-    return (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="text-muted-foreground opacity-50"
-              aria-label={`Delete ${environment.name}`}
-              aria-disabled="true"
-            />
-          }
-        >
-          <Trash2Icon />
-        </TooltipTrigger>
-        <TooltipContent>
-          A project needs at least one environment
-        </TooltipContent>
-      </Tooltip>
-    )
+  const close = () => {
+    setKeep([])
+    setError("")
+    onDone()
   }
 
   const confirm = async () => {
+    setError("")
     try {
       await remove.mutateAsync({
         path: { id: project.id, envId: environment.id },
+        query: {
+          keep: keep.filter((id) => removable.some((b) => b.id === id)),
+        },
       })
       toast.success(`Deleted ${environment.name}`)
+      close()
     } catch (err) {
-      toast.error(messageOf(err, "The environment wasn't deleted."))
+      if (statusOf(err) !== 0) {
+        // Refused, such as when only an admin may delete what it runs:
+        // the dialog stays, so you can keep more or ask an admin.
+        setError(messageOf(err, "The environment wasn't deleted."))
+        return
+      }
+      // No answer: the server may still be deleting what it runs.
+      toast.error(
+        `Deleting ${environment.name} may still be in progress. Refresh in a moment to see whether it went.`
+      )
+      close()
     } finally {
-      setOpen(false)
       invalidate(useEnvironmentsList)
       invalidate(useVariablesResolve)
     }
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="text-muted-foreground"
-            aria-label={`Delete ${environment.name}`}
-            disabled={remove.isPending}
+    <CloudConfirm
+      open={open}
+      onOpenChange={(next) => !next && close()}
+      title={`Delete ${environment.name}?`}
+      confirmLabel="Delete environment"
+      pending={remove.isPending}
+      disabled={unread}
+      onConfirm={() => void confirm()}
+      error={
+        error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )
+      }
+      details={
+        bindings.status === "error" && unread ? (
+          <QueryError
+            error={bindings.error}
+            fallback={`What runs in ${environment.name} couldn't be read, so it can't be deleted yet.`}
+            retry={bindings.refetch}
           />
-        }
-      >
-        <Trash2Icon />
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {environment.name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            The variables set on it for {project.name} go with it, secrets
-            included. Workspace-wide variables for {environment.name} stay, for
-            other projects.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Keep it</AlertDialogCancel>
-          <AlertDialogAction
-            variant="destructive"
-            disabled={remove.isPending}
-            onClick={() => void confirm()}
-          >
-            {remove.isPending && <Spinner />}
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-/**
- * Deployed lists what runs in an environment and where each service
- * answers, from what the last deployments recorded.
- */
-/** LatestRun is an environment's newest deployment as a thread. */
-function LatestRun({ run, now }: { run?: Run; now: number }) {
-  if (!run) return null
-  return (
-    <Link
-      to="/deployments/$id"
-      params={{ id: run.id }}
-      className="flex min-w-0 items-center gap-2 px-3.5 pb-2.5 text-[12.5px] text-muted-foreground transition-colors hover:text-foreground"
+        ) : (
+          removable.length > 0 && (
+            <div className="grid gap-2.5 text-[12.5px]">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">Keep running</span>
+                {databases.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setKeep((ids) => [
+                        ...new Set([...ids, ...databases.map((b) => b.id)]),
+                      ])
+                    }
+                  >
+                    Keep all databases
+                  </Button>
+                )}
+              </div>
+              <ul className="grid max-h-56 gap-1.5 overflow-y-auto rounded-lg border p-2.5">
+                {removable.map((b) => (
+                  <li key={b.id} className="flex min-w-0 items-center gap-2.5">
+                    <Checkbox
+                      aria-label={`Keep ${aliasOf(b)}`}
+                      checked={kept(b.id)}
+                      onCheckedChange={(on) => toggle(b.id, on)}
+                    />
+                    <span className="truncate">{aliasOf(b)}</span>
+                    {b.alias && (
+                      <span className="truncate font-mono text-muted-foreground">
+                        {b.name}
+                      </span>
+                    )}
+                    <span className="ml-auto shrink-0 text-muted-foreground">
+                      {providerName(b.provider)}{" "}
+                      {b.subject === "resource" ? "database" : "service"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <Alert variant="destructive">
+                <AlertDescription>
+                  Unticked databases are deleted with their data. Kept resources
+                  keep running and are listed as left behind.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )
+        )
+      }
     >
-      <Thread steps={run.thread} size="sm" className="w-[72px] shrink-0" />
-      <span className="truncate">{run.phase}</span>
-      <span className="ml-auto shrink-0">
-        {isLive(run)
-          ? runStatusText[run.status]
-          : relative(Date.parse(run.finishedAt ?? run.createdAt), now)}
-      </span>
-    </Link>
-  )
-}
-
-function Deployed({
-  project,
-  environment,
-}: {
-  project: Project
-  environment: string
-}) {
-  const bindings = useQuery(useBindingsList, {
-    path: { id: project.id },
-    query: { environment },
-  })
-  const services = (bindings.data?.bindings ?? []).filter(
-    (b) => b.subject === "service"
-  )
-  if (services.length === 0) {
-    return (
-      <span className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-        <span className="h-1.5 w-3 rounded-full bg-warp" />
-        {bindings.data ? "Not deployed yet" : "Checking"}
-      </span>
-    )
-  }
-  return (
-    <ul className="grid gap-1.5 text-[12.5px]">
-      {services.map((b) => (
-        <li
-          key={b.id}
-          className="flex min-w-0 items-center gap-2"
-          title={
-            b.drift ? `Changed outside Loomplane: ${b.driftMessage}` : undefined
-          }
-        >
-          <span
-            className={cn(
-              "h-1.5 w-3 shrink-0 rounded-full",
-              b.drift ? "bg-weld" : "bg-overdye"
-            )}
-          />
-          <span className="font-medium">{b.name}</span>
-          {b.drift && (
-            <span className="shrink-0 text-weld-ink">
-              {b.drift === "missing"
-                ? "deleted outside Loomplane"
-                : "changed outside Loomplane"}
-            </span>
-          )}
-          {b.url ? (
-            <ServiceAddress
-              address={b.url}
-              className="truncate text-muted-foreground"
-            />
-          ) : (
-            <span className="text-muted-foreground">on {b.provider}</span>
-          )}
-        </li>
-      ))}
-    </ul>
+      The variables set on it for {project.name} go with it, secrets included.
+      Workspace-wide variables for {environment.name} stay, for other projects.
+      {unread
+        ? ""
+        : removable.length > 0
+          ? " What Loomplane made for it on Vercel and Render is deleted too, unless you keep it below. Anything else that runs there keeps running until you remove it in its account."
+          : " What runs there keeps running until you remove it in its account."}
+    </CloudConfirm>
   )
 }

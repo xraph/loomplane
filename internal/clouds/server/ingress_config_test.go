@@ -225,3 +225,118 @@ func TestIngressImagePinIsADigest(t *testing.T) {
 		t.Fatal(LegacyIngressImage)
 	}
 }
+
+func TestIngressConfigServesAnAddressCheck(t *testing.T) {
+	nonce := "0123456789abcdef0123456789abcdef"
+	plain := IngressConfig{OrgID: "org", ServerID: "srv", Version: "initial", Routes: []IngressRoute{}}
+	before, err := plain.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := plain
+	check.AddressCheck = nonce
+	raw, err := check.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gjsonRoutes(t, raw, "challenges"); len(got) != 1 || !slices.Equal(got[0].Paths, []string{NodeAddressPath + nonce}) || got[0].Hosts != nil || got[0].Handler != "static_response" || got[0].StatusCode != 200 {
+		t.Fatalf("routes %+v", got)
+	}
+	var doc struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Listen []string `json:"listen"`
+					Routes []struct {
+						Match  []map[string][]string `json:"match"`
+						Handle []struct {
+							Body string `json:"body"`
+						} `json:"handle"`
+					} `json:"routes"`
+				} `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err = json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	challenges := doc.Apps.HTTP.Servers["challenges"]
+	if !slices.Equal(challenges.Listen, []string{":80"}) || challenges.Routes[0].Handle[0].Body != nonce || !slices.Equal(challenges.Routes[0].Match[0]["method"], []string{"GET"}) {
+		t.Fatalf("challenges server %+v", challenges)
+	}
+	if _, ok := doc.Apps.HTTP.Servers["https"]; ok {
+		t.Fatal("an address check alone opened 443")
+	}
+	// The check never lands in a stored config, and leaving it out renders
+	// the config as it was.
+	stored, err := json.Marshal(check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stored, []byte(nonce)) {
+		t.Fatalf("stored %s", stored)
+	}
+	check.AddressCheck = ""
+	if after, _ := check.JSON(); !bytes.Equal(before, after) {
+		t.Fatalf("config changed: %s", after)
+	}
+
+	// It shares port 80 with a handoff's challenge routes.
+	r := IngressRoute{ID: "r1", Hostname: "app.example.com", Backend: testBackend(), ChallengeAddress: "203.0.113.9"}
+	r.Backend.OrgID = "org"
+	shared := IngressConfig{OrgID: "org", ServerID: "srv", Version: "v2", Routes: []IngressRoute{r}, AddressCheck: nonce}
+	raw, err = shared.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gjsonRoutes(t, raw, "challenges"); len(got) != 2 || !slices.Equal(got[1].Paths, []string{NodeAddressPath + nonce}) {
+		t.Fatalf("routes %+v", got)
+	}
+
+	for _, bad := range []string{"short", "0123456789ABCDEF0123456789ABCDEF", "0123456789abcdef0123456789abcde/", "../../../etc/passwd0123456789abcdef"} {
+		shared.AddressCheck = bad
+		if _, err := shared.JSON(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("nonce %q: %v", bad, err)
+		}
+	}
+}
+
+func TestWithoutAddressChecksTakesOnlyTheChecks(t *testing.T) {
+	nonce := "0123456789abcdef0123456789abcdef"
+	r := IngressRoute{ID: "r1", Hostname: "app.example.com", Backend: testBackend(), ChallengeAddress: "203.0.113.9"}
+	r.Backend.OrgID = "org"
+	for _, routes := range [][]IngressRoute{{}, {r}} {
+		plain := IngressConfig{OrgID: "org", ServerID: "srv", Version: "v1", Routes: routes}
+		want, err := plain.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, changed := WithoutAddressChecks(want); changed || !bytes.Equal(out, want) {
+			t.Fatalf("a config without checks changed: %s", out)
+		}
+		plain.AddressCheck = nonce
+		checking, err := plain.JSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, changed := WithoutAddressChecks(checking)
+		if !changed || !SameIngressConfig(want, out) {
+			t.Fatalf("%d routes: %s", len(routes), out)
+		}
+	}
+	if out, changed := WithoutAddressChecks([]byte("{")); changed || string(out) != "{" {
+		t.Fatalf("garbage: %s", out)
+	}
+}
+
+func TestIngressPortsTakenIsNamed(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"docker returned HTTP 500: driver failed programming external connectivity on endpoint lp-ingress: Bind for 0.0.0.0:80 failed: port is already allocated": true,
+		"docker returned HTTP 500: listen tcp4 0.0.0.0:443: bind: address already in use":                                                                         true,
+		"docker returned HTTP 500: no space left on device":                                                                                                       false,
+	} {
+		if got := portsTaken(errors.New(msg)); got != want {
+			t.Errorf("%q: %v", msg, got)
+		}
+	}
+}

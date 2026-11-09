@@ -16,9 +16,9 @@ import (
 	"github.com/xraph/warden/role"
 )
 
-// rootNamespace is Warden's top namespace. Loomplane doesn't nest
-// namespaces inside an organization (yet), so every role, permission and
-// assignment lives here.
+// rootNamespace is Warden's top namespace. Every role and permission, and
+// every member role, lives here. A team's project grant lives one level
+// down, at the project's namespace (ProjectNamespace in teams.go).
 const rootNamespace = ""
 
 // Store is the part of Warden's store the Authorizer writes through.
@@ -51,6 +51,15 @@ type Authorizer struct {
 	members MembershipFunc
 	now     func() time.Time
 
+	// Teams (teams.go): where Sync reads team grants, the per-person lock
+	// it takes (and TrySync's version of it, which never waits), and the
+	// slots that bound how many syncs hold that lock at once. All are set
+	// once at startup; nil means none.
+	teamGrants  TeamGrants
+	syncLock    LockFunc
+	syncTryLock TryLockFunc
+	syncSlots   chan struct{}
+
 	// ensured remembers the tenants whose catalog this process has already
 	// written, so steady-state checks don't touch the catalog at all.
 	ensured  sync.Map
@@ -64,11 +73,29 @@ func NewAuthorizer(engine Engine, store Store, members MembershipFunc) *Authoriz
 }
 
 // Require returns nil when p may perform perm on the resource, ErrForbidden
-// when it may not, and any other error when Warden couldn't decide.
+// when it may not, and any other error when Warden couldn't decide. The AI
+// agent acting for a person needs the person to hold perm as well.
 func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, resourceID string) error {
-	if p.ReadOnly && !perm.Reads() {
-		return fmt.Errorf("%w (%s): this API key can only read", ErrForbidden, perm.Name())
+	person, acting, err := onBehalf(p, perm)
+	if err != nil {
+		return err
 	}
+	if err := a.require(ctx, p, perm, resourceID); err != nil {
+		return err
+	}
+	if !acting {
+		return nil
+	}
+	if err := a.require(ctx, person, perm, resourceID); err != nil {
+		if errors.Is(err, ErrForbidden) {
+			return fmt.Errorf("%w (%s): the person the agent acts for lacks it", ErrForbidden, perm.Name())
+		}
+		return err
+	}
+	return nil
+}
+
+func (a *Authorizer) require(ctx context.Context, p Principal, perm Permission, resourceID string) error {
 	res, err := a.check(ctx, p, perm, resourceID)
 	if err != nil {
 		return err
@@ -77,7 +104,7 @@ func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, 
 		return nil
 	}
 	// Only people have memberships to repair from. A service account's
-	// role comes from EnsureTenant alone.
+	// role comes from EnsureTenant or AssignAgent alone.
 	if res.Decision == warden.DecisionDenyNoRoles && a.members != nil && !p.IsServiceAccount() {
 		repaired, err := a.repair(ctx, p)
 		if err != nil {
@@ -95,13 +122,34 @@ func (a *Authorizer) Require(ctx context.Context, p Principal, perm Permission, 
 	return fmt.Errorf("%w (%s)", ErrForbidden, perm.Name())
 }
 
-// Allowed reports whether p may perform perm, for answers such as which
-// buttons the dashboard shows. It never repairs.
+// Allowed reports whether p may perform perm across the workspace, for
+// answers such as which buttons the dashboard shows. It never repairs. The
+// AI agent acting for a person is allowed only what both may do.
 func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) (bool, error) {
-	if p.ReadOnly && !perm.Reads() {
+	return a.AllowedOn(ctx, p, perm, "")
+}
+
+// AllowedOn is Allowed on one project, where the person's team grants on
+// that project count too. It never repairs. The AI agent acting for a
+// person is allowed only what both may do there, so a person's team grant
+// on one project never lends the agent another.
+func (a *Authorizer) AllowedOn(ctx context.Context, p Principal, perm Permission, projectID string) (bool, error) {
+	person, acting, err := onBehalf(p, perm)
+	if errors.Is(err, ErrForbidden) {
 		return false, nil
 	}
-	res, err := a.check(ctx, p, perm, "")
+	if err != nil {
+		return false, err
+	}
+	ok, err := a.allowedOn(ctx, p, perm, projectID)
+	if !ok || err != nil || !acting {
+		return ok, err
+	}
+	return a.allowedOn(ctx, person, perm, projectID)
+}
+
+func (a *Authorizer) allowedOn(ctx context.Context, p Principal, perm Permission, projectID string) (bool, error) {
+	res, err := a.check(ctx, p, perm, projectID)
 	if errors.Is(err, ErrForbidden) {
 		return false, nil
 	}
@@ -111,13 +159,47 @@ func (a *Authorizer) Allowed(ctx context.Context, p Principal, perm Permission) 
 	return res.Allowed, nil
 }
 
+// onBehalf returns the person an agent principal acts for, and refuses,
+// before asking Warden about either of them, what a read-only key may not
+// do and a person who isn't one of the organization's people.
+func onBehalf(p Principal, perm Permission) (person Principal, acting bool, err error) {
+	if p.ReadOnly && !perm.Reads() {
+		return Principal{}, false, fmt.Errorf("%w (%s): this API key can only read", ErrForbidden, perm.Name())
+	}
+	person, acting = p.Person()
+	if !acting {
+		return Principal{}, false, nil
+	}
+	if person.Kind != KindUser || person.OnBehalfOf != nil || person.OrgID != p.OrgID {
+		return Principal{}, false, fmt.Errorf("%w (%s): the agent acts only for its own organization's members", ErrForbidden, perm.Name())
+	}
+	if person.ReadOnly && !perm.Reads() {
+		return Principal{}, false, fmt.Errorf("%w (%s): the person the agent acts for can only read", ErrForbidden, perm.Name())
+	}
+	return person, true, nil
+}
+
 func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, resourceID string) (*warden.CheckResult, error) {
+	// Fleet credentials use separately persisted grants. They never inherit
+	// member permissions or the general automation role, even for reads.
+	if p.IsFleet() || p.Fleet != nil || IsFleetSubject(p.UserID) {
+		return nil, ErrForbidden
+	}
 	if p.UserID == "" || p.OrgID == "" {
 		return nil, ErrUnauthenticated
 	}
 	// The automation acts only in its own organization.
 	if p.IsSystem() && p.UserID != SystemSubject(p.OrgID) {
 		return nil, ErrForbidden
+	}
+	// So does the agent.
+	if p.IsAgent() && p.UserID != AgentSubject(p.OrgID) {
+		return nil, fmt.Errorf("%w (%s)", ErrForbidden, perm.Name())
+	}
+	// Its role holds infrastructure:modify for the deployments it approved,
+	// which run as it alone. Anywhere else, it doesn't change infrastructure.
+	if p.IsAgent() && deploymentRunOnly(perm) && !InDeploymentRun(ctx) {
+		return nil, fmt.Errorf("%w (%s): the agent changes infrastructure only while running a deployment it approved", ErrForbidden, perm.Name())
 	}
 	// Retirement destroys recovery bytes. A cached Warden assignment alone
 	// cannot authorize it when a membership hook has failed or is delayed,
@@ -135,17 +217,15 @@ func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, re
 		}
 	}
 	// Once per organization per process, so an upgrade that grows a role
-	// reaches organizations whose members already have one. Assign is the
-	// only other caller, and it only runs when membership changes.
+	// reaches organizations whose members already have one. Sync is the
+	// only other caller, and it only runs when membership or teams change.
 	if err := a.EnsureTenant(ctx, p.OrgID); err != nil {
 		return nil, err
 	}
-	res, err := a.engine.Check(ctx, &warden.CheckRequest{
-		Subject:  subjectFor(p),
-		Action:   warden.Action{Name: perm.Action},
-		Resource: warden.Resource{Type: perm.Resource, ID: resourceID},
-		TenantID: p.OrgID,
-	})
+	// A check on a project runs at the project's namespace, so a team's
+	// grant there counts; root assignments still reach it as an ancestor.
+	// Any other resource ID (an org, a connection) checks at the root.
+	res, err := a.engine.Check(ctx, checkRequest(p, perm, resourceID))
 	if err != nil {
 		return nil, fmt.Errorf("authorize %s: %w", perm.Name(), err)
 	}
@@ -161,20 +241,17 @@ func subjectFor(p Principal) warden.Subject {
 	return warden.Subject{Kind: warden.SubjectUser, ID: p.UserID}
 }
 
-// repair gives a member who has no role the one their membership calls for.
+// repair re-syncs a person who has no role: their member role and their
+// team grants, or nothing for someone who isn't a member. A nil Sync counts
+// as repaired, and Require checks again.
 func (a *Authorizer) repair(ctx context.Context, p Principal) (bool, error) {
-	memberRole, found, err := a.members(ctx, p.OrgID, p.UserID)
-	if err != nil {
-		return false, fmt.Errorf("look up membership: %w", err)
-	}
-	if !found {
-		return false, nil
-	}
-	if err := a.Assign(ctx, p.OrgID, p.UserID, RoleForMember(memberRole), "loomplane:repair"); err != nil {
+	if err := a.Sync(ctx, p.OrgID, p.UserID); err != nil {
 		return false, err
 	}
 	return true, nil
 }
+
+const ensureTenantTimeout = 30 * time.Second
 
 // EnsureTenant writes the role catalog into the organization's tenant. It's
 // idempotent, and it brings an existing tenant's roles up to the current
@@ -193,7 +270,9 @@ func (a *Authorizer) EnsureTenant(ctx context.Context, orgID string) error {
 		if _, done := a.ensured.Load(orgID); done {
 			return nil, nil
 		}
-		return nil, a.ensureTenant(ctx, orgID)
+		ensureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ensureTenantTimeout)
+		defer cancel()
+		return nil, a.ensureTenant(ensureCtx, orgID)
 	})
 	select {
 	case <-ctx.Done():
@@ -205,23 +284,11 @@ func (a *Authorizer) EnsureTenant(ctx context.Context, orgID string) error {
 
 func (a *Authorizer) ensureTenant(ctx context.Context, orgID string) error {
 	now := a.now().UTC()
-	for _, perm := range AllPermissions() {
-		if err := a.ensurePermission(ctx, orgID, perm, now); err != nil {
-			return err
-		}
+	if err := a.ensurePermissions(ctx, orgID, now); err != nil {
+		return err
 	}
-	for _, def := range append(Catalog(), SystemRole()) {
-		r, err := a.ensureRole(ctx, orgID, def, now)
-		if err != nil {
-			return err
-		}
-		refs := make([]permission.Ref, 0, len(def.Permissions))
-		for _, perm := range def.Permissions {
-			refs = append(refs, permission.Ref{NamespacePath: rootNamespace, Name: perm.Name()})
-		}
-		if err := a.store.SetRolePermissions(ctx, orgID, r.ID, refs); err != nil {
-			return fmt.Errorf("set permissions of role %s in %s: %w", def.Slug, orgID, err)
-		}
+	if err := a.ensureRoles(ctx, orgID, now); err != nil {
+		return err
 	}
 	system := SystemSubject(orgID)
 	if err := a.assign(ctx, orgID, warden.SubjectServiceAcct, system, RoleSystem, "loomplane"); err != nil {
@@ -231,6 +298,109 @@ func (a *Authorizer) ensureTenant(ctx context.Context, orgID string) error {
 	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, system)
 	a.ensured.Store(orgID, struct{}{})
 	return nil
+}
+
+// writeRole creates the role if it's missing and sets its permissions to
+// def's, whatever they were.
+func (a *Authorizer) writeRole(ctx context.Context, orgID string, def RoleDef, now time.Time) error {
+	r, err := a.ensureRole(ctx, orgID, def, now)
+	if err != nil {
+		return err
+	}
+	refs := make([]permission.Ref, 0, len(def.Permissions))
+	for _, perm := range def.Permissions {
+		refs = append(refs, permission.Ref{NamespacePath: rootNamespace, Name: perm.Name()})
+	}
+	if err := a.store.SetRolePermissions(ctx, orgID, r.ID, refs); err != nil {
+		return fmt.Errorf("set permissions of role %s in %s: %w", def.Slug, orgID, err)
+	}
+	return nil
+}
+
+func (a *Authorizer) ensurePermissions(ctx context.Context, orgID string, now time.Time) error {
+	existing, err := a.store.ListPermissions(ctx, &permission.ListFilter{TenantID: orgID})
+	if err != nil {
+		return fmt.Errorf("list permissions in %s: %w", orgID, err)
+	}
+	have := make(map[string]struct{}, len(existing))
+	for _, p := range existing {
+		if p.NamespacePath == rootNamespace {
+			have[p.Name] = struct{}{}
+		}
+	}
+	for _, perm := range AllPermissions() {
+		if _, ok := have[perm.Name()]; ok {
+			continue
+		}
+		if permErr := a.ensurePermission(ctx, orgID, perm, now); permErr != nil {
+			return permErr
+		}
+	}
+	return nil
+}
+
+func (a *Authorizer) ensureRoles(ctx context.Context, orgID string, now time.Time) error {
+	existing, err := a.store.ListRoles(ctx, &role.ListFilter{TenantID: orgID})
+	if err != nil {
+		return fmt.Errorf("list roles in %s: %w", orgID, err)
+	}
+	bySlug := make(map[string]*role.Role, len(existing))
+	for _, r := range existing {
+		if r.NamespacePath == rootNamespace {
+			bySlug[r.Slug] = r
+		}
+	}
+	defs := append(Catalog(), SystemRole())
+	roles := make([]*role.Role, len(defs))
+	roleIDs := make([]wardenid.RoleID, 0, len(defs))
+	for i, def := range defs {
+		r, ok := bySlug[def.Slug]
+		if !ok {
+			var roleErr error
+			if r, roleErr = a.ensureRole(ctx, orgID, def, now); roleErr != nil {
+				return roleErr
+			}
+		}
+		roles[i] = r
+		roleIDs = append(roleIDs, r.ID)
+	}
+	granted, err := a.store.ListRolePermissionsForRoles(ctx, orgID, roleIDs)
+	if err != nil {
+		return fmt.Errorf("list role permissions in %s: %w", orgID, err)
+	}
+	for i, def := range defs {
+		r := roles[i]
+		if sameRolePermissions(granted[r.ID], def.Permissions) {
+			continue
+		}
+		refs := make([]permission.Ref, 0, len(def.Permissions))
+		for _, perm := range def.Permissions {
+			refs = append(refs, permission.Ref{NamespacePath: rootNamespace, Name: perm.Name()})
+		}
+		if setErr := a.store.SetRolePermissions(ctx, orgID, r.ID, refs); setErr != nil {
+			return fmt.Errorf("set permissions of role %s in %s: %w", def.Slug, orgID, setErr)
+		}
+	}
+	return nil
+}
+
+func sameRolePermissions(held []*permission.Permission, want []Permission) bool {
+	if len(held) != len(want) {
+		return false
+	}
+	have := make(map[string]struct{}, len(held))
+	for _, p := range held {
+		if p == nil || p.NamespacePath != rootNamespace {
+			return false
+		}
+		have[p.Name] = struct{}{}
+	}
+	for _, p := range want {
+		if _, ok := have[p.Name()]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Authorizer) ensurePermission(ctx context.Context, orgID string, perm Permission, now time.Time) error {
@@ -275,20 +445,21 @@ func (a *Authorizer) ensureRole(ctx context.Context, orgID string, def RoleDef, 
 	return r, nil
 }
 
-// Assign makes roleSlug the user's only role in the organization.
+// Assign makes roleSlug the person's member role and re-derives the rest
+// of their rows (their team grants) through Sync, without asking authsome:
+// the membership hooks call it with the role authsome just wrote. The root
+// row it creates carries grantedBy.
 func (a *Authorizer) Assign(ctx context.Context, orgID, userID, roleSlug, grantedBy string) error {
-	// The automation's role is never a person's.
-	if roleSlug == RoleSystem {
-		return fmt.Errorf("%w: %s isn't a member role", ErrForbidden, RoleSystem)
+	// The automation's role and the agent's are never a person's.
+	if roleSlug == RoleSystem || roleSlug == RoleAgent {
+		return fmt.Errorf("%w: %s isn't a member role", ErrForbidden, roleSlug)
 	}
-	if err := a.EnsureTenant(ctx, orgID); err != nil {
-		return err
-	}
-	return a.assign(ctx, orgID, warden.SubjectUser, userID, roleSlug, grantedBy)
+	return a.sync(ctx, orgID, userID, roleSlug, grantedBy)
 }
 
-// assign makes roleSlug the subject's only role in the organization, and
-// drops the engine's cache of the subject when that changes anything.
+// assign makes roleSlug a service account's only role in the organization
+// (people go through Sync), and drops the engine's cache of the subject
+// when that changes anything.
 func (a *Authorizer) assign(ctx context.Context, orgID string, kind warden.SubjectKind, subjectID, roleSlug, grantedBy string) error {
 	r, err := a.store.GetRoleBySlug(ctx, orgID, rootNamespace, roleSlug)
 	if err != nil {
@@ -324,5 +495,57 @@ func (a *Authorizer) Revoke(ctx context.Context, orgID, userID string) error {
 		return fmt.Errorf("revoke roles of %s in %s: %w", userID, orgID, err)
 	}
 	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectUser, userID)
+	return nil
+}
+
+// AssignAgent gives the organization's AI agent its role, when the
+// workspace turns the agent on. Unlike the automation's, the role is
+// written into this tenant only, and brought up to AgentRole each time, so
+// a release that grows the role reaches a workspace on its next enable.
+func (a *Authorizer) AssignAgent(ctx context.Context, orgID string) error {
+	if orgID == "" {
+		return fmt.Errorf("%w: the agent needs an organization", ErrForbidden)
+	}
+	if err := a.EnsureTenant(ctx, orgID); err != nil {
+		return err
+	}
+	if err := a.writeRole(ctx, orgID, AgentRole(), a.now().UTC()); err != nil {
+		return err
+	}
+	agent := AgentSubject(orgID)
+	if err := a.assign(ctx, orgID, warden.SubjectServiceAcct, agent, RoleAgent, "loomplane"); err != nil {
+		return err
+	}
+	// Its role's permissions may have just changed, assignment or not.
+	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, agent)
+	return nil
+}
+
+// RevokeAgent takes the organization's AI agent's role away, when the
+// workspace turns the agent off. The role stays, held by no one.
+func (a *Authorizer) RevokeAgent(ctx context.Context, orgID string) error {
+	if orgID == "" {
+		return fmt.Errorf("%w: the agent needs an organization", ErrForbidden)
+	}
+	agent := AgentSubject(orgID)
+	if err := a.store.DeleteAssignmentsBySubject(ctx, orgID, string(warden.SubjectServiceAcct), agent); err != nil {
+		return fmt.Errorf("revoke roles of %s in %s: %w", agent, orgID, err)
+	}
+	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, agent)
+	return nil
+}
+
+// RequireCurrentMembership checks the identity source before a saved approval buys resources.
+func (a *Authorizer) RequireCurrentMembership(ctx context.Context, p Principal) error {
+	if a.members == nil || p.IsServiceAccount() || p.OrgID == "" || p.UserID == "" {
+		return ErrForbidden
+	}
+	_, found, err := a.members(ctx, p.OrgID, p.UserID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrNotMember
+	}
 	return nil
 }

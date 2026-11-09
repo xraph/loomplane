@@ -11,7 +11,7 @@ import (
 )
 
 func HasCapacityIntent(a Action) bool {
-	return a.Service != nil && (a.Service.CapacityIntent != nil || a.Service.FrontendDemand != nil)
+	return a.Service != nil && (a.Service.CapacityIntent != nil || a.Service.FrontendDemand != nil || a.Service.ClusterDemand != nil)
 }
 
 // frontendConnection is the connection a frontend action deploys with,

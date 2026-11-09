@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/store/memory"
@@ -24,10 +25,28 @@ type memStore struct {
 	mu       sync.Mutex
 	projects map[string]*Project
 	envs     map[string]*Environment
+	teams    map[string]string // team ID to its organization
+	teamSets []string          // "org/project/team" for every SetResponsibleTeam
 }
 
 func newMemStore() *memStore {
-	return &memStore{projects: map[string]*Project{}, envs: map[string]*Environment{}}
+	return &memStore{projects: map[string]*Project{}, envs: map[string]*Environment{}, teams: map[string]string{}}
+}
+
+func (m *memStore) SetResponsibleTeam(_ context.Context, orgID, id, teamID string) (*Project, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.teamSets = append(m.teamSets, orgID+"/"+id+"/"+teamID)
+	p, ok := m.projects[id]
+	if !ok || p.OrgID != orgID {
+		return nil, ErrNotFound
+	}
+	if teamID != "" && m.teams[teamID] != orgID {
+		return nil, ErrTeamNotFound
+	}
+	p.ResponsibleTeamID = teamID
+	c := *p
+	return &c, nil
 }
 
 func (m *memStore) CreateProject(_ context.Context, p *Project, envs []*Environment) error {
@@ -71,15 +90,36 @@ func (m *memStore) ListProjects(_ context.Context, orgID string) ([]*Project, er
 	return out, nil
 }
 
+// UpdateProject writes what PgStore's does: name, description, icon,
+// color, status and updated_at.
 func (m *memStore) UpdateProject(_ context.Context, p *Project) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if q, ok := m.projects[p.ID]; !ok || q.OrgID != p.OrgID {
+	q, ok := m.projects[p.ID]
+	if !ok || q.OrgID != p.OrgID {
 		return ErrNotFound
 	}
-	c := *p
-	m.projects[p.ID] = &c
+	q.Name, q.Description, q.Icon, q.Color, q.Status, q.UpdatedAt = p.Name, p.Description, p.Icon, p.Color, p.Status, p.UpdatedAt
 	return nil
+}
+
+func (m *memStore) SetAutonomy(_ context.Context, orgID, id string, in AutonomyInput, at time.Time) (*Project, Autonomy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.projects[id]
+	if !ok || p.OrgID != orgID {
+		return nil, Autonomy{}, ErrNotFound
+	}
+	before := Autonomy{AutonomousPromotion: p.AutonomousPromotion, MinStagingSoakSeconds: p.MinStagingSoakSeconds}
+	if in.AutonomousPromotion != nil {
+		p.AutonomousPromotion = *in.AutonomousPromotion
+	}
+	if in.MinStagingSoakSeconds != nil {
+		p.MinStagingSoakSeconds = *in.MinStagingSoakSeconds
+	}
+	p.UpdatedAt = at
+	c := *p
+	return &c, before, nil
 }
 
 func (m *memStore) UpdateExclusions(_ context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (*Project, error) {
@@ -815,5 +855,302 @@ func TestService_reapersRunAroundDeletion(t *testing.T) {
 	}
 	if !slices.Equal(reaper.reaped, []string{whole}) || !slices.Equal(reaper.finished, []string{whole}) {
 		t.Fatalf("after deleting the project: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+}
+
+// optionsReaper is a ReaperWithOptions that records the options each
+// deletion asked for, and fails the test if it's reaped without them.
+type optionsReaper struct {
+	t    *testing.T
+	keep [][]string
+}
+
+func (r *optionsReaper) Reap(context.Context, string, string, string) func(context.Context) {
+	r.t.Error("a reaper that reads options was reaped without them")
+	return nil
+}
+
+func (r *optionsReaper) ReapWithOptions(_ context.Context, _, _, _ string, opts DeleteEnvironmentOptions) Reaped {
+	r.keep = append(r.keep, opts.Keep)
+	return Reaped{}
+}
+
+// providerReaper is a ReaperWithOptions with resources in a provider
+// account that it removes, unless they're kept.
+type providerReaper struct {
+	resources []string
+	cleaned   int
+}
+
+func (r *providerReaper) Reap(context.Context, string, string, string) func(context.Context) {
+	return nil
+}
+
+func (r *providerReaper) ReapWithOptions(_ context.Context, _, _, _ string, opts DeleteEnvironmentOptions) Reaped {
+	var out Reaped
+	for _, id := range r.resources {
+		if slices.Contains(opts.Keep, id) {
+			out.Keeps = append(out.Keeps, id)
+		} else {
+			out.Removes = append(out.Removes, id)
+		}
+	}
+	out.Cleanup = func(context.Context) { r.cleaned++ }
+	return out
+}
+
+func TestService_removingProviderResourcesNeedsAnAdmin(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	reaper := &providerReaper{resources: []string{"bnd_web", "bnd_db"}}
+	f.svc.AddReaper(reaper)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"qa", "demo"} {
+		if _, err = f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil || len(envs) != 4 {
+		t.Fatalf("environments: %d, %v", len(envs), err)
+	}
+
+	// A developer may not delete what runs in a provider account.
+	err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}})
+	if !errors.Is(err, security.ErrForbidden) || !strings.Contains(err.Error(), "An admin must delete this environment") {
+		t.Fatalf("a developer removing provider resources: %v", err)
+	}
+	if _, gerr := f.store.GetEnvironment(ctx, org, p.ID, envs[0].ID); gerr != nil || reaper.cleaned != 0 {
+		t.Fatalf("a refused deletion deleted something: %v, cleaned %d", gerr, reaper.cleaned)
+	}
+
+	// Keeping everything removes nothing there, so a developer may.
+	f.audit.events = nil
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_web", "bnd_db"}}); err != nil {
+		t.Fatalf("a developer keeping everything: %v", err)
+	}
+	if got := f.audit.events[0].Attributes; !slices.Equal(got["kept"].([]string), []string{"bnd_web", "bnd_db"}) || got["removed"] != nil {
+		t.Fatalf("audited %v", got)
+	}
+
+	// An admin may remove them, and the audit says what went and stayed.
+	f.audit.events = nil
+	if err = f.svc.DeleteEnvironment(ctx, admin, p.ID, envs[1].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}}); err != nil {
+		t.Fatalf("an admin removing provider resources: %v", err)
+	}
+	got := f.audit.events[0].Attributes
+	if !slices.Equal(got["removed"].([]string), []string{"bnd_web"}) || !slices.Equal(got["kept"].([]string), []string{"bnd_db"}) {
+		t.Fatalf("audited %v", got)
+	}
+
+	// Nothing in a provider account is what deleting always was.
+	reaper.resources = nil
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[2].ID); err != nil {
+		t.Fatalf("a developer deleting an environment with nothing on a provider: %v", err)
+	}
+}
+
+func TestService_deleteEnvironmentPassesItsOptionsOn(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	plain, withOptions := &reapRecorder{}, &optionsReaper{t: t}
+	f.svc.AddReaper(plain)
+	f.svc.AddReaper(withOptions)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: "qa"}); err != nil {
+		t.Fatal(err)
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil || len(envs) < 3 {
+		t.Fatalf("environments: %d, %v", len(envs), err)
+	}
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID, DeleteEnvironmentOptions{Keep: []string{"bnd_db"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Without options nothing is kept.
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(withOptions.keep) != 2 || !slices.Equal(withOptions.keep[0], []string{"bnd_db"}) || len(withOptions.keep[1]) != 0 {
+		t.Fatalf("the reaper was asked to keep %v", withOptions.keep)
+	}
+	// A reaper that doesn't read options is reaped as it always was.
+	if len(plain.reaped) != 2 || len(plain.finished) != 2 {
+		t.Fatalf("the plain reaper: reaped %v, finished %v", plain.reaped, plain.finished)
+	}
+}
+
+// checkRecorder is an Authorizer that records every check as
+// "permission resource" and allows them all, unless deny is set.
+type checkRecorder struct {
+	checks []string
+	deny   bool
+}
+
+func (r *checkRecorder) Require(_ context.Context, _ security.Principal, perm security.Permission, resourceID string) error {
+	r.checks = append(r.checks, perm.Name()+" "+resourceID)
+	if r.deny {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+func TestSetTeamNeedsProjectUpdateOnTheProject(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	store.projects["proj_1"] = &Project{ID: "proj_1", OrgID: org}
+	store.teams["team_1"] = org
+	authz := &checkRecorder{}
+	svc := NewService(store, authz, &initRecorder{}, &auditRecorder{})
+	p := security.Principal{UserID: "ausr_dev", OrgID: org}
+	team := "team_1"
+
+	got, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &team})
+	if err != nil {
+		t.Fatalf("SetTeam: %v", err)
+	}
+	if got.ResponsibleTeamID != "team_1" {
+		t.Fatalf("responsible team %q", got.ResponsibleTeamID)
+	}
+	if !slices.Equal(authz.checks, []string{"project:update proj_1"}) {
+		t.Fatalf("checks %v, want project:update on proj_1", authz.checks)
+	}
+
+	denied := &checkRecorder{deny: true}
+	store.teamSets = nil
+	svc = NewService(store, denied, &initRecorder{}, &auditRecorder{})
+	if _, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &team}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("denied SetTeam: %v", err)
+	}
+	if len(store.teamSets) != 0 {
+		t.Fatalf("a refused SetTeam reached the store: %v", store.teamSets)
+	}
+}
+
+func TestSetTeamClearsAndAudits(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	store.projects["proj_1"] = &Project{ID: "proj_1", OrgID: org, ResponsibleTeamID: "team_1"}
+	store.teams["team_1"] = org
+	store.teams["team_other"] = "aorg_other"
+	audit := &auditRecorder{}
+	svc := NewService(store, &checkRecorder{}, &initRecorder{}, audit)
+	p := security.Principal{UserID: "ausr_dev", OrgID: org}
+
+	got, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: nil})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got.ResponsibleTeamID != "" {
+		t.Fatalf("after clearing: %q", got.ResponsibleTeamID)
+	}
+	blank := "  "
+	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &blank}); err != nil {
+		t.Fatalf("clear with a blank ID: %v", err)
+	}
+	if want := []string{org + "/proj_1/", org + "/proj_1/"}; !slices.Equal(store.teamSets, want) {
+		t.Fatalf("store calls %v, want %v", store.teamSets, want)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("audit %v: clearing a project with no team must not audit", audit.actions)
+	}
+	e := audit.events[0]
+	if e.Action != "project.team.set" || e.ProjectID != "proj_1" || e.Principal.UserID != "ausr_dev" {
+		t.Fatalf("audit event %+v", e)
+	}
+	if v, ok := e.Attributes["team_id"]; !ok || v != "" {
+		t.Fatalf("team_id attribute %v (present %v)", v, ok)
+	}
+	if e.Attributes["previous_team_id"] != "team_1" {
+		t.Fatalf("previous_team_id attribute %v", e.Attributes["previous_team_id"])
+	}
+
+	// Another workspace's team is refused, and nothing is audited.
+	other := "team_other"
+	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &other}); !errors.Is(err, ErrTeamNotFound) {
+		t.Fatalf("another workspace's team: %v", err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("a refused change was audited: %v", audit.actions)
+	}
+	mine := "team_1"
+	if _, err = svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &mine}); err != nil {
+		t.Fatal(err)
+	}
+	if last := audit.events[len(audit.events)-1]; last.Attributes["team_id"] != "team_1" {
+		t.Fatalf("team_id attribute %v", last.Attributes["team_id"])
+	}
+}
+
+func TestSetTeamAuditsThePreviousTeam(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore()
+	store.projects["proj_1"] = &Project{ID: "proj_1", OrgID: org, ResponsibleTeamID: "team_1"}
+	store.teams["team_1"] = org
+	store.teams["team_2"] = org
+	audit := &auditRecorder{}
+	svc := NewService(store, &checkRecorder{}, &initRecorder{}, audit)
+	p := security.Principal{UserID: "ausr_dev", OrgID: org}
+
+	next := "team_2"
+	if _, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{TeamID: &next}); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("audit %v", audit.actions)
+	}
+	a := audit.events[0].Attributes
+	if a["team_id"] != "team_2" || a["previous_team_id"] != "team_1" {
+		t.Fatalf("attributes %v", a)
+	}
+
+	// A project with no team, cleared again, changes nothing and audits nothing.
+	store.projects["proj_1"].ResponsibleTeamID = ""
+	if _, err := svc.SetTeam(ctx, p, "proj_1", SetTeamInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.events) != 1 {
+		t.Fatalf("clearing an unset team was audited: %v", audit.actions)
+	}
+}
+
+func TestService_createRollbackRunsTheReapers(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	reaper := &reapRecorder{}
+	f.svc.AddReaper(reaper)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+
+	// The first repository attaches, the second can't: the project goes, and
+	// what the first one's attach set up is cleaned up after it.
+	f.attach.failOn = map[string]error{"acme/private": fmt.Errorf("%w: Loomplane can't read it", ErrRepository)}
+	_, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Shop", Repositories: []RepositoryInput{{Repository: "acme/api"}, {Repository: "acme/private"}}})
+	if !errors.Is(err, ErrRepository) {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(reaper.reaped) != 1 || !slices.Equal(reaper.reaped, reaper.finished) || !strings.HasSuffix(reaper.reaped[0], "/") {
+		t.Fatalf("a rolled-back attach: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+
+	// The same when the project's initialization can't start.
+	f.attach.failOn = nil
+	reaper.reaped, reaper.finished = nil, nil
+	f.init.err = errors.New("queue down")
+	if _, err = f.svc.Create(ctx, dev, CreateProjectInput{Name: "Shop", RepositoryURL: "https://github.com/acme/api"}); err == nil {
+		t.Fatal("Create succeeded without its initialization")
+	} else if !strings.Contains(err.Error(), "initialization") {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(reaper.reaped) != 1 || !slices.Equal(reaper.reaped, reaper.finished) {
+		t.Fatalf("a rolled-back initialization: reaped %v, finished %v", reaper.reaped, reaper.finished)
 	}
 }

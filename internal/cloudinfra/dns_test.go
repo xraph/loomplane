@@ -194,10 +194,16 @@ func TestRouteDNSCleanupAfterCredentialRotation(t *testing.T) {
 			}
 			svc := NewService(Deps{Adapters: registry, Connections: rotatedRouteCredential{conn: conn, raw: []byte("new-token")}})
 			zone := &Zone{OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account", ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com", AccountID: "account"}}
-			if _, _, err := svc.zoneCredential(t.Context(), zone); err == nil {
-				t.Fatal("new work accepted rotated generation")
+			// A renewed token keeps the zone only once the provider confirms
+			// the same hosted zone and account.
+			_, _, err := svc.zoneCredential(t.Context(), zone)
+			if variant == "same-account" && err != nil {
+				t.Fatal("new work refused renewed same-account credential", err)
 			}
-			err := svc.applyRouteDNS(t.Context(), &routeDNSStore{}, &RouteOperation{Kind: "remove", Receipt: &receipt}, zone)
+			if variant != "same-account" && err == nil {
+				t.Fatal("new work accepted rotated generation in another account or zone")
+			}
+			err = svc.applyRouteDNS(t.Context(), &routeDNSStore{}, &RouteOperation{Kind: "remove", Receipt: &receipt}, zone)
 			if variant == "same-account" {
 				if err != nil || adapter.deleted != "owned" {
 					t.Fatal("cleanup refused same account", err)

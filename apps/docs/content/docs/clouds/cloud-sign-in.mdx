@@ -1,20 +1,22 @@
 ---
 title: Connect a cloud by signing in
-description: Register an OAuth app once, then connect DigitalOcean, Vercel, Google Cloud or Azure with a sign-in instead of a pasted token or key.
+description: Register an OAuth app once for the whole instance, then connect DigitalOcean, Vercel, Google Cloud, Azure or Cloudflare by signing in.
 ---
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-A pasted token works, but it's yours to copy, store and rotate. Signing in swaps that for a grant the cloud hands to Loomplane after you approve it, and Loomplane renews the grant on its own. DigitalOcean, Vercel, Google Cloud and Azure all connect this way. On AWS, Google Cloud and Azure you can also [connect keylessly](/docs/clouds/keyless), where Loomplane holds no grant at all.
+A pasted token works, but it's yours to copy, store and rotate. Signing in swaps that for a grant the cloud hands to Loomplane after you approve it, and Loomplane renews the grant on its own. DigitalOcean, Vercel, Google Cloud, Azure and Cloudflare all connect this way. On AWS, Google Cloud and Azure you can also [connect keylessly](/docs/clouds/keyless), where Loomplane holds no grant at all.
 
 ## Register the OAuth app
 
-You do this once per organization for each cloud, and you need to be an owner or admin.
+You do this once per cloud for the whole instance, and you need to be the platform owner or a platform admin. Everyone else in every organization only signs in. Until a cloud has an app, its connect dialog can't offer to sign in. You paste a token there, or connect keylessly where the cloud supports it.
+
+The first time you run Loomplane, setup ends with an optional **Cloud sign-in** step. Skip that step and you can register the apps later on the Cloud sign-in page.
 
 <Steps>
 <Step>
 
-In Loomplane, open **Settings**, then **Cloud sign-in**. The page shows a callback URL, which is your public URL followed by `/integrations/oauth/callback`. Copy it. Every cloud uses the same one.
+In Loomplane, open **Settings**, then **Cloud sign-in** (it's at `/platform/cloud-sign-in`, and only platform owners and admins see it). The page shows a callback URL, which is your public URL followed by `/integrations/oauth/callback`. Copy it. Every cloud uses the same one.
 
 </Step>
 <Step>
@@ -59,7 +61,44 @@ Under **Certificates & secrets**, add a client secret and copy its value, since 
 
 The Application (client) ID on the app's overview is the client ID you paste into Loomplane.
 
-## Sign in
+### Cloudflare
+
+In Cloudflare, open **Manage Account**, then **OAuth clients**, and create a client. Register the callback shown in Loomplane. Choose **Authorization Code** and **Refresh Token**, response type **code**, and token authentication **client_secret_basic**. Loomplane also sends S256 PKCE.
+
+Enable `account-settings.read` and `offline_access` on the client. For DNS, also enable `zone.read` and `dns.write`. For R2 storage, enable `workers-r2.write`. If you offer both, register all five scopes. Loomplane requests the scopes for the services you choose when connecting. Account Settings Read lets Loomplane verify the selected account. Enable `offline_access` on the client itself, since a grant without a refresh token cannot keep your connection working. Check the current scope IDs in Cloudflare's scope picker or its authenticated `GET /client/v4/oauth/scopes` API.
+
+Copy the client ID and secret into Loomplane's **Cloud sign-in** settings. A private client works only for members of the Cloudflare account that owns it. To serve other accounts, complete Cloudflare's domain verification and public-client requirements. Making a client public is permanent. See [Cloudflare's registration guide](https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/).
+
+When connecting, enter the **Account ID**, then choose **DNS**, **R2 storage** or **DNS and R2**. Loomplane verifies account access and checks only the selected services. A storage-only connection does not need DNS permissions. Existing connections default to DNS. Replace the credential to add R2 access to one; its account stays fixed. Existing API-token connections continue to work. Extra registrar or cache permissions are needed only for the operations that use them.
+
+R2 API-token connections also need Account Settings Read so resource sync can verify the account. R2 permission checks only list bucket metadata. A successful check does not prove bucket creation permission, and OAuth credentials are never passed to an application's S3 client. A Worker in the same verified Cloudflare account can use a native binding. For other application targets, supply bucket-scoped R2 S3 credentials in Resources and complete its access check. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
+
+To create a bucket, add an `object-storage` resource to your manifest with `cloudflare-workers` as its provider and your Cloudflare connection ID as its target:
+
+```yaml
+version: 1
+resources:
+  assets:
+    kind: object-storage
+    provider: cloudflare-workers
+    target: conn_your_cloudflare_connection
+    settings:
+      jurisdiction: default
+```
+
+Review and approve the plan before Loomplane creates the bucket. Sync your account in Resources to discover existing buckets. After setting up the selected bucket's application access, you can attach it with its inventory ID:
+
+```yaml
+version: 1
+resources:
+  assets:
+    kind: object-storage
+    existing_resource: providerresource_your_bucket
+```
+
+Add `assets` to your application's `needs` to use it. Native bindings require a Worker in the bucket's account, with Workers deployment permissions on its connection. The R2 OAuth selection grants bucket management access only. Removing an existing-resource attachment disconnects it from the project and keeps the provider bucket.
+
+## Sign in to your cloud
 
 Open **Integrations**, choose the cloud and pick **Sign in with** followed by the cloud's name, or **Use a token instead** underneath if you'd rather paste a token or key. You finish on the cloud's page and land back in Loomplane with the connection ready. Be quick. The sign-in Loomplane starts expires after ten minutes.
 
@@ -76,11 +115,11 @@ Google and Azure act as the person who signed in, so the connection can only do 
 
 A Google or Azure connection shows who it acts as: **Signed in as** the Google or Microsoft account, then the Loomplane member who signed in. A DigitalOcean or Vercel sign-in belongs to the team it was approved for, so there's no person to show.
 
-If that member leaves your Loomplane organization, the connection shouldn't go on acting as them, so Loomplane notices on its next background run (they're 6 hours apart), marks the connection as needing a new sign-in and sends the usual notice. Anyone who can manage cloud accounts can then choose **Sign in again** with their own account. The connection keeps its ID, and the project, or the tenant, subscription and resource group, have to stay the same.
+If that member leaves the connection's organization, the connection shouldn't go on acting as them, so Loomplane notices on its next background run (they're 6 hours apart), marks the connection as needing a new sign-in and sends the usual notice. Anyone who can manage cloud accounts can then choose **Sign in again** with their own account. The connection keeps its ID, and the project, or the tenant, subscription and resource group, have to stay the same.
 
 ## Set the app in config instead
 
-If you run Loomplane yourself and want one app for every organization, put it in `config.yaml` or the environment:
+If you'd rather keep the app out of the dashboard, put it in `config.yaml` or the environment. It applies to every organization, the same as an app from the page:
 
 ```yaml
 clouds:
@@ -98,6 +137,9 @@ clouds:
     azure:
       client_id: your-application-client-id
       client_secret: your-client-secret
+    cloudflare:
+      client_id: your-client-id
+      client_secret: your-client-secret
 ```
 
 You only need the clouds you use. Each value also reads from the environment:
@@ -108,10 +150,11 @@ You only need the clouds you use. Each value also reads from the environment:
 | Vercel | `LOOMPLANE_VERCEL_OAUTH_CLIENT_ID`, `LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET`, `LOOMPLANE_VERCEL_OAUTH_SLUG` |
 | Google Cloud | `LOOMPLANE_GCP_OAUTH_CLIENT_ID`, `LOOMPLANE_GCP_OAUTH_CLIENT_SECRET` |
 | Azure | `LOOMPLANE_AZURE_OAUTH_CLIENT_ID`, `LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET` |
+| Cloudflare | `LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_ID`, `LOOMPLANE_CLOUDFLARE_OAUTH_CLIENT_SECRET` |
 
 Set a cloud's ID and secret together or not at all, because one without the other stops startup. Vercel's slug is required once its ID and secret are set.
 
-Config wins. Once a cloud's app is set there, the settings page shows that it comes from config and locks it for every organization, so nobody can point their own at something else.
+Config wins. Once a cloud's app is set there, the Cloud sign-in page shows that cloud as **Set by the deployment** and locks it, so nobody can point it at something else. Clouds you left out of config stay editable on the page.
 
 ## When a sign-in lapses
 
@@ -126,13 +169,21 @@ A cloud can still refuse the grant. Someone revoked Loomplane's access, uninstal
 
 Once Loomplane knows, the connection shows **Sign-in needed** and nothing deploys through it. Choose **Sign in again**, either on the connection's page or on its row in the **Clouds** list under **Integrations**, and approve once more. The button shows on any signed-in connection that isn't ready. The connection keeps its ID, so your projects and environments carry on without changes.
 
-The person who made the connection and the organization's owners and admins hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
+The person who made the connection and the owners and admins of the connection's organization hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
 
 A Google or Azure person can also lose a role without losing the sign-in. The grant still works then, but deployments fail on the permission. **Check again** lists what's missing.
 
+## Replace or remove an app
+
+Choose **Edit** on the cloud's row to change the app. The **Remove** button is in the same dialog. If connections have signed in with the current app, the page tells you how many before you change its client ID or remove it.
+
+Give a cloud a different client ID, or remove its app, and every one of those connections asks to be signed in again, because the old grants belong to the old app. Changing only the client secret keeps them all working. Vercel connections are the exception: Vercel's tokens don't depend on the app once they're issued, so they carry on either way.
+
 ## When the cloud refuses the app
 
-If the cloud refuses the app itself, say after someone rotated its client secret, every sign-in through it stops working. The Cloud sign-in page shows the problem on that cloud's row. Save the app again with the new values and it clears. An app set in config clears with the first sign-in that works after you fix config. Each connection that tried the app asks to be signed in again as well.
+If the cloud refuses the app itself, say after someone rotated its client secret, every sign-in through it stops working. A platform owner or admin sees the problem on that cloud's row of the Cloud sign-in page. Save the app again with the new values and it clears. Each connection that tried the app asks to be signed in again as well.
+
+An app set in config isn't recorded on the page, so a refusal there shows only on the connections, with the cloud's message. It clears with the first sign-in that works after you fix config.
 
 ## Switch between a token and a sign-in
 

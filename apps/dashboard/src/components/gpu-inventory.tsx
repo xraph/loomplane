@@ -5,7 +5,8 @@ import { useConnectionGpusGet } from "@/client/forge/loomplane/hooks"
 import type { GPUDevice, GPUNodeGroup } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { QueryError } from "@/components/query-error"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { CloudCallout } from "@/components/cloud-targets/cloud-page"
+import { CloudSectionHead } from "@/components/cloud-targets/infrastructure-ui"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -56,9 +57,11 @@ export function GpuInventory({
   const devices = inv?.devices ?? []
   const nodes = inv?.nodes ?? []
   return (
-    <section className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
-      <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">GPUs</h2>
+    <section aria-label="GPUs" className="grid gap-2.5">
+      <CloudSectionHead
+        title="GPUs"
+        description="The GPUs Loomplane found on this account's machines, for services that ask for one."
+      >
         <Button
           size="sm"
           variant="outline"
@@ -66,48 +69,50 @@ export function GpuInventory({
         >
           Refresh
         </Button>
-      </div>
-      {gpus.status === "error" ? (
-        <div className="p-4">
-          <QueryError
-            error={gpus.error}
-            fallback="GPUs could not be read."
-            retry={() => gpus.refetch()}
+      </CloudSectionHead>
+      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        {gpus.status === "error" ? (
+          <div className="p-4">
+            <QueryError
+              error={gpus.error}
+              fallback="GPUs couldn't be read."
+              retry={() => gpus.refetch()}
+            />
+          </div>
+        ) : !inv ? (
+          <div className="p-4">
+            <Skeleton className="h-5 w-72" />
+          </div>
+        ) : inv.status === "unlisted" ? (
+          <Missing
+            title="Loomplane can't list this cluster's nodes"
+            description={inv.message}
           />
-        </div>
-      ) : !inv ? (
-        <div className="p-4">
-          <Skeleton className="h-5 w-72" />
-        </div>
-      ) : inv.status === "unlisted" ? (
-        <Missing
-          title="Loomplane can't list this cluster's nodes"
-          description={inv.message}
-        />
-      ) : inv.status === "none" && cloud === "kubernetes" ? (
-        <Missing
-          title="No GPU nodes"
-          description={
-            inv.message ||
-            "This cluster has no nodes with GPU drivers and the device plugin."
-          }
-        />
-      ) : inv.status === "none" ? (
-        <div className="px-4 py-4 text-[13px] text-muted-foreground">
-          <p>No GPUs on this server.</p>
-          {inv.message && <p className="mt-1">{inv.message}</p>}
-        </div>
-      ) : (
-        <div className="grid gap-3 p-4">
-          {problems.has(inv.status) && (
-            <Alert>
-              <AlertDescription>{inv.message}</AlertDescription>
-            </Alert>
-          )}
-          {devices.length > 0 && <DeviceTable devices={devices} />}
-          {nodes.length > 0 && <NodeTable groups={nodes} />}
-        </div>
-      )}
+        ) : inv.status === "none" && cloud === "kubernetes" ? (
+          <Missing
+            title="No GPU nodes"
+            description={
+              inv.message ||
+              "This cluster has no nodes with GPU drivers and the device plugin."
+            }
+          />
+        ) : inv.status === "none" ? (
+          <div className="px-4 py-4 text-[13px] text-muted-foreground">
+            <p>No GPUs on this server.</p>
+            {inv.message && <p className="mt-1">{inv.message}</p>}
+          </div>
+        ) : (
+          <div className="grid gap-3 p-4">
+            {problems.has(inv.status) && (
+              <CloudCallout tone="attention" title="Some GPUs can't take work">
+                {inv.message}
+              </CloudCallout>
+            )}
+            {devices.length > 0 && <DeviceTable devices={devices} />}
+            {nodes.length > 0 && <NodeTable groups={nodes} />}
+          </div>
+        )}
+      </div>
     </section>
   )
 }

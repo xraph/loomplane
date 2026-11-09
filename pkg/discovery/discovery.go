@@ -118,7 +118,11 @@ type Entrypoint struct {
 	Resources  []ResourceUse `json:"resources,omitempty"`
 	// Commands are the entrypoint's own, when they aren't its unit's: a
 	// Procfile process or a task queue's worker beside a web app.
-	Commands *Commands  `json:"commands,omitempty"`
+	Commands *Commands `json:"commands,omitempty"`
+	// Packages are the directories of the repository's Go packages a
+	// main package imports, directly or not, its own among them. It's
+	// empty for other ecosystems.
+	Packages []string   `json:"packages,omitempty"`
 	Evidence []Evidence `json:"evidence"`
 }
 
@@ -204,6 +208,18 @@ type Image struct {
 	Evidence []Evidence `json:"evidence"`
 }
 
+// EnvUse is an environment variable the code reads, or an example file
+// lists, such as DATABASE_URL.
+type EnvUse struct {
+	Name string `json:"name"`
+	// Example is the value an example file (.env.example) or a default in
+	// the code gives it. A committed .env's values are never read.
+	Example    string     `json:"example,omitempty"`
+	Confidence Confidence `json:"confidence"`
+	// Evidence is the first place each file reads or lists it.
+	Evidence []Evidence `json:"evidence"`
+}
+
 // Note is something the analysis couldn't read, or chose not to.
 type Note struct {
 	Path string `json:"path,omitempty"`
@@ -219,6 +235,7 @@ type Report struct {
 	Images       []Image       `json:"images"`
 	Resources    []ResourceUse `json:"resources"`
 	BuildSystems []BuildSystem `json:"build_systems"`
+	Env          []EnvUse      `json:"env"`
 	Notes        []Note        `json:"notes"`
 }
 

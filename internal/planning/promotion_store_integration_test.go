@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/ops"
 )
@@ -85,7 +86,7 @@ func TestPgStore_planKindsRoundTrip(t *testing.T) {
 	p := &Plan{
 		ID: "plan_promo", OrgID: "org", ProjectID: "proj", EnvironmentID: "env_b", Environment: "production",
 		Status: StatusPlanning, ManifestID: "man_1", ManifestRevision: 1, CreatedBy: "usr", CreatedAt: now,
-		Kind: KindPromotion, From: "staging", FromEnvironmentID: "env_a",
+		Kind: KindPromotion, From: "staging", FromEnvironmentID: "env_a", Services: []string{"api", "web"},
 		Sources: []PlanSource{{
 			SourceID: "src_1", Alias: "mono", Repository: "acme/mono", AnalysisID: "anl_1", CommitSHA: "abc",
 			InScope: true, FromPlanID: "plan_staging",
@@ -111,6 +112,9 @@ func TestPgStore_planKindsRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(got.Sources, p.Sources) {
 		t.Fatalf("sources %+v", got.Sources)
 	}
+	if !reflect.DeepEqual(got.Services, []string{"api", "web"}) {
+		t.Fatalf("services %q", got.Services)
+	}
 	if !reflect.DeepEqual(got.Leftovers, p.Leftovers) || !reflect.DeepEqual(got.Artifacts, p.Artifacts) {
 		t.Fatalf("leftovers %+v artifacts %+v", got.Leftovers, got.Artifacts)
 	}
@@ -123,7 +127,7 @@ func TestPgStore_planKindsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.Kind != KindRelease || old.From != "" || old.FromEnvironmentID != "" || old.Rollback != nil {
+	if old.Kind != KindRelease || old.From != "" || old.FromEnvironmentID != "" || old.Rollback != nil || old.Services != nil {
 		t.Fatalf("old plan: %+v", old)
 	}
 	if old.Leftovers == nil || len(old.Leftovers) != 0 || old.Artifacts == nil || len(old.Artifacts) != 0 {
@@ -158,6 +162,85 @@ func TestPgStore_rollbackSpecRoundTrip(t *testing.T) {
 	}
 	if got.Rollback.RestoreFinishedAt.Location() != time.UTC {
 		t.Fatalf("restore_finished_at in %s", got.Rollback.RestoreFinishedAt.Location())
+	}
+}
+
+// RolledBackPlans names the plans a rollback in the environment undid:
+// a rollback whose deployment succeeded or failed counts, since a failed
+// one still undid some of its target.
+func TestPgStore_rolledBackPlans(t *testing.T) {
+	ctx, store, pg := promotionDB(t)
+	if got, err := store.RolledBackPlans(ctx, "org", "env_b"); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("before any rollback: %v %v", got, err)
+	}
+	plan := func(id, env, kind, target string) {
+		t.Helper()
+		var spec []byte
+		if kind == KindRollback {
+			var err error
+			if spec, err = json.Marshal(Rollback{Reason: "bad", Trigger: TriggerManual, TargetPlanID: target}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		envName := map[string]string{"env_a": "staging", "env_b": "production"}[env]
+		if _, err := pg.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status, manifest_id,
+			manifest_revision, kind, rollback, created_by, created_at)
+			VALUES ($1, 'org', 'proj', $2, $3, 'approved', 'man_1', 1, $4, $5, 'usr', now())`, id, env, envName, kind, spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deploy := func(id, planID, env, status string) {
+		t.Helper()
+		envName := map[string]string{"env_a": "staging", "env_b": "production"}[env]
+		var finished *time.Time
+		if status != "running" {
+			now := time.Now()
+			finished = &now
+		}
+		if _, err := pg.Exec(ctx, `INSERT INTO loomplane_deployments (id, org_id, project_id, environment_id, environment, plan_id,
+			commit_sha, status, started_by, started_at, finished_at)
+			VALUES ($1, 'org', 'proj', $2, $3, $4, 'abc', $5, 'usr', now(), $6)`, id, env, envName, planID, status, finished); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"plan_r1", "plan_r2", "plan_r3", "plan_r4", "plan_r5"} {
+		plan(id, "env_b", KindRelease, "")
+	}
+	plan("plan_rb_ok", "env_b", KindRollback, "plan_r1")
+	deploy("dep_rb_ok", "plan_rb_ok", "env_b", "succeeded")
+	plan("plan_rb_failed", "env_b", KindRollback, "plan_r2")
+	deploy("dep_rb_failed", "plan_rb_failed", "env_b", "failed")
+	plan("plan_rb_running", "env_b", KindRollback, "plan_r3")
+	deploy("dep_rb_running", "plan_rb_running", "env_b", "running")
+	// A rollback plan nobody approved has no deployment.
+	plan("plan_rb_open", "env_b", KindRollback, "plan_r4")
+	// A rollback refused as stale deployed nothing, but its target was still
+	// judged bad, so no later rollback may restore it.
+	plan("plan_rb_stale", "env_b", KindRollback, "plan_r4")
+	deploy("dep_rb_stale", "plan_rb_stale", "env_b", "failed")
+	if _, err := pg.Exec(ctx, `UPDATE loomplane_deployments SET error=$1 WHERE id='dep_rb_stale'`, StaleRollback); err != nil {
+		t.Fatal(err)
+	}
+	// Staging's rollback is staging's.
+	plan("plan_rb_staging", "env_a", KindRollback, "plan_r5")
+	deploy("dep_rb_staging", "plan_rb_staging", "env_a", "succeeded")
+	// A release's deployment succeeding undoes nothing.
+	deploy("dep_r5", "plan_r5", "env_b", "succeeded")
+
+	got, err := store.RolledBackPlans(ctx, "org", "env_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A failed rollback still undid some of its target, and a stale one's
+	// target stays rolled back.
+	if want := map[string]bool{"plan_r1": true, "plan_r2": true, "plan_r4": true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("production rolled back %v, want %v", got, want)
+	}
+	if got, err = store.RolledBackPlans(ctx, "org", "env_a"); err != nil || !reflect.DeepEqual(got, map[string]bool{"plan_r5": true}) {
+		t.Fatalf("staging rolled back %v, %v", got, err)
+	}
+	if got, err = store.RolledBackPlans(ctx, "org-2", "env_b"); err != nil || len(got) != 0 {
+		t.Fatalf("another organization rolled back %v, %v", got, err)
 	}
 }
 
@@ -335,5 +418,54 @@ func TestDiscoveryPgStore_pinnedAnalysesDontBlockTheBranch(t *testing.T) {
 	}
 	if a, activeErr := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); activeErr != nil || a.ID != "anl_branch" || a.Pinned {
 		t.Fatalf("running branch analysis %+v %v", a, activeErr)
+	}
+}
+
+// TestPgStore_releaseRoutesAllowsTheTargetsHandoffs: a route whose handoff
+// a release still holds blocks every plan, except a rollback of the plan
+// that prepared that handoff.
+func TestPgStore_releaseRoutesAllowsTheTargetsHandoffs(t *testing.T) {
+	ctx, store, pg := promotionDB(t)
+	route := map[string]any{"id": "route_1", "org_id": "org", "project_id": "proj", "status": "ready",
+		"input": map[string]any{"environment_id": "env_b", "service": "web", "hostname": "shop.example.com"}}
+	body, err := json.Marshal(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(Result{Connections: map[string]string{}, Problems: []Finding{}, Warnings: []Finding{}, Actions: []Action{{ID: "service:web", Op: Replace, Subject: ServiceSubject, Name: "web",
+		Routes: []cloudinfra.Route{{ID: "route_1"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		// The route's zone, server and connection don't matter here; this
+		// database is the test's own.
+		{`ALTER TABLE loomplane_domain_routes DISABLE TRIGGER USER`, nil},
+		{`INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body)
+			VALUES('route_1','org','proj','env_b','cloud','server','conn','zone','shop.example.com','ready',1,$1)`, []any{body}},
+		{`UPDATE loomplane_plans SET result=$1 WHERE id='plan_old'`, []any{result}},
+		{`INSERT INTO loomplane_route_handoffs(id,org_id,route_id,source_connection_id,destination_connection_id) VALUES($1,'org','route_1','conn','conn')`,
+			[]any{cloudinfra.ReleasePrepareID("plan_old/service:web", "route_1")}},
+	} {
+		if _, err = pg.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+	if _, err = store.ReleaseRoutes(ctx, "org", "proj", "env_b", ""); err == nil || !strings.Contains(err.Error(), "finish the retained route handoff for shop.example.com") {
+		t.Fatalf("a release while plan_old holds the handoff: %v", err)
+	}
+	routes, err := store.ReleaseRoutes(ctx, "org", "proj", "env_b", "plan_old")
+	if err != nil || len(routes) != 1 || routes[0].ID != "route_1" {
+		t.Fatalf("a rollback of plan_old: %+v, %v", routes, err)
+	}
+	// Another plan's handoff blocks the rollback too.
+	if _, err = pg.Exec(ctx, `UPDATE loomplane_route_handoffs SET id='routeop_other' WHERE route_id='route_1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ReleaseRoutes(ctx, "org", "proj", "env_b", "plan_old"); err == nil {
+		t.Fatal("a rollback of plan_old passed another plan's handoff")
 	}
 }
