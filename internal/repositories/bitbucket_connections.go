@@ -178,9 +178,10 @@ type BitbucketConnections struct {
 	mu     sync.Mutex
 	tokens map[string]cachedToken // by orgID/connectionID
 	// consumerRejected is when Bitbucket last turned down Loomplane's own
-	// consumer on a renewal, or zero once one has worked since. It's this
-	// process's view only: the consumer is the same for every organization
-	// and every process, and each one finds out on its own next renewal.
+	// consumer on a renewal or a connect, or zero once one has worked
+	// since. It's this process's view only: the consumer is the same for
+	// every organization and every process, and each one finds out on its
+	// own next renewal or connect.
 	consumerRejected time.Time
 }
 
@@ -282,6 +283,9 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 		return nil, ErrBadState
 	}
 	grant, err := c.api.Exchange(ctx, in.Code)
+	if errors.Is(err, ErrBitbucketConsumerRejected) {
+		c.consumerRejectedNow()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -823,8 +827,8 @@ func (c *BitbucketConnections) consumerAccepted() {
 	c.consumerRejected = time.Time{}
 }
 
-// consumerWasRejected reports whether the last renewal found Loomplane's
-// consumer turned down.
+// consumerWasRejected reports whether the last renewal or connect found
+// Loomplane's consumer turned down.
 func (c *BitbucketConnections) consumerWasRejected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

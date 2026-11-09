@@ -1080,6 +1080,16 @@ func TestBitbucketConnect_rejectedConsumer(t *testing.T) {
 	if rows, _ := f.store.ListBitbucketWorkspaces(ctx, "aorg_a"); len(rows) != 0 || f.secrets.len() != 0 {
 		t.Fatalf("a rejected consumer kept %d rows and %d secrets", len(rows), f.secrets.len())
 	}
+	// The card says so too, until a sign-in works.
+	st, err := f.conns.Status(ctx, admin)
+	if err != nil || len(st.Problems) != 1 || st.Problems[0] != bitbucketConsumerProblem {
+		t.Fatalf("status after a rejected connect = %+v, %v", st, err)
+	}
+	f.api.set(func(a *fakeBBAPI) { a.exchangeErr = nil })
+	f.connect(t, admin, "acme")
+	if st, err = f.conns.Status(ctx, admin); err != nil || len(st.Problems) != 0 {
+		t.Fatalf("status once a connect works = %+v, %v", st, err)
+	}
 }
 
 func TestBitbucketToken_connectorLeft(t *testing.T) {
