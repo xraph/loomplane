@@ -115,17 +115,17 @@ func (c *GitLabConnections) Token(ctx context.Context, orgID string, repo Reposi
 	// public project reads without a token, so ask GitLab anonymously:
 	// only one that needs a sign-in is worth the lapsed error, which tells
 	// someone what to do where "not found" wouldn't.
-	h, ok, err := c.cfg.Registry.Host(ctx, orgID, lapsed.Host)
-	if err != nil {
-		return "", err
+	lh, found, hostErr := c.cfg.Registry.Host(ctx, orgID, lapsed.Host)
+	if hostErr != nil {
+		return "", hostErr
 	}
-	if ok {
-		_, err = c.client(h).Project(ctx, repo, "")
+	if found {
+		_, anonErr := c.client(lh).Project(ctx, repo, "")
 		switch {
-		case err == nil:
+		case anonErr == nil:
 			return "", nil
-		case !errors.Is(err, ErrNotFound):
-			return "", err
+		case !errors.Is(anonErr, ErrNotFound):
+			return "", anonErr
 		}
 	}
 	return "", &GitLabSignInLapsedError{Username: lapsed.Username, Host: canonicalGitLabHost(lapsed.Host)}
