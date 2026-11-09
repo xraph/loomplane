@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -252,17 +251,18 @@ func (r registryOnly) Credential(ctx context.Context, orgID, connectionID string
 	if r.inner == nil {
 		return nil, nil, ErrNoCredential
 	}
-	// A source that can list connections without revealing them is asked
+	// A source that can look a connection up without revealing it is asked
 	// first, so a connection that isn't one of the organization's registries
-	// is refused before its secret is decrypted.
-	if lister, ok := r.inner.(interface {
-		All(ctx context.Context, orgID string) ([]*connections.Connection, error)
+	// is refused before its secret is decrypted. One it doesn't have stays
+	// not found.
+	if looker, ok := r.inner.(interface {
+		Metadata(ctx context.Context, orgID, id string) (*connections.Connection, error)
 	}); ok {
-		all, err := lister.All(ctx, orgID)
+		meta, err := looker.Metadata(ctx, orgID, connectionID)
 		if err != nil {
 			return nil, nil, err
 		}
-		if !slices.ContainsFunc(all, func(c *connections.Connection) bool { return isOrgRegistry(c, orgID, connectionID) }) {
+		if !isOrgRegistry(meta, orgID, connectionID) {
 			return nil, nil, platformRefusalError("Loomplane Cloud reads only the workspace's own registry connections.")
 		}
 	}

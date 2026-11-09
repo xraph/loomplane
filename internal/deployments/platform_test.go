@@ -957,14 +957,12 @@ type revealCounter struct {
 	revealed []string
 }
 
-func (r *revealCounter) All(_ context.Context, orgID string) ([]*connections.Connection, error) {
-	var out []*connections.Connection
-	for _, c := range r.conns {
-		if c.OrgID == orgID {
-			out = append(out, c)
-		}
+func (r *revealCounter) Metadata(_ context.Context, orgID, id string) (*connections.Connection, error) {
+	c := r.conns[id]
+	if c == nil || c.OrgID != orgID {
+		return nil, connections.ErrNotFound
 	}
-	return out, nil
+	return c, nil
 }
 
 func (r *revealCounter) Credential(_ context.Context, _, id string) (*connections.Connection, []byte, error) {
@@ -985,6 +983,9 @@ func TestRegistryOnlyChecksBeforeRevealing(t *testing.T) {
 		if c, raw, err := r.Credential(t.Context(), "org_a", id); err == nil || c != nil || raw != nil {
 			t.Fatalf("%s was read", id)
 		}
+	}
+	if _, _, err := r.Credential(t.Context(), "org_a", "conn_missing"); !errors.Is(err, connections.ErrNotFound) {
+		t.Fatalf("a missing connection answered %v, want not found", err)
 	}
 	if len(src.revealed) != 0 {
 		t.Fatalf("revealed %v before the check", src.revealed)
