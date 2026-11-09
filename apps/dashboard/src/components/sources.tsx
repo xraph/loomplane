@@ -61,7 +61,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { isActive, shortSHA, stepLabel } from "@/lib/architecture"
-import { relative, repositoryHost, repositoryURL } from "@/lib/format"
+import { hostLabel, relative, sourceURL } from "@/lib/format"
 import { listOf } from "@/lib/models"
 import { useOrganization } from "@/lib/organization"
 import { servicesInRepo, withoutServices } from "@/lib/placement"
@@ -81,26 +81,6 @@ function refreshRepositories(
   invalidate(useProjectsGet, { path: { id: projectID } })
   invalidate(useProjectsList)
   invalidate(useProjectsGraph, { path: { id: projectID } })
-}
-
-/**
- * sourceURL links to a source on its host, at its directory when it has one.
- * Each host has its own page for a directory.
- */
-function sourceURL(s: Source): string {
-  const base = repositoryURL(s.repository)
-  if (!s.root) return base
-  const ref = s.ref || "HEAD"
-  const host = repositoryHost(s.repository)
-  if (host === "github.com") return `${base}/tree/${ref}/${s.root}`
-  if (host === "bitbucket.org") return `${base}/src/${ref}/${s.root}`
-  return `${base}/-/tree/${ref}/${s.root}`
-}
-
-/** hostLabel is what "Open on" names: GitHub, or the key's own host. */
-function hostLabel(s: Source): string {
-  const host = repositoryHost(s.repository)
-  return host === "github.com" ? "GitHub" : host
 }
 
 /**
@@ -249,7 +229,7 @@ export function Repositories({ project }: { project: Project }) {
                           />
                         }
                       >
-                        Open on {hostLabel(s)}
+                        Open on {hostLabel(s.repository)}
                       </DropdownMenuItem>
                       {mayEdit && (
                         <>
