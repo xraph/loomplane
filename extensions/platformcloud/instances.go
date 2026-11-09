@@ -64,6 +64,8 @@ type instances struct {
 	// leaves it that way for good. Instances of other providers are never
 	// touched.
 	resetStuck func(ctx context.Context, iid id.ID, state cpprovider.InstanceState, since time.Time) error
+	// stopHost tells the placement's host to stop its VM.
+	stopHost func(ctx context.Context, p platformcloud.Placement) error
 }
 
 // startTimeout bounds one start: one service's apply, image pull included.
@@ -93,11 +95,15 @@ var (
 )
 
 func newInstances(svc *platformcloud.Service, target *deployments.PlatformTarget, pg *pgdriver.PgDB) *instances {
-	return &instances{svc: svc, regions: target, ctrl: target.Ctrl.Instances, authority: target.Authority,
+	ic := &instances{svc: svc, regions: target, ctrl: target.Ctrl.Instances, authority: target.Authority,
 		resetStuck: func(ctx context.Context, iid id.ID, state cpprovider.InstanceState, since time.Time) error {
 			_, err := pg.Exec(ctx, `UPDATE cp_instances SET state='failed',updated_at=now() WHERE id=$1 AND state=$2 AND updated_at<$3 AND provider_name LIKE 'platform.%'`, iid.String(), string(state), since)
 			return err
 		}}
+	ic.stopHost = func(ctx context.Context, p platformcloud.Placement) error {
+		return deployments.PlatformVMAction(ctx, ic.svc, ic.authority, p, "stop")
+	}
+	return ic
 }
 
 // stuckLimit is how long an instance may say state before it is stuck, or
@@ -114,7 +120,7 @@ func stuckLimit(state cpprovider.InstanceState) time.Duration {
 
 // current reads the instance, turning one stuck starting or stopping into
 // failed first, so restore, repair and move can proceed.
-func (ic *instances) current(ctx context.Context, iid id.ID) (*cpinstance.Instance, error) {
+func (ic *instances) current(ctx context.Context, p *platformcloud.Placement, iid id.ID) (*cpinstance.Instance, error) {
 	inst, err := ic.ctrl.Get(ctx, iid)
 	if err != nil || ic.resetStuck == nil {
 		return inst, err
@@ -124,6 +130,13 @@ func (ic *instances) current(ctx context.Context, iid id.ID) (*cpinstance.Instan
 		return inst, err
 	}
 	slog.WarnContext(ctx, "platform cloud: an instance was stuck; resetting it so it can start again", "instance", iid.String(), "state", string(inst.State), "since", inst.UpdatedAt)
+	if inst.State == cpprovider.StateStopping && ic.stopHost != nil && p != nil {
+		// A suspension's stop that stalled may have left the VM running:
+		// the host is told to stop it before the instance is released.
+		if stopErr := ic.stopHost(ctx, *p); stopErr != nil {
+			return nil, fmt.Errorf("stop the stuck VM: %w", stopErr)
+		}
+	}
 	if checkErr := ic.resetStuck(ctx, iid, inst.State, time.Now().Add(-limit)); checkErr != nil {
 		return nil, checkErr
 	}
@@ -193,11 +206,11 @@ func (ic *instances) Stop(ctx context.Context, instanceID string) error {
 // Start starts the instance and returns once it runs, or with why it
 // doesn't.
 func (ic *instances) Start(ctx context.Context, instanceID string) error {
-	_, iid, ctx, err := ic.prepare(ctx, instanceID)
+	p, iid, ctx, err := ic.prepare(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	inst, err := ic.current(ctx, iid)
+	inst, err := ic.current(ctx, p, iid)
 	if err != nil {
 		return err
 	}
@@ -245,11 +258,11 @@ var errMoveFailed = errors.New("the service could not be started on another host
 // same host, in a region of one host too. An instance stuck starting is
 // started again.
 func (ic *instances) Redeploy(ctx context.Context, instanceID string) error {
-	_, iid, ctx, err := ic.prepare(ctx, instanceID)
+	p, iid, ctx, err := ic.prepare(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	inst, err := ic.current(ctx, iid)
+	inst, err := ic.current(ctx, p, iid)
 	if err != nil {
 		return err
 	}
@@ -259,7 +272,7 @@ func (ic *instances) Redeploy(ctx context.Context, instanceID string) error {
 		if stopErr := ic.stopForMove(ctx, iid); stopErr != nil {
 			slog.WarnContext(ctx, "platform cloud redeploy: the stop failed; starting anyway", "instance", instanceID, "error", stopErr)
 		}
-		if inst, err = ic.current(ctx, iid); err != nil {
+		if inst, err = ic.current(ctx, p, iid); err != nil {
 			return err
 		}
 	}
@@ -284,7 +297,7 @@ func (ic *instances) Move(ctx context.Context, instanceID string) error {
 	if err != nil {
 		return err
 	}
-	inst, err := ic.current(ctx, iid)
+	inst, err := ic.current(ctx, p, iid)
 	if err != nil {
 		return err
 	}
@@ -305,7 +318,7 @@ func (ic *instances) Move(ctx context.Context, instanceID string) error {
 	if stopErr := ic.stopForMove(ctx, iid); stopErr != nil {
 		slog.WarnContext(ctx, "platform cloud move: the stop failed; starting anyway", "instance", instanceID, "error", stopErr)
 	}
-	if inst, err = ic.current(ctx, iid); err != nil {
+	if inst, err = ic.current(ctx, p, iid); err != nil {
 		return err
 	}
 	if inst.State != cpprovider.StateStopped && inst.State != cpprovider.StateFailed {
@@ -321,7 +334,7 @@ func (ic *instances) Move(ctx context.Context, instanceID string) error {
 	}
 	back, cancel := fresh(ctx, startTimeout)
 	defer cancel()
-	if inst, err = ic.current(back, iid); err != nil {
+	if inst, err = ic.current(back, p, iid); err != nil {
 		return errors.Join(startErr, err)
 	}
 	if inst.State != cpprovider.StateStopped && inst.State != cpprovider.StateFailed {

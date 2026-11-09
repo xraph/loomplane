@@ -55,6 +55,8 @@ type fakeLifecycle struct {
 	liveStarts []bool
 	// resets records the cutoff of each reset the control asked for.
 	resets []time.Time
+	// hostStops records the instance state at each stop sent to the host.
+	hostStops []cpprovider.InstanceState
 }
 
 func (f *fakeLifecycle) Get(context.Context, id.ID) (*cpinstance.Instance, error) {
@@ -89,6 +91,12 @@ func (f *fakeLifecycle) Start(ctx context.Context, _ id.ID) error {
 func newTestInstances(room bool) (*instances, *fakeLifecycle) {
 	lc := &fakeLifecycle{state: cpprovider.StateRunning, updated: time.Now()}
 	ic := &instances{svc: &fakePlacements{room: room}, regions: noRegions{}, ctrl: lc}
+	ic.stopHost = func(context.Context, platformcloud.Placement) error {
+		lc.mu.Lock()
+		defer lc.mu.Unlock()
+		lc.hostStops = append(lc.hostStops, lc.state)
+		return nil
+	}
 	ic.resetStuck = func(_ context.Context, _ id.ID, state cpprovider.InstanceState, since time.Time) error {
 		lc.mu.Lock()
 		defer lc.mu.Unlock()
@@ -212,12 +220,12 @@ func TestStuckResetWaitsForTheGrace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ic, lc := newTestInstances(false)
 			lc.state, lc.updated = tc.state, time.Now().Add(-tc.timeout-stuckGrace/2)
-			inst, err := ic.current(t.Context(), testIID)
+			inst, err := ic.current(t.Context(), nil, testIID)
 			if err != nil || inst.State != tc.state || len(lc.resets) != 0 {
 				t.Fatalf("inside the grace: %v, state %s, resets %v", err, inst.State, lc.resets)
 			}
 			lc.updated = time.Now().Add(-tc.timeout - stuckGrace - time.Second)
-			inst, err = ic.current(t.Context(), testIID)
+			inst, err = ic.current(t.Context(), nil, testIID)
 			if err != nil || inst.State != cpprovider.StateFailed || len(lc.resets) != 1 {
 				t.Fatalf("past the grace: %v, state %s, resets %v", err, inst.State, lc.resets)
 			}
@@ -238,5 +246,10 @@ func TestRepairRestartsAnInstanceStuckStopping(t *testing.T) {
 	}
 	if len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
 		t.Fatalf("starts %v, state %s", lc.starts, lc.state)
+	}
+	// The host was told to stop while the instance still said stopping, that
+	// is before the reset.
+	if len(lc.hostStops) != 1 || lc.hostStops[0] != cpprovider.StateStopping {
+		t.Fatalf("host stops %v, want one before the reset", lc.hostStops)
 	}
 }
