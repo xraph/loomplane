@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -352,6 +353,8 @@ type gcFake struct {
 	revokeHints []string
 	// revokeStatus, when set, answers every revoke.
 	revokeStatus int
+	// revokeHold, when set, holds each revoke until it's closed.
+	revokeHold chan struct{}
 	// failList are the users whose project listing GitLab answers 401.
 	failList map[string]bool
 	forms    []url.Values
@@ -422,6 +425,12 @@ func (f *gcFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case r.Method == http.MethodPost && r.URL.Path == "/oauth/revoke":
 		_ = r.ParseForm()
+		f.mu.Lock()
+		hold := f.revokeHold
+		f.mu.Unlock()
+		if hold != nil {
+			<-hold
+		}
 		f.mu.Lock()
 		f.revoked = append(f.revoked, r.PostForm.Get("token"))
 		f.revokeHints = append(f.revokeHints, r.PostForm.Get("token_type_hint"))
@@ -569,6 +578,8 @@ func (f *gcFixture) connect(t *testing.T, p security.Principal, hostID, user str
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
+	// A reconnect's revoke of the grant it replaced runs on its own.
+	repositories.WaitGitLabBackground(f.svc)
 	return v
 }
 
@@ -1381,6 +1392,48 @@ func TestGitLabConnect_reconnectRevokesTheReplacedGrant(t *testing.T) {
 	}
 }
 
+func TestGitLabConnect_reconnectDoesntWaitForTheRevoke(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	first := f.connect(t, p, "instance:"+gcHost, "alice")
+	old := f.secrets.grant(t, first.ID)
+	hold := make(chan struct{})
+	f.fake.mu.Lock()
+	f.fake.revokeHold = hold
+	f.fake.mu.Unlock()
+	start, err := f.svc.StartSignIn(context.Background(), p, repositories.StartGitLabSignInInput{HostID: "instance:" + gcHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(start.AuthorizeURL)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.svc.Connect(context.Background(), p, repositories.ConnectGitLabInput{Code: "code-alice", State: u.Query().Get("state")})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		close(hold)
+		t.Fatal("Connect waited for GitLab to answer the revoke")
+	}
+	// The new grant is in use before GitLab has answered.
+	if g := f.secrets.grant(t, first.ID); g.RefreshToken == old.RefreshToken {
+		t.Fatal("the reconnect kept the old grant")
+	}
+	close(hold)
+	repositories.WaitGitLabBackground(f.svc)
+	f.fake.mu.Lock()
+	revoked := slices.Clone(f.fake.revoked)
+	f.fake.mu.Unlock()
+	if len(revoked) != 1 || revoked[0] != old.RefreshToken {
+		t.Fatalf("revoked %v, want the replaced refresh token", revoked)
+	}
+}
+
 func TestGitLabConnect_reconnectRevokeFailureIsAudited(t *testing.T) {
 	f := newGCFixture(t, allowAll, true)
 	p := gcPrincipal("org-a", "user-1")
@@ -1398,11 +1451,11 @@ func TestGitLabConnect_reconnectRevokeFailureIsAudited(t *testing.T) {
 		t.Fatal("the reconnect kept the old grant")
 	}
 	last := len(f.audit.details) - 1
-	if f.audit.actions[last] != "gitlab.connect" {
+	if f.audit.actions[last-1] != "gitlab.connect" || f.audit.actions[last] != "gitlab.revoke.failed" {
 		t.Fatalf("audit = %v", f.audit.actions)
 	}
-	if _, ok := f.audit.details[last]["revoke_error"]; !ok {
-		t.Fatalf("audit details = %v, want the revoke failure", f.audit.details[last])
+	if d := f.audit.details[last]; d["revoke_error"] == nil || d["connection_id"] != first.ID || d["username"] != "alice" {
+		t.Fatalf("audit details = %v, want the revoke failure for alice's connection", d)
 	}
 	raw, _ := json.Marshal(f.audit.details[last])
 	if strings.Contains(string(raw), old.RefreshToken) || strings.Contains(string(raw), old.AccessToken) {
@@ -1479,6 +1532,51 @@ func TestGitLabRemoveHost_vaultFailureKeepsTheHost(t *testing.T) {
 	}
 	if _, err := f.secrets.Reveal(context.Background(), "org-a", "host/"+h.ID); !errors.Is(err, repositories.ErrSecretNotFound) {
 		t.Fatalf("the host's secret after removing it: %v", err)
+	}
+}
+
+// flakyReveals fails every Reveal with err while it's set.
+type flakyReveals struct {
+	*memSecrets
+	err error
+}
+
+func (f *flakyReveals) Reveal(ctx context.Context, orgID, id string) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.memSecrets.Reveal(ctx, orgID, id)
+}
+
+func TestGitLabRemoveHost_unreadableSecretKeepsTheHost(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	h, err := f.svc.AddHost(context.Background(), p, repositories.AddGitLabHostInput{WebURL: "https://git.a.example", ClientID: "a-app", ClientSecret: gcOrgSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flaky := &flakyReveals{memSecrets: f.secrets, err: errors.New("vault timed out")}
+	svc := repositories.NewGitLabConnections(repositories.GitLabConnectionsConfig{
+		Store: f.store, Secrets: flaky, Authz: allowAll, Audit: f.audit,
+		Registry: &repositories.GitLabRegistry{Store: f.store, AllowOrganizationHosts: true},
+	})
+	if err := svc.RemoveHost(context.Background(), p, h.ID); err == nil || !strings.Contains(err.Error(), "vault timed out") {
+		t.Fatalf("RemoveHost with Reveal failing = %v, want its error", err)
+	}
+	// Nothing was deleted: not the row, and not the secret.
+	if hs, _ := f.store.ListHosts(context.Background(), "org-a"); len(hs) != 1 {
+		t.Fatalf("hosts = %v, want the host kept", hs)
+	}
+	if raw, err := f.secrets.Reveal(context.Background(), "org-a", "host/"+h.ID); err != nil || string(raw) != gcOrgSecret {
+		t.Fatalf("the host's secret = %q, %v; want it kept", raw, err)
+	}
+	// A host whose secret is already gone still removes.
+	flaky.err = nil
+	if err := f.secrets.Delete(context.Background(), "org-a", "host/"+h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RemoveHost(context.Background(), p, h.ID); err != nil {
+		t.Fatalf("RemoveHost with no secret = %v", err)
 	}
 }
 

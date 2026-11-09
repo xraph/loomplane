@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/oauth"
@@ -163,20 +164,32 @@ func (c *GitLabConnections) Connect(ctx context.Context, p security.Principal, i
 		return nil, err
 	}
 	details := map[string]any{"host": h.Host, "username": user.Username, "connection_id": id}
-	if hadReplaced && replaced.RefreshToken != grant.RefreshToken {
-		// Best-effort: the new sign-in works whether or not GitLab takes
-		// the revoke, and a caller giving up mustn't leave it unsent.
-		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitlabRenewTimeout)
-		if revokeErr := c.revokeGrant(revokeCtx, h, replaced); revokeErr != nil {
-			details["revoke_error"] = revokeErr.Error()
-		}
-		cancel()
-	}
 	c.record(ctx, AuditGitLabConnect, p, details)
+	if hadReplaced && replaced.RefreshToken != grant.RefreshToken {
+		c.revokeReplaced(ctx, p, h, replaced, details)
+	}
 	saved, err := c.ownConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
 	}
 	v := c.connectionView(saved)
 	return &v, nil
+}
+
+// revokeReplaced asks h to revoke a grant a new sign-in replaced, in the
+// background, so a GitLab slow to answer doesn't hold the sign-in page for
+// up to gitlabRenewTimeout. It's best-effort: the new sign-in works whether
+// or not GitLab takes the revoke, so a failure is audited, not returned.
+// The caller giving up doesn't stop it.
+func (c *GitLabConnections) revokeReplaced(ctx context.Context, p security.Principal, h GitLabHost, replaced oauth.Grant, details map[string]any) {
+	bg := context.WithoutCancel(ctx)
+	c.background.Go(func() {
+		revokeCtx, cancel := context.WithTimeout(bg, gitlabRenewTimeout)
+		defer cancel()
+		if err := c.revokeGrant(revokeCtx, h, replaced); err != nil {
+			failed := maps.Clone(details)
+			failed["revoke_error"] = err.Error()
+			c.record(bg, AuditGitLabRevokeFailed, p, failed)
+		}
+	})
 }
