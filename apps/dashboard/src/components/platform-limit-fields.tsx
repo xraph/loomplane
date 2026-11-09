@@ -10,6 +10,8 @@ export type LimitInputs = {
 
 export type LimitLabels = Record<keyof LimitInputs, string>
 
+const fieldOrder: (keyof LimitInputs)[] = ["vcpus", "mem", "vms", "builds"]
+
 const workspaceLabels: LimitLabels = {
   vcpus: "vCPUs",
   mem: "Memory (GiB)",
@@ -29,7 +31,7 @@ export function PlatformLimitFields({
 }) {
   return (
     <div className="grid grid-cols-2 gap-3">
-      {(Object.keys(labels) as (keyof LimitInputs)[]).map((key) => (
+      {fieldOrder.map((key) => (
         <NumberField
           key={key}
           label={labels[key]}
