@@ -8,12 +8,12 @@ import {
 import type { SettingsView } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import {
-  NumberField,
   countOf,
   errorOf,
   gibOf,
   mibOf,
 } from "@/components/platform-cloud-parts"
+import { PlatformLimitFields } from "@/components/platform-limit-fields"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -159,28 +159,16 @@ function SettingsForm({ view }: { view: SettingsView }) {
           </SelectContent>
         </Select>
       </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <NumberField
-          label="Limit vCPUs"
-          value={limits.vcpus}
-          onChange={(vcpus) => setLimits({ ...limits, vcpus })}
-        />
-        <NumberField
-          label="Limit memory (GiB)"
-          value={limits.mem}
-          onChange={(mem) => setLimits({ ...limits, mem })}
-        />
-        <NumberField
-          label="Limit VMs"
-          value={limits.vms}
-          onChange={(vms) => setLimits({ ...limits, vms })}
-        />
-        <NumberField
-          label="Limit builds at once"
-          value={limits.builds}
-          onChange={(builds) => setLimits({ ...limits, builds })}
-        />
-      </div>
+      <PlatformLimitFields
+        values={limits}
+        onChange={setLimits}
+        labels={{
+          vcpus: "Limit vCPUs",
+          mem: "Limit memory (GiB)",
+          vms: "Limit VMs",
+          builds: "Limit builds at once",
+        }}
+      />
       <Field>
         <FieldLabel>Apex domain</FieldLabel>
         <Input
