@@ -34,16 +34,21 @@ const nodeFeatures = [
   {
     what: "Deploy with Docker",
     how: "A node with docker allowed becomes a server target, like an SSH server",
-    soon: true,
+    soon: false,
   },
   {
     what: "Builds on a node",
     how: "Mark a node as a dedicated build worker when you join it",
-    soon: true,
+    soon: false,
   },
   {
     what: "Domains routed to a node",
-    how: "An edge relays traffic to nodes behind NAT, and TLS ends on the node",
+    how: "Direct to a node with a public address, confirmed on port 80 before DNS points at it",
+    soon: false,
+  },
+  {
+    what: "Relay for nodes behind NAT",
+    how: "An edge relays traffic to nodes with no public address, and TLS ends on the node",
     soon: true,
   },
   {
@@ -483,9 +488,10 @@ export default function CloudsPage() {
             What a node does today, and what&apos;s next.
           </h2>
           <p className="sec-lede">
-            Joining, trust and updates ship first, so the machines you join now
-            are ready when the workloads arrive. You won&apos;t have to answer
-            the allowlist again.
+            Joining, trust and updates came first. Now a node with{" "}
+            <code>docker</code> allowed takes deploys, builds and domains, and
+            you answered the allowlist only once. Relay and Kubernetes are still
+            to come.
           </p>
           <div className="table-wrap">
             <table>

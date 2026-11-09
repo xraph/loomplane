@@ -59,6 +59,7 @@ type gpuDocker struct {
 	t          *testing.T
 	mu         sync.Mutex
 	containers map[string]*gpuContainer
+	volumes    map[string]instanceClassVolume
 	creates    []map[string]any
 	lists      int
 }
@@ -84,6 +85,38 @@ func (d *gpuDocker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer d.mu.Unlock()
 	path := r.URL.Path
 	switch {
+	case r.Method == http.MethodPost && path == "/volumes/create":
+		var requested instanceClassVolume
+		if err := json.NewDecoder(r.Body).Decode(&requested); err != nil {
+			d.t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if requested.Name == "" || requested.Driver != "local" {
+			d.t.Error("invalid fixture local-volume request")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if d.volumes == nil {
+			d.volumes = map[string]instanceClassVolume{}
+		}
+		stored, exists := d.volumes[requested.Name]
+		if !exists {
+			requested.Scope = "local"
+			requested.CreatedAt = "2026-11-01T00:00:00Z"
+			requested.Labels = maps.Clone(requested.Labels)
+			d.volumes[requested.Name] = requested
+			stored = requested
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(stored)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/volumes/"):
+		volume, exists := d.volumes[strings.TrimPrefix(path, "/volumes/")]
+		if !exists {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(volume)
 	case r.Method == http.MethodGet && path == "/containers/json":
 		if r.URL.Query().Get("all") != "1" {
 			d.t.Errorf("container list must include stopped containers: %s", r.URL)
@@ -240,7 +273,7 @@ func TestApplyReusesItsOwnDevicesOnReplace(t *testing.T) {
 	oneL4 := provider.GPUInventory{Status: provider.GPUStatusReady, Devices: []provider.GPUDevice{{Index: 0, UUID: "GPU-a", Kind: "nvidia-l4", Product: "NVIDIA L4"}}}
 	setup := func(t *testing.T, iid id.ID) (*gpuDocker, map[string]string) {
 		labels := gpuLabels("new")
-		own := map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelRevision: "old", LabelGPUDevices: "GPU-a", owned.LabelGPU: labels[owned.LabelGPU]}
+		own := map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelConnection: "conn_fixture", owned.LabelRevision: "old", LabelGPUDevices: "GPU-a", owned.LabelGPU: labels[owned.LabelGPU]}
 		return &gpuDocker{t: t, containers: map[string]*gpuContainer{ContainerName(iid): {id: "old", image: "sha256:old", labels: own, running: true}}}, labels
 	}
 
@@ -268,6 +301,22 @@ func TestApplyReusesItsOwnDevicesOnReplace(t *testing.T) {
 	t.Run("own previous container", func(t *testing.T) {
 		iid := id.New(id.PrefixInstance)
 		d, labels := setup(t, iid)
+		// This rollout established its ordinary class while the old current
+		// container was present, before interruption left a previous name.
+		old := d.containers[ContainerName(iid)]
+		class, err := observedCheckpointClass(old.labels)
+		if err != nil || class != "ordinary" {
+			t.Fatal("previous fixture has ambiguous engine metadata")
+		}
+		if scopeErr := sameClassScope(iid, old.labels, labels); scopeErr != nil {
+			t.Fatal(scopeErr)
+		}
+		anchorLabels, err := classLabels(iid, old.labels, class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		anchorName := instanceClassName(iid)
+		d.volumes = map[string]instanceClassVolume{anchorName: {Name: anchorName, Driver: "local", Scope: "local", Labels: anchorLabels}}
 		// An interrupted rollover left the old container stopped under its backup name.
 		d.containers[ContainerName(iid)+"-previous-stopped"] = d.containers[ContainerName(iid)]
 		delete(d.containers, ContainerName(iid))

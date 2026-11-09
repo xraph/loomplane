@@ -59,6 +59,20 @@ func (d *Deps) findProject(ctx context.Context, call Call, ref string) (*project
 	return found, nil
 }
 
+// FindProject is findProject for operations served outside this package:
+// a project by ID, slug or name, as the principal sees it and within the
+// run's scope.
+func (d *Deps) FindProject(ctx context.Context, call Call, ref string) (*projects.Project, error) {
+	return d.findProject(ctx, call, ref)
+}
+
+// FindEnvironment is environment for operations served outside this
+// package: one of the project's environments by name, within the run's
+// scope.
+func (d *Deps) FindEnvironment(ctx context.Context, call Call, projectID, name string) (*projects.Environment, error) {
+	return d.environment(ctx, call, projectID, name)
+}
+
 // environment finds one of a project's environments by name.
 func (d *Deps) environment(ctx context.Context, call Call, projectID, name string) (*projects.Environment, error) {
 	envs, err := d.Projects.Environments(ctx, call.Principal, projectID)
@@ -105,7 +119,13 @@ type (
 		Permissions []string `json:"permissions"`
 	}
 	projectsOutput struct {
-		Projects []projects.Project `json:"projects"`
+		Projects []listedProject `json:"projects"`
+	}
+	// listedProject is a project with its page in the dashboard, relative
+	// to the workspace.
+	listedProject struct {
+		projects.Project
+		Path string `json:"path"`
 	}
 	statusOutput struct {
 		Environments []environmentStatus `json:"environments"`
@@ -141,10 +161,10 @@ func registerProjects(r *Registry, d *Deps) {
 		if err != nil {
 			return projectsOutput{}, err
 		}
-		out := projectsOutput{Projects: make([]projects.Project, 0, len(list))}
+		out := projectsOutput{Projects: make([]listedProject, 0, len(list))}
 		for _, p := range list {
 			if call.Scope.ProjectID == "" || p.ID == call.Scope.ProjectID {
-				out.Projects = append(out.Projects, *p)
+				out.Projects = append(out.Projects, listedProject{Project: *p, Path: projectPath(p.ID)})
 			}
 		}
 		return out, nil

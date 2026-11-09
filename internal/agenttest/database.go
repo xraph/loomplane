@@ -19,15 +19,31 @@ import (
 // DatabaseEnv names the Postgres FreshDatabase creates databases next to.
 const DatabaseEnv = "LOOMPLANE_TEST_DATABASE_URL"
 
+// PgvectorEnv names a Postgres with pgvector (make up-knowledge), which
+// FreshPgvectorDatabase creates databases next to.
+const PgvectorEnv = "LOOMPLANE_TEST_PGVECTOR_URL"
+
 // FreshDatabase creates an empty database next to the one in
 // LOOMPLANE_TEST_DATABASE_URL, runs every migration group Loomplane runs
 // (migrations.All) on it and returns its DSN. It's dropped when the test
 // ends. Without the variable the test is skipped.
 func FreshDatabase(t testing.TB) string {
 	t.Helper()
-	admin := os.Getenv(DatabaseEnv)
+	return freshOn(t, DatabaseEnv, "set "+DatabaseEnv+" to run the agent's database tests")
+}
+
+// FreshPgvectorDatabase is FreshDatabase on the Postgres with pgvector in
+// LOOMPLANE_TEST_PGVECTOR_URL. Without the variable the test is skipped.
+func FreshPgvectorDatabase(t testing.TB) string {
+	t.Helper()
+	return freshOn(t, PgvectorEnv, "set "+PgvectorEnv+" (make up-knowledge) to run the knowledge tests that need pgvector")
+}
+
+func freshOn(t testing.TB, env, skip string) string {
+	t.Helper()
+	admin := os.Getenv(env)
 	if admin == "" {
-		t.Skip("set " + DatabaseEnv + " to run the agent's database tests")
+		t.Skip(skip)
 	}
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, admin)

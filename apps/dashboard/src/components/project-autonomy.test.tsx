@@ -74,12 +74,30 @@ test("starts at ask first and needs approve permission", async () => {
     name: "Autonomous promotion",
   })
   expect(toggle).toHaveAttribute("aria-checked", "false")
-  // The promotion gate isn't in this version, so the card says the agent
-  // still asks before every production promotion.
+  // The gate ships: the card lists the seven gates and what always asks.
   expect(
-    screen.getByText(/still asks a person before every production promotion/)
+    screen.getByText("The agent promotes only when every gate holds")
   ).toBeInTheDocument()
-  expect(screen.queryByText(/promotes without asking/)).toBeNull()
+  for (const gate of [
+    "autonomous promotion",
+    "promotes what staging runs",
+    "clean plan",
+    "staging soak",
+    "safety net",
+    "nothing open on staging",
+    "budget",
+  ])
+    expect(screen.getByText(gate)).toBeInTheDocument()
+  expect(
+    screen.getByText(/Kubernetes, server, Vercel, DigitalOcean, Firecracker/)
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText(/a source's first production release/)
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText(/With it off, the agent still asks/)
+  ).toBeInTheDocument()
+  expect(screen.queryByText(/takes effect when the promotion/)).toBeNull()
   await waitFor(() => expect(dev.permissionReads()).toBe(1))
   expect(toggle).toHaveAttribute("aria-disabled", "true")
   await userEvent.click(toggle)
@@ -109,7 +127,7 @@ test("starts at ask first and needs approve permission", async () => {
   )
   await waitFor(() =>
     expect(toasts.success).toHaveBeenCalledWith(
-      "Saved. In this version the agent still asks before it promotes to production."
+      "Saved. The agent promotes a release someone asked for only when every gate holds."
     )
   )
 })

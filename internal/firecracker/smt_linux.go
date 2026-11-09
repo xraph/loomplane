@@ -11,7 +11,7 @@ import (
 // smt directory. A missing active file counts as off only when control says the
 // CPU does not support SMT; any other unreadable state is an error.
 func smtActive(root string) (bool, error) {
-	raw, err := os.ReadFile(filepath.Join(root, "active")) //nolint:gosec // Fixed kernel path, or a test directory.
+	raw, err := os.ReadFile(filepath.Join(root, "active"))
 	if err == nil {
 		switch strings.TrimSpace(string(raw)) {
 		case "0":
@@ -21,7 +21,7 @@ func smtActive(root string) (bool, error) {
 		}
 		return false, fmt.Errorf("%w: SMT state is unreadable", ErrUnavailable)
 	}
-	control, cerr := os.ReadFile(filepath.Join(root, "control")) //nolint:gosec // Fixed kernel path, or a test directory.
+	control, cerr := os.ReadFile(filepath.Join(root, "control"))
 	if cerr == nil && strings.TrimSpace(string(control)) == "notsupported" {
 		return false, nil
 	}

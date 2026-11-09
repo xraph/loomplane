@@ -102,7 +102,8 @@ func (s *Service) enqueueMembersIn(ctx context.Context, exec Execer, org, projec
 	return err
 }
 
-func (s *Service) registerEventTypes(ctx context.Context) error {
+// webhookDefinitions are every webhook event type Loomplane sends.
+func webhookDefinitions() []catalog.WebhookDefinition {
 	definitions := make([]catalog.WebhookDefinition, 0, 10+len(registrationStatuses))
 	for _, status := range []string{"succeeded", "failed"} {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"})
@@ -119,7 +120,13 @@ func (s *Service) registerEventTypes(ctx context.Context) error {
 		catalog.WebhookDefinition{Name: "model.budget_" + ModelBudgetCrossed, Description: "A GPU model passed its monthly budget", Group: "model", Version: "2026-11-26"},
 		catalog.WebhookDefinition{Name: KindAgentRequest + ".created", Description: "The agent needs a decision from you", Group: "agent", Version: "2026-11-28"},
 		catalog.WebhookDefinition{Name: KindAgentReport + ".created", Description: "The agent filed a report", Group: "agent", Version: "2026-11-28"},
-		catalog.WebhookDefinition{Name: KindAgentBudget + ".created", Description: "The agent's spend needs your attention", Group: "agent", Version: "2026-11-28"})
+		catalog.WebhookDefinition{Name: KindAgentBudget + ".created", Description: "The agent's spend needs your attention", Group: "agent", Version: "2026-11-28"},
+		catalog.WebhookDefinition{Name: KindAgentRelease + ".created", Description: "The agent prepared a production release", Group: "agent", Version: "2026-11-28"})
+	return definitions
+}
+
+func (s *Service) registerEventTypes(ctx context.Context) error {
+	definitions := webhookDefinitions()
 	for _, definition := range definitions {
 		if _, err := s.relay.RegisterEventType(ctx, definition); err != nil {
 			return err

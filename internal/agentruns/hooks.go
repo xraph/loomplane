@@ -27,7 +27,14 @@ var (
 	_ plugin.RunCompleted   = (*Hooks)(nil)
 	_ plugin.RunFailed      = (*Hooks)(nil)
 	_ plugin.RunTerminated  = (*Hooks)(nil)
+	_ plugin.ToolCompleted  = (*Hooks)(nil)
+	_ plugin.ToolFailed     = (*Hooks)(nil)
+	_ plugin.ToolDenied     = (*Hooks)(nil)
 )
+
+// SafetyStopped is a task's error when Loomplane's safety checks stopped
+// its run's answer.
+const SafetyStopped = "Loomplane's safety checks stopped this answer."
 
 // Name implements plugin.Extension.
 func (h *Hooks) Name() string { return "loomplane-agent-runs" }
@@ -91,6 +98,37 @@ func (h *Hooks) OnRunSuspended(ctx context.Context, _ id.AgentID, runID id.Agent
 	return nil
 }
 
+// OnToolCompleted records a tool call that succeeded. The result itself
+// isn't kept: it's the model's to read, and it can carry what the log
+// mustn't.
+func (h *Hooks) OnToolCompleted(_ context.Context, runID id.AgentRunID, tool, _ string, _ time.Duration) error {
+	if h.Service != nil {
+		h.Service.toolOutcome(runID.String(), toolOutcome{tool: tool, outcome: OutcomeOK})
+	}
+	return nil
+}
+
+// OnToolFailed records a tool call that failed, with its error cut to
+// 300 bytes.
+func (h *Hooks) OnToolFailed(_ context.Context, runID id.AgentRunID, tool string, err error) error {
+	why := ""
+	if err != nil {
+		why = cut(err.Error(), maxOutcomeMessage)
+	}
+	if h.Service != nil {
+		h.Service.toolOutcome(runID.String(), toolOutcome{tool: tool, outcome: OutcomeFailed, message: why})
+	}
+	return nil
+}
+
+// OnToolDenied records a tool call the authorizer refused, with why.
+func (h *Hooks) OnToolDenied(_ context.Context, runID id.AgentRunID, tool, reason string) error {
+	if h.Service != nil {
+		h.Service.toolOutcome(runID.String(), toolOutcome{tool: tool, outcome: OutcomeDenied, message: cut(reason, maxOutcomeMessage)})
+	}
+	return nil
+}
+
 // OnRunCompleted finishes the task.
 func (h *Hooks) OnRunCompleted(ctx context.Context, _ id.AgentID, runID id.AgentRunID, _ string, _ time.Duration) error {
 	h.finish(ctx, runID, StatusCompleted, "")
@@ -125,11 +163,11 @@ func (h *Hooks) finish(ctx context.Context, runID id.AgentRunID, status, hookErr
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	tokens, runError := -1, ""
+	tokens, runError, stop := -1, "", run.StopReason("")
 	if eng := s.engine(); eng != nil {
 		if r, err := eng.GetRun(ctx, runID); err == nil && r != nil {
-			tokens, runError = r.TokensUsed, r.Error
+			tokens, runError, stop = r.TokensUsed, r.Error, r.StopReason
 		}
 	}
-	s.finishRun(ctx, t, status, tokens, failure(status, runError, hookError))
+	s.finishRun(ctx, t, status, tokens, failure(status, stop, runError, hookError))
 }

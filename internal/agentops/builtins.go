@@ -14,6 +14,7 @@ func Builtins(r *Registry, d *Deps) {
 	r.SetAuditor(func() projects.Auditor { return d.Audit })
 	registerProjects(r, d)
 	registerRepositories(r, d)
+	registerRepositoryState(r, d)
 	registerVariables(r, d)
 	registerPlans(r, d)
 	registerDeployments(r, d)

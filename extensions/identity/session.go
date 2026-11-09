@@ -62,6 +62,12 @@ type PublicConfig struct {
 // gate platform-wide routes. An API key is never a platform user.
 type PlatformUser func(ctx context.Context) (userID string, ok bool)
 
+// PlatformOwner says whether the request is a session whose user holds the
+// platform-owner role, and who that is. An API key is never the owner. A
+// platform admin is a PlatformUser and not a PlatformOwner, so a route
+// gated on it is the owner's alone.
+type PlatformOwner func(ctx context.Context) (userID string, ok bool)
+
 // Features says which optional sections the server runs, so the dashboard
 // shows only those.
 type Features struct {
@@ -160,6 +166,21 @@ func (e *Extension) platformUser(ctx context.Context) (string, bool) {
 	return userID.String(), true
 }
 
+// platformOwner is the PlatformOwner other extensions use: platformUser
+// for the platform-owner role alone. A key has no session user, so it is
+// refused before any role is read.
+func (e *Extension) platformOwner(ctx context.Context) (string, bool) {
+	userID, ok := authmw.UserIDFrom(ctx)
+	if !ok {
+		return "", false
+	}
+	roles, ok := e.appRoles(ctx, userID.String())
+	if !ok || !platformadmin.IsOwner(roles, e.cfg.Identity.AppID) {
+		return "", false
+	}
+	return userID.String(), true
+}
+
 // cloudSignInOffer reports whether the instance still offers cloud sign-in
 // setup. A setting that can't be read counts as off, so a hiccup never
 // nags.
@@ -189,8 +210,12 @@ func (e *Extension) appRoles(ctx context.Context, userID string) (roles []*rbac.
 // apikeys so it can gate instance-wide node join tokens. A failure to read
 // roles says no.
 func (e *Extension) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
-	roles, ok := e.appRoles(ctx, userID)
-	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID), nil
+	staff, err := e.readStaff(ctx, userID)
+	if err != nil {
+		e.Logger().Error("read platform roles", forge.F("user_id", userID), forge.F("error", err.Error()))
+		return false, nil
+	}
+	return staff, nil
 }
 
 func (e *Extension) getSession(c forge.Context) error {

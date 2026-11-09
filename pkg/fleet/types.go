@@ -80,7 +80,12 @@ type CreateInstanceInput struct {
 }
 
 // Operation describes durable work; provider receipts remain internal.
-type Operation struct {
+type Operation = FleetOperation
+
+// FleetOperation has a distinct API schema name.
+//
+//nolint:revive // Keep the API schema name distinct; Go callers retain the short alias.
+type FleetOperation struct {
 	ID          string    `json:"id" forge:"id"`
 	InstanceID  string    `json:"instance_id"`
 	Kind        string    `json:"kind"`

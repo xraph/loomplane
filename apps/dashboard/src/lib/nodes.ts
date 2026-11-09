@@ -1,7 +1,7 @@
 // Nodes are machines that joined by running `loomctl node join` and dial out
 // to Loomplane. These helpers turn what the API reports into the words and
 // small shapes the Nodes pages show.
-import type { Node } from "@/client/forge/loomplane/types"
+import type { Connection, Node } from "@/client/forge/loomplane/types"
 
 const clock = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
@@ -149,4 +149,28 @@ export function roleNote(n: Node): string | undefined {
   }
   if (n.inventory?.os === "darwin") return "macOS, for development"
   return undefined
+}
+
+/**
+ * nodeIdOf is the node a server connection reaches its Docker through, or
+ * undefined for any other connection.
+ */
+export function nodeIdOf(c: Connection | undefined): string | undefined {
+  if (c?.method !== "node") return undefined
+  const id = c.details?.node_id ?? c.details?.nodeId
+  return typeof id === "string" && id ? id : undefined
+}
+
+/** ingressLine is how traffic reaches the node, in one sentence. */
+export function ingressLine(n: Node): string {
+  if (n.status === "pending") return "Not set until the node connects."
+  if (n.role === "edge") return "This node is an edge."
+  if (n.ingressMode !== "direct") return "None. Nothing is routed to this node."
+  if (!n.publicAddress) return "Direct. Waiting for a public address."
+  const at = n.publicAddressConfirmedAt
+    ? clockTime(n.publicAddressConfirmedAt)
+    : ""
+  return at
+    ? `Direct. ${n.publicAddress} answered on port 80 at ${at}.`
+    : `Direct. Waiting for ${n.publicAddress} to answer on port 80.`
 }

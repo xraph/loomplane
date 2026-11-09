@@ -26,9 +26,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/grove/drivers/pgdriver/pgmigrate"
 	"github.com/xraph/grove/migrate"
+	"github.com/xraph/weave/vectorstore/pgvector"
 )
 
 // Format names the backup format. Restore refuses any other.
@@ -42,6 +44,11 @@ type Manifest struct {
 	// Migrations are the schema the rows fit: group:version.
 	Migrations []string `json:"migrations"`
 	Tables     []Table  `json:"tables"`
+	// VectorDimensions is the size of the agent's knowledge vectors
+	// (weave_vectors.embedding), when the database had that table. A
+	// restore checks it against ai.knowledge.dimensions before it
+	// changes anything.
+	VectorDimensions int `json:"vector_dimensions,omitempty"`
 }
 
 // Table is one table in a backup.
@@ -154,6 +161,9 @@ func Backup(ctx context.Context, dsn, version string, w io.Writer) (*Manifest, e
 		return nil, err
 	}
 	m.Migrations = applied
+	if m.VectorDimensions, err = vectorDimensions(ctx, tx); err != nil {
+		return nil, err
+	}
 	names, err := tables(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("list the tables: %w", err)
@@ -206,6 +216,18 @@ func appliedIn(ctx context.Context, q interface {
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// vectorDimensions reads the size of weave_vectors' embedding column, or
+// 0 when the database has no such table.
+func vectorDimensions(ctx context.Context, tx pgx.Tx) (int, error) {
+	var size int
+	err := tx.QueryRow(ctx, `SELECT coalesce((SELECT atttypmod FROM pg_attribute
+		WHERE attrelid = to_regclass('public.weave_vectors') AND attname = 'embedding' AND NOT attisdropped), 0)`).Scan(&size)
+	if err != nil {
+		return 0, fmt.Errorf("read the knowledge vectors' size: %w", err)
+	}
+	return max(size, 0), nil
+}
+
 // ErrNotEmpty is a restore into a database a Loomplane has already run on.
 var ErrNotEmpty = errors.New("a Loomplane has already run on this database; restore into an empty one, or pass --force to replace what it has")
 
@@ -214,6 +236,22 @@ type RestoreOptions struct {
 	// Force replaces whatever the database has. Without it, only a
 	// database no Loomplane has migrated is restored into.
 	Force bool
+	// OnDemand are groups this Loomplane runs only when a feature is on:
+	// weave's pgvector group, when AI is on and knowledge is configured
+	// (migrations.OnDemand). A backup that applied one is restored with
+	// it, so the tables it made come back with their rows; one it didn't
+	// apply stays off, as it was.
+	OnDemand []*migrate.Group
+	// Optional are the on-demand migrations, as group:version, this
+	// Loomplane knows (migrations.OptionalVersions). A backup that applied
+	// one that no OnDemand group carries is refused with what to set,
+	// not as a newer Loomplane's.
+	Optional []string
+	// VectorDimensions is ai.knowledge.dimensions, the size OnDemand's
+	// pgvector group makes the vector table at. A backup that applied
+	// that group is refused, before anything changes, when its vectors
+	// are another size.
+	VectorDimensions int
 }
 
 // migrated reports whether any Loomplane has migrated the database.
@@ -233,23 +271,22 @@ func migrated(ctx context.Context, dsn string) (bool, error) {
 }
 
 // Restore loads a backup into the database: it migrates it to the
-// backup's schema with groups, which must be this Loomplane's, then
-// replaces every table's rows, in one transaction.
+// backup's schema with groups, which must be this Loomplane's, plus the
+// on-demand groups the backup applied, then replaces every table's rows,
+// in one transaction.
 func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Reader, opts RestoreOptions) (*Manifest, error) {
 	m, files, err := read(r)
 	if err != nil {
 		return nil, err
 	}
-	known := map[string]bool{}
-	for _, g := range groups {
-		for _, mg := range g.Migrations() {
-			known[mg.Group+":"+mg.Version] = true
-		}
+	groups, err = restoreGroups(m, groups, opts)
+	if err != nil {
+		return nil, err
 	}
-	for _, mg := range m.Migrations {
-		if !known[mg] {
-			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane doesn't; restore it with Loomplane %s or later", mg, m.Version)
-		}
+	// Migrate runs outside the row transaction, so anything that would
+	// fail the load has to be caught before it.
+	if cerr := checkVectors(ctx, dsn, m, opts); cerr != nil {
+		return nil, cerr
 	}
 	if !opts.Force {
 		used, uerr := migrated(ctx, dsn)
@@ -325,6 +362,75 @@ func Restore(ctx context.Context, dsn string, groups []*migrate.Group, r io.Read
 		return nil, fmt.Errorf("the backup is loaded, but bringing it up to this Loomplane's schema failed: %w", err)
 	}
 	return m, nil
+}
+
+// restoreGroups are the groups a restore of m runs: groups, and each of
+// opts.OnDemand the backup applied any of. Every migration the backup
+// applied must be in one of them.
+func restoreGroups(m *Manifest, groups []*migrate.Group, opts RestoreOptions) ([]*migrate.Group, error) {
+	applied := make(map[string]bool, len(m.Migrations))
+	for _, mg := range m.Migrations {
+		applied[mg] = true
+	}
+	known := map[string]bool{}
+	add := func(g *migrate.Group) (used bool) {
+		for _, mg := range g.Migrations() {
+			known[g.Name()+":"+mg.Version] = true
+			used = used || applied[g.Name()+":"+mg.Version]
+		}
+		return used
+	}
+	for _, g := range groups {
+		add(g)
+	}
+	run := slices.Clip(groups)
+	for _, g := range opts.OnDemand {
+		if add(g) {
+			run = append(run, g)
+		}
+	}
+	for _, mg := range m.Migrations {
+		switch {
+		case known[mg]:
+		case slices.Contains(opts.Optional, mg):
+			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane runs only when AI and the agent's knowledge are both on; set ai.enabled and ai.knowledge in config.yaml, with the ai.knowledge.dimensions the backed-up server ran with, and restore again", mg)
+		default:
+			return nil, fmt.Errorf("the backup's schema has migration %s, which this Loomplane doesn't; restore it with Loomplane %s or later", mg, m.Version)
+		}
+	}
+	return run, nil
+}
+
+// checkVectors refuses a backup with the agent's knowledge vectors that
+// the target can't take: one at another size than opts.VectorDimensions,
+// or a database that can't have pgvector. It changes nothing: the probe's
+// CREATE EXTENSION is rolled back. A backup that doesn't record its
+// vectors' size skips the size check.
+func checkVectors(ctx context.Context, dsn string, m *Manifest, opts RestoreOptions) error {
+	if !slices.ContainsFunc(m.Migrations, func(mg string) bool { return strings.HasPrefix(mg, pgvector.GroupName+":") }) {
+		return nil
+	}
+	if have := m.VectorDimensions; have > 0 && have != opts.VectorDimensions {
+		return fmt.Errorf("the backup's knowledge vectors have %d dimensions, and ai.knowledge.dimensions is %d; set ai.knowledge.dimensions to %d, with the embedding model the backed-up server ran with, and restore again", have, opts.VectorDimensions, have)
+	}
+	pg := pgdriver.New()
+	if err := pg.Open(ctx, dsn); err != nil {
+		return fmt.Errorf("connect to the database: %w", err)
+	}
+	db, err := grove.Open(pg)
+	if err != nil {
+		_ = pg.Close()
+		return fmt.Errorf("connect to the database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	ok, reason, err := pgvector.Available(ctx, db)
+	if err != nil {
+		return fmt.Errorf("check the database for pgvector: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("the backup has the agent's knowledge vectors, and this database can't have pgvector: %s; restore into a Postgres with pgvector 0.5.0 or later, or have a database owner run CREATE EXTENSION vector, and restore again", reason)
+	}
+	return nil
 }
 
 type restoreTrigger struct{ table, name, mode string }

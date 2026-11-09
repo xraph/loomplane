@@ -258,6 +258,43 @@ func (s *Service) Canary(ctx context.Context, p security.Principal, deploymentID
 	return report, nil
 }
 
+// lastCanaryStore finds the newest canary that ramped one action. The
+// Postgres store has it; a store without it makes LastCanary fail, never
+// answer "none".
+type lastCanaryStore interface {
+	LastCanary(ctx context.Context, orgID, projectID, environmentID, actionID string) (*Deployment, error)
+}
+
+// LastCanary returns the newest of an environment's deployments whose
+// canary ramped actionID, however many canaries of other services ran
+// since, with its current retry's verdicts; nil when no canary ever ramped
+// it.
+func (s *Service) LastCanary(ctx context.Context, p security.Principal, projectID, environmentID, actionID string) (*CanaryRun, error) {
+	cs, ok := s.store.(CanaryStore)
+	last, ok2 := s.store.(lastCanaryStore)
+	if !ok || !ok2 {
+		return nil, ErrNoCanaries
+	}
+	if actionID == "" {
+		return nil, errors.New("a canary is looked up by the action it ramped")
+	}
+	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
+		return nil, err
+	}
+	d, err := last.LastCanary(ctx, p.OrgID, projectID, environmentID, actionID)
+	if err != nil || d == nil {
+		return nil, err
+	}
+	all, err := cs.Verdicts(ctx, p.OrgID, d.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &CanaryRun{
+		DeploymentID: d.ID, PlanID: d.PlanID, Environment: d.Environment, Status: d.Status,
+		StartedAt: d.StartedAt, FinishedAt: d.FinishedAt, Canary: d.Canary, Verdicts: currentVerdicts(d, all),
+	}, nil
+}
+
 // RecentCanaries returns up to limit of an environment's deployments that
 // ran a canary, newest first, each with its canary and its current retry's
 // verdicts. A limit outside 1 to 50 is brought into it.

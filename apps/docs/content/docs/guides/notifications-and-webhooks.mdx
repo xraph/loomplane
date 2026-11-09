@@ -1,6 +1,6 @@
 ---
 title: Notifications and webhooks
-description: Get deployment results by email, and send signed webhooks to your own systems.
+description: Get deployment results and the agent's reports by email, and send signed webhooks to your own systems.
 ---
 
 Open **Notifications** to read deployment results, change your deployment email preference and, as an owner or admin, manage signed webhooks.
@@ -70,3 +70,29 @@ The signing secret appears once, after you create the endpoint or rotate its sec
 Relay owns HTTP retries and the delivery history. The page shows each attempt, its HTTP status and the next retry, and the public API doesn't keep response bodies. A receiver that returns 410 gets its endpoint disabled.
 
 Deployment payloads hold allowlisted IDs, status, attempt and an application link. They leave out build logs, variables and raw provider errors.
+
+## The agent's notices
+
+When the [built-in agent](/docs/agents/built-in-agent) is on, it sends four kinds of notice of its own. Each one lands in the inbox, goes by email and fires one webhook for the workspace, however many people it reaches.
+
+| Webhook type | When | Who gets it |
+|---|---|---|
+| `agent.request.created` | The agent needs a decision from someone | The people it asks. See [What needs a person](/docs/agents/what-needs-a-person#who-is-asked) |
+| `agent.report.created` | The agent opened a report, or one came back or happened again | The members of the project's responsible team (owners and admins when it has none), and the person who started the deployment it's about |
+| `agent.budget.created` | The agent stopped investigating because the month's AI budget is spent, and again when it starts | Owners and admins |
+| `agent.release.created` | A [release preparation](/docs/agents/release-preparation) ended: promoted by the agent, stale, stopped, blocked or failed | The person who asked, and the members of the project's responsible team (owners and admins when it has none) |
+
+A report or release notice reaches a person only while they have `deployment:read` on its project, and a budget notice only while they have `ai:manage`. The project's team counts only when the project names one. When it doesn't, owners and admins already have it. Repeats of one report send at most one notice an hour. [Watching and reports](/docs/agents/watching-and-reports#notices) has the whole story.
+
+The webhook's body is the notice: `project_id` (empty for a budget notice), `subject_id`, `title`, `body`, `path`, `url` and `need`, the permission a person needs to read it. A release notice's `metadata` carries `release_report_id`, `plan_id` and `state`. A report's `metadata` carries `report_id`, `signal`, `severity` and `environment`, and its title and body have already had the project's known secrets redacted and been through the agent's outbound scan.
+
+### Turn off the agent's email
+
+The agent's mail has a switch of its own, apart from deployment mail. Both are on until you change them, and each person sets their own:
+
+```bash
+curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"agent_email": false}' "$URL/api/v1/notifications/preferences"
+```
+
+The body changes only the fields it carries, so this leaves `deployment_email` as it was. `GET /api/v1/notifications/preferences` returns both. With `agent_email` off you still get the agent's notices in the inbox.

@@ -18,9 +18,9 @@ import (
 
 func TestRuntime_replacesContainerStoppedByInterruptedAttempt(t *testing.T) {
 	iid := id.New(id.PrefixInstance)
-	labels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelInstance: iid.String(), owned.LabelRevision: "new"}
+	labels := map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelInstance: iid.String(), owned.LabelRevision: "new"}
 	name := ContainerName(iid)
-	oldLabels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelInstance: iid.String(), owned.LabelRevision: "old"}
+	oldLabels := map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelInstance: iid.String(), owned.LabelRevision: "old"}
 	old := &containerInfo{ID: "old"}
 	old.Config.Image, old.Config.Labels = "sha256:old", oldLabels
 	old.State.Status = "exited"
@@ -69,6 +69,7 @@ func TestRuntime_replacesContainerStoppedByInterruptedAttempt(t *testing.T) {
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
 	})}}
 	runtime := &Runtime{Session: func(context.Context, map[string]string) (*Client, error) { return c, nil }}
+	seedOrdinaryClass(t, runtime, iid, labels)
 	result, err := runtime.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: "sha256:new"}, labels)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +92,7 @@ func TestRuntime_setRunningAcceptsOnlyDocumentedIdempotentResponses(t *testing.T
 		for _, status := range []int{http.StatusNoContent, http.StatusNotModified, http.StatusBadRequest, http.StatusNotFound, http.StatusInternalServerError} {
 			t.Run(action+"/"+http.StatusText(status), func(t *testing.T) {
 				iid := id.New(id.PrefixInstance)
-				labels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelInstance: iid.String()}
+				labels := map[string]string{owned.LabelConnection: "conn_fixture", owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelInstance: iid.String()}
 				body := &runtimeResponseBody{Reader: strings.NewReader(`{"message":"daemon failure"}`)}
 				c := &Client{HTTP: &http.Client{Transport: runtimeTransport(func(req *http.Request) (*http.Response, error) {
 					if req.Method == http.MethodGet && req.URL.Path == "/containers/"+ContainerName(iid)+"/json" {
@@ -106,6 +107,7 @@ func TestRuntime_setRunningAcceptsOnlyDocumentedIdempotentResponses(t *testing.T
 					return &http.Response{StatusCode: status, Body: body}, nil
 				})}}
 				runtime := &Runtime{Session: func(context.Context, map[string]string) (*Client, error) { return c, nil }}
+				seedOrdinaryClass(t, runtime, iid, labels)
 				err := runtime.SetRunning(t.Context(), iid, labels, running)
 				if status == http.StatusNoContent || status == http.StatusNotModified {
 					if err != nil {

@@ -17,4 +17,7 @@ type Store interface {
 	// otherwise. It leaves the budget, embeddings and Hugging Face columns
 	// alone. On success s holds the stored row.
 	Save(ctx context.Context, s *Settings, expectRevision int64) error
+	// ListEnabled returns the IDs of the workspaces whose agent is on,
+	// sorted.
+	ListEnabled(ctx context.Context) ([]string, error)
 }

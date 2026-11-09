@@ -1,13 +1,15 @@
 // The bar above every page of the dashboard: the shared top bar, with the
 // organization first in the breadcrumbs, what's in flight, search opening
-// the command menu, and the notification bell.
+// the command menu, the agent's panel, and the notification bell.
 import { KeyboardIcon } from "lucide-react"
 
 import { NotificationBell } from "@/components/notification-bell"
 import { EnvBadge, Thread } from "@/components/runs"
-import { useShell } from "@/components/shell"
+import { AgentOrb } from "@/components/assistant/agent-orb"
+import { useAgentDock, useShell } from "@/components/shell"
 import { TopBar } from "@/components/top-bar"
 import { Button } from "@/components/ui/button"
+import { Kbd } from "@/components/ui/kbd"
 import {
   Item,
   ItemDescription,
@@ -27,6 +29,7 @@ import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 import { elapsed, isLive, type Run } from "@/lib/runs"
 import { useNow, useRuns } from "@/lib/use-runs"
+import { cn } from "@/lib/utils"
 
 export type Crumb = {
   label: string
@@ -48,11 +51,13 @@ export type Crumb = {
     | "/webhooks"
     | "/domains"
     | "/ai/models"
+    | "/assistant"
     | "/nodes"
 }
 
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
   const { openCommand, openShortcuts } = useShell()
+  const dock = useAgentDock()
   const { session, organizations } = useOrganization()
   const org = organizations.find((o) => o.id === session.orgId)
   return (
@@ -65,7 +70,28 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
           link: c.link ?? (c.to ? <Link to={c.to} /> : undefined),
         })),
       ]}
-      before={<InFlight />}
+      before={
+        <>
+          <InFlight />
+          {/* The agent sits before the theme menu, beside the search. */}
+          {dock && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={dock.open}
+              onClick={dock.toggle}
+              className={cn(
+                "gap-1.5 text-muted-foreground",
+                dock.open && "bg-muted text-foreground"
+              )}
+            >
+              <AgentOrb size={16} state={dock.activity} />
+              <span className="hidden xl:inline">Ask the agent</span>
+              <Kbd className="hidden 2xl:inline-flex">⌘J</Kbd>
+            </Button>
+          )}
+        </>
+      }
       after={
         <>
           <NotificationBell />

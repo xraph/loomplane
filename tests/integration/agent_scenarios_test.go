@@ -40,16 +40,40 @@ import (
 // for a person, end to end.
 
 // lateInput is a tool call's input the test fills in once it knows it,
-// such as a plan's ID: the fake model reads it when it serves the turn.
+// such as a plan's ID: the fake model holds the turn until it is set, and
+// reads it when it serves the turn.
 type lateInput struct {
-	mu sync.Mutex
-	v  map[string]any
+	mu    sync.Mutex
+	v     map[string]any
+	ready chan struct{}
 }
+
+var _ agenttest.Pending = (*lateInput)(nil)
 
 func (l *lateInput) set(v map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.v = v
+	ch := l.readyLocked()
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+// Ready is closed once the input is set.
+func (l *lateInput) Ready() <-chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.readyLocked()
+}
+
+func (l *lateInput) readyLocked() chan struct{} {
+	if l.ready == nil {
+		l.ready = make(chan struct{})
+	}
+	return l.ready
 }
 
 func (l *lateInput) MarshalJSON() ([]byte, error) {
@@ -105,12 +129,46 @@ func startScenario(t *testing.T, fake *agenttest.FakeAnthropic, agentUSD string,
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close(context.Background()) })
+	// A run the safety checks stopped says only that, so a failed test logs
+	// what shield held back.
+	t.Cleanup(func() {
+		if t.Failed() {
+			logShieldHolds(t, db)
+		}
+	})
 	s := &scenario{agentOrg: a, fake: fake, host: host, db: db}
 	// People read who decided by name.
 	s.rename(a.userID(), "Ada")
 	a.budget(agentUSD)
 	s.on = a.enable(nil)
 	return s
+}
+
+// logShieldHolds logs every scan shield didn't allow: its direction and
+// decision, the findings (detector, span and score, never the text) and the
+// scan's source.
+func logShieldHolds(t *testing.T, db *pgx.Conn) {
+	t.Helper()
+	rows, err := db.Query(context.Background(), `SELECT direction, decision, findings::text, metadata->>'source' FROM shield_scans
+		WHERE decision <> 'allow' ORDER BY created_at`)
+	if err != nil {
+		t.Logf("read shield's scans: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var direction, decision, findings string
+		var source *string
+		if err = rows.Scan(&direction, &decision, &findings, &source); err != nil {
+			t.Logf("read shield's scans: %v", err)
+			return
+		}
+		from := ""
+		if source != nil {
+			from = *source
+		}
+		t.Logf("shield %s %s scan of %s: %s", decision, direction, from, findings)
+	}
 }
 
 // rename gives a person the first name others read them by.
@@ -205,7 +263,11 @@ func (s *scenario) pendingRequest(t *testing.T, taskID string, kind agentrequest
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no pending %s request for %s: %+v", kind, taskID, list.Requests)
+			task, err := inject[*agentruns.Service](t, s.container()).Get(context.Background(), s.ownerPrincipal(), taskID)
+			if err != nil {
+				t.Fatalf("no pending %s request for %s, and the task can't be read: %v", kind, taskID, err)
+			}
+			t.Fatalf("no pending %s request for %s, which is %s (%q): %+v", kind, taskID, task.Status, task.Error, list.Requests)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -589,10 +651,11 @@ func TestScenario_budgetExhaustedRefusesNewWork(t *testing.T) {
 	}
 }
 
-// With autonomy on and the gate saying no (the ask-first gate), a
-// production release Ada planned waits for a person, and the request says
-// why. Ada approves it in the API, and the resumed call reports her
-// approval.
+// With autonomy on and the gate saying no, a production release Ada
+// planned waits for a person, and the request says why: release
+// preparation's gate is installed, and no readiness report covers a plan
+// approved from a chat, so gate 2 fails. Ada approves it in the API, and
+// the resumed call reports her approval.
 func TestScenario_promotionAsksWhenTheGateSaysNo(t *testing.T) {
 	approve := &lateInput{}
 	fake := agenttest.Anthropic(t,
@@ -614,7 +677,7 @@ func TestScenario_promotionAsksWhenTheGateSaysNo(t *testing.T) {
 
 	runs, task := s.chat(t, ada, "Promote the release.")
 	req := s.pendingRequest(t, task.ID, agentrequests.KindApprovePlan)
-	if !strings.Contains(req.Question, "isn't available yet") {
+	if !strings.HasPrefix(req.Question, "Needs a person: gate 2 (") || !strings.Contains(req.Question, "no release readiness report covers this plan") {
 		t.Fatalf("request %+v", req)
 	}
 	if p := s.planStatus(t, plan.ID); p.Status != "ready" {

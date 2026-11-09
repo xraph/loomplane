@@ -30,9 +30,10 @@ import (
 const pebbleImage = "ghcr.io/letsencrypt/pebble:latest@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199"
 const challengeImage = "ghcr.io/letsencrypt/pebble-challtestsrv:latest@sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b"
 
-func ingressHTTPS(c *Client, address, hostname string, roots *x509.CertPool) *http.Client {
+// ingressHTTPS reaches the proxy's HTTPS port from the host c reaches.
+func ingressHTTPS(c *Client, hostname string, roots *x509.CertPool) *http.Client {
 	return &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: hostname, MinVersion: tls.VersionTLS12}, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return c.ssh.DialContext(ctx, "tcp", address)
+		return c.access.DialContext(ctx, "tcp", "127.0.0.1:443")
 	}}}
 }
 
@@ -50,7 +51,10 @@ func TestIngressTwoProxyACMEHandoff(t *testing.T) {
 	source, sourceHost := ingressFixture(t)
 	destination, destHost := ingressFixture(t)
 	network := fmt.Sprintf("lp-acme-%d", time.Now().UnixNano())
-	ingressDocker(t, "network", "create", network)
+	// Docker gives a fixed --ip only on a network with its own subnet, and
+	// one from its default pools can clash with a network inside a fixture
+	// host, which then can't join it.
+	ingressDocker(t, "network", "create", "--subnet", "10.213.1.0/24", network)
 	t.Cleanup(func() {
 		_ = exec.CommandContext(context.Background(), "docker", "network", "disconnect", "-f", network, sourceHost).Run()
 		_ = exec.CommandContext(context.Background(), "docker", "network", "disconnect", "-f", network, destHost).Run()
@@ -96,7 +100,10 @@ func TestIngressTwoProxyACMEHandoff(t *testing.T) {
 		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-fv", name).Run() })
 	}
 	ingressDocker(t, "run", "-d", "--name", dnsName, "--network", network, "--ip", dnsIP, challengeImage, "-defaultIPv6", "", "-defaultIPv4", sourceIP)
-	ingressDocker(t, "run", "-d", "--name", pebbleName, "--network", network, "--ip", pebbleIP, "-e", "PEBBLE_VA_NOSLEEP=1", "-v", dir+":/fixture:ro", pebbleImage, "-config", "/fixture/config.json", "-dnsserver", dnsIP+":8053")
+	// Pebble's management port is published to this host, which reads the
+	// issued root from it directly: Pebble is no Loomplane container, so a
+	// node's dial guard would rightly refuse it.
+	ingressDocker(t, "run", "-d", "--name", pebbleName, "--network", network, "--ip", pebbleIP, "-p", "127.0.0.1::15000", "-e", "PEBBLE_VA_NOSLEEP=1", "-v", dir+":/fixture:ro", pebbleImage, "-config", "/fixture/config.json", "-dnsserver", dnsIP+":8053")
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, name := range []string{pebbleName, dnsName} {
@@ -148,7 +155,10 @@ func TestIngressTwoProxyACMEHandoff(t *testing.T) {
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(root)
-	ca := ingressHTTPS(source, pebbleIP+":15000", pebbleIP, roots)
+	mgmt := ingressDocker(t, "port", pebbleName, "15000/tcp")
+	ca := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: pebbleIP, MinVersion: tls.VersionTLS12}, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", mgmt)
+	}}}
 	var issuedRoot []byte
 	for range 30 {
 		resp, getErr := ingressGet(t, ca, "https://"+pebbleIP+":15000/roots/0")
@@ -165,7 +175,7 @@ func TestIngressTwoProxyACMEHandoff(t *testing.T) {
 	if !issued.AppendCertsFromPEM(issuedRoot) {
 		t.Fatalf("issued root unavailable: %s", issuedRoot)
 	}
-	client := ingressHTTPS(destination, "127.0.0.1:443", hostname, issued)
+	client := ingressHTTPS(destination, hostname, issued)
 	var serial string
 	for range 100 {
 		resp, getErr := ingressGet(t, client, "https://"+hostname+"/")
@@ -190,7 +200,7 @@ func TestIngressTwoProxyACMEHandoff(t *testing.T) {
 	}
 	// Restart the owned proxy. Caddy resumes its accepted config and stored key.
 	ingressDocker(t, "exec", destHost, "docker", "restart", IngressName("org", "destination"))
-	client = ingressHTTPS(destination, "127.0.0.1:443", hostname, issued)
+	client = ingressHTTPS(destination, hostname, issued)
 	var resp *http.Response
 	for range 30 {
 		resp, err = ingressGet(t, client, "https://"+hostname+"/")
@@ -233,7 +243,8 @@ func TestWildcardCertificateThroughDNSChallenge(t *testing.T) {
 	}
 	image := testIngressImage(t, "")
 	network := fmt.Sprintf("lp-dns01-%d", time.Now().UnixNano())
-	ingressDocker(t, "network", "create", network)
+	// A subnet of its own, so Docker accepts the fixed addresses below.
+	ingressDocker(t, "network", "create", "--subnet", "10.213.2.0/24", network)
 	cfName, pebbleName, proxyName := network+"-cf", network+"-ca", network+"-proxy"
 	t.Cleanup(func() {
 		for _, name := range []string{proxyName, pebbleName, cfName} {

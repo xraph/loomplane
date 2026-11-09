@@ -45,44 +45,9 @@ func (s *Service) PreviewCloudRevert(ctx context.Context, p security.Principal, 
 	if err != nil {
 		return nil, err
 	}
-	var in cloudprofiles.ChangeInput
-	switch {
-	case sync.Default:
-		// Compensate only while the Cloud still holds exactly the default this sync set.
-		current, e := st.GetProfile(ctx, p.OrgID, "", sync.CloudID)
-		if e != nil {
-			return nil, e
-		}
-		if !sameDefault(current.DefaultPlacement, sync.AfterDefault) {
-			return nil, cloudprofiles.ErrConflict
-		}
-		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, Default: true, Revision: current.Revision}
-		if before := sync.BeforeDefault; before != nil {
-			in.Provider, in.ConnectionID, in.Region = before.Provider, before.ConnectionID, before.Region
-		}
-	case sync.TargetID != "":
-		current, e := st.GetTarget(ctx, p.OrgID, "", sync.CloudID, sync.TargetID)
-		if e != nil {
-			return nil, e
-		}
-		if sync.After == nil || current.Provider != sync.After.Provider || current.ConnectionID != sync.After.ConnectionID || current.Region != sync.After.Region || current.Runtime != sync.After.Runtime || current.PoolID != sync.After.PoolID || current.Revision != sync.After.Revision {
-			return nil, cloudprofiles.ErrConflict
-		}
-		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, TargetID: sync.TargetID, Revision: current.Revision, Provider: sync.Before.Provider, ConnectionID: sync.Before.ConnectionID, Region: sync.Before.Region, Runtime: sync.Before.Runtime, PoolID: sync.Before.PoolID}
-	default:
-		env := previous.Input.EnvironmentID
-		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env)
-		if e != nil {
-			return nil, e
-		}
-		if generation != previous.Input.Revision+1 {
-			return nil, cloudprofiles.ErrConflict
-		}
-		in.EnvironmentID = env
-		in.Revision = generation
-		if previous.BeforeAssignment != nil {
-			in.CloudID = previous.BeforeAssignment.CloudID
-		}
+	in, err := revertChangeInput(ctx, st, p, project, sync, previous)
+	if err != nil {
+		return nil, err
 	}
 	return s.previewCloudChange(ctx, p, project, in, id)
 }
@@ -238,4 +203,54 @@ func cloudCompensationDescription(actions []Action) (mode, message string) {
 	default:
 		return "", ""
 	}
+}
+
+// revertChangeInput is the change that undoes sync: the default it
+// replaced, the target as it was, or the environment's move back to the
+// Cloud it left, which may be Loomplane Cloud.
+func revertChangeInput(ctx context.Context, st cloudprofiles.SyncStore, p security.Principal, project string, sync *cloudprofiles.Sync, previous *cloudprofiles.Preview) (cloudprofiles.ChangeInput, error) {
+	var in cloudprofiles.ChangeInput
+	switch {
+	case sync.Default:
+		// Compensate only while the Cloud still holds exactly the default this sync set.
+		current, e := st.GetProfile(ctx, p.OrgID, "", sync.CloudID)
+		if e != nil {
+			return in, e
+		}
+		if !sameDefault(current.DefaultPlacement, sync.AfterDefault) {
+			return in, cloudprofiles.ErrConflict
+		}
+		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, Default: true, Revision: current.Revision}
+		if before := sync.BeforeDefault; before != nil {
+			in.Provider, in.ConnectionID, in.Region = before.Provider, before.ConnectionID, before.Region
+		}
+	case sync.TargetID != "" && (sync.Before != nil && sync.Before.Runtime == platformRuntime || sync.After != nil && sync.After.Runtime == platformRuntime):
+		// Loomplane Cloud's targets are never changed through a sync, so
+		// there is no such change to undo.
+		return in, cloudprofiles.ErrPlatformOwned
+	case sync.TargetID != "":
+		current, e := st.GetTarget(ctx, p.OrgID, "", sync.CloudID, sync.TargetID)
+		if e != nil {
+			return in, e
+		}
+		if sync.After == nil || current.Provider != sync.After.Provider || current.ConnectionID != sync.After.ConnectionID || current.Region != sync.After.Region || current.Runtime != sync.After.Runtime || current.PoolID != sync.After.PoolID || current.Revision != sync.After.Revision {
+			return in, cloudprofiles.ErrConflict
+		}
+		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, TargetID: sync.TargetID, Revision: current.Revision, Provider: sync.Before.Provider, ConnectionID: sync.Before.ConnectionID, Region: sync.Before.Region, Runtime: sync.Before.Runtime, PoolID: sync.Before.PoolID}
+	default:
+		env := previous.Input.EnvironmentID
+		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env)
+		if e != nil {
+			return in, e
+		}
+		if generation != previous.Input.Revision+1 {
+			return in, cloudprofiles.ErrConflict
+		}
+		in.EnvironmentID = env
+		in.Revision = generation
+		if previous.BeforeAssignment != nil {
+			in.CloudID = previous.BeforeAssignment.CloudID
+		}
+	}
+	return in, nil
 }

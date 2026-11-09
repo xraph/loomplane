@@ -41,6 +41,7 @@ All paths are under `/api/v1`.
 | `/members`, `/invitations` | People |
 | `/teams` | Teams |
 | `/notifications` | Notifications, preferences, retry and signed webhooks |
+| `/agent/reports`, `/agent/watcher` | The built-in agent's reports and its watcher, while the agent is on. See [Agent reports](#agent-reports) |
 | `/service-backups`, `/service-restores`, `/service-backup-retirements` | Database recovery |
 | `/native-recovery-sources`, `/native-recovery-copies` | Native cloud snapshots and copies |
 | `/infrastructure` | Ctrl Plane's status, and the server enrollment callback |
@@ -92,6 +93,39 @@ curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json"
 | `GET /plans/{id}/soak` | How long a promotion's source has run exactly the commits the plan moves, and whether healthily. A plan that isn't a promotion returns 422 | `deployment:read` |
 
 A rollback that can't go ahead returns 409 (a deployment is running, there's no earlier release, or the canary already dealt with the release) or 422 (the newest deployment isn't the one you named, or the current release is a rollback), with a message that says what to do. A promotion from an environment that runs nothing returns 409, and one that holds back a repository never deployed to the target returns 412. Watch updates arrive on the realtime stream as `release_watch.updated` events. See [Promotion and rollback](/docs/concepts/promotion-and-rollback).
+
+## Agent reports
+
+These routes exist only on a server with `ai.enabled` on, and answer 409 while the agent is off in your workspace. [Watching and reports](/docs/agents/watching-and-reports) explains what a report is.
+
+| Route | What it does | Needs |
+|---|---|---|
+| `GET /agent/reports` | Lists reports, newest first, as `{"reports": [...]}`. Takes `status` (`open` by default, `resolved`, `closed` or `all`), `project_id` and `limit` (1 to 100, 50 by default). You only get the reports of projects whose deployments you can read | `agent:use`, and `deployment:read` on each project |
+| `GET /agent/reports/{id}` | One report: its facts, evidence, findings, investigation and issue | `agent:use`, and `deployment:read` on its project |
+| `POST /agent/reports/{id}/close` | Closes an open report. The body is optional: `{"reason": "..."}`, at most 500 characters. If the report has a GitHub issue, Loomplane comments there and closes it | `deployment:create` on its project |
+| `GET /agent/watcher` | Whether the watcher is paused, why (`budget`) and since when, when it last ran, and `issues`: whether the server has a GitHub App, and for each installation whether it has accepted the Issues permission, with its `manage_url` | `agent:use` |
+
+A report in a project you can't read returns 404, as one that doesn't exist does. Closing a report that isn't open returns 409, and a bad `status`, `limit` or reason returns 422.
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"reason":"Fixed in the config"}' "$URL/api/v1/agent/reports/$REPORT/close"
+```
+
+A report's `issue.state` is `none`, `open`, `closed`, `waiting_for_permission` (its installation hasn't accepted Issues), `no_repository` (no repository Loomplane can open an issue on) or `failed` (the last attempt failed and is retried). `issue.error` says why when there's no issue or the last attempt failed. Its `investigation` is `none`, `queued`, `running`, `done`, `failed` or `skipped`, and `investigation_note` says why when one failed or was skipped. Changes arrive on the realtime stream as `agent_report.updated` events.
+
+## Release reports
+
+These routes exist only on a server with `ai.enabled` on. [Release preparation](/docs/agents/release-preparation) explains what a report holds and what the gates are.
+
+| Route | What it does | Needs |
+|---|---|---|
+| `POST /projects/{id}/release-reports` | Starts a release preparation and returns 202 with the report. The body is optional: `{"from", "to", "scope", "replace"}`. `from` and `to` are environment names and default to the project's only staging and production ones. `scope` is a list of source aliases. `replace` supersedes a production plan someone else has open | `agent:use` and `deployment:create` on the project |
+| `GET /projects/{id}/release-reports` | Lists the project's reports, newest first, as `{"reports": [...]}`. Takes `limit`, 1 to 50, 20 by default | `deployment:read` |
+| `GET /release-reports/{id}` | One report: state, gates, evidence, concerns, and the plan and request it's about | `deployment:read` on its project |
+| `POST /release-reports/{id}/cancel` | Stops a preparation that's still going | The person who asked, while they hold `agent:use`, or `deployment:approve` |
+
+Every route needs a person acting as themselves, which includes an API key made by one. A report in another workspace returns 404. A request with a plan already open on production, a preparation already running there, or a report that has finished returns 409 with the reason. A project without a staging or production environment, or with more than one and no `from` or `to`, returns 422. Changes arrive on the realtime stream as `release_report.updated` and `release_report.deleted` events, which leave out the evidence and the concerns. Read the report again for those.
 
 ## Live events
 

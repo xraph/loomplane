@@ -1,16 +1,24 @@
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
+import { messageOf, statusOf } from "@/client/errors"
 import {
   useBindingsList,
   useEnvironmentsCreate,
   useEnvironmentsDelete,
   useEnvironmentsList,
+  useProviderEnvironmentsList,
+  useProviderEnvironmentsRetry,
   useVariablesResolve,
 } from "@/client/forge/loomplane/hooks"
-import type { Environment, Project } from "@/client/forge/loomplane/types"
+import type {
+  Binding,
+  Environment,
+  Project,
+  ProviderEnvironment,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { aliasOf } from "@/components/binding-alias"
 import { providerName } from "@/components/cloud-detail/clusters"
 import {
   ActionsCell,
@@ -30,6 +38,7 @@ import { QueryError } from "@/components/query-error"
 import { StatusPill, toneOf } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -188,6 +197,7 @@ export function Environments({
   retry,
   mayManage,
   mayDeploy,
+  mayClouds = false,
   runs = [],
   onOpen,
 }: {
@@ -198,12 +208,23 @@ export function Environments({
   retry: () => Promise<unknown>
   mayManage: boolean
   mayDeploy: boolean
+  /** Whether the row menu offers the environment's Cloud. */
+  mayClouds?: boolean
   /** The project's runs, newest first. */
   runs?: Run[]
   /** Opens another tab of the project page on one environment. */
-  onOpen: (tab: "deployments" | "variables", environment: string) => void
+  onOpen: (
+    tab: "deployments" | "variables" | "cloud",
+    environment: string
+  ) => void
 }) {
   const now = useNow(30_000)
+  const providerEnvironments = useQuery(useProviderEnvironmentsList, {
+    path: { id: project.id },
+  })
+  const fallbacks = (
+    providerEnvironments.data?.providerEnvironments ?? []
+  ).filter((p) => p.mode === "fallback")
   const [deleting, setDeleting] = useState<Environment | null>(null)
   const list = environments ?? []
   return (
@@ -248,6 +269,8 @@ export function Environments({
               now={now}
               mayManage={mayManage}
               mayDeploy={mayDeploy}
+              mayClouds={mayClouds}
+              fallbacks={fallbacks.filter((f) => f.environmentId === env.id)}
               last={list.length === 1}
               onOpen={onOpen}
               onDelete={() => setDeleting(env)}
@@ -271,6 +294,8 @@ function EnvironmentRow({
   now,
   mayManage,
   mayDeploy,
+  mayClouds,
+  fallbacks,
   last,
   onOpen,
   onDelete,
@@ -282,11 +307,19 @@ function EnvironmentRow({
   now: number
   mayManage: boolean
   mayDeploy: boolean
+  mayClouds: boolean
+  /** This environment's provider environments that fell back. */
+  fallbacks: ProviderEnvironment[]
   last: boolean
-  onOpen: (tab: "deployments" | "variables", environment: string) => void
+  onOpen: (
+    tab: "deployments" | "variables" | "cloud",
+    environment: string
+  ) => void
   onDelete: () => void
 }) {
   const people = usePeople()
+  const moveToNative = useMutation(useProviderEnvironmentsRetry)
+  const invalidate = useInvalidate()
   const bindings = useQuery(useBindingsList, {
     path: { id: project.id },
     query: { environment: environment.name },
@@ -318,6 +351,35 @@ function EnvironmentRow({
     return <StatusPill tone="quiet">Not deployed</StatusPill>
   })()
 
+  const vercelServices = services.filter((b) => b.provider === "vercel").length
+  const vercelFallbacks = fallbacks.filter(
+    (f) => f.provider === "vercel"
+  ).length
+  const separate =
+    fallbacks.length === 0
+      ? ""
+      : vercelFallbacks < fallbacks.length || vercelFallbacks >= vercelServices
+        ? "Separate project"
+        : `${vercelFallbacks} of ${vercelServices} services on separate projects`
+  const fallbackReasons = fallbacks
+    .map((f) => `${f.scope || f.provider}: ${f.reason}`)
+    .join("\n")
+  const retryable = fallbacks.some((f) => !f.permanent)
+
+  const tryNativeAgain = async () => {
+    try {
+      await moveToNative.mutateAsync({
+        path: { id: project.id, environmentId: environment.id },
+      })
+      // Try again cleared the fallbacks, so the row's note goes.
+      invalidate(useProviderEnvironmentsList)
+      toast.success(`A plan to move ${environment.name} is ready to review`)
+      onOpen("deployments", environment.name)
+    } catch (err) {
+      toast.error(messageOf(err, "The environment wasn't planned again."))
+    }
+  }
+
   const lastDeploy = waiting.length
     ? `${waiting.length} ${waiting.length === 1 ? "plan" : "plans"} to approve · planned ${relative(Date.parse(waiting[0].createdAt), now)}`
     : latest
@@ -327,7 +389,17 @@ function EnvironmentRow({
   return (
     <CloudTableRow>
       <NameCell name={environment.name} meta={kind} mono />
-      <Cell>{state}</Cell>
+      <Cell className="flex-wrap gap-x-2">
+        {state}
+        {separate && (
+          <span
+            title={fallbackReasons}
+            className="truncate text-xs text-muted-foreground"
+          >
+            {separate}
+          </span>
+        )}
+      </Cell>
       <Cell className="truncate text-muted-foreground">
         {latest ? (
           <Link
@@ -351,7 +423,21 @@ function EnvironmentRow({
               : ""}
       </Cell>
       <ActionsCell>
-        {waiting[0] ? (
+        {environment.instanceId ? (
+          <Button
+            size="sm"
+            variant="outline"
+            nativeButton={false}
+            render={
+              <Link
+                to="/projects/$id/fleet/instances/$instanceId"
+                params={{ id: project.id, instanceId: environment.instanceId }}
+              />
+            }
+          >
+            View instance
+          </Button>
+        ) : waiting[0] ? (
           <Button
             size="sm"
             nativeButton={false}
@@ -388,12 +474,24 @@ function EnvironmentRow({
           >
             Where services run
           </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => onOpen("variables", environment.name)}
-          >
-            Variables
-          </DropdownMenuItem>
-          {mayManage && (
+          {!environment.instanceId && (
+            <DropdownMenuItem
+              onClick={() => onOpen("variables", environment.name)}
+            >
+              Variables
+            </DropdownMenuItem>
+          )}
+          {mayClouds && !environment.instanceId && (
+            <DropdownMenuItem onClick={() => onOpen("cloud", environment.name)}>
+              Cloud
+            </DropdownMenuItem>
+          )}
+          {mayDeploy && retryable && (
+            <DropdownMenuItem onClick={() => void tryNativeAgain()}>
+              Try native environment again
+            </DropdownMenuItem>
+          )}
+          {mayManage && !environment.instanceId && (
             <>
               <DropdownMenuSeparator />
               {/* A project needs at least one environment. */}
@@ -414,6 +512,24 @@ function EnvironmentRow({
   )
 }
 
+/** Whether Loomplane deletes what a binding runs with its environment. */
+function removedWithEnvironment(b: Binding): boolean {
+  if (b.provider !== "vercel" && b.provider !== "render") return false
+  // A database gateway has its own clean up, and an existing resource
+  // isn't Loomplane's to delete.
+  const config: unknown = b.config
+  return !(
+    typeof config === "object" &&
+    config !== null &&
+    ("database_gateway" in config || "existing_resource" in config)
+  )
+}
+
+/**
+ * DeleteEnvironment asks before an environment goes. It stays mounted
+ * once opened, on the last environment asked about, so it can close
+ * without losing its contents.
+ */
 function DeleteEnvironment({
   project,
   environment,
@@ -423,20 +539,79 @@ function DeleteEnvironment({
   environment: Environment | null
   onDone: () => void
 }) {
+  const [shown, setShown] = useState(environment)
+  if (environment && environment.id !== shown?.id) setShown(environment)
+  if (!shown) return null
+  return (
+    <ConfirmDeleteEnvironment
+      project={project}
+      environment={shown}
+      open={!!environment}
+      onDone={onDone}
+    />
+  )
+}
+
+function ConfirmDeleteEnvironment({
+  project,
+  environment,
+  open,
+  onDone,
+}: {
+  project: Project
+  environment: Environment
+  open: boolean
+  onDone: () => void
+}) {
   const remove = useMutation(useEnvironmentsDelete)
   const invalidate = useInvalidate()
+  const bindings = useQuery(useBindingsList, {
+    path: { id: project.id },
+    query: { environment: environment.name },
+  })
+  const removable = (bindings.data?.bindings ?? []).filter(
+    removedWithEnvironment
+  )
+  // Deleting removes what Loomplane made on Vercel and Render, so it waits
+  // until the list of what can be kept has loaded.
+  const unread = !bindings.data
+  const [keep, setKeep] = useState<string[]>([])
+  const [error, setError] = useState("")
+  const kept = (id: string) => keep.includes(id)
+  const toggle = (id: string, on: boolean) =>
+    setKeep((ids) => (on ? [...ids, id] : ids.filter((k) => k !== id)))
+  const databases = removable.filter((b) => b.subject === "resource")
+
+  const close = () => {
+    setKeep([])
+    setError("")
+    onDone()
+  }
 
   const confirm = async () => {
-    if (!environment) return
+    setError("")
     try {
       await remove.mutateAsync({
         path: { id: project.id, envId: environment.id },
+        query: {
+          keep: keep.filter((id) => removable.some((b) => b.id === id)),
+        },
       })
       toast.success(`Deleted ${environment.name}`)
+      close()
     } catch (err) {
-      toast.error(messageOf(err, "The environment wasn't deleted."))
+      if (statusOf(err) !== 0) {
+        // Refused, such as when only an admin may delete what it runs:
+        // the dialog stays, so you can keep more or ask an admin.
+        setError(messageOf(err, "The environment wasn't deleted."))
+        return
+      }
+      // No answer: the server may still be deleting what it runs.
+      toast.error(
+        `Deleting ${environment.name} may still be in progress. Refresh in a moment to see whether it went.`
+      )
+      close()
     } finally {
-      onDone()
       invalidate(useEnvironmentsList)
       invalidate(useVariablesResolve)
     }
@@ -444,16 +619,85 @@ function DeleteEnvironment({
 
   return (
     <CloudConfirm
-      open={!!environment}
-      onOpenChange={(open) => !open && onDone()}
-      title={`Delete ${environment?.name ?? "environment"}?`}
+      open={open}
+      onOpenChange={(next) => !next && close()}
+      title={`Delete ${environment.name}?`}
       confirmLabel="Delete environment"
       pending={remove.isPending}
+      disabled={unread}
       onConfirm={() => void confirm()}
+      error={
+        error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )
+      }
+      details={
+        bindings.status === "error" && unread ? (
+          <QueryError
+            error={bindings.error}
+            fallback={`What runs in ${environment.name} couldn't be read, so it can't be deleted yet.`}
+            retry={bindings.refetch}
+          />
+        ) : (
+          removable.length > 0 && (
+            <div className="grid gap-2.5 text-[12.5px]">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-medium">Keep running</span>
+                {databases.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setKeep((ids) => [
+                        ...new Set([...ids, ...databases.map((b) => b.id)]),
+                      ])
+                    }
+                  >
+                    Keep all databases
+                  </Button>
+                )}
+              </div>
+              <ul className="grid max-h-56 gap-1.5 overflow-y-auto rounded-lg border p-2.5">
+                {removable.map((b) => (
+                  <li key={b.id} className="flex min-w-0 items-center gap-2.5">
+                    <Checkbox
+                      aria-label={`Keep ${aliasOf(b)}`}
+                      checked={kept(b.id)}
+                      onCheckedChange={(on) => toggle(b.id, on)}
+                    />
+                    <span className="truncate">{aliasOf(b)}</span>
+                    {b.alias && (
+                      <span className="truncate font-mono text-muted-foreground">
+                        {b.name}
+                      </span>
+                    )}
+                    <span className="ml-auto shrink-0 text-muted-foreground">
+                      {providerName(b.provider)}{" "}
+                      {b.subject === "resource" ? "database" : "service"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <Alert variant="destructive">
+                <AlertDescription>
+                  Unticked databases are deleted with their data. Kept resources
+                  keep running and are listed as left behind.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )
+        )
+      }
     >
       The variables set on it for {project.name} go with it, secrets included.
-      Workspace-wide variables for {environment?.name} stay, for other projects.
-      What runs there keeps running until you remove it in its account.
+      Workspace-wide variables for {environment.name} stay, for other projects.
+      {unread
+        ? ""
+        : removable.length > 0
+          ? " What Loomplane made for it on Vercel and Render is deleted too, unless you keep it below. Anything else that runs there keeps running until you remove it in its account."
+          : " What runs there keeps running until you remove it in its account."}
     </CloudConfirm>
   )
 }

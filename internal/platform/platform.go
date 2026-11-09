@@ -18,6 +18,7 @@ import (
 	"os"
 	"time"
 
+	witnessforge "github.com/hallproof/witness/forge"
 	cpext "github.com/xraph/ctrlplane/extension"
 	drt "github.com/xraph/dispatch/durable/runtime"
 	dispatchext "github.com/xraph/dispatch/extension"
@@ -30,6 +31,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/extensions/agentwatch"
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/extensions/aiagent"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
@@ -38,14 +40,17 @@ import (
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	federationext "github.com/xraph/loomplane/extensions/federation"
+	fleetext "github.com/xraph/loomplane/extensions/fleets"
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
 	nodesext "github.com/xraph/loomplane/extensions/nodes"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	octopusext "github.com/xraph/loomplane/extensions/octopus"
 	planningext "github.com/xraph/loomplane/extensions/planning"
+	platformcloudext "github.com/xraph/loomplane/extensions/platformcloud"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
+	releaseprepext "github.com/xraph/loomplane/extensions/releaseprep"
 	"github.com/xraph/loomplane/extensions/web"
 	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
@@ -67,9 +72,10 @@ const (
 )
 
 // New builds the app. It does no I/O: Forge registers and starts the
-// extensions when the app starts.
-func New(cfg config.Config) (forge.App, error) {
-	app := forge.New(
+// extensions when the app starts. opts go after Loomplane's own, so a test
+// can swap one, such as the logger.
+func New(cfg config.Config, opts ...forge.AppOption) (forge.App, error) {
+	app := forge.New(append([]forge.AppOption{
 		forge.WithAppName("loomplane"),
 		forge.WithAppVersion(buildinfo.Version),
 		forge.WithAppEnvironment(cfg.Environment),
@@ -78,7 +84,7 @@ func New(cfg config.Config) (forge.App, error) {
 		forge.WithEnvPrefix(forgeEnvPrefix),
 		forge.WithCentralMigrations(),
 		forge.WithAppRouterOptions(forge.WithOpenAPI(openAPI(cfg)), forge.WithAsyncAPI(forge.AsyncAPIConfig{Title: "Loomplane realtime", Version: buildinfo.Version, SpecEnabled: true, UIEnabled: cfg.IsDevelopment()})),
-	)
+	}, opts...)...)
 	for _, ext := range Extensions(cfg) {
 		if err := app.RegisterExtension(ext); err != nil {
 			return nil, fmt.Errorf("register %s: %w", ext.Name(), err)
@@ -170,12 +176,14 @@ func Extensions(cfg config.Config) []forge.Extension {
 		projectsext.New(cfg, jobs.Engine),
 		discoveryext.New(cfg, jobs.Engine),
 		environmentsext.New(cfg),
-		connectionsext.New(cfg, plugs),
-		cloudinfraext.New(cfg, deployments),
+		fleetext.New(cfg),
+		connectionsext.New(cfg, plugs, nodes.Hub()),
+		cloudinfraext.New(cfg, deployments, nodes.Hub()),
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
-		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
+		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs, nodes.Hub()),
 		octopusext.New(cfg, jobs.Engine),
+		platformcloudext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		nodes,
@@ -188,7 +196,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// section, which provides the agent's settings.
 		agent := aiagent.New(cfg, jobs.Engine)
 		exts = append(exts, agent.LibraryExtensions()...)
-		exts = append(exts, agent)
+		// The watcher comes after the agent, whose reports, runs and binder
+		// it works through, and so does release preparation, which also
+		// installs the promotion gate in the agent's authorizer.
+		exts = append(exts, agent, agentwatch.New(cfg, jobs.Engine), releaseprepext.New(cfg, jobs.Engine))
 	} else {
 		// What AI scheduled while it was on stays in the database and keeps
 		// firing; this gives those jobs handlers that do nothing, and adds
@@ -199,8 +210,16 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// after the sections it builds on and before the console, which depends
 	// on every extension before it.
 	exts = append(exts, editionExtensions(cfg, jobs.Engine)...)
+	// Hallproof's witness, only with hallproof.endpoint set. It finds each
+	// library once every extension has started, so its place only matters
+	// for the console, which depends on it like on every other.
+	if cfg.Hallproof.Enabled() {
+		exts = append(exts, witnessforge.New(witnessforge.WithConfig(witnessConfig(cfg))))
+	}
 	exts = append(exts, console(exts))
-	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/"))
+	site := web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/node/", "/.well-known/", "/catalog-admin/").
+		WithAndroidApp(cfg.Mobile.AndroidPackage, cfg.Mobile.AndroidCertFingerprints)
+	return append(exts, site)
 }
 
 // queues are the Dispatch queues this process works: the default and

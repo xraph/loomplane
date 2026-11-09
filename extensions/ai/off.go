@@ -9,7 +9,10 @@ import (
 	"github.com/xraph/dispatch/job"
 	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/agentwatch"
+	"github.com/xraph/loomplane/internal/releaseprep"
 )
 
 // OffName is the name of the extension the platform registers when AI is
@@ -76,4 +79,34 @@ func RegisterOffJobs(eng *engine.Engine) {
 	engine.Register(eng, job.NewDefinition(agentruns.JobSweep, func(context.Context, struct{}) error {
 		return nil
 	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// Knowledge's recovery, scheduled while AI and knowledge were on.
+	engine.Register(eng, job.NewDefinition(agentknowledge.JobRecover, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// The backfill of past reports into knowledge, scheduled while AI and
+	// knowledge were on.
+	engine.Register(eng, job.NewDefinition(agentknowledge.JobBackfillReports, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// The watcher's tick, scheduled while AI was on.
+	engine.Register(eng, job.NewDefinition(agentwatch.JobTick, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// A pass or a delivery the watcher queued just before AI went off: they
+	// run on the default queue too, and do nothing.
+	engine.Register(eng, job.NewDefinition(agentwatch.JobOrg, func(context.Context, agentwatch.OrgPayload) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	engine.Register(eng, job.NewDefinition(agentwatch.JobDeliver, func(context.Context, agentwatch.DeliverPayload) error {
+		return nil
+	}, job.WithQueue(agentruns.SweepQueue), job.WithMaxRetries(0)))
+	// Release preparation's settle, scheduled while AI was on, and a
+	// preparation queued just before AI went off: they do nothing. A
+	// report left planning or reviewing is settled when AI is on again.
+	engine.Register(eng, job.NewDefinition(releaseprep.JobSettle, func(context.Context, struct{}) error {
+		return nil
+	}, job.WithQueue(releaseprep.JobQueue), job.WithMaxRetries(0)))
+	engine.Register(eng, job.NewDefinition(releaseprep.JobPrepare, func(context.Context, releaseprep.JobPayload) error {
+		return nil
+	}, job.WithQueue(releaseprep.JobQueue), job.WithMaxRetries(0)))
 }

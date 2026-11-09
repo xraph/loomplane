@@ -169,7 +169,11 @@ func reservationHash(in fleet.CreateInstanceInput) (string, error) {
 
 // ReserveInstance reserves identity and quota only. It performs no cloud work.
 // Callers must validate release and operation authority before scheduling it.
-func (s *PgStore) ReserveInstance(ctx context.Context, scope FleetScope, in fleet.CreateInstanceInput) (result *fleet.OperationResult, err error) {
+func (s *PgStore) ReserveInstance(ctx context.Context, scope FleetScope, in fleet.CreateInstanceInput) (*fleet.OperationResult, error) {
+	return s.reserveInstance(ctx, scope, in, nil)
+}
+
+func (s *PgStore) reserveInstance(ctx context.Context, scope FleetScope, in fleet.CreateInstanceInput, afterReserve func(driver.Tx, *fleet.OperationResult, bool) error) (result *fleet.OperationResult, err error) {
 	hash, err := reservationHash(in)
 	if err != nil {
 		return nil, err
@@ -192,6 +196,11 @@ func (s *PgStore) ReserveInstance(ctx context.Context, scope FleetScope, in flee
 		return nil, err
 	}
 	if replay != nil {
+		if afterReserve != nil {
+			if checkErr := afterReserve(tx, replay, false); checkErr != nil {
+				return nil, checkErr
+			}
+		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, commitErr
 		}
@@ -230,10 +239,16 @@ func (s *PgStore) ReserveInstance(ctx context.Context, scope FleetScope, in flee
 	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_operations(id,org_id,fleet_id,instance_id,kind,status,idempotency_key,request_hash,generation,created_at) VALUES($1,$2,$3,$4,'create',$5,$6,$7,1,$8)`, op.ID, scope.OrgID, scope.FleetID, i.ID, op.Status, in.IdempotencyKey, hash, now); err != nil {
 		return nil, storeError(err)
 	}
+	result = &fleet.OperationResult{Instance: i, Operation: op}
+	if afterReserve != nil {
+		if checkErr := afterReserve(tx, result, true); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("reserve instance: %w", err)
 	}
-	return &fleet.OperationResult{Instance: i, Operation: op}, nil
+	return result, nil
 }
 
 func reservationReplay(ctx context.Context, tx driver.Tx, scope FleetScope, key, hash string) (*fleet.OperationResult, error) {

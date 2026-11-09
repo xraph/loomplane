@@ -12,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/approvaladmission"
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -20,8 +21,10 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -110,6 +113,10 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	gate                metering.Gate
+	approvalAdmitter    approvaladmission.Admitter
+	approvalVerifier    approvaladmission.Verification
+	approvalAppID       string
 	memberPrerequisites *MemberPrerequisiteService
 	instanceRuntime     InstanceRuntimeQualifier
 	instances           InstanceVerifier
@@ -146,10 +153,15 @@ type Service struct {
 	dialer            TargetDialer
 	features          map[string]bool
 	inputs            CatalogInputMap
+	platform          platformPlacer
+	nativeFallbacks   NativeFallbacks
 }
 
 // Deps are what a Service needs.
 type Deps struct {
+	ApprovalAdmitter  approvaladmission.Admitter
+	ApprovalVerifier  approvaladmission.Verification
+	ApprovalAppID     string
 	InstanceRuntime   InstanceRuntimeQualifier
 	Instances         InstanceVerifier
 	CapacityTemplates CapacityTemplateValidator
@@ -202,6 +214,19 @@ type Deps struct {
 	// CatalogInputs digest what kinds render from outside the manifest,
 	// by kind. The map may gain entries after NewService, during Register.
 	CatalogInputs CatalogInputMap
+	// Platform previews room on Loomplane Cloud for services planned onto
+	// its targets. Nil means this instance has no Loomplane Cloud, so a
+	// plan that names one of its targets is refused.
+	Platform platformPlacer
+	// Gate refuses an approval the workspace may not run yet. Nil means
+	// metering.AllowAll.
+	Gate metering.Gate
+	// NativeFallbacks reads the provider environment records, so a Vercel
+	// service on a project of its own with no fallback record is planned as
+	// a move into its shared project, and Render resources standing alone
+	// with no record at all as an update that moves them into the
+	// environment's Render environment. Nil plans no such move.
+	NativeFallbacks NativeFallbacks
 }
 
 // NewService returns a Service.
@@ -215,7 +240,12 @@ func NewService(d Deps) *Service {
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	return &Service{instanceRuntime: d.InstanceRuntime,
+	gate := d.Gate
+	if gate == nil {
+		gate = metering.AllowAll
+	}
+	return &Service{gate: gate, instanceRuntime: d.InstanceRuntime,
+		approvalAdmitter: d.ApprovalAdmitter, approvalVerifier: d.ApprovalVerifier, approvalAppID: d.ApprovalAppID,
 		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
@@ -223,7 +253,7 @@ func NewService(d Deps) *Service {
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, existingResources: d.ExistingResources, dialer: d.Dialer,
-		features: d.Features, inputs: d.CatalogInputs,
+		features: d.Features, inputs: d.CatalogInputs, platform: d.Platform, nativeFallbacks: d.NativeFallbacks,
 	}
 }
 
@@ -602,6 +632,13 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
 			return nil, checkErr
 		}
+		// Teardowns run nothing, so a workspace without a card can still
+		// remove what it has.
+		if !plan.TeardownOnly() {
+			if gateErr := s.gate.CanRun(ctx, plan.OrgID, metering.KindDeploy, false); gateErr != nil {
+				return nil, gateErr
+			}
+		}
 	}
 	reqID, err := typeid.Generate("dec")
 	if err != nil {
@@ -610,6 +647,18 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	dec := orchestration.Decision{Actor: &p, Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
 	if !approve {
 		dec.Revision = plan.Revision
+	}
+	if approve && len(plan.PlacementGroups) > 0 {
+		request, admitErr := groupApprovalRequest(plan, p, reqID.String(), dec.Note)
+		if admitErr != nil || s.approvalAdmitter == nil {
+			return nil, ErrUnavailable
+		}
+		envelope, admitErr := s.approvalAdmitter.AdmitPlanApproval(ctx, request)
+		if admitErr != nil {
+			return nil, ErrUnavailable
+		}
+		dec.RequestID = reqID.String()
+		dec.GroupAdmission = string(envelope)
 	}
 	err = s.workflow.Decide(ctx, plan.ID, reqID.String(), dec)
 	if errors.Is(err, orchestration.ErrNotRunning) {
@@ -637,14 +686,22 @@ func (s *Service) Bindings(ctx context.Context, p security.Principal, projectID,
 	if err := s.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
 		return nil, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+	project, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(environment))
 	if err != nil {
 		return nil, err
 	}
-	return s.store.ListBindings(ctx, p.OrgID, env.ID)
+	bindings, err := s.store.ListBindings(ctx, p.OrgID, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range bindings {
+		b.SuggestedAlias = SuggestAlias(project.Slug, env.Name, b.Subject, b.Name)
+	}
+	return bindings, nil
 }
 
 // Deployed returns what's deployed of each of a project's live
@@ -826,10 +883,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		} else {
 			pools, poolErr = s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
 		}
+		var platform map[string]*platformcloud.Ref
+		if poolErr == nil {
+			platform, poolErr = s.resolvePlatform(ctx, plan, resolutionManifest, assignment, needs.Held)
+		}
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, platform, needs.Held, intents)
 		}
 	}
 	for name, selection := range locationSelections {
@@ -892,6 +953,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		if len(locationSelections) > 0 {
 			moves, moveProblems = appliedPoolMoves(bindings, assignment, options, s.providers, placements, routes, locationSelections)
 		}
+		native, nativeErr := nativeMoves(ctx, s.nativeFallbacks, plan.OrgID, plan.EnvironmentID, bindings)
+		if nativeErr != nil {
+			return nil, "", nativeErr
+		}
+		renderNative, renderErr := renderMoves(ctx, s.nativeFallbacks, plan.OrgID, plan.EnvironmentID, bindings)
+		if renderErr != nil {
+			return nil, "", renderErr
+		}
 		result = Compute(Input{
 			appliedMoves: moves, appliedMoveProblems: moveProblems,
 			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
@@ -903,6 +972,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Connections: options, Chosen: chosen, Held: held, Excluded: excluded, Only: loaded.only,
 			Kinds: s.kinds, Endpoints: endpointChecks,
 			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
+			NativeMoves: native, RenderMoves: renderNative,
 		})
 	}
 	if resolutionErr == nil && len(locationSelections) == 0 && poolRelocation(bindings, placements) {
@@ -1223,6 +1293,11 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	if plan.Status != StatusReady {
 		return plan.Status, nil
 	}
+	// Fleet decisions require the operation's typed authority and transaction.
+	// A generic Dispatch decision cannot approve or reject managed work.
+	if plan.Kind == KindInstance || plan.ManagedInstanceID != "" {
+		return "", security.ErrForbidden
+	}
 	// Loomplane automation decides only the rollbacks it started.
 	if systemDecision(d) && !automaticRollback(plan) {
 		return "", security.ErrForbidden
@@ -1235,6 +1310,11 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// The API checks this before it signals, so this is a decision on
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
+	}
+	if len(plan.PlacementGroups) > 0 {
+		if verifyErr := s.verifyGroupApproval(plan, d); verifyErr != nil {
+			return "", verifyErr
+		}
 	}
 	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
 		return "", checkErr
@@ -1266,6 +1346,10 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 			return "", security.ErrForbidden
 		}
 		ctx = security.WithPrincipal(ctx, *d.Actor)
+	}
+	if len(plan.PlacementGroups) > 0 {
+		// Source provenance alone cannot install or bypass group acceptance.
+		return "", ErrUnavailable
 	}
 	return s.settleAs(ctx, plan, StatusApproved, d.By, d.Note, now)
 }

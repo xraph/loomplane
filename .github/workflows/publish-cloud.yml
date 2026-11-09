@@ -7,8 +7,12 @@ name: Publish (Cloud)
 # environment a required reviewer and every run waits for approval.
 #
 # The image goes to ghcr.io/xraph/loomplane-cloud, which must already exist and
-# be private. Create it once by hand (see the PR notes). Pushing :latest on
-# every run means re-publishing an older version moves latest back to it.
+# be private. Create it once by hand (see the PR notes).
+#
+# It builds the version's tag, wherever you run it from, so the image always
+# matches the release it's named after. :latest moves only when the version is
+# the newest stable tag: a release candidate, or an older version published
+# again, leaves it where it is.
 #
 # Stripe keys are runtime secrets of the Cloud deployment. They are never
 # build inputs, so this workflow never sees them.
@@ -17,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to build and tag, e.g. v1.2.3.
+        description: Release tag to build, e.g. v1.2.3 or v1.3.0-rc.1. It must already exist.
         required: true
         type: string
 
@@ -38,7 +42,46 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Check the version
+        id: version
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v${VERSION#v}
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$tag isn't vMAJOR.MINOR.PATCH with an optional -prerelease suffix."
+            exit 1
+          fi
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+            echo "::error::$tag doesn't exist. Cut the release first, then publish its Cloud image."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.version.outputs.tag }}
+          # Every tag, to tell whether this one is the newest stable release.
+          fetch-depth: 0
+      - name: Work out the image tags
+        id: tags
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          newest=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          {
+            echo "list<<EOF"
+            echo "${IMAGE}:${TAG}"
+            if [ "$TAG" = "$newest" ]; then echo "${IMAGE}:latest"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$TAG" = "$newest" ]; then
+            echo "Publishing $TAG and moving latest to it." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Publishing $TAG. latest stays on ${newest:-nothing yet}." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Require a private package before pushing
         env:
           # A classic personal access token with read:packages, stored as a
@@ -70,11 +113,9 @@ jobs:
           context: .
           file: deployments/docker/Dockerfile
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ inputs.version }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ steps.tags.outputs.list }}
           build-args: |
-            VERSION=${{ inputs.version }}
+            VERSION=${{ steps.version.outputs.tag }}
             GO_TAGS=cloud
             LOOMPLANE_EDITION=cloud
           cache-from: type=gha,scope=cloud

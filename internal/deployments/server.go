@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/infrastructure"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -44,12 +46,20 @@ const labelRegistry = "loomplane.registry"
 const labelRegistrySettings = "loomplane.registry.settings"
 const labelImage = owned.LabelImage
 
+// labelPlatformRegistry marks a service whose image Loomplane Cloud built,
+// pulled from the platform registry rather than a workspace connection.
+const labelPlatformRegistry = "loomplane.registry.platform"
+
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
 	ExistingResources    planning.ExistingProjectResourceResolver
 	RouteGuard           RuntimeRemovalGuard
 	FirecrackerAuthority fc.Issuer
+
+	// Gate refuses a customer build the workspace may not run yet. Nil
+	// means metering.AllowAll.
+	Gate metering.Gate
 
 	Cloud       string
 	Ctrl        CtrlPlane
@@ -61,8 +71,12 @@ type OwnedTarget struct {
 	// serializes it within this process only.
 	GPULocks    server.GPULocks
 	Controllers ControllerReceipts
-	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
-	Backend     func(string, string) owned.Backend
+	// NodeStreams reach joined nodes, for server connections that are a
+	// node's. Nil reaches only SSH servers.
+	NodeStreams server.NodeStreams
+	// ServerConnect replaces server.Connect, for tests. Nil is server.Connect.
+	ServerConnect func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error)
+	Backend       func(string, string) owned.Backend
 
 	// Kinds is the catalog composed resources' components are checked
 	// against. Nil is recipes.Default().
@@ -98,9 +112,19 @@ type OwnedTarget struct {
 	// endpointDial dials from a target for an endpoint check. Nil is
 	// TargetDial.
 	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+	// reconnect is how long a deploy waits for an offline node. The zero
+	// value is nodeReconnectWindow; tests shorten it.
+	reconnect nodeReconnect
 	// componentDial reaches a component's port for its composition's
 	// hooks. Nil is ComponentTransport.
 	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
+	// providerKey, when set, is the one Ctrl Plane provider key this
+	// target registers, whatever the connection: a Loomplane Cloud region's.
+	providerKey string
+	// platformRegistry is the Loomplane Cloud registry an image built there
+	// is pulled from, in the workspace's own repository. Nil refuses such
+	// an image.
+	platformRegistry func(ctx context.Context, orgID string) (*registry.Config, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
@@ -144,24 +168,26 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		if err != nil {
 			return nil, err
 		}
-		cfg, err := server.ParseConfig(raw, c.Details)
+		client, node, err := serverClientFor(ctx, c, raw, e.NodeStreams, e.ServerConnect, e.reconnect)
 		if err != nil {
 			return nil, err
 		}
-		recorded := cfg.RecordedDetails(c.Details)
-		dial := e.ServerDial
-		if dial == nil {
-			dial = server.Dial
-		}
-		client, err := dial(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
+		recorded := client.Config.RecordedDetails(c.Details)
+		client.RequestsGPUs = labels[owned.LabelGPU] != ""
 		details, missing, err := client.Check(ctx)
 		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, recorded)) {
 			_ = client.Close()
+			if unreachable := node.unreachable(); unreachable != nil {
+				return nil, unreachable
+			}
 			if err != nil {
 				return nil, err
+			}
+			if slices.Contains(missing, "docker:runtimes") {
+				return nil, errors.New("the container engine doesn't name its runtimes, so it can't run GPU work; use Docker with the NVIDIA Container Toolkit")
+			}
+			if client.Config.Node != nil {
+				return nil, errors.New("the node or its Docker identity changed; check the connection and plan again")
 			}
 			return nil, errors.New("the SSH server or Docker identity changed; check the connection and plan again")
 		}
@@ -273,6 +299,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 	}
 	connection := labels[labelRegistry]
 	if connection == "" {
+		if labels[labelPlatformRegistry] == "true" {
+			return e.platformPull(ctx, labels, values)
+		}
 		return values, nil
 	}
 	if e.Credentials == nil {
@@ -326,6 +355,9 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 // Register restores a connection-specific provider without opening credentials.
 func (e *OwnedTarget) Register(org, connection string) string {
 	key := e.Cloud + "." + connection
+	if e.providerKey != "" {
+		key = e.providerKey
+	}
 	if _, err := e.Ctrl.Providers.Get(key); err == nil {
 		return key
 	}
@@ -336,7 +368,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 	case e.Cloud == connections.Server:
 		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
 	case e.Cloud == connections.Firecracker:
-		backend = &firecrackerBackend{target: e, org: org, connection: connection}
+		backend = e.orgFirecracker(org, connection)
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -469,7 +501,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Dial: e.ServerDial, FirecrackerAuthority: e.FirecrackerAuthority}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, Gate: e.Gate, reconnect: e.reconnect}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"
@@ -579,6 +611,12 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 			expectedRevision = labels[owned.LabelManagedRevisionBase] + "/" + applied.ReleaseID.String()
 		}
 		if err != nil {
+			// Ctrl Plane's deploy error is ErrDeploymentFailed alone, so a
+			// node that went offline mid-deploy is named by the restore
+			// below: its Apply opens a new session, which finds the node
+			// offline and returns the hub's error, typed, in backendErr.
+			// The preflight session above has already caught a node that
+			// was offline before the deploy started.
 			restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			backend, backendErr := e.registeredBackend(key)
@@ -679,7 +717,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker") && cfg.Component == nil {
+	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker" || job.Action.Provider == platformProvider) && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
@@ -736,6 +774,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[labelRegistry] = cfg.BuildTarget.Registry
 		registrySettings, _ := json.Marshal(cfg.BuildTarget.RegistrySettings) //nolint:errcheck // string maps always encode
 		labels[labelRegistrySettings] = string(registrySettings)
+		if platformSourceBuild(cfg.BuildTarget) {
+			labels[labelPlatformRegistry] = "true"
+		}
 	}
 	if len(job.files) > 0 {
 		// The rendered bytes are part of the revision, so a changed file

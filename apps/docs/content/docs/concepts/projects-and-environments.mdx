@@ -17,7 +17,7 @@ Repeat `--repo` for each repository. Write `alias=repository` to name one yourse
 
 ## Sources
 
-Each repository in a project is a source: a repository, an optional directory inside it, a tracked branch and an alias. Pick the alias carefully. It becomes part of every service ID (`svc:api:go:cmd/server`), so it never changes and is never reused, even after you remove the source.
+Each repository in a project is a source: a repository, an optional directory inside it, a tracked branch and an alias. Pick the alias carefully. It becomes part of every service ID (`svc:api:go:cmd/server`), so it never changes, and it never moves to another repository, even after you remove the source. Add the same repository again and it can take the alias back.
 
 An analysis reads one source at one commit. To read a different branch, tag or commit for a single source, use `--ref`:
 

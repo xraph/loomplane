@@ -189,7 +189,7 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := server.Dial(t.Context(), cfg)
+	client, err := server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = server.Dial(t.Context(), cfg); !errors.Is(err, server.ErrRejected) {
+	if _, err = server.Connect(t.Context(), cfg, nil); !errors.Is(err, server.ErrRejected) {
 		t.Fatalf("unknown host key: %v", err)
 	}
 	t.Logf("Verified isolated host %s: Docker identity, %d CPUs, %d bytes, enrollment replay refusal and listener conflict", name, v.Health.CPUs, v.Health.MemoryBytes)
@@ -225,7 +225,7 @@ func cloudInfrastructureRuntimeFixture(t *testing.T, constrained bool) {
 func verifyRuntimeEffectFence(t *testing.T, host string, cfg *server.Config) {
 	t.Helper()
 	infraDocker(t, "exec", host, "sh", "-c", "tar -C / -cf /tmp/fence-rootfs.tar bin lib && docker import /tmp/fence-rootfs.tar fence-fixture >/dev/null && docker run -d --network=none --name fence-sleeper fence-fixture /bin/busybox sleep 300")
-	old, err := server.Dial(t.Context(), cfg)
+	old, err := server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func verifyRuntimeEffectFence(t *testing.T, host string, cfg *server.Config) {
 	if err = old.Close(); err != nil {
 		t.Fatal(err)
 	}
-	next, err := server.Dial(t.Context(), cfg)
+	next, err := server.Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -142,3 +142,27 @@ func TestSettings_cloudSignInOffer(t *testing.T) {
 		}
 	}
 }
+
+func TestSettings_platformCloudRoundTrip(t *testing.T) {
+	s := scratchSettings(t)
+	ctx := t.Context()
+
+	got, err := s.PlatformCloud(ctx)
+	if err != nil || got.Attach != "manual" || got.DefaultLimits != (PlatformLimits{VCPUs: 4, MemoryMiB: 8192, VMs: 10, ConcurrentBuilds: 1}) {
+		t.Fatalf("fresh database: %+v err %v", got, err)
+	}
+	want := PlatformCloudSettings{
+		Attach:        "all_workspaces",
+		DefaultLimits: PlatformLimits{VCPUs: 8, MemoryMiB: 16384, VMs: 20, ConcurrentBuilds: 3},
+		Apex:          "apps.example.com",
+		Registry:      RegistrySettings{Endpoint: "registry.example.com", Repository: "loomplane", AuthEndpoint: "https://auth.example.com/token"},
+		DNS:           PlatformDNSSettings{Provider: "cloudflare", Zone: "example.com"},
+	}
+	if err = s.SetPlatformCloud(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.PlatformCloud(ctx)
+	if err != nil || got != want {
+		t.Fatalf("round trip: %+v err %v, want %+v", got, err, want)
+	}
+}

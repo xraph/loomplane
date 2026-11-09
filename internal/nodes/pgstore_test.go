@@ -399,13 +399,23 @@ func TestUpdateSettings(t *testing.T) {
 	if err := s.SetStatus(ctx, "node_1", StatusOnline); err != nil {
 		t.Fatal(err)
 	}
+	// A rename leaves the ingress mode nobody's choice.
+	name := "web-1b"
+	if got, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name}); err != nil || got.IngressModeByOwner {
+		t.Fatalf("rename: %+v %v", got, err)
+	}
 	name, mode := "web-2", "relay"
 	got, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name, IngressMode: &mode, Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusOnline || got.Name != "web-2" || got.IngressMode != "relay" || len(got.Endpoints) != 1 || got.Labels["zone"] != "a" {
+	if got.Status != StatusOnline || got.Name != "web-2" || got.IngressMode != "relay" || len(got.Endpoints) != 1 || got.Labels["zone"] != "a" || !got.IngressModeByOwner {
 		t.Fatalf("node %+v", got)
+	}
+	// An address check's settling doesn't take the owner's choice away.
+	at := time.Now().UTC()
+	if got, err = s.SetIngress(ctx, "node_1", IngressSetting{Mode: "none", Detail: "no public address answered", SentAt: at}); err != nil || !got.IngressModeByOwner {
+		t.Fatalf("after a check: %+v %v", got, err)
 	}
 
 	// A stale widen is refused, and nothing changes.
@@ -671,5 +681,98 @@ func TestKeyNeverJoinsTwice(t *testing.T) {
 	}
 	if taken, err := s.NameTaken(ctx, "org_2", "web-3"); err != nil || taken {
 		t.Fatalf("name in another org: %v %v", taken, err)
+	}
+}
+
+func TestSetIngressAndAppliedRoundTrip(t *testing.T) {
+	s, conn := testStore(t)
+	ctx := t.Context()
+	if err := s.Create(ctx, newNode("node_1", "org_1", "web-1")); err != nil {
+		t.Fatal(err)
+	}
+	events := func() int {
+		var c int
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_events WHERE type='node.updated'`).Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	before := events()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	got, err := s.SetIngress(ctx, "node_1", IngressSetting{Mode: "direct", PublicAddress: "203.0.113.7", ConfirmedAt: &at, SentAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IngressMode != "direct" || got.PublicAddress != "203.0.113.7" || got.PublicAddressConfirmedAt == nil || !got.PublicAddressConfirmedAt.Equal(at) || got.IngressSentAt == nil || got.IngressApplied != "" || got.IngressDetail != "" {
+		t.Fatalf("node %+v", got)
+	}
+	if events() != before+1 {
+		t.Fatal("a new address appended no node.updated")
+	}
+	// The node's answer is bookkeeping: stored, and no event. An answer
+	// from a superseded session is dropped.
+	epoch, err := s.ClaimSession(ctx, Session{NodeID: "node_1", Replica: "r1", ConnectedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordIngressApplied(ctx, "node_1", "relay", epoch-1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale answer: %v", err)
+	}
+	if err = s.RecordIngressApplied(ctx, "node_1", "direct", epoch); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.GetByID(ctx, "node_1"); n.IngressApplied != "direct" || events() != before+1 {
+		t.Fatalf("applied %+v, %d events", n, events())
+	}
+	got, err = s.SetIngress(ctx, "node_1", IngressSetting{Mode: "none", Detail: "no public address answered", SentAt: at})
+	if err != nil || got.PublicAddress != "" || got.PublicAddressConfirmedAt != nil || got.IngressDetail != "no public address answered" || got.IngressApplied != "direct" {
+		t.Fatalf("none: %+v %v", got, err)
+	}
+	// A detail alone keeps the rest and appends no event.
+	count := events()
+	if err = s.SetIngressDetail(ctx, "node_1", "address changed to 198.51.100.9 but it doesn't answer on port 80"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.GetByID(ctx, "node_1"); n.IngressDetail != "address changed to 198.51.100.9 but it doesn't answer on port 80" || n.IngressMode != "none" || !n.IngressSentAt.Equal(at) || events() != count {
+		t.Fatalf("detail %+v, %d events", n, events())
+	}
+	// The first-inventory resend restamps the send time alone, with no event.
+	count = events()
+	resent := at.Add(time.Minute)
+	if err = s.MarkIngressSent(ctx, "node_1", resent); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.GetByID(ctx, "node_1"); !n.IngressSentAt.Equal(resent) || events() != count {
+		t.Fatalf("resent %+v, %d events", n, events())
+	}
+	// A settings change of the mode sends it again and drops the old detail.
+	mode := "direct"
+	got, err = s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{IngressMode: &mode})
+	if err != nil || got.IngressDetail != "" || got.IngressSentAt == nil || !got.IngressSentAt.After(at) {
+		t.Fatalf("settings: %+v %v", got, err)
+	}
+	name := "web-2"
+	again, err := s.UpdateSettings(ctx, "org_1", "node_1", SettingsUpdate{Name: &name})
+	if err != nil || !again.IngressSentAt.Equal(*got.IngressSentAt) {
+		t.Fatalf("a rename moved the send time: %+v %v", again, err)
+	}
+	// A revoked node takes neither.
+	n, _ := s.GetByID(ctx, "node_1")
+	now := time.Now().UTC()
+	n.RevokedAt, n.RevokedBy, n.Status = &now, "usr_1", StatusRevoked
+	if err = s.Update(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SetIngress(ctx, "node_1", IngressSetting{Mode: "none", SentAt: at}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked set: %v", err)
+	}
+	if err = s.MarkIngressSent(ctx, "node_1", at); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked sent: %v", err)
+	}
+	if err = s.RecordIngressApplied(ctx, "node_1", "none", epoch); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked applied: %v", err)
+	}
+	if err = s.SetIngressDetail(ctx, "node_1", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked detail: %v", err)
 	}
 }

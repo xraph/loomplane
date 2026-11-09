@@ -55,10 +55,13 @@ function project({
   writes = [],
   excluded = [],
   plan,
+  removed = false,
 }: {
   writes?: { method: string; url: string; body: unknown }[]
   excluded?: unknown[]
   plan?: Promise<void>
+  /** removed takes the backend repository away, as removing it does. */
+  removed?: boolean
 } = {}) {
   let revision = 1
   const manifest = {
@@ -98,13 +101,15 @@ function project({
           graph: {
             sources: [
               { alias: "frontend", commit_sha: "new1" },
-              { alias: "backend", commit_sha: "new2" },
+              ...(removed ? [] : [{ alias: "backend", commit_sha: "new2" }]),
             ],
             // The graph leaves out what the project excludes.
             services: [
               graphService("api"),
               graphService("web"),
-              ...(excluded.length ? [] : [graphService("worker", "backend")]),
+              ...(excluded.length || removed
+                ? []
+                : [graphService("worker", "backend")]),
             ],
           },
         })
@@ -125,11 +130,15 @@ function project({
               alias: "frontend",
               repository: "https://github.com/acme/web",
             },
-            {
-              id: "s2",
-              alias: "backend",
-              repository: "https://github.com/acme/api",
-            },
+            ...(removed
+              ? []
+              : [
+                  {
+                    id: "s2",
+                    alias: "backend",
+                    repository: "https://github.com/acme/api",
+                  },
+                ]),
           ],
         })
       if (url.endsWith("/deployed"))
@@ -308,6 +317,32 @@ it("never lists a service the project excludes", async () => {
     screen.getByText(/1 service is excluded from Shop and never deploys/)
   ).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "Manage exclusions" })).toBeVisible()
+})
+
+it("names each service's repository and never deploys one whose repository was removed", async () => {
+  const writes = project({ removed: true })
+  mount({ project: "p", environment: "preview" })
+  const worker = await screen.findByRole("checkbox", { name: "Deploy worker" })
+  expect(worker).toHaveAttribute("aria-disabled", "true")
+  expect(screen.getByText("Repository removed")).toBeInTheDocument()
+  expect(screen.getByText(/backend was removed from Shop/)).toBeInTheDocument()
+  expect(screen.getAllByText("frontend · Static site")).toHaveLength(2)
+  await userEvent.click(screen.getByRole("button", { name: "All" }))
+  expect(worker).not.toBeChecked()
+  expect(
+    screen.getByRole("region", { name: "Deploy summary" })
+  ).toHaveTextContent("2 services to preview")
+  await userEvent.click(screen.getByRole("button", { name: "Review plan" }))
+  await vi.waitFor(() => expect(navigate).toHaveBeenCalled())
+  // Naming the services leaves worker out, so its missing repository
+  // can't block the plan.
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      url: expect.stringContaining("/plans"),
+      body: { environment: "preview", services: ["api", "web"] },
+    },
+  ])
 })
 
 it("holds the plan while loomplane.yaml has unsaved changes", async () => {

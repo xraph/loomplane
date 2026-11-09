@@ -54,7 +54,7 @@ type capacityRecoveryStore interface {
 }
 
 func (s *Service) RefreshCapacity(ctx context.Context, p security.Principal, cloudID string) (*CapacityUsage, error) {
-	if _, err := s.authorize(ctx, p, cloudID); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloudID); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {

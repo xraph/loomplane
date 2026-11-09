@@ -45,7 +45,7 @@ func meterPolicy(device, vmID string) (string, error) {
 	if !deviceName.MatchString(device) || !meterID.MatchString(vmID) {
 		return "", ErrInvalid
 	}
-	return fmt.Sprintf("table netdev %s {\n counter egress { }\n chain meter { type filter hook ingress device \"%s\" priority -400; policy accept;\n counter name \"egress\"\n }\n}\n", meterTable(vmID), device), nil
+	return fmt.Sprintf("table netdev %s {\n counter egress { }\n chain meter { type filter hook ingress device %q priority -400; policy accept;\n counter name \"egress\"\n }\n}\n", meterTable(vmID), device), nil
 }
 
 // parseMeter reads the egress counter from `nft -j list table`.
@@ -58,8 +58,8 @@ func parseMeter(raw []byte) (bytes, packets uint64, err error) {
 			}
 		}
 	}
-	if err = json.Unmarshal(raw, &out); err != nil {
-		return 0, 0, err
+	if decodeErr := json.Unmarshal(raw, &out); decodeErr != nil {
+		return 0, 0, decodeErr
 	}
 	for _, item := range out.Nftables {
 		if item.Counter != nil && item.Counter.Name == "egress" {

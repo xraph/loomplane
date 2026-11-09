@@ -29,11 +29,13 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/render"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -48,6 +50,8 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg     config.Config
 	plugins *plugins.Set
+	// streams reach joined nodes, for the servers they connect.
+	streams server.NodeStreams
 	svc     *connections.Service
 	issuer  *issuer.Service
 	// platformUser says whether a request is a platform owner's or admin's,
@@ -66,10 +70,12 @@ const startupRotateTimeout = time.Minute
 // issuer is serving its keys.
 const issuerCheckTimeout = 10 * time.Second
 
-// New returns the extension.
-func New(cfg config.Config, plugs *plugins.Set) *Extension {
+// New returns the extension. streams reach joined nodes: the nodes
+// extension's hub.
+func New(cfg config.Config, plugs *plugins.Set, streams server.NodeStreams) *Extension {
 	return &Extension{
 		plugins:       plugs,
+		streams:       streams,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud connections"),
 		cfg:           cfg,
 	}
@@ -144,7 +150,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
 		connections.Azure:        connections.AzureChecker{Client: azureClient},
 		connections.Cloudflare:   connections.CloudflareChecker{Client: cfClient},
-		connections.Server:       connections.ServerChecker{},
+		connections.Server:       connections.ServerChecker{Streams: e.streams},
 		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},
@@ -317,10 +323,11 @@ func (a auditor) Record(ctx context.Context, action string, p security.Principal
 }
 
 // RecordApp implements connections.AppAuditor. It records the cloud and the
-// client ID, never the secret.
+// client ID, never the secret, in the staff stream: only a platform user
+// changes a sign-in app.
 func (a auditor) RecordApp(ctx context.Context, action, userID, cloud, clientID string) {
 	b := a.chronicle.Warning(ctx, action, "cloud_signin_app", cloud).
-		Category("cloud_connections").AppID(a.appID).UserID(userID).Outcome("success").
+		Category("cloud_connections").AppID(a.appID).TenantID(platformadmin.AuditTenant).UserID(userID).Outcome("success").
 		Meta("cloud", cloud).Meta("client_id", clientID)
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))

@@ -637,6 +637,9 @@ test("registered application kinds follow the native service recipes", async () 
     .getAllByRole("article")
     .map((card) => within(card).getAllByRole("button")[0].textContent)
   expect(cards).toEqual([
+    "Deploy FalkorDB",
+    "Deploy OpenSearch",
+    "Deploy Elasticsearch",
     "Deploy PostgreSQL",
     "Deploy MySQL",
     "Deploy MariaDB",
@@ -648,7 +651,7 @@ test("registered application kinds follow the native service recipes", async () 
   ])
   expect(within(catalog).queryByText(/Helper/)).not.toBeInTheDocument()
   await userEvent.click(
-    within(catalog).getByRole("radio", { name: /^Data\s*2$/ })
+    within(catalog).getByRole("radio", { name: /^Data\s*5$/ })
   )
   expect(
     within(catalog).getByRole("button", { name: "Deploy NATS JetStream" })

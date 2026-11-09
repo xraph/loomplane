@@ -1,12 +1,12 @@
 ---
 title: Nodes
-description: Join a machine to Loomplane as a node, choose what Loomplane may use on it, update it with signed releases and cut it off when you're done.
+description: Join a machine to Loomplane as a node, deploy and build on its Docker, route domains to it, and update, drain or remove it when you're done.
 ---
 
 A node is a machine that joins your organization and keeps one connection open to Loomplane. It dials out and opens no port, so a laptop behind a router and a server behind a firewall join the same way.
 
 <Callout>
-  Right now a node can join, report on itself, update and be revoked. Deploying to nodes, Docker or Kubernetes through a node, and routing domains to a node come in the next phases.
+  A node can join, report on itself, update and be revoked. With `docker` allowed it also takes deploys and builds, and it can serve a domain directly if it has a public address. Relaying traffic for nodes behind NAT, and Kubernetes through a node, come later.
 </Callout>
 
 ## Join a machine
@@ -43,13 +43,13 @@ Use your own instance's address. The script downloads the `loomctl` release your
 | `--name` | The node's name. Loomplane uses the hostname if you don't |
 | `--label key=value` | A label. Repeat it for each |
 | `--allow` | What Loomplane may use here, such as `docker,probe`. See below |
-| `--cloud` | The Cloud this node will join. Recorded now; the node joins it once deploying to nodes arrives. Can't be combined with `--token` |
-| `--builder dedicated` | Marks the node as a dedicated build worker. Recorded now; builds run on it once deploying to nodes arrives |
+| `--cloud` | The Cloud this node will join. Once it connects, its Docker becomes a server in that Cloud. Can't be combined with `--token` |
+| `--builder dedicated` | Marks the node as a dedicated build worker, a machine that only builds. Untrusted source builds on a node like this. Can't be combined with `--token` |
 | `--edge` | Marks the node as an edge, which will serve traffic. Recorded now; edges start working once domain routing to nodes arrives. Can't be combined with `--token` |
 | `--foreground` | Runs in your terminal and installs no service |
 | `--state-dir` | Where the node keeps its files |
 
-If you pass a token, mint it with `--cloud` or `--edge` already set, because the token carries them.
+If you pass a token, mint it with `--cloud`, `--builder` or `--edge` already set, because the token carries them. The dashboard's Add node panel has a Cloud picker and a Dedicated builder checkbox for the same thing.
 
 Check the result with `sudo loomctl node status`. It shows the node ID, the key fingerprint, the allowed endpoints and whether the service is running.
 
@@ -91,7 +91,7 @@ Each node has an allowlist of endpoints. There are five names:
 | `kube` | A local Kubernetes API |
 | `firecracker` | Firecracker microVMs |
 
-Today only `probe` does anything. The rest are accepted and stored, so you won't have to answer again when deploying to nodes arrives.
+`probe` and `docker` do the work today, and `dial` lets Loomplane reach the node's own loopback and the containers it runs on Loomplane's networks, nothing else. `kube` and `firecracker` are accepted and stored, so you won't have to answer again when they arrive.
 
 An interactive `node join` shows what it found and asks whether to allow it. Say anything but yes and it allows nothing. Without a terminal, such as a script, a cloud-init run or the `curl | sh` line, it allows nothing unless you pass `--allow`. The command the dashboard gives you passes it for you:
 
@@ -107,13 +107,53 @@ sudo loomctl node allow docker
 
 That writes `allow.json` first and then tells the running node. The node serves only what both `allow.json` and `node.json` allow, so code running as the service user can't widen it. The exception is `docker`, which is covered below. If `allow.json` is missing, belongs to anyone else, or can be written by other users, the node serves nothing and logs why. Run `node allow` again to fix it.
 
-The ingress mode is the one setting that comes from the dashboard and could open something up. It will decide whether public traffic reaches the node once domain routing to nodes arrives. Nothing serves `public` on a node yet.
+The ingress mode is the one setting that comes from the dashboard and could open something up. It decides whether public traffic reaches the node. Today the only mode that does is `direct`, covered under [Domains on a node](#domains-on-a-node).
 
 <Callout type="warn">
   Access to the Docker socket is root access on that host. Anything that can start a container can mount `/` into it. Allow `docker` only on a machine you'd let Loomplane administer.
 
-  `node allow docker` also adds the `loomplane-node` user to the `docker` group and restarts the service to pick that up. From then on, the service user is effectively root on that machine, and the ceiling in `allow.json` no longer holds it back. Removing `docker` in the dashboard stops the node using Docker, but the node isn't root and can't take the group back. To do that, run `sudo gpasswd -d loomplane-node docker` on the machine and restart the service.
+  `node allow docker` also adds the `loomplane-node` user to the `docker` group and restarts the service to pick that up. From then on, the service user is effectively root on that machine, and the ceiling in `allow.json` no longer holds it back. Removing `docker` in the dashboard stops the node using Docker, so deploys to it stop too. It doesn't take the group back: the `loomplane-node` user stays in `docker`, and the node isn't root, so it can't remove itself. To take the access back, run `sudo gpasswd -d loomplane-node docker` on the machine and restart the service. Loomplane doesn't do this for you.
 </Callout>
+
+## Deploy to a node
+
+Join the node with `docker` allowed and a Cloud, and Loomplane connects its Docker as a server in that Cloud. Most nodes adopt on their own. One that needs a look first shows up on the Cloud's Changes tab with the reason and an Adopt button. The reasons are ports 80 and 443 already in use on the machine, an architecture that doesn't match the Cloud's pools, a server with that name already in the Cloud, or a token whose minter can no longer manage Clouds (or whose API key was revoked or expired). Adopt goes through the same reviewed steps as any server you connect, so you see what changes before it does.
+
+After that the node is an ordinary server target. A pool can use it, a service can place on it, and the dashboard marks it with a Node badge and says it was connected by its owner. You can disconnect it from the Cloud, but you can't delete it, because Loomplane didn't create the machine.
+
+The same Docker daemon can't be connected twice. If it is already in a Cloud over SSH, the node's connection is refused until you disconnect the SSH one, and the other way round. Two connections would mean two fence journals for one daemon, and fencing would stop meaning anything.
+
+Podman works through its Docker-compatible socket. If its API leaves out something Loomplane needs to identify the daemon, the check names what's missing instead of passing. Hosts on cgroup v1 don't report their CPU and memory limits, so their capacity shows as unknown.
+
+A deploy to a node that is offline waits for it for about two minutes. If the node hasn't come back by then, the deploy fails with `node NAME is offline since TIME`, and you can run it again once the node is back.
+
+## Builds on a node
+
+Join a node with `--builder dedicated` and it builds source for the Cloud it joined:
+
+```bash
+sudo loomctl node join --cloud cloud_... --builder dedicated --allow docker,probe
+```
+
+Use a machine that only builds. Untrusted source builds on a dedicated builder, so keep your services somewhere else.
+
+## Domains on a node
+
+A node serves a domain directly when it has a public address that answers on port 80. Loomplane confirms that from the outside before DNS points at the address, by fetching a one-time token through the node's own proxy. Until the check passes, the route keeps serving where it was. The node's page shows the address, when it was confirmed, and why not if it wasn't. A check that found nothing runs again every five minutes or so, and straight away when you set the node's ingress mode to `direct`.
+
+If the node's address changes, Loomplane notices and checks the new one. In a zone Loomplane manages, the record moves once the new address answers. In an external zone, the route shows you the record to set, and you set it. Either way DNS never points at an address that hasn't answered.
+
+A node behind NAT has no address to confirm, so it can't take a direct domain. Relaying traffic to it is the next piece.
+
+## Drain a node
+
+Draining stops new placements on the node's server. What already runs there keeps running until you move it, each with its own reviewed move.
+
+```bash
+loomctl node drain NAME
+```
+
+It lists what runs on the node first, and warns about any database with no backup policy: if the machine is lost, so is that data. It then asks. Pass `--yes` to skip the question. The Drain button on the node's page does the same, with the same review. A draining node shows as Draining.
 
 ## Commands
 
@@ -125,13 +165,36 @@ The ingress mode is the one setting that comes from the dashboard and could open
 | `run` | Runs the node in the foreground. The service uses this |
 | `status` | Shows the node's config, key fingerprint, endpoints and whether it runs. `--json` is for scripts |
 | `allow ENDPOINT...` | Widens `allow.json` and tells the node. Needs root on Linux |
-| `leave` | Tells Loomplane to revoke the node, stops the service and removes its config. The key stays in the state directory, and the next join makes a fresh one |
+| `leave [--purge] [--purge-volumes]` | Tells Loomplane to revoke the node, stops the service and removes its config. The key stays in the state directory, and the next join makes a fresh one. See [Leaving a node](#leaving-a-node) |
+| `drain NAME-OR-ID [--yes]` | Stops new placements on a node's server, after showing what runs there. Uses your login or `--url` and `--key` |
 | `list` | Lists the organization's nodes. Uses your login or `--url` and `--key` |
 | `revoke NAME-OR-ID` | Stops Loomplane trusting a node. Use the ID if two nodes share a name |
 | `update --release TAG` | Replaces the node's binary with a signed release |
 | `verify-release` | Checks a downloaded release against its signature |
 
 A node that Loomplane revoked stops itself and exits with code 77. That holds whether it was connected at the time or finds out at its next connect, so a machine that was off when you revoked it stops when it comes back. A service manager that restarts on failure should treat 77 as final. The systemd unit does.
+
+## Leaving a node
+
+`sudo loomctl node leave` removes the node and leaves Docker alone. The containers Loomplane started keep running. To clean up as you go:
+
+```bash
+sudo loomctl node leave --purge
+```
+
+`--purge` also removes the containers and networks Loomplane made on the machine's Docker. Volumes stay, because they hold data, and the command prints their names so you can delete them yourself with `docker volume rm`.
+
+```bash
+sudo loomctl node leave --purge-volumes
+```
+
+`--purge-volumes` deletes the volumes too, and everything in them. It asks you to type the node's name first. In a script, pass `--yes-delete-volumes=NAME` with the name instead. A wrong name changes nothing.
+
+## If a deploy says the fence couldn't be established
+
+Docker requests from Loomplane run under a fence, so two attempts can't act on one daemon at once. The node keeps the fence's journal in its state directory, under `fence/<hash>/state`. If the node drops in the middle of a change, the journal stays marked dirty, and the next deploy reports that the runtime effect fence couldn't establish quiescence.
+
+Check what is running on the machine first. Then open that `state` file and set `"dirty"` to `false`. Never delete the file: that resets the fence's epochs, and the fence stops protecting you.
 
 ## Releases and updates
 

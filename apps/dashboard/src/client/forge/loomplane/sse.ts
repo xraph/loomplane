@@ -83,6 +83,237 @@ import { ConnectionState } from './types';
 import { decode } from './codecs';
 
 /**
+ * AgentTasksStreamSSEClient
+ * Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.
+ * 
+ * Features:
+ * - Cross-platform (Browser & Node.js)
+ * - Connection timeouts
+ */
+export class AgentTasksStreamSSEClient extends EventEmitter {
+  private eventSource: EventSource | null = null;
+  private config: Required<Pick<SSEClientConfig, 'baseURL'>> & SSEClientConfig;
+  private state: ConnectionState = ConnectionState.DISCONNECTED;
+  private connectionTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(config: SSEClientConfig) {
+    super();
+    this.config = {
+      connectionTimeout: 30000,
+      withCredentials: false,
+      ...config,
+    };
+  }
+
+  /**
+   * Connect to the SSE stream.
+   * @returns Promise that resolves when connected
+   * @throws Error if connection fails or times out
+   */
+  async connect(): Promise<void> {
+    if (this.state === ConnectionState.CONNECTED) {
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      this.setState(ConnectionState.CONNECTING);
+      let url = this.config.baseURL + '/api/v1/agent/tasks/:id/stream';
+      
+      // In browser, add auth as query params since EventSource doesn't support custom headers
+      if (isBrowser) {
+        const params = new URLSearchParams();
+        if (this.config.auth?.bearerToken) {
+          params.set('token', this.config.auth.bearerToken);
+        }
+        if (this.config.auth?.apiKey) {
+          params.set('apiKey', this.config.auth.apiKey);
+        }
+        const queryString = params.toString();
+        if (queryString) {
+          url += (url.includes('?') ? '&' : '?') + queryString;
+        }
+      }
+
+      // Setup connection timeout
+      this.connectionTimeoutId = setTimeout(() => {
+        this.connectionTimeoutId = null;
+        if (this.eventSource) {
+          this.eventSource.close();
+          this.eventSource = null;
+        }
+        this.setState(ConnectionState.ERROR);
+        reject(new Error('Connection timeout'));
+      }, this.config.connectionTimeout);
+
+      try {
+        const ES = getEventSource();
+
+        if (isBrowser) {
+          this.eventSource = new ES(url, {
+            withCredentials: this.config.withCredentials,
+          });
+        } else {
+          // Node.js: can pass custom headers
+          const headers: Record<string, string> = {
+            'Accept': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+          };
+          if (this.config.auth?.bearerToken) {
+            headers['Authorization'] = `Bearer ${this.config.auth.bearerToken}`;
+          }
+          if (this.config.auth?.apiKey) {
+            headers['X-API-Key'] = this.config.auth.apiKey;
+          }
+          this.eventSource = new (ES as any)(url, { headers }) as EventSource;
+        }
+
+        this.eventSource.onopen = () => {
+          this.clearConnectionTimeout();
+          this.setState(ConnectionState.CONNECTED);
+          resolve();
+        };
+
+        this.eventSource.onerror = (event: Event) => {
+          this.clearConnectionTimeout();
+          this.setState(ConnectionState.ERROR);
+          const error = new Error('SSE connection error');
+          this.emit('error', error);
+
+          reject(error);
+        };
+
+        this.eventSource.addEventListener('agent.end', (event: MessageEvent) => {
+          try {
+            const data: types.RealtimeAgentEnd = decode(JSON.parse(event.data), "RealtimeAgentEnd");
+            this.emit('agent.end', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('agent.event', (event: MessageEvent) => {
+          try {
+            const data: types.RealtimeAgentEvent = decode(JSON.parse(event.data), "RealtimeAgentEvent");
+            this.emit('agent.event', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('forge.resumed', (event: MessageEvent) => {
+          try {
+            const data: unknown = JSON.parse(event.data);
+            this.emit('forge.resumed', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('forge.gap', (event: MessageEvent) => {
+          try {
+            const data: unknown = JSON.parse(event.data);
+            this.emit('forge.gap', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        // Listen for generic messages
+        this.eventSource.onmessage = (event: MessageEvent) => {
+          this.emit('message', event.data);
+        };
+      } catch (error) {
+        this.clearConnectionTimeout();
+        this.setState(ConnectionState.ERROR);
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Register a handler for agent.end events.
+   * @param handler - Function to call when agent.end event is received
+   */
+  onAgentEnd(handler: (data: types.RealtimeAgentEnd) => void): void {
+    this.on('agent.end', handler);
+  }
+
+  /**
+   * Remove a handler for agent.end events.
+   * @param handler - The handler to remove
+   */
+  offAgentEnd(handler: (data: types.RealtimeAgentEnd) => void): void {
+    this.off('agent.end', handler);
+  }
+
+  /**
+   * Register a handler for agent.event events.
+   * @param handler - Function to call when agent.event event is received
+   */
+  onAgentEvent(handler: (data: types.RealtimeAgentEvent) => void): void {
+    this.on('agent.event', handler);
+  }
+
+  /**
+   * Remove a handler for agent.event events.
+   * @param handler - The handler to remove
+   */
+  offAgentEvent(handler: (data: types.RealtimeAgentEvent) => void): void {
+    this.off('agent.event', handler);
+  }
+
+  /**
+   * Register a handler for generic messages.
+   * @param handler - Function to call when a generic message is received
+   */
+  onMessage(handler: (data: string) => void): void {
+    this.on('message', handler);
+  }
+
+  /**
+   * Register a handler for errors.
+   * @param handler - Function to call when an error occurs
+   */
+  onError(handler: (error: Error) => void): void {
+    this.on('error', handler);
+  }
+
+  private setState(state: ConnectionState): void {
+    if (this.state !== state) {
+      this.state = state;
+      this.emit('stateChange', state);
+    }
+  }
+
+  private clearConnectionTimeout(): void {
+    if (this.connectionTimeoutId) {
+      clearTimeout(this.connectionTimeoutId);
+      this.connectionTimeoutId = null;
+    }
+  }
+
+  /**
+   * Close the SSE connection.
+   */
+  close(): void {
+    this.clearConnectionTimeout();
+
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    this.setState(ConnectionState.CLOSED);
+  }
+
+  /**
+   * Check if the SSE stream is currently connected.
+   */
+  isConnected(): boolean {
+    return this.state === ConnectionState.CONNECTED;
+  }
+}
+
+/**
  * RealtimeEventsSSEClient
  * 
  * Features:
@@ -180,6 +411,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
 
           reject(error);
         };
+
+        this.eventSource.addEventListener('agent_report.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.Report = decode(JSON.parse(event.data), "Report");
+            this.emit('agent_report.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('agent_report.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Report = decode(JSON.parse(event.data), "Report");
+            this.emit('agent_report.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
 
         this.eventSource.addEventListener('agent_request.deleted', (event: MessageEvent) => {
           try {
@@ -523,6 +772,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('release_report.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.ReleaseReportEvent = decode(JSON.parse(event.data), "ReleaseReportEvent");
+            this.emit('release_report.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('release_report.updated', (event: MessageEvent) => {
+          try {
+            const data: types.ReleaseReportEvent = decode(JSON.parse(event.data), "ReleaseReportEvent");
+            this.emit('release_report.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('release_watch.deleted', (event: MessageEvent) => {
           try {
             const data: types.Watch = decode(JSON.parse(event.data), "Watch");
@@ -569,6 +836,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
         reject(error);
       }
     });
+  }
+
+  /**
+   * Register a handler for agent_report.deleted events.
+   * @param handler - Function to call when agent_report.deleted event is received
+   */
+  onAgentReportDeleted(handler: (data: types.Report) => void): void {
+    this.on('agent_report.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for agent_report.deleted events.
+   * @param handler - The handler to remove
+   */
+  offAgentReportDeleted(handler: (data: types.Report) => void): void {
+    this.off('agent_report.deleted', handler);
+  }
+
+  /**
+   * Register a handler for agent_report.updated events.
+   * @param handler - Function to call when agent_report.updated event is received
+   */
+  onAgentReportUpdated(handler: (data: types.Report) => void): void {
+    this.on('agent_report.updated', handler);
+  }
+
+  /**
+   * Remove a handler for agent_report.updated events.
+   * @param handler - The handler to remove
+   */
+  offAgentReportUpdated(handler: (data: types.Report) => void): void {
+    this.off('agent_report.updated', handler);
   }
 
   /**
@@ -1177,6 +1476,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offRealtimeStatus(handler: (data: types.RealtimeRealtimeStatus) => void): void {
     this.off('realtime.status', handler);
+  }
+
+  /**
+   * Register a handler for release_report.deleted events.
+   * @param handler - Function to call when release_report.deleted event is received
+   */
+  onReleaseReportDeleted(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.on('release_report.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for release_report.deleted events.
+   * @param handler - The handler to remove
+   */
+  offReleaseReportDeleted(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.off('release_report.deleted', handler);
+  }
+
+  /**
+   * Register a handler for release_report.updated events.
+   * @param handler - Function to call when release_report.updated event is received
+   */
+  onReleaseReportUpdated(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.on('release_report.updated', handler);
+  }
+
+  /**
+   * Remove a handler for release_report.updated events.
+   * @param handler - The handler to remove
+   */
+  offReleaseReportUpdated(handler: (data: types.ReleaseReportEvent) => void): void {
+    this.off('release_report.updated', handler);
   }
 
   /**

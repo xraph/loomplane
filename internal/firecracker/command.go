@@ -64,8 +64,8 @@ func RunHost(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	if err = platformReady(cfg, caps); err != nil {
-		return err
+	if checkErr := platformReady(cfg, caps); checkErr != nil {
+		return checkErr
 	}
 	host := &Host{Store: store, Driver: driver, Limits: cfg.Limits, Key: key}
 	platform := ""
@@ -156,8 +156,8 @@ func CheckHost(ctx context.Context, path string) (Capabilities, error) {
 	if err != nil {
 		return Capabilities{}, err
 	}
-	if err = platformReady(cfg, caps); err != nil {
-		return Capabilities{}, err
+	if checkErr := platformReady(cfg, caps); checkErr != nil {
+		return Capabilities{}, checkErr
 	}
 	return caps, nil
 }

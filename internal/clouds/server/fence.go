@@ -1,13 +1,14 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
 )
 
 type EffectFence struct {
@@ -15,6 +16,10 @@ type EffectFence struct {
 	Generation int64  `json:"generation"`
 }
 type effectFenceKey struct{}
+
+// errFenceOutcomeUnknown is a fenced request whose response stopped before
+// it was whole, so whether the effect ran is unknown.
+var errFenceOutcomeUnknown = errors.New("runtime effect fence outcome is unknown")
 
 func WithEffectFence(ctx context.Context, f EffectFence) context.Context {
 	return context.WithValue(ctx, effectFenceKey{}, f)
@@ -51,65 +56,18 @@ func (b *fenceBody) Close() error {
 	return errors.Join(b.ReadCloser.Close(), b.closeSession())
 }
 func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, method, path string, body io.Reader, headers http.Header) (*http.Response, error) {
-	if c.ssh == nil || c.Config.Details["docker_id"] == "" {
+	if c.access == nil || c.Config.Details["docker_id"] == "" {
+		if c.Config != nil && c.Config.Node != nil {
+			return nil, errors.New("verified runtime fencing is unavailable")
+		}
 		return nil, errors.New("verified SSH runtime fencing is unavailable")
 	}
-	session, err := c.ssh.NewSession()
-	if err != nil {
-		return nil, err
-	}
-	input, err := session.StdinPipe()
-	if err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-	output, err := session.StdoutPipe()
-	if err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-	script, err := fenceScript()
-	if err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-	// The constant script contains no credentials. Request headers and bodies use
-	// stdin only and never enter a shell command, file log or error response.
-	if err = session.Start("python3 -c '" + strings.ReplaceAll(script, "'", "'\"'\"'") + "'"); err != nil {
-		_ = session.Close()
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
-	request := struct {
-		Mode, Daemon, Socket, Method, Path string
-		Fence                              EffectFence
-		Headers                            http.Header
-	}{mode, c.Config.Details["docker_id"], c.Config.Socket, method, path, f, headers}
-	if err = json.NewEncoder(input).Encode(request); err == nil && body != nil {
-		_, err = io.Copy(input, body)
-	}
-	closeErr := input.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		stop()
-		_ = session.Close()
-		return nil, err
-	}
-	response, err := http.ReadResponse(bufio.NewReader(output), nil)
-	if err != nil {
-		stop()
-		_ = session.Close()
-		return nil, errors.New("runtime effect fence outcome is unknown")
-	}
-	response.Body = &fenceBody{ReadCloser: response.Body, closeSession: session.Close, stop: stop}
-	return response, nil
+	return c.access.FencedRequest(ctx, mode, f, c.Config.Details["docker_id"], c.Config.Socket, method, path, body, headers)
 }
 
 // fenceScript is effectFenceScript naming the images an owned proxy may run.
 func fenceScript() (string, error) {
-	images, err := json.Marshal(ingressImages())
+	images, err := json.Marshal(fencerules.IngressImages())
 	if err != nil {
 		return "", err
 	}
@@ -185,9 +143,9 @@ def main():
   assert not process['tty'] and not process['privileged']
  if ingress:
   assert process['entrypoint']=='sh' and args[0]=='-c'
-  admin=r"""` + ingressAdminScript + `"""
-  probe=r"""` + ingressProbeScript + `"""
-  token=r"""` + ingressTokenScript + `"""
+  admin=r"""` + fencerules.IngressAdminScript + `"""
+  probe=r"""` + fencerules.IngressProbeScript + `"""
+  token=r"""` + fencerules.IngressTokenScript + `"""
   assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply','reload')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3])) or (len(args)==4 and args[1]==token and args[2]=='dns' and re.fullmatch(r'[a-z0-9_]{1,64}',args[3]))
   c.request('GET','/containers/'+container+'/json');r=c.getresponse();owned=json.loads(r.read());assert r.status==200
   assert owned['Id']==container and owned['State']['Running'] and owned['Config']['Image'] in INGRESS_IMAGES

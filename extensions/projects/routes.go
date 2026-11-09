@@ -2,6 +2,7 @@ package projects
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/xraph/forge"
 
@@ -21,6 +22,15 @@ type ProjectList struct {
 // EnvironmentList is the body of GET /api/v1/projects/:id/environments.
 type EnvironmentList struct {
 	Environments []projects.Environment `json:"environments"`
+}
+
+// DeleteEnvironmentQuery is the query of DELETE
+// /api/v1/projects/:id/environments/:envId.
+type DeleteEnvironmentQuery struct {
+	// Keep names, by binding ID, what stays running when the environment
+	// goes, repeated once per binding. Everything else Loomplane made on
+	// Vercel and Render for the environment is deleted.
+	Keep []string `query:"keep,omitempty"`
 }
 
 // ProjectPermissions is the body of GET /api/v1/projects/:id/permissions:
@@ -110,6 +120,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodDelete, "/projects/:id/environments/:envId", e.deleteEnvironment, []forge.RouteOption{
 			forge.WithName("environments.delete"),
 			forge.WithSummary("Delete an environment and the variables set on it. A project's last environment can't be deleted."),
+			forge.WithQuerySchema(DeleteEnvironmentQuery{}),
 			forge.WithNoContentResponse(),
 			forge.WithEntity(forge.EntityDef{Type: "Environment", IDField: "id"}),
 		}},
@@ -316,7 +327,17 @@ func (e *Extension) deleteEnvironment(c forge.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.svc.DeleteEnvironment(c.Request().Context(), p, c.Param("id"), c.Param("envId")); err != nil {
+	// Each keep is one binding, or several joined with commas, as the
+	// generated REST client sends a list.
+	var opts projects.DeleteEnvironmentOptions
+	for _, v := range c.Request().URL.Query()["keep"] {
+		for id := range strings.SplitSeq(v, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				opts.Keep = append(opts.Keep, id)
+			}
+		}
+	}
+	if err := e.svc.DeleteEnvironment(c.Request().Context(), p, c.Param("id"), c.Param("envId"), opts); err != nil {
 		return fail(err)
 	}
 	return c.NoContent(http.StatusNoContent)

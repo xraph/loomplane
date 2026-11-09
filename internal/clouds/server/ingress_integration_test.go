@@ -11,6 +11,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -34,8 +36,14 @@ func ingressFixture(t *testing.T) (*Client, string) {
 	if os.Getenv("LOOMPLANE_TEST_INGRESS") != "1" {
 		t.Skip("set LOOMPLANE_TEST_INGRESS=1 for disposable real Docker/SSH ingress")
 	}
+	access := testAccess(t)
 	name := fmt.Sprintf("loomplane-ingress-test-%d", time.Now().UnixNano())
-	ingressDocker(t, "run", "-d", "--privileged", "--name", name, "--label", "loomplane.test=domain-ingress", "-e", "DOCKER_TLS_CERTDIR=", "-p", "127.0.0.1::22", "docker:29-dind", "dockerd", "--host=unix:///var/run/docker.sock")
+	run := []string{"run", "-d", "--privileged", "--name", name, "--label", "loomplane.test=domain-ingress", "-e", "DOCKER_TLS_CERTDIR=", "-p", "127.0.0.1::22"}
+	if access == "node" {
+		// The node in the container reaches the hub in this process.
+		run = append(run, "--add-host=host.docker.internal:host-gateway")
+	}
+	ingressDocker(t, append(run, "docker:29-dind", "dockerd", "--host=unix:///var/run/docker.sock")...)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -48,6 +56,13 @@ func ingressFixture(t *testing.T) (*Client, string) {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+	if access == "node" {
+		// The node runs where sshd would, on the same daemon, with no SSH
+		// and no Python: it fences with its own journal.
+		c := ContainerNodeFixture(t, name)
+		c.RequireFence = true
+		return c, name
 	}
 	ingressDocker(t, "exec", name, "sh", "-c", "apk add --no-cache openssh-server python3 && ssh-keygen -A && passwd -d root && mkdir -p /root/.ssh && chmod 700 /root/.ssh")
 	_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -73,7 +88,7 @@ func ingressFixture(t *testing.T) (*Client, string) {
 		t.Fatal(err)
 	}
 	cfg.Details["docker_id"] = ingressDocker(t, "exec", name, "docker", "info", "--format", "{{.ID}}")
-	c, err := Dial(t.Context(), cfg)
+	c, err := Connect(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +191,7 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM([]byte(ingressDocker(t, "exec", host, "docker", "exec", IngressName("org", "server"), "cat", "/data/caddy/pki/authorities/local/root.crt")))
-	public := ingressHTTPS(c, "127.0.0.1:443", "a.ingress.test", roots)
+	public := ingressHTTPS(c, "a.ingress.test", roots)
 	serving := func(want string) {
 		t.Helper()
 		response, getErr := ingressGet(t, public, "https://a.ingress.test/")
@@ -192,7 +207,7 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 	// Route b keeps /admin off its hostname; route a still serves it.
 	for hostname, want := range map[string]string{"a.ingress.test": "admin-a", "b.ingress.test": ""} {
 		for _, path := range []string{"/admin", "/admin/", "/admin/index.html"} {
-			response, getErr := ingressGet(t, ingressHTTPS(c, "127.0.0.1:443", hostname, roots), "https://"+hostname+path)
+			response, getErr := ingressGet(t, ingressHTTPS(c, hostname, roots), "https://"+hostname+path)
 			if getErr != nil {
 				t.Fatal(getErr)
 			}
@@ -206,7 +221,7 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 	// Caddy matches the cleaned, unescaped, case-folded path, so spellings of
 	// /admin can't slip past the block.
 	for _, path := range []string{"//admin/", "/ADMIN/", "/%61dmin/", "/x/../admin/"} {
-		response, getErr := ingressGet(t, ingressHTTPS(c, "127.0.0.1:443", "b.ingress.test", roots), "https://b.ingress.test"+path)
+		response, getErr := ingressGet(t, ingressHTTPS(c, "b.ingress.test", roots), "https://b.ingress.test"+path)
 		if getErr != nil {
 			t.Fatal(getErr)
 		}
@@ -277,4 +292,57 @@ func TestIngressRealCASAndIsolation(t *testing.T) {
 		t.Fatal("removal broke unrelated route", err)
 	}
 	t.Log("real pinned SSH/Docker, Caddy native CAS, stale worker rejection, two-project private network isolation, loopback admin, blocked path and exact release request checks passed")
+}
+
+// The fenced half of a node address check, against the real proxy: the
+// check's route answers its nonce on port 80 once applied, and is gone once
+// a config without it is applied.
+func TestIngressAddressCheckRoute(t *testing.T) {
+	c, host := ingressFixture(t)
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, _ := exec.CommandContext(context.Background(), "docker", "exec", host, "docker", "logs", IngressName("org", "server")).CombinedOutput()
+			t.Logf("Caddy diagnostics: %s", out)
+		}
+	})
+	ctx := WithEffectFence(t.Context(), EffectFence{Operation: "org/ingress/server", Generation: 1})
+	snapshot, err := EnsureIngress(ctx, c, "org", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const nonce = "0123456789abcdef0123456789abcdef"
+	plain := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return c.access.DialContext(ctx, "tcp", "127.0.0.1:80")
+	}}}
+	answer := func() (int, string, error) {
+		response, getErr := ingressGet(t, plain, "http://203.0.113.7"+NodeAddressPath+nonce)
+		if getErr != nil {
+			return 0, "", getErr
+		}
+		defer response.Body.Close()
+		body, readErr := io.ReadAll(response.Body)
+		return response.StatusCode, string(body), readErr
+	}
+	checking, err := ApplyIngress(ctx, c, snapshot, IngressConfig{OrgID: "org", ServerID: "server", Version: "address-check", InternalCA: true, AddressCheck: nonce})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var code int
+	var body string
+	for range 50 {
+		if code, body, err = answer(); err == nil && code == http.StatusOK {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil || code != http.StatusOK || body != nonce {
+		t.Fatalf("address check: %d %q %v", code, body, err)
+	}
+	if _, err = ApplyIngress(ctx, c, checking, IngressConfig{OrgID: "org", ServerID: "server", Version: "address-checked", InternalCA: true}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body, err = answer(); err == nil && code == http.StatusOK && body == nonce {
+		t.Fatal("the address check still answers after its removal")
+	}
+	t.Log("the fenced address check route answered its nonce on port 80 and was removed")
 }

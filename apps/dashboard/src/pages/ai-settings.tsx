@@ -14,6 +14,7 @@ import {
 import type { HuggingFaceToken } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { AgentSettings } from "@/components/agent-settings"
+import { AgentWatcherCard } from "@/components/agent-watcher-card"
 import { AIBudget } from "@/components/ai-budget"
 import { ApiKeysIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
@@ -46,6 +47,7 @@ import {
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { formatDate } from "@/lib/format"
+import { useAgent, useFeatures } from "@/lib/features"
 import { useOrganization } from "@/lib/organization"
 
 const description =
@@ -56,6 +58,8 @@ export function AISettings() {
   const settings = useQuery(useAiSettingsGet)
   const denied = settings.status === "error" && statusOf(settings.error) === 403
   const { can } = useOrganization()
+  const features = useFeatures()
+  const agent = useAgent()
   return (
     <>
       <SiteHeader crumbs={[{ label: "AI settings" }]} />
@@ -79,6 +83,9 @@ export function AISettings() {
         {settings.data && <AIBudget settings={settings.data} />}
         {settings.data && can("ai:manage") && (
           <AgentSettings unallocatedUsd={settings.data.unallocatedUsd} />
+        )}
+        {settings.data && features.ai && agent.enabled && can("agent:use") && (
+          <AgentWatcherCard />
         )}
         {settings.data && (
           <HuggingFaceSection

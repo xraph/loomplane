@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/nexus/provider"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 // Credentials resolves the key and base URL each of the agent's nexus
@@ -50,6 +51,25 @@ func (c *Credentials) ResolveCredential(ctx context.Context, providerName string
 		}
 		if s.cfg.APIKey == "" && providerName != config.AIProviderOpenAICompatible {
 			return provider.Credential{}, fmt.Errorf("agentsettings: refused a call to %s: the server has no key for it (ai.api_key), and the workspace chose none", providerName)
+		}
+		// The server's key is the platform's: the edition's gate says
+		// whether this workspace may use it, and the call is claimed so
+		// billing can price it later.
+		if err = s.canUseServerKey(ctx, st.OrgID); err != nil {
+			if errors.Is(err, metering.ErrBlocked) {
+				return provider.Credential{}, err
+			}
+			return provider.Credential{}, refusal("check whether the workspace may use the server's key", err)
+		}
+		requestID := pipeline.RequestID(ctx)
+		if requestID == "" {
+			return provider.Credential{}, errors.New("agentsettings: refused a call with no request id on the server's key")
+		}
+		if err = s.metering.Record(ctx, metering.Event{
+			ID: "ai-request:" + requestID, OrgID: st.OrgID, Feature: FeatureAIPlatformRequests,
+			ResourceRef: tenant + ":" + requestID, Quantity: 1, OccurredAt: s.now().UTC(), PlatformOwned: true,
+		}); err != nil {
+			return provider.Credential{}, refusal("claim the call on the server's key", err)
 		}
 		return provider.Credential{}, provider.ErrCredentialNotFound
 	}

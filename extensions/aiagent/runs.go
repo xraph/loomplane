@@ -45,6 +45,13 @@ func (e *Extension) registerRuns(c forge.Container, settings *agentsettings.Serv
 		Settings: settings, Binder: e.binder, Registry: e.ops, Authz: authz, Projects: projectSvc, Plans: plans,
 		Codec: e.codec, Wake: wake,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Debug: func(msg string, keyvals ...any) {
+			fields := make([]forge.Field, 0, len(keyvals)/2)
+			for i := 0; i+1 < len(keyvals); i += 2 {
+				fields = append(fields, forge.F(fmt.Sprint(keyvals[i]), keyvals[i+1]))
+			}
+			log.Debug(msg, fields...)
+		},
 	})
 	if kerr := runs.RegisterKind(agentruns.ChatSpec()); kerr != nil {
 		return kerr

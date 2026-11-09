@@ -51,7 +51,7 @@ func withPolicyLists(policy *CapacityPolicy) *CapacityPolicy {
 }
 
 func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, cloudID string, in CapacityPolicyInput) (*CapacityPolicy, error) {
-	if _, err := s.authorize(ctx, p, cloudID); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloudID); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {

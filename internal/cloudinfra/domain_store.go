@@ -209,7 +209,19 @@ const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_arr
  WHERE (b.subject='resource' OR svc->>'name'='main') AND EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$6)
  ORDER BY svc->>'name' LIMIT 1) routed ON true`
 
-var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+// routeServerAddress is where a server binding's route sends traffic: the
+// connection's advertise_host, else its SSH host. A node's connection has
+// no SSH host, and its advertise_host counts only while it is the address
+// the node confirmed by an address check and the node is in direct
+// ingress mode; otherwise it is empty. So a connection whose
+// advertise_host someone set by hand never routes to an address that
+// didn't answer, and a node its owner took out of direct ingress takes no
+// new route.
+const routeServerAddress = `CASE WHEN coalesce(c.details->>'node_id','')='' THEN coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+ ELSE coalesce((SELECT n.public_address FROM loomplane_nodes n WHERE n.id=c.details->>'node_id' AND n.org_id=c.org_id AND n.revoked_at IS NULL
+ AND n.ingress_mode='direct' AND n.public_address_confirmed_at IS NOT NULL AND n.public_address<>'' AND n.public_address=c.details->>'advertise_host'),'') END`
+
+var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),` + routeServerAddress + `,coalesce(c.details->>'node_id','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_targets t ON t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id'
@@ -221,14 +233,22 @@ var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.exte
  AND (b.subject='service' OR (` + routableComponent + `))
  ORDER BY b.subject='service' DESC`
 
+// errUnconfirmedNodeAddress is a node binding whose connection doesn't
+// name the node's confirmed address, as while an address change settles.
+var errUnconfirmedNodeAddress = fmt.Errorf("%w: the node this service runs on has no confirmed public address on this connection yet; Loomplane routes to a node once its address answers on port 80", ErrConflict)
+
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 	var out RouteBinding
 	var config []byte
-	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address)
+	var node string
+	err := row.Scan(&out.BindingID, &config, &out.ServerID, &out.TargetID, &out.ConnectionID, &out.ConnectionGeneration, &out.InstanceID, &out.RuntimeID, &out.ReleaseID, &out.ContainerID, &out.Address, &node)
 	if err != nil {
 		return out, storeError(err)
 	}
 	out.ConfigDigest = digest(json.RawMessage(config))
+	if node != "" && out.Address == "" {
+		return out, errUnconfirmedNodeAddress
+	}
 	if out.RuntimeID == "" || out.InstanceID == "" || out.ReleaseID == "" || out.ContainerID == "" || !validRouteAddress(out.Address) {
 		return out, fmt.Errorf("%w: no successful exact runtime receipt; redeploy this service successfully before configuring its route", ErrConflict)
 	}
@@ -321,6 +341,9 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 	}
 	if backend == RouteBackendFirecracker {
 		return scanFirecrackerRouteBinding(s.db.QueryRow(ctx, firecrackerRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+	}
+	if backend == platformCloudService {
+		return scanPlatformCloudRouteBinding(s.db.QueryRow(ctx, platformCloudRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
 	}
 	if backend == RouteBackendKubernetes {
 		return scanKubernetesRouteBinding(s.db.QueryRow(ctx, kubernetesRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
@@ -437,6 +460,10 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		// The organization lock already orders this with grant changes.
 		switch route.Binding.BackendName() {
 		case RouteBackendFirecracker:
+			if isPlatformCloud(route.Binding) {
+				current, lookupErr = scanPlatformCloudRouteBinding(tx.QueryRow(ctx, platformCloudRouteBindingQuery+" FOR SHARE OF b,i,pl", args...))
+				break
+			}
 			current, lookupErr = scanFirecrackerRouteBinding(tx.QueryRow(ctx, firecrackerRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
 		case RouteBackendKubernetes:
 			current, lookupErr = scanKubernetesRouteBinding(tx.QueryRow(ctx, kubernetesRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
@@ -509,6 +536,18 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		}
 		if current != route.Revision {
 			return ErrConflict
+		}
+		switch op.Kind {
+		case "address":
+			if checkErr := acceptAddressRoute(ctx, tx, op); checkErr != nil {
+				return checkErr
+			}
+		case "prepare":
+			// A handoff goes ahead of an address change still waiting; the
+			// change is made again once the handoff is done.
+			if checkErr := yieldAddressRoute(ctx, tx, op); checkErr != nil {
+				return checkErr
+			}
 		}
 		if op.Kind == "cutover" || op.Kind == "rollback" || op.Kind == "release" {
 			var released bool

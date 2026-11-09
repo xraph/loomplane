@@ -67,6 +67,27 @@ func (s *PgStore) ByNexusTenant(ctx context.Context, tenantID string) (*Settings
 	return got, nil
 }
 
+// ListEnabled implements Store.
+func (s *PgStore) ListEnabled(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT org_id FROM loomplane_ai_settings WHERE agent_enabled ORDER BY org_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list workspaces with the agent on: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list workspaces with the agent on: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("list workspaces with the agent on: %w", err)
+	}
+	return out, nil
+}
+
 // Save implements Store.
 func (s *PgStore) Save(ctx context.Context, in *Settings, expectRevision int64) error {
 	now := s.now().UTC()

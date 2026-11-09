@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/cortex"
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/id"
+	"github.com/xraph/cortex/knowledge"
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"github.com/xraph/nexus/pipeline"
 	"github.com/xraph/shield"
@@ -25,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -84,6 +86,45 @@ func TestStartRefusesAtBudget(t *testing.T) {
 	}
 	if w.store.count() != 0 {
 		t.Fatal("a task was written")
+	}
+}
+
+func TestAGateRefusalAtStartFailsTheTaskOnceWithItsReason(t *testing.T) {
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+	const why = "Turn on the AI add-on in Settings > Billing, or add your own model key."
+	w.settings.blocked = map[string]string{orgA: why}
+	if err := w.runStart(t, task); err != nil {
+		t.Fatalf("a gate refusal was retried: %v", err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusFailed || got.Error != why {
+		t.Fatalf("task %s %q, want failed with the reason", got.Status, got.Error)
+	}
+}
+
+// Billing still starting after a deploy refuses no one: the task's job is
+// tried again and the task stays open.
+func TestBillingNotReadyAtStartIsRetried(t *testing.T) {
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+	w.settings.mu.Lock()
+	w.settings.notReady = map[string]bool{orgA: true}
+	w.settings.mu.Unlock()
+	if err := w.runStart(t, task); !errors.Is(err, metering.ErrNotReady) {
+		t.Fatalf("billing not ready: %v, want the job retried with ErrNotReady", err)
+	}
+	if got := w.store.task(t, task.ID); got.Status == StatusFailed {
+		t.Fatalf("task failed with %q while billing was starting", got.Error)
+	}
+	w.settings.mu.Lock()
+	w.settings.notReady = nil
+	w.settings.mu.Unlock()
+	if err := w.runStart(t, task); err != nil {
+		t.Fatalf("the retry once billing is ready: %v", err)
+	}
+	if got := w.store.task(t, task.ID); got.Status == StatusFailed {
+		t.Fatalf("the retry failed the task: %q", got.Error)
 	}
 }
 
@@ -162,6 +203,31 @@ func TestStartRefusesUnknownKindsAndReservedMetadata(t *testing.T) {
 	}
 	if _, err = w.svc.Start(context.Background(), StartInput{Kind: KindChat, OrgID: orgA, OnBehalfOf: personPtr(orgA, ada)}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("no input: %v", err)
+	}
+}
+
+// Only an investigation the agent runs alone names a report: a chat, or
+// an investigation for a person, can't take one over.
+func TestOnlyTheAgentsInvestigationNamesAReport(t *testing.T) {
+	w := newWorld(t)
+	if err := w.svc.RegisterKind(KindSpec{Kind: KindInvestigation, Agent: "loomplane-investigation", MaxSteps: 1, DefaultMaxTokens: 1, MaxTokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{MetaReportID, MetaFingerprint} {
+		for name, in := range map[string]StartInput{
+			"a chat":                        {Kind: KindChat, OnBehalfOf: personPtr(orgA, ada)},
+			"an investigation for a person": {Kind: KindInvestigation, OnBehalfOf: personPtr(orgA, ada)},
+		} {
+			in.OrgID, in.Input, in.Metadata = orgA, "hi", map[string]string{key: "arep_1"}
+			if _, err := w.svc.Start(context.Background(), in); !errors.Is(err, ErrInvalid) {
+				t.Errorf("%s with %s: %v", name, key, err)
+			}
+		}
+	}
+	task := w.start(t, StartInput{Kind: KindInvestigation, ProjectID: "prj_mono",
+		Metadata: map[string]string{MetaReportID: "arep_1", MetaFingerprint: "fp_1"}})
+	if task.Metadata[MetaReportID] != "arep_1" || task.Metadata[MetaFingerprint] != "fp_1" {
+		t.Fatalf("metadata %v", task.Metadata)
 	}
 }
 
@@ -325,6 +391,51 @@ func TestStartJobPassesRunIDAndBudget(t *testing.T) {
 	}
 	if got := w.store.task(t, task.ID); got.Status != StatusRunning {
 		t.Fatalf("status %s", got.Status)
+	}
+}
+
+// knowingEngine is the fake engine with a knowledge provider, as cortex
+// is when knowledge is configured.
+type knowingEngine struct {
+	*fakeEngine
+}
+
+func (knowingEngine) Knowledge() knowledge.Provider { return knowingProvider{} }
+
+type knowingProvider struct{ knowledge.Provider }
+
+// Cortex leaves a builtin out of a run whose allowlist doesn't name it,
+// and refuses to prepare one that names a tool it doesn't have. So a chat
+// names knowledge_search only when cortex has knowledge; the authorizer
+// still decides, per workspace, whether the model sees it.
+func TestChatToolsNameKnowledgeSearchOnlyWithKnowledge(t *testing.T) {
+	for _, knows := range []bool{false, true} {
+		w := newWorld(t)
+		if knows {
+			w.svc.engine = func() runner { return knowingEngine{w.engine} }
+		}
+		task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+		if err := w.runStart(t, task); err != nil {
+			t.Fatal(err)
+		}
+		streams, _, _, _, _ := w.engine.calls()
+		o := streams[0].overrides
+		if !o.ToolsRestricted || slices.Contains(o.Tools, agentauthz.KnowledgeSearch) != knows || !slices.Contains(o.Tools, "list_teams") {
+			t.Errorf("with knowledge %v, tools %v", knows, o.Tools)
+		}
+		// A kind with its own list keeps it.
+		if err := w.svc.RegisterKind(KindSpec{Kind: KindInvestigation, Agent: "loomplane-investigation", Prompt: "Investigate.",
+			MaxSteps: 10, DefaultMaxTokens: 1000, MaxTokens: 1000, Tools: []string{"whoami"}}); err != nil {
+			t.Fatal(err)
+		}
+		task = w.start(t, StartInput{Kind: KindInvestigation})
+		if err := w.runStart(t, task); err != nil {
+			t.Fatal(err)
+		}
+		streams, _, _, _, _ = w.engine.calls()
+		if o := streams[1].overrides; !slices.Equal(o.Tools, []string{"whoami"}) {
+			t.Errorf("with knowledge %v, the investigation's tools %v", knows, o.Tools)
+		}
 	}
 }
 
@@ -860,5 +971,98 @@ func TestSweepGivesUpOnATaskThatNeverStarts(t *testing.T) {
 	}
 	if n := len(w.pendingNamed(t, JobStart)); n != 1 {
 		t.Fatalf("%d starts queued", n)
+	}
+}
+
+// refusingAuthz is the real authorizer with some checks refused, keyed
+// "<user> <resource:action> <resource>".
+type refusingAuthz struct {
+	inner  authorizer
+	refuse map[string]bool
+}
+
+func (a refusingAuthz) Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error {
+	if a.refuse[p.UserID+" "+perm.Name()+" "+resourceID] {
+		return security.ErrForbidden
+	}
+	return a.inner.Require(ctx, p, perm, resourceID)
+}
+
+// The person who asked for a task cancels it only while they may use the
+// agent on its project, or on the workspace for a workspace-wide task. A
+// read-only key of theirs can't.
+func TestCancelByTheRequesterNeedsAgentUse(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono"})
+	w.svc.authz = refusingAuthz{inner: w.authz, refuse: map[string]bool{ada + " " + security.AgentUse.Name() + " prj_mono": true}}
+	if err := w.svc.Cancel(ctx, person(orgA, ada), task.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("without agent:use on the project: %v, want ErrForbidden", err)
+	}
+	readOnly := person(orgA, ada)
+	readOnly.ReadOnly = true
+	w.svc.authz = w.authz
+	if err := w.svc.Cancel(ctx, readOnly, task.ID); err == nil {
+		t.Fatal("a read-only key cancelled a task")
+	}
+	if got, err := w.store.Get(ctx, orgA, task.ID); err != nil || Terminal(got.Status) {
+		t.Fatalf("refused cancels moved the task: %+v %v", got, err)
+	}
+	if err := w.svc.Cancel(ctx, person(orgA, ada), task.ID); err != nil {
+		t.Fatalf("with agent:use: %v", err)
+	}
+
+	// A workspace-wide task needs agent:use on the workspace.
+	wide := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada)})
+	w.svc.authz = refusingAuthz{inner: w.authz, refuse: map[string]bool{ada + " " + security.AgentUse.Name() + " ": true}}
+	if err := w.svc.Cancel(ctx, person(orgA, ada), wide.ID); err == nil {
+		t.Fatal("cancelled a workspace-wide task without agent:use")
+	}
+	w.svc.authz = w.authz
+	if err := w.svc.Cancel(ctx, person(orgA, ada), wide.ID); err != nil {
+		t.Fatalf("workspace-wide: %v", err)
+	}
+}
+
+// CancelTask cancels a task for a caller that holds no person, such as
+// release preparation when someone who may approve the release stops a
+// preparation another person asked for: the task is cancelled and its run
+// ends in cortex. Another workspace's task reads as not found and is left
+// alone, and a finished task can't be cancelled again.
+func TestCancelTaskNeedsNoPerson(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	task := w.start(t, StartInput{OnBehalfOf: personPtr(orgA, ada), ProjectID: "prj_mono"})
+	mustMove(t, w, task, StatusRunning)
+	theirs := w.start(t, StartInput{OrgID: orgB, OnBehalfOf: personPtr(orgB, bob)})
+
+	if err := w.svc.CancelTask(ctx, orgB, task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another workspace's ID: %v, want ErrNotFound", err)
+	}
+	if got := w.store.task(t, task.ID); got.Status != StatusRunning {
+		t.Fatalf("a cancel from another workspace moved the task to %s", got.Status)
+	}
+	if err := w.svc.CancelTask(ctx, orgA, "atask_nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown task: %v, want ErrNotFound", err)
+	}
+	if err := w.svc.CancelTask(ctx, "", task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no workspace: %v, want ErrNotFound", err)
+	}
+
+	if err := w.svc.CancelTask(ctx, orgA, task.ID); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusCancelled || got.FinishedAt == nil {
+		t.Fatalf("the task after: %+v", got)
+	}
+	if _, _, cancels, _, _ := w.engine.calls(); !slices.Equal(cancels, []string{task.RunID}) {
+		t.Fatalf("cancelled runs %v, want %s", cancels, task.RunID)
+	}
+	if err := w.svc.CancelTask(ctx, orgA, task.ID); !errors.Is(err, ErrNotCancelable) {
+		t.Fatalf("a finished task: %v, want ErrNotCancelable", err)
+	}
+	if got := w.store.task(t, theirs.ID); got.Status != StatusQueued {
+		t.Fatalf("the other workspace's task is %s", got.Status)
 	}
 }

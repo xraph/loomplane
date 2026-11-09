@@ -13,7 +13,7 @@ import (
 )
 
 type resourceRefresher interface {
-	Sync(context.Context, security.Principal, string) (*providerresources.ProviderResourceSync, error)
+	SyncIfIdle(context.Context, security.Principal, string) (*providerresources.ProviderResourceSync, error)
 	RefreshAll(context.Context) error
 }
 type resourceRefreshConnections interface {
@@ -61,7 +61,10 @@ func (r *providerResourceRefresh) runChecked(ctx context.Context, event checkedR
 		if c.OrgID != event.principal.OrgID || c.Generation != event.connection.Generation || c.Cloud != event.connection.Cloud || c.Status != connections.StatusReady || connections.AccountIdentity(c.Cloud, c.Account, c.Details) != connections.AccountIdentity(event.connection.Cloud, event.connection.Account, event.connection.Details) {
 			return nil
 		}
-		_, err := r.resources.Sync(ctx, event.principal, c.ID)
+		_, err := r.resources.SyncIfIdle(ctx, event.principal, c.ID)
+		if errors.Is(err, providerresources.ErrSyncRunning) {
+			return nil
+		}
 		return err
 	}
 	return nil

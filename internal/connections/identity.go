@@ -75,6 +75,12 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			return ""
 		}
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "docker_id", "advertise_host"}
+		if details["node_id"] != "" {
+			// A node is its ID and the key it joined with, which a rejoin
+			// with a new key moves to a new generation. Its public address
+			// follows DDNS, so it isn't part of who the node is.
+			keys = []string{"node_id", "identity_generation", "docker_socket", "docker_id"}
+		}
 	case Firecracker:
 		if details["host_id"] == "" {
 			return ""

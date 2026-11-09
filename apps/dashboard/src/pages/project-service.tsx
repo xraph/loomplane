@@ -37,6 +37,7 @@ import {
   CloudSectionHead,
   statusWord,
 } from "@/components/cloud-targets/infrastructure-ui"
+import { aliasOf, BindingAlias } from "@/components/binding-alias"
 import { AddHostnameDialog } from "@/components/domains/add-hostname-dialog"
 import { EdgeCacheDialog } from "@/components/domains/edge-cache-dialog"
 import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
@@ -1124,6 +1125,7 @@ function Uses({
   env: Environment
   bindings: Binding[]
 }) {
+  const can = useProjectCan(project.id)
   const binding = row.deployed[env.name]
   const links = deployedConfig(binding).env.filter(
     (l) => l.subject === "resource"
@@ -1174,18 +1176,30 @@ function Uses({
               <NameCell
                 tile={icon(r.kind)}
                 name={
-                  <ResourceLink
-                    project={project}
-                    env={env}
-                    name={r.rb ? r.name : undefined}
-                  >
-                    {r.name}
-                  </ResourceLink>
+                  <span className="inline-flex items-center gap-1">
+                    <ResourceLink
+                      project={project}
+                      env={env}
+                      name={r.rb ? r.name : undefined}
+                    >
+                      {r.rb ? aliasOf(r.rb) : r.name}
+                    </ResourceLink>
+                    {r.rb && can("deployment:create") && (
+                      <BindingAlias
+                        projectId={project.id}
+                        environment={env.name}
+                        binding={r.rb}
+                      />
+                    )}
+                  </span>
                 }
-                meta={
+                meta={[
+                  r.rb?.alias && r.name,
                   r.kind &&
-                  `${resourceLabel(r.kind)}${r.version ? ` ${r.version}` : ""}`
-                }
+                    `${resourceLabel(r.kind)}${r.version ? ` ${r.version}` : ""}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               />
               <Cell className="text-[12.5px] text-muted-foreground">
                 As <code className="font-mono text-foreground">{r.key}</code>
@@ -1230,12 +1244,19 @@ function Uses({
                   )
                 }
                 name={
-                  <>
+                  <span className="inline-flex items-center gap-1">
                     {cloudLabel(binding.provider)} app{" "}
                     <span className="font-mono font-medium">
-                      {binding.name}
+                      {aliasOf(binding)}
                     </span>
-                  </>
+                    {can("deployment:create") && (
+                      <BindingAlias
+                        projectId={project.id}
+                        environment={env.name}
+                        binding={binding}
+                      />
+                    )}
+                  </span>
                 }
                 meta={[
                   binding.externalId || binding.physicalId,

@@ -131,6 +131,9 @@ func (s *Service) SaveLocation(ctx context.Context, p security.Principal, cloudI
 	if err := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); err != nil {
 		return nil, err
 	}
+	if _, err := s.writable(ctx, p.OrgID, "", cloudID); err != nil {
+		return nil, err
+	}
 	location, err := normalizeLocation(in)
 	if err != nil {
 		return nil, err
@@ -241,6 +244,9 @@ func (s *Service) DeleteLocation(ctx context.Context, p security.Principal, clou
 	if err := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); err != nil {
 		return err
 	}
+	if _, err := s.writable(ctx, p.OrgID, "", cloudID); err != nil {
+		return err
+	}
 	st, err := s.locationStore()
 	if err != nil {
 		return err
@@ -308,6 +314,9 @@ func attestLocation(location CloudLocation, in LocationVerificationInput, actor 
 // VerifyLocation saves an operator attestation against the current account and region.
 func (s *Service) VerifyLocation(ctx context.Context, p security.Principal, cloudID, id string, in LocationVerificationInput) (*CloudLocation, error) {
 	if err := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); err != nil {
+		return nil, err
+	}
+	if _, err := s.writable(ctx, p.OrgID, "", cloudID); err != nil {
 		return nil, err
 	}
 	st, err := s.locationStore()

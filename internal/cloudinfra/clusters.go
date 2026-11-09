@@ -76,7 +76,7 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 			return nil, access, checkErr
 		}
 	}
-	profile, err := s.authorize(ctx, p, cloud)
+	profile, err := s.authorizeChange(ctx, p, cloud)
 	if err != nil {
 		return nil, access, err
 	}

@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -56,6 +58,23 @@ type buildRoundTripper func(*http.Request) (*http.Response, error)
 func (f buildRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogFixture, *int) {
+	t.Helper()
+	rig := newImageBuildRig(t, push)
+	return rig.job, rig.builder, rig.sink, rig.builds
+}
+
+// imageBuildRig is imageBuildFixture with the fake daemon's address, and
+// the sha256 of each build context the daemon read, in order.
+type imageBuildRig struct {
+	job     *Job
+	builder *ImageBuilder
+	sink    *buildLogFixture
+	builds  *int
+	daemon  string
+	tars    *[]string
+}
+
+func newImageBuildRig(t *testing.T, push bool) *imageBuildRig {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -120,7 +139,7 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 	job.Source = func(context.Context) (io.ReadCloser, int64, error) {
 		return io.NopCloser(bytes.NewReader(archive)), int64(len(archive)), nil
 	}
-	builds := new(int)
+	builds, tars := new(int), new([]string)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/version":
@@ -136,6 +155,8 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 			if readErr != nil {
 				t.Error(readErr)
 			}
+			sum := sha256.Sum256(data)
+			*tars = append(*tars, hex.EncodeToString(sum[:]))
 			files := contextFiles(t, data)
 			if files["marker"] != "approved-source-marker" {
 				t.Error("approved artifact marker absent")
@@ -162,13 +183,13 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 	if err != nil {
 		t.Fatal(err)
 	}
-	imageBuilder := &ImageBuilder{Dial: func(_ context.Context, cfg *server.Config) (*server.Client, error) {
+	imageBuilder := &ImageBuilder{Connect: func(_ context.Context, cfg *server.Config, _ server.NodeStreams) (*server.Client, error) {
 		return &server.Client{Config: cfg, HTTP: &http.Client{Transport: buildRoundTripper(func(r *http.Request) (*http.Response, error) {
 			r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
 			return http.DefaultTransport.RoundTrip(r)
 		})}}, nil
 	}}
-	return job, imageBuilder, sink, builds
+	return &imageBuildRig{job: job, builder: imageBuilder, sink: sink, builds: builds, daemon: u.Host, tars: tars}
 }
 
 func TestImageBuild_remoteArtifactCheckpointAndRedactedRepeatedOutput(t *testing.T) {

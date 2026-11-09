@@ -143,6 +143,7 @@ func (a *App) ownCommands() []cli.Command {
 				cli.NewBoolFlag("catalog", "", "Plan standalone resources without a repository", false),
 				cli.NewBoolFlag("no-wait", "", "Start planning and return", false), jsonFlag)),
 		a.promoteCommand(),
+		a.releaseCommand(),
 		a.rollbackCommand(),
 		cli.NewCommand("plans", "List a project's plans", a.plans, cli.WithUsage("plans <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,

@@ -36,7 +36,7 @@ func (s *Service) GPUInventory(ctx context.Context, p security.Principal, id str
 	defer cancel()
 	read := s.GPUReader
 	if read == nil {
-		read = readGPUs
+		read = s.readGPUs
 	}
 	inv, err := read(ctx, c, credential)
 	if err != nil {
@@ -45,7 +45,7 @@ func (s *Service) GPUInventory(ctx context.Context, p security.Principal, id str
 	return &inv, nil
 }
 
-func readGPUs(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error) {
+func (s *Service) readGPUs(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error) {
 	switch c.Cloud {
 	case Server:
 		cfg, err := server.ParseConfig(credential, c.Details)
@@ -53,7 +53,7 @@ func readGPUs(ctx context.Context, c *Connection, credential []byte) (provider.G
 			return provider.GPUInventory{}, err
 		}
 		maps.Copy(cfg.Details, c.Details)
-		native, err := server.Dial(ctx, cfg)
+		native, err := server.Connect(ctx, cfg, s.nodeStreams())
 		if err != nil {
 			return provider.GPUInventory{}, err
 		}

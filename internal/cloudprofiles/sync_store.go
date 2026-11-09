@@ -217,8 +217,8 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if decodeErr := json.Unmarshal(current, &target); decodeErr != nil {
 			return nil, decodeErr
 		}
-		if target.Revision != p.Input.Revision || p.Before == nil || target.ConnectionID != p.Before.ConnectionID || target.Provider != p.Before.Provider || target.Region != p.Before.Region || target.Runtime != p.Before.Runtime || target.PoolID != p.Before.PoolID || target.ManagedResourceID != p.Before.ManagedResourceID || target.LocationID != p.Before.LocationID {
-			return nil, ErrConflict
+		if checkErr := checkSyncTarget(target, p.Input.Revision, p.Before); checkErr != nil {
+			return nil, checkErr
 		}
 	}
 	if p.Input.Default {
@@ -674,4 +674,18 @@ func validateAcceptedReview(ctx context.Context, tx driver.Tx, p *Preview, snaps
 
 func sameDefaultPlacement(a, b *DefaultPlacement) bool {
 	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+// checkSyncTarget refuses a target change whose locked target is no longer
+// the one reviewed. A Loomplane Cloud target is never changed through a
+// sync: the platform owns it, and the projection guard would refuse the
+// write anyway.
+func checkSyncTarget(target Target, revision int64, before *Target) error {
+	switch {
+	case target.Runtime == "platform":
+		return ErrPlatformOwned
+	case target.Revision != revision || before == nil || target.ConnectionID != before.ConnectionID || target.Provider != before.Provider || target.Region != before.Region || target.Runtime != before.Runtime || target.PoolID != before.PoolID || target.ManagedResourceID != before.ManagedResourceID || target.LocationID != before.LocationID:
+		return ErrConflict
+	}
+	return nil
 }

@@ -35,6 +35,7 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 	pkgdiscovery "github.com/xraph/loomplane/pkg/discovery"
 )
@@ -140,6 +141,7 @@ type rtWorld struct {
 	deps   *rtDeployments
 	logs   *rtLogs
 	disco  *rtDiscovery
+	repos  *rtRepos
 	audit  *rtAudit
 }
 
@@ -172,13 +174,14 @@ func newRTWorld(t *testing.T) *rtWorld {
 	w.deps = &rtDeployments{authz: authz, deps: map[string]*deployments.Deployment{}}
 	w.logs = &rtLogs{lines: map[string][]string{}}
 	w.disco = &rtDiscovery{authz: authz}
+	w.repos = &rtRepos{}
 	w.safety = &agentsafety.Scanner{Engine: rtShield(t)}
 
 	w.reg = agentops.NewRegistry()
 	d := &agentops.Deps{
 		Projects: prj, Environments: &rtVariables{authz: authz, writes: writes}, Discovery: w.disco,
 		Manifests: &rtManifests{authz: authz, writes: writes}, Plans: w.plans, Deployments: w.deps,
-		Logs: w.logs, Authz: authz, Safety: w.safety, Audit: w.audit,
+		Logs: w.logs, Authz: authz, Safety: w.safety, Audit: w.audit, Repositories: w.repos,
 	}
 	agentops.Builtins(w.reg, d)
 	a := &agentauthz.Authorizer{Registry: w.reg, Plans: w.plans, Projects: prj, Authz: authz, ApprovalWindow: 72 * time.Hour}
@@ -293,6 +296,14 @@ func TestRedTeamTextNeverReachesTheModelRaw(t *testing.T) {
 					t.Fatalf("deployed doesn't name the commit: %s", res)
 				}
 				markerOnlyQuoted(t, "deployed", res, f.Marker)
+				// The head commit's message and author, and the latest
+				// release's name and tag, as the Git host gives them.
+				w.repos.text = f.Text
+				res = w.read("get_repository_state", map[string]string{"project": "api"})
+				if !strings.Contains(res, rtCommitSHA) || !strings.Contains(res, "/deployments/"+rtCommitPlan) {
+					t.Fatalf("get_repository_state doesn't name the commit: %s", res)
+				}
+				markerOnlyQuoted(t, "get_repository_state", res, f.Marker)
 			case redteam.SourceLogLine:
 				w.deps.add(&deployments.Deployment{
 					ID: rtDeployment, OrgID: rtOrg, ProjectID: rtProject, EnvironmentID: rtProject + "_staging", Environment: "staging",
@@ -334,6 +345,23 @@ func TestRedTeamTextNeverReachesTheModelRaw(t *testing.T) {
 				// every body through Untrusted, as here.
 				got := w.safety.Untrusted(w.ctx, agentsafety.SourceIssueBody, f.Text)
 				quotedOrWithheld(t, "issue body", got, f.Marker)
+			case redteam.SourceAgentOutput:
+				// Text the agent sends out never goes through Untrusted.
+				// A credential blocks the whole text and personal data is
+				// redacted, so the marker is gone either way.
+				out, err := w.safety.Outbound(w.ctx, f.Text)
+				switch f.Expect {
+				case redteam.ExpectBlock:
+					if !errors.Is(err, agentsafety.ErrOutboundBlocked) || out != "" {
+						t.Fatalf("outbound %s: %q, %v, want it blocked", f.Technique, out, err)
+					}
+				case redteam.ExpectRedact:
+					if err != nil || out == "" || strings.Contains(out, f.Marker) {
+						t.Fatalf("outbound %s: %q, %v, want it redacted", f.Technique, out, err)
+					}
+				default:
+					t.Fatalf("fixture %s expects %q", f.ID, f.Expect)
+				}
 			default:
 				t.Fatalf("no place surfaces source %q", f.Source)
 			}
@@ -351,6 +379,11 @@ func TestRedTeamTextNeverReachesTheModelRaw(t *testing.T) {
 // pauses for a person and never approves.
 func TestRedTeamObedientModelChangesNothing(t *testing.T) {
 	for _, f := range fixtures(redteam.KindAttack) {
+		if f.Source == redteam.SourceAgentOutput {
+			// A leak fixture is text going out, not an instruction a model
+			// could obey; TestRedTeamTextNeverReachesTheModelRaw scans it.
+			continue
+		}
 		t.Run(f.ID, func(t *testing.T) {
 			w := newRTWorld(t)
 			w.plans.add(&planning.Plan{
@@ -430,12 +463,21 @@ func TestBenignFixturesStillWork(t *testing.T) {
 	for _, f := range benign {
 		t.Run(f.ID, func(t *testing.T) {
 			w := newRTWorld(t)
-			got := w.safety.Untrusted(w.ctx, f.Source, f.Text)
-			if got == agentsafety.Withheld {
-				t.Fatalf("withheld a benign %s", f.Source)
-			}
-			if !isQuote(got) {
-				t.Fatalf("not quoted: %q", got)
+			if f.Source == redteam.SourceAgentOutput {
+				// Outbound text that looks like a credential but isn't goes
+				// out untouched.
+				out, err := w.safety.Outbound(w.ctx, f.Text)
+				if err != nil || out != f.Text {
+					t.Fatalf("outbound benign text: %q, %v", out, err)
+				}
+			} else {
+				got := w.safety.Untrusted(w.ctx, f.Source, f.Text)
+				if got == agentsafety.Withheld {
+					t.Fatalf("withheld a benign %s", f.Source)
+				}
+				if !isQuote(got) {
+					t.Fatalf("not quoted: %q", got)
+				}
 			}
 
 			res, err := w.dispatch("set_variable", map[string]any{"project": "api", "key": "RELEASE_NOTE", "value": f.Text})
@@ -808,8 +850,31 @@ func (f *rtDiscovery) Get(ctx context.Context, p security.Principal, _ string) (
 	return f.analysis(rtProject), nil
 }
 
+func (f *rtDiscovery) Sources(ctx context.Context, p security.Principal, projectID string) ([]*discovery.Source, error) {
+	if err := f.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
+		return nil, err
+	}
+	return []*discovery.Source{{ID: "src_api", OrgID: rtOrg, ProjectID: projectID, Alias: "api", Repository: "acme/api"}}, nil
+}
+
 func (f *rtDiscovery) AddSource(context.Context, security.Principal, string, discovery.AddSourceInput) (*discovery.Source, error) {
 	return nil, discovery.ErrInvalid
+}
+
+// rtRepos is a Git host whose every commit message, author, release name
+// and tag is text.
+type rtRepos struct{ text string }
+
+func (f *rtRepos) HeadCommit(_ context.Context, _ repositories.Repository, _, _ string) (repositories.Commit, error) {
+	return repositories.Commit{SHA: rtCommitSHA, Ref: "main", Message: f.text, Author: f.text, URL: "https://github.com/acme/api/commit/" + rtCommitSHA}, nil
+}
+
+func (f *rtRepos) LatestRelease(context.Context, repositories.Repository, string) (*repositories.Release, error) {
+	return &repositories.Release{Name: f.text, Tag: f.text, Kind: repositories.ReleaseKindRelease, URL: "https://github.com/acme/api/releases"}, nil
+}
+
+func (f *rtRepos) RepositoryURL(_ context.Context, repo repositories.Repository) string {
+	return repo.URL()
 }
 
 // rtManifests records every save.

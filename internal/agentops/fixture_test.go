@@ -108,6 +108,7 @@ func newWorld(t *testing.T) *world {
 	dsvc := deployments.NewService(w.dstore, w.authz, noRetry{}, nil)
 	dsvc.Projects = w.pstore
 	w.plans.authz = w.authz
+	w.disco.authz = w.authz
 	w.vars.authz = w.authz
 	w.deps = &Deps{
 		Projects: w.projects, Environments: w.vars, Discovery: w.disco, GitHub: w.github, Manifests: w.mans,
@@ -541,10 +542,14 @@ type fakePlans struct {
 	plans    map[string]*planning.Plan
 	bindings []*planning.Binding
 	deployed []*planning.DeployedRepository
-	created  []planning.CreatePlanInput
-	rejected []string
-	approved []string
-	rollback []planning.RollbackInput
+	// deployedIn, when set, is what each environment runs, by name, in
+	// place of deployed.
+	deployedIn  map[string][]*planning.DeployedRepository
+	deployedErr error
+	created     []planning.CreatePlanInput
+	rejected    []string
+	approved    []string
+	rollback    []planning.RollbackInput
 }
 
 func (f *fakePlans) RollbackTarget(ctx context.Context, p security.Principal, projectID, environment, deploymentID string) (*planning.RollbackTarget, error) {
@@ -666,9 +671,15 @@ func (f *fakePlans) Bindings(ctx context.Context, p security.Principal, projectI
 	return out, nil
 }
 
-func (f *fakePlans) Deployed(ctx context.Context, p security.Principal, projectID, _ string) ([]*planning.DeployedRepository, error) {
+func (f *fakePlans) Deployed(ctx context.Context, p security.Principal, projectID, environment string) ([]*planning.DeployedRepository, error) {
 	if err := f.authz.Require(ctx, p, security.DeploymentRead, projectID); err != nil {
 		return nil, err
+	}
+	if f.deployedErr != nil {
+		return nil, f.deployedErr
+	}
+	if f.deployedIn != nil {
+		return f.deployedIn[environment], nil
 	}
 	return f.deployed, nil
 }
@@ -713,7 +724,19 @@ func (f *fakeGitHub) Repositories(context.Context, security.Principal) ([]reposi
 	return nil, nil
 }
 
-type fakeDiscovery struct{}
+// fakeDiscovery lists sources, checking the principal through the real
+// Authorizer as discovery does, and refuses everything else.
+type fakeDiscovery struct {
+	authz   *security.Authorizer
+	sources map[string][]*discovery.Source // by project ID
+}
+
+func (f *fakeDiscovery) Sources(ctx context.Context, p security.Principal, projectID string) ([]*discovery.Source, error) {
+	if err := f.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
+		return nil, err
+	}
+	return f.sources[projectID], nil
+}
 
 func (fakeDiscovery) Start(context.Context, security.Principal, string, discovery.StartAnalysisInput) ([]*discovery.Analysis, error) {
 	return nil, nil

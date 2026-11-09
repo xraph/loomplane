@@ -30,7 +30,12 @@ func selectsPlacement(selector string, pin *CloudPlacement) bool {
 // using the Cloud is a participant; services there with a placement of their
 // own keep it.
 func (s *Service) previewDefaultSwitch(ctx context.Context, st cloudprofiles.SyncStore, p security.Principal, in cloudprofiles.ChangeInput, preview *cloudprofiles.Preview, snapshot *cloudprofiles.Snapshot, options []ConnectionOption) error {
-	if in.TargetID != "" || in.EnvironmentID != "" || in.Runtime != "" && in.Runtime != "managed" || in.PoolID != "" {
+	switch {
+	case in.Runtime == platformRuntime || strings.TrimSpace(in.Provider) == platformRuntime:
+		// Loomplane Cloud is reached through its own targets, never a
+		// Cloud default, which names a connection it doesn't have.
+		return fmt.Errorf("%w: Loomplane Cloud can't be a Cloud default; assign the environment to Loomplane Cloud and name its target with cloud_target", cloudprofiles.ErrInvalid)
+	case in.TargetID != "" || in.EnvironmentID != "" || in.Runtime != "" && in.Runtime != "managed" || in.PoolID != "":
 		return fmt.Errorf("%w: a default placement is one managed provider and connection", cloudprofiles.ErrInvalid)
 	}
 	profile, err := st.GetProfile(ctx, p.OrgID, "", in.CloudID)

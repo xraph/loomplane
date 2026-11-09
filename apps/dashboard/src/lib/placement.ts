@@ -38,6 +38,10 @@ export type PlacementRow = {
   name: string
   kind: string
   entry: Entry
+  /** repo is the alias of the repository a service is in, when that's settled. */
+  repo?: string
+  /** repoGone is true for a service whose repository the project no longer has. */
+  repoGone?: boolean
 }
 
 const localID = (s: Graph["services"][number]) => {
@@ -60,6 +64,67 @@ function matching(services: Graph["services"], entry: Entry, repo: string) {
 
 const repoOf = (entry: Entry, g: Graph) =>
   entry.repo || (g.sources?.length === 1 ? g.sources[0].alias : "")
+
+// The graph lists every repository the project still has, analyzed or
+// not, so an entry naming one it doesn't list, or a project left with
+// none, means the repository was removed. A graph from before
+// repositories lists none but still has services, and matches anywhere.
+const repoGone = (entry: Entry, g: Graph) =>
+  !!g.sources &&
+  (entry.repo
+    ? !g.sources.some((s) => s.alias === entry.repo)
+    : g.sources.length === 0 && g.services.length === 0)
+
+/** servicesInRepo names the manifest's services in one repository. */
+export function servicesInRepo(m: Manifest, g: Graph, alias: string): string[] {
+  return Object.entries((m.services ?? {}) as Record<string, Entry>)
+    .filter(([, entry]) => repoOf(entry, g) === alias)
+    .map(([name]) => name)
+}
+
+/**
+ * withoutServices drops services from a manifest along with what would
+ * leave it invalid: other services' needs on them and gateway routes to
+ * them. A gateway with no route left goes too, and is named in gateways.
+ */
+export function withoutServices(
+  m: Manifest,
+  names: string[]
+): { manifest: Manifest; gateways: string[] } {
+  const drop = new Set(names)
+  const services: Record<string, Entry & Record<string, unknown>> = {}
+  for (const [name, entry] of Object.entries(m.services ?? {})) {
+    if (drop.has(name)) continue
+    const next = { ...entry }
+    if (Array.isArray(entry.needs)) {
+      const needs = (entry.needs as string[]).filter((n) => !drop.has(n))
+      if (needs.length) next.needs = needs
+      else delete next.needs
+    }
+    if (entry.need_options) {
+      const options = Object.fromEntries(
+        Object.entries(entry.need_options).filter(([n]) => !drop.has(n))
+      )
+      if (Object.keys(options).length) next.need_options = options
+      else delete next.need_options
+    }
+    services[name] = next
+  }
+  const manifest: Manifest = { ...m, services }
+  const gone: string[] = []
+  if (m.gateways) {
+    const gateways: Record<string, unknown> = {}
+    for (const [name, gw] of Object.entries(m.gateways)) {
+      const routes = ((gw.routes ?? []) as { to: string }[]).filter(
+        (r) => !drop.has(r.to)
+      )
+      if (routes.length) gateways[name] = { ...gw, routes }
+      else gone.push(name)
+    }
+    manifest.gateways = gateways
+  }
+  return { manifest, gateways: gone }
+}
 
 /**
  * excludedNames are the manifest's services the project excludes. The
@@ -117,6 +182,8 @@ export function placementRows(
         found && (entry.kind || found.deployable)
           ? entry.kind || found.kind
           : "",
+      repo,
+      repoGone: repoGone(entry, g),
     })
   }
   for (const [name, entry] of Object.entries(m.resources ?? {}) as [

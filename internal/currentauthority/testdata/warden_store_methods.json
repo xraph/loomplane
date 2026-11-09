@@ -1,0 +1,1018 @@
+{
+  "module": "github.com/xraph/warden",
+  "version": "v1.8.1",
+  "scope": "Explicit installed Store routing contracts",
+  "source_files": [
+    {
+      "path": "role/store.go",
+      "sha256": "8c69abe9cb09e6b824b0c06df62837dea50bc315cfd4ba47757e292e918a39ea"
+    },
+    {
+      "path": "permission/store.go",
+      "sha256": "d92ca581a1439345e75e52db2159dc36786871b4630803c01a1932f9cf2c3fcc"
+    },
+    {
+      "path": "assignment/store.go",
+      "sha256": "1a9956b72481c8548a640d25dac894ab8d8c674df5a7652d9efdfbcd78d95cc1"
+    },
+    {
+      "path": "relation/store.go",
+      "sha256": "dc115abe58391f536ba5a54cf2c7cc0fbb698157d3822ea9e68f16d9689ef045"
+    },
+    {
+      "path": "policy/store.go",
+      "sha256": "21c5781e53033d6fa68432b9130e33e285ebe27510e2e7fa2ee71fabdd659665"
+    },
+    {
+      "path": "resourcetype/store.go",
+      "sha256": "98ea019695a91844628f35b40ffa69af8a2e6cc09f2df9b6b8fb3bbe05b15308"
+    },
+    {
+      "path": "checklog/store.go",
+      "sha256": "eb0f0bc6fb44cc2c138a67ae5c745094ab7855bee18e877e438903a5ede521d7"
+    },
+    {
+      "path": "store/store.go",
+      "sha256": "34ec30d68f19510d5f3bec06d6a993d91966420d662b7674407dc6a7328628d9"
+    },
+    {
+      "path": "store/postgres/store.go",
+      "sha256": "3bb14f8af0a189495fa972c5251fa6fdd2dec907018464557081e203c41350b3"
+    },
+    {
+      "path": "wardenerr/errors.go",
+      "sha256": "e80ef031aaa8720d7e7250b319a18e1c979d4e3e09ecd30e0f79ea903dbbd581"
+    }
+  ],
+  "counts": {
+    "reject_and_poison": 40,
+    "read": 40,
+    "context_free_close": 1
+  },
+  "typed_absence_read_count": 11,
+  "methods": [
+    {
+      "method": "AttachPermission",
+      "subsystem": "role",
+      "signature": "AttachPermission(ctx context.Context, tenantID string, roleID id.RoleID, ref permission.Ref) error",
+      "interface_line": 64,
+      "postgres_line": 443,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrPermissionNotFound",
+        "ErrRoleNotFound"
+      ]
+    },
+    {
+      "method": "CheckDirectRelation",
+      "subsystem": "relation",
+      "signature": "CheckDirectRelation(ctx context.Context, tenantID string, namespacePaths []string, objectType, objectID, rel, subjectType, subjectID string) (bool, error)",
+      "interface_line": 56,
+      "postgres_line": 1294,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "Close",
+      "subsystem": "store",
+      "signature": "Close() error",
+      "interface_line": 38,
+      "postgres_line": 170,
+      "ordinary": "coordinator_close_only",
+      "current": "context_free_close",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountAssignments",
+      "subsystem": "assignment",
+      "signature": "CountAssignments(ctx context.Context, filter *assignment.ListFilter) (int64, error)",
+      "interface_line": 29,
+      "postgres_line": 903,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountCheckLogs",
+      "subsystem": "checklog",
+      "signature": "CountCheckLogs(ctx context.Context, filter *checklog.QueryFilter) (int64, error)",
+      "interface_line": 23,
+      "postgres_line": 1857,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountPermissions",
+      "subsystem": "permission",
+      "signature": "CountPermissions(ctx context.Context, filter *permission.ListFilter) (int64, error)",
+      "interface_line": 39,
+      "postgres_line": 730,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountPolicies",
+      "subsystem": "policy",
+      "signature": "CountPolicies(ctx context.Context, filter *policy.ListFilter) (int64, error)",
+      "interface_line": 43,
+      "postgres_line": 1519,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountRelations",
+      "subsystem": "relation",
+      "signature": "CountRelations(ctx context.Context, filter *relation.ListFilter) (int64, error)",
+      "interface_line": 34,
+      "postgres_line": 1213,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountResourceTypes",
+      "subsystem": "resourcetype",
+      "signature": "CountResourceTypes(ctx context.Context, filter *resourcetype.ListFilter) (int64, error)",
+      "interface_line": 36,
+      "postgres_line": 1718,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CountRoles",
+      "subsystem": "role",
+      "signature": "CountRoles(ctx context.Context, filter *role.ListFilter) (int64, error)",
+      "interface_line": 47,
+      "postgres_line": 329,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CreateAssignment",
+      "subsystem": "assignment",
+      "signature": "CreateAssignment(ctx context.Context, a *assignment.Assignment) error",
+      "interface_line": 17,
+      "postgres_line": 806,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicateAssignment"
+      ]
+    },
+    {
+      "method": "CreateCheckLog",
+      "subsystem": "checklog",
+      "signature": "CreateCheckLog(ctx context.Context, e *checklog.Entry) error",
+      "interface_line": 13,
+      "postgres_line": 1755,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "CreatePermission",
+      "subsystem": "permission",
+      "signature": "CreatePermission(ctx context.Context, p *permission.Permission) error",
+      "interface_line": 16,
+      "postgres_line": 569,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicatePermission"
+      ]
+    },
+    {
+      "method": "CreatePolicy",
+      "subsystem": "policy",
+      "signature": "CreatePolicy(ctx context.Context, p *policy.Policy) error",
+      "interface_line": 16,
+      "postgres_line": 1349,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicatePolicy"
+      ]
+    },
+    {
+      "method": "CreateRelation",
+      "subsystem": "relation",
+      "signature": "CreateRelation(ctx context.Context, t *relation.Tuple) error",
+      "interface_line": 12,
+      "postgres_line": 1094,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicateRelation"
+      ]
+    },
+    {
+      "method": "CreateResourceType",
+      "subsystem": "resourcetype",
+      "signature": "CreateResourceType(ctx context.Context, rt *resourcetype.ResourceType) error",
+      "interface_line": 16,
+      "postgres_line": 1597,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicateResourceType"
+      ]
+    },
+    {
+      "method": "CreateRole",
+      "subsystem": "role",
+      "signature": "CreateRole(ctx context.Context, r *role.Role) error",
+      "interface_line": 18,
+      "postgres_line": 178,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicateRole"
+      ]
+    },
+    {
+      "method": "DeleteAssignment",
+      "subsystem": "assignment",
+      "signature": "DeleteAssignment(ctx context.Context, tenantID string, assID id.AssignmentID) error",
+      "interface_line": 23,
+      "postgres_line": 841,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrAssignmentNotFound"
+      ]
+    },
+    {
+      "method": "DeleteAssignmentsByRole",
+      "subsystem": "assignment",
+      "signature": "DeleteAssignmentsByRole(ctx context.Context, tenantID string, roleID id.RoleID) error",
+      "interface_line": 72,
+      "postgres_line": 1070,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteAssignmentsBySubject",
+      "subsystem": "assignment",
+      "signature": "DeleteAssignmentsBySubject(ctx context.Context, tenantID, subjectKind, subjectID string) error",
+      "interface_line": 69,
+      "postgres_line": 1058,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteAssignmentsByTenant",
+      "subsystem": "assignment",
+      "signature": "DeleteAssignmentsByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 75,
+      "postgres_line": 1081,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteCheckLogsBySubject",
+      "subsystem": "checklog",
+      "signature": "DeleteCheckLogsBySubject(ctx context.Context, tenantID, subjectKind, subjectID string) (int64, error)",
+      "interface_line": 38,
+      "postgres_line": 1899,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteCheckLogsByTenant",
+      "subsystem": "checklog",
+      "signature": "DeleteCheckLogsByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 41,
+      "postgres_line": 1915,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteExpiredAssignments",
+      "subsystem": "assignment",
+      "signature": "DeleteExpiredAssignments(ctx context.Context, now time.Time) (int64, error)",
+      "interface_line": 59,
+      "postgres_line": 1024,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteExpiredAssignmentsForTenant",
+      "subsystem": "assignment",
+      "signature": "DeleteExpiredAssignmentsForTenant(ctx context.Context, tenantID string, now time.Time) (int64, error)",
+      "interface_line": 66,
+      "postgres_line": 1039,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrTenantRequired"
+      ]
+    },
+    {
+      "method": "DeletePermission",
+      "subsystem": "permission",
+      "signature": "DeletePermission(ctx context.Context, tenantID string, permID id.PermissionID) error",
+      "interface_line": 33,
+      "postgres_line": 653,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrPermissionNotFound"
+      ]
+    },
+    {
+      "method": "DeletePermissionsByTenant",
+      "subsystem": "permission",
+      "signature": "DeletePermissionsByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 50,
+      "postgres_line": 793,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeletePoliciesByTenant",
+      "subsystem": "policy",
+      "signature": "DeletePoliciesByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 55,
+      "postgres_line": 1584,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeletePolicy",
+      "subsystem": "policy",
+      "signature": "DeletePolicy(ctx context.Context, tenantID string, polID id.PolicyID) error",
+      "interface_line": 37,
+      "postgres_line": 1463,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrPolicyNotFound"
+      ]
+    },
+    {
+      "method": "DeleteRelation",
+      "subsystem": "relation",
+      "signature": "DeleteRelation(ctx context.Context, tenantID string, relID id.RelationID) error",
+      "interface_line": 21,
+      "postgres_line": 1129,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrRelationNotFound"
+      ]
+    },
+    {
+      "method": "DeleteRelationTuple",
+      "subsystem": "relation",
+      "signature": "DeleteRelationTuple(ctx context.Context, tenantID, namespacePath, objectType, objectID, rel, subjectType, subjectID, subjectRelation string) error",
+      "interface_line": 28,
+      "postgres_line": 1143,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteRelationsByObject",
+      "subsystem": "relation",
+      "signature": "DeleteRelationsByObject(ctx context.Context, tenantID, objectType, objectID string) error",
+      "interface_line": 59,
+      "postgres_line": 1312,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteRelationsBySubject",
+      "subsystem": "relation",
+      "signature": "DeleteRelationsBySubject(ctx context.Context, tenantID, subjectType, subjectID string) error",
+      "interface_line": 62,
+      "postgres_line": 1324,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteRelationsByTenant",
+      "subsystem": "relation",
+      "signature": "DeleteRelationsByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 65,
+      "postgres_line": 1336,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteResourceType",
+      "subsystem": "resourcetype",
+      "signature": "DeleteResourceType(ctx context.Context, tenantID string, rtID id.ResourceTypeID) error",
+      "interface_line": 30,
+      "postgres_line": 1668,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrResourceTypeNotFound"
+      ]
+    },
+    {
+      "method": "DeleteResourceTypesByTenant",
+      "subsystem": "resourcetype",
+      "signature": "DeleteResourceTypesByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 39,
+      "postgres_line": 1742,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DeleteRole",
+      "subsystem": "role",
+      "signature": "DeleteRole(ctx context.Context, tenantID string, roleID id.RoleID) error",
+      "interface_line": 41,
+      "postgres_line": 270,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrRoleNotFound"
+      ]
+    },
+    {
+      "method": "DeleteRolesByTenant",
+      "subsystem": "role",
+      "signature": "DeleteRolesByTenant(ctx context.Context, tenantID string) error",
+      "interface_line": 77,
+      "postgres_line": 556,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "DetachPermission",
+      "subsystem": "role",
+      "signature": "DetachPermission(ctx context.Context, tenantID string, roleID id.RoleID, ref permission.Ref) error",
+      "interface_line": 67,
+      "postgres_line": 484,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrRoleNotFound"
+      ]
+    },
+    {
+      "method": "GetAssignment",
+      "subsystem": "assignment",
+      "signature": "GetAssignment(ctx context.Context, tenantID string, assID id.AssignmentID) (*assignment.Assignment, error)",
+      "interface_line": 20,
+      "postgres_line": 826,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrAssignmentNotFound",
+      "ordinary_typed_errors": [
+        "ErrAssignmentNotFound"
+      ]
+    },
+    {
+      "method": "GetCheckLog",
+      "subsystem": "checklog",
+      "signature": "GetCheckLog(ctx context.Context, tenantID string, logID id.CheckLogID) (*checklog.Entry, error)",
+      "interface_line": 17,
+      "postgres_line": 1770,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrCheckLogNotFound",
+      "ordinary_typed_errors": [
+        "ErrCheckLogNotFound"
+      ]
+    },
+    {
+      "method": "GetPermission",
+      "subsystem": "permission",
+      "signature": "GetPermission(ctx context.Context, tenantID string, permID id.PermissionID) (*permission.Permission, error)",
+      "interface_line": 19,
+      "postgres_line": 592,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrPermissionNotFound",
+      "ordinary_typed_errors": [
+        "ErrPermissionNotFound"
+      ]
+    },
+    {
+      "method": "GetPermissionByName",
+      "subsystem": "permission",
+      "signature": "GetPermissionByName(ctx context.Context, tenantID, namespacePath, name string) (*permission.Permission, error)",
+      "interface_line": 24,
+      "postgres_line": 607,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrPermissionNotFound",
+      "ordinary_typed_errors": [
+        "ErrPermissionNotFound"
+      ]
+    },
+    {
+      "method": "GetPolicy",
+      "subsystem": "policy",
+      "signature": "GetPolicy(ctx context.Context, tenantID string, polID id.PolicyID) (*policy.Policy, error)",
+      "interface_line": 19,
+      "postgres_line": 1372,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrPolicyNotFound",
+      "ordinary_typed_errors": [
+        "ErrPolicyNotFound"
+      ]
+    },
+    {
+      "method": "GetPolicyByName",
+      "subsystem": "policy",
+      "signature": "GetPolicyByName(ctx context.Context, tenantID, namespacePath, name string) (*policy.Policy, error)",
+      "interface_line": 23,
+      "postgres_line": 1387,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrPolicyNotFound",
+      "ordinary_typed_errors": [
+        "ErrPolicyNotFound"
+      ]
+    },
+    {
+      "method": "GetRelation",
+      "subsystem": "relation",
+      "signature": "GetRelation(ctx context.Context, tenantID string, relID id.RelationID) (*relation.Tuple, error)",
+      "interface_line": 17,
+      "postgres_line": 1114,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrRelationNotFound",
+      "ordinary_typed_errors": [
+        "ErrRelationNotFound"
+      ]
+    },
+    {
+      "method": "GetResourceType",
+      "subsystem": "resourcetype",
+      "signature": "GetResourceType(ctx context.Context, tenantID string, rtID id.ResourceTypeID) (*resourcetype.ResourceType, error)",
+      "interface_line": 19,
+      "postgres_line": 1620,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrResourceTypeNotFound",
+      "ordinary_typed_errors": [
+        "ErrResourceTypeNotFound"
+      ]
+    },
+    {
+      "method": "GetResourceTypeByName",
+      "subsystem": "resourcetype",
+      "signature": "GetResourceTypeByName(ctx context.Context, tenantID, namespacePath, name string) (*resourcetype.ResourceType, error)",
+      "interface_line": 23,
+      "postgres_line": 1635,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrResourceTypeNotFound",
+      "ordinary_typed_errors": [
+        "ErrResourceTypeNotFound"
+      ]
+    },
+    {
+      "method": "GetRole",
+      "subsystem": "role",
+      "signature": "GetRole(ctx context.Context, tenantID string, roleID id.RoleID) (*role.Role, error)",
+      "interface_line": 21,
+      "postgres_line": 201,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrRoleNotFound",
+      "ordinary_typed_errors": [
+        "ErrRoleNotFound"
+      ]
+    },
+    {
+      "method": "GetRoleBySlug",
+      "subsystem": "role",
+      "signature": "GetRoleBySlug(ctx context.Context, tenantID, namespacePath, slug string) (*role.Role, error)",
+      "interface_line": 32,
+      "postgres_line": 235,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": "ErrRoleNotFound",
+      "ordinary_typed_errors": [
+        "ErrRoleNotFound"
+      ]
+    },
+    {
+      "method": "GetRoles",
+      "subsystem": "role",
+      "signature": "GetRoles(ctx context.Context, tenantID string, roleIDs []id.RoleID) ([]*role.Role, error)",
+      "interface_line": 26,
+      "postgres_line": 216,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListActivePolicies",
+      "subsystem": "policy",
+      "signature": "ListActivePolicies(ctx context.Context, tenantID string, namespacePaths []string) ([]*policy.Policy, error)",
+      "interface_line": 49,
+      "postgres_line": 1549,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListAssignments",
+      "subsystem": "assignment",
+      "signature": "ListAssignments(ctx context.Context, filter *assignment.ListFilter) ([]*assignment.Assignment, error)",
+      "interface_line": 26,
+      "postgres_line": 855,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListCheckLogs",
+      "subsystem": "checklog",
+      "signature": "ListCheckLogs(ctx context.Context, filter *checklog.QueryFilter) ([]*checklog.Entry, error)",
+      "interface_line": 20,
+      "postgres_line": 1836,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListChildRoles",
+      "subsystem": "role",
+      "signature": "ListChildRoles(ctx context.Context, tenantID, parentSlug string) ([]*role.Role, error)",
+      "interface_line": 74,
+      "postgres_line": 539,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListExpiringAssignments",
+      "subsystem": "assignment",
+      "signature": "ListExpiringAssignments(ctx context.Context, tenantID string, before time.Time, limit int) ([]*assignment.Assignment, error)",
+      "interface_line": 55,
+      "postgres_line": 1005,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListPermissions",
+      "subsystem": "permission",
+      "signature": "ListPermissions(ctx context.Context, filter *permission.ListFilter) ([]*permission.Permission, error)",
+      "interface_line": 36,
+      "postgres_line": 685,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListPermissionsByRole",
+      "subsystem": "permission",
+      "signature": "ListPermissionsByRole(ctx context.Context, tenantID string, roleID id.RoleID) ([]*permission.Permission, error)",
+      "interface_line": 43,
+      "postgres_line": 763,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListPermissionsBySubject",
+      "subsystem": "permission",
+      "signature": "ListPermissionsBySubject(ctx context.Context, tenantID, subjectKind, subjectID string) ([]*permission.Permission, error)",
+      "interface_line": 47,
+      "postgres_line": 781,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListPolicies",
+      "subsystem": "policy",
+      "signature": "ListPolicies(ctx context.Context, filter *policy.ListFilter) ([]*policy.Policy, error)",
+      "interface_line": 40,
+      "postgres_line": 1477,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRelationObjects",
+      "subsystem": "relation",
+      "signature": "ListRelationObjects(ctx context.Context, tenantID, namespacePath, subjectType, subjectID, rel string, limit int) ([]*relation.Tuple, error)",
+      "interface_line": 49,
+      "postgres_line": 1273,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRelationSubjects",
+      "subsystem": "relation",
+      "signature": "ListRelationSubjects(ctx context.Context, tenantID string, namespacePaths []string, objectType, objectID, rel string, limit int) ([]*relation.Tuple, error)",
+      "interface_line": 43,
+      "postgres_line": 1252,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRelations",
+      "subsystem": "relation",
+      "signature": "ListRelations(ctx context.Context, filter *relation.ListFilter) ([]*relation.Tuple, error)",
+      "interface_line": 31,
+      "postgres_line": 1162,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListResourceTypes",
+      "subsystem": "resourcetype",
+      "signature": "ListResourceTypes(ctx context.Context, filter *resourcetype.ListFilter) ([]*resourcetype.ResourceType, error)",
+      "interface_line": 33,
+      "postgres_line": 1682,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRolePermissions",
+      "subsystem": "role",
+      "signature": "ListRolePermissions(ctx context.Context, tenantID string, roleID id.RoleID) ([]*permission.Permission, error)",
+      "interface_line": 53,
+      "postgres_line": 395,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRolePermissionsForRoles",
+      "subsystem": "role",
+      "signature": "ListRolePermissionsForRoles(ctx context.Context, tenantID string, roleIDs []id.RoleID) (map[id.RoleID][]*permission.Permission, error)",
+      "interface_line": 58,
+      "postgres_line": 407,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRoles",
+      "subsystem": "role",
+      "signature": "ListRoles(ctx context.Context, filter *role.ListFilter) ([]*role.Role, error)",
+      "interface_line": 44,
+      "postgres_line": 284,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRolesForSubject",
+      "subsystem": "assignment",
+      "signature": "ListRolesForSubject(ctx context.Context, tenantID string, namespacePaths []string, subjectKind, subjectID string) ([]id.RoleID, error)",
+      "interface_line": 40,
+      "postgres_line": 939,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListRolesForSubjectOnResource",
+      "subsystem": "assignment",
+      "signature": "ListRolesForSubjectOnResource(ctx context.Context, tenantID string, namespacePaths []string, subjectKind, subjectID, resourceType, resourceID string) ([]id.RoleID, error)",
+      "interface_line": 46,
+      "postgres_line": 963,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "ListSubjectsForRole",
+      "subsystem": "assignment",
+      "signature": "ListSubjectsForRole(ctx context.Context, tenantID string, roleID id.RoleID) ([]*assignment.Assignment, error)",
+      "interface_line": 50,
+      "postgres_line": 988,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "Migrate",
+      "subsystem": "store",
+      "signature": "Migrate(ctx context.Context) error",
+      "interface_line": 32,
+      "postgres_line": 152,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "Ping",
+      "subsystem": "store",
+      "signature": "Ping(ctx context.Context) error",
+      "interface_line": 35,
+      "postgres_line": 165,
+      "ordinary": "delegate_original",
+      "current": "read",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "PurgeCheckLogs",
+      "subsystem": "checklog",
+      "signature": "PurgeCheckLogs(ctx context.Context, before time.Time) (int64, error)",
+      "interface_line": 27,
+      "postgres_line": 1866,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": []
+    },
+    {
+      "method": "PurgeCheckLogsForTenant",
+      "subsystem": "checklog",
+      "signature": "PurgeCheckLogsForTenant(ctx context.Context, tenantID string, before time.Time) (int64, error)",
+      "interface_line": 34,
+      "postgres_line": 1881,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrTenantRequired"
+      ]
+    },
+    {
+      "method": "SetPolicyVersion",
+      "subsystem": "policy",
+      "signature": "SetPolicyVersion(ctx context.Context, tenantID string, polID id.PolicyID, version int) error",
+      "interface_line": 52,
+      "postgres_line": 1568,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrPolicyNotFound"
+      ]
+    },
+    {
+      "method": "SetRolePermissions",
+      "subsystem": "role",
+      "signature": "SetRolePermissions(ctx context.Context, tenantID string, roleID id.RoleID, refs []permission.Ref) error",
+      "interface_line": 70,
+      "postgres_line": 499,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrRoleNotFound"
+      ]
+    },
+    {
+      "method": "UpdatePermission",
+      "subsystem": "permission",
+      "signature": "UpdatePermission(ctx context.Context, p *permission.Permission) error",
+      "interface_line": 28,
+      "postgres_line": 623,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrPermissionNotFound"
+      ]
+    },
+    {
+      "method": "UpdatePolicy",
+      "subsystem": "policy",
+      "signature": "UpdatePolicy(ctx context.Context, p *policy.Policy) error",
+      "interface_line": 27,
+      "postgres_line": 1403,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicatePolicy",
+        "ErrPolicyNotFound"
+      ]
+    },
+    {
+      "method": "UpdatePolicyIfVersion",
+      "subsystem": "policy",
+      "signature": "UpdatePolicyIfVersion(ctx context.Context, p *policy.Policy, expected int) error",
+      "interface_line": 34,
+      "postgres_line": 1435,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrDuplicatePolicy",
+        "ErrPolicyNotFound",
+        "ErrPolicyVersionConflict"
+      ]
+    },
+    {
+      "method": "UpdateResourceType",
+      "subsystem": "resourcetype",
+      "signature": "UpdateResourceType(ctx context.Context, rt *resourcetype.ResourceType) error",
+      "interface_line": 27,
+      "postgres_line": 1651,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrResourceTypeNotFound"
+      ]
+    },
+    {
+      "method": "UpdateRole",
+      "subsystem": "role",
+      "signature": "UpdateRole(ctx context.Context, r *role.Role) error",
+      "interface_line": 38,
+      "postgres_line": 251,
+      "ordinary": "delegate_original",
+      "current": "reject_and_poison",
+      "current_expected_absence": null,
+      "ordinary_typed_errors": [
+        "ErrRoleNotFound"
+      ]
+    }
+  ]
+}

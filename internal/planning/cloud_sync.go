@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -103,6 +104,15 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if in.Shared() {
 		if authErr := s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID); authErr != nil {
 			return nil, authErr
+		}
+		// A shared change rewrites the Cloud's targets or default, which the
+		// platform-owned Loomplane Cloud never takes from an organization.
+		cloud, cloudErr := st.GetProfile(ctx, p.OrgID, "", in.CloudID)
+		if cloudErr != nil {
+			return nil, cloudErr
+		}
+		if cloud.PlatformOwned {
+			return nil, cloudprofiles.ErrPlatformOwned
 		}
 		snapshot.Shared = true
 	}
@@ -343,6 +353,13 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if poolPlacements == nil {
 			poolPlacements = map[string]CloudPlacement{}
 		}
+		// Services moving onto Loomplane Cloud take the room it previews,
+		// as pool services take their reviewed capacity.
+		platformPlacements, platformErr := s.syncPlatformPlacements(ctx, plan, capacityBindings, poolAssignment, in.TargetID)
+		if platformErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+platformErr.Error())
+		}
+		maps.Copy(poolPlacements, platformPlacements)
 		for _, c := range compensations {
 			if !c.Retained {
 				continue
@@ -554,7 +571,18 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 }
 
 func (s *Service) validateSyncTarget(ctx context.Context, t cloudprofiles.Target, options []ConnectionOption) error {
-	if t.Runtime == "server" {
+	switch t.Runtime {
+	case platformRuntime:
+		// A Loomplane Cloud target runs through no connection of the
+		// organization's, so there is none to look up.
+		if t.Provider != platformRuntime || t.ConnectionID != "" || t.PoolID != "" {
+			return cloudprofiles.ErrInvalid
+		}
+		if s.platform == nil {
+			return errPlatformUnavailable
+		}
+		return nil
+	case "server":
 		if t.Provider != "server" || t.PoolID == "" || t.ConnectionID != "" {
 			return cloudprofiles.ErrInvalid
 		}

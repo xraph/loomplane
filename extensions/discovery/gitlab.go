@@ -289,9 +289,12 @@ func gitlabInstanceHosts(cfg config.GitLabConfig) ([]repositories.GitLabHost, ma
 // SourceReaders reads the hosts a source can be on: GitHub, Bitbucket,
 // gitlab.com and whichever GitLab the registry knows.
 func SourceReaders(cfg config.Config, registry *repositories.GitLabRegistry) repositories.Readers {
+	github := repositories.NewGitHub(cfg.GitHub.APIURL)
+	// Commit and release links point at GitHub's pages, not its API.
+	github.WebURL = cfg.GitHub.WebURL
 	return repositories.Readers{
 		Static: map[string]repositories.Reader{
-			"github.com":               repositories.NewGitHub(cfg.GitHub.APIURL),
+			"github.com":               github,
 			repositories.HostBitbucket: repositories.NewBitbucket(cfg.Bitbucket.APIURL, cfg.Bitbucket.WebURL),
 			repositories.HostGitLab:    repositories.NewGitLab(cfg.GitLab.APIURL, nil),
 		},

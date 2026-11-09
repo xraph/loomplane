@@ -71,13 +71,35 @@ These need the agent on. On a server with `ai.enabled` off they print "This Loom
 
 | Command | What it does |
 |---|---|
+| `agent [--project REF] [--conversation ID]` | Opens a chat at a `you> ` prompt. Each line is a message, and the answer streams in as the agent writes it. When the agent asks a question you can answer, it asks it right there (`agent asks: ...`, options numbered): type the text or an option's number, or press Enter to leave it pending. Other requests print how to answer them. `/new` starts a new conversation, `/stop` stops the agent's task, `/follow` watches a task you left pending, and `/quit` or the end of input leaves. Ctrl-C while the agent answers stops its task and takes you back to the prompt. At the prompt it leaves. `--conversation` carries on one you started, picking up the agent where it waits |
+| `agent ask PROMPT [--project REF] [--conversation ID] [--json] [--no-wait]` | Asks one thing and prints the answer. Text goes to standard output as it comes. Each tool the agent uses goes to standard error as `· name (risk)`, then `  ok`, `  failed: why` or `  refused: why`. A question for a person prints with how to answer it. `--json` prints each event as one JSON line on standard output and nothing else. With `--no-wait`, a task that waits for a person exits 3 and tells you the `loomctl agent --conversation ID` to carry on with. Ctrl-C stops the task and exits 130 |
+| `agent conversations [--project REF] [--json]` | Lists your conversations: ID, project, title, status and when they were last updated |
+| `agent conversations rename ID TITLE` | Renames one of your conversations (up to 120 characters) |
+| `agent conversations delete ID` | Deletes one of your conversations, and stops the agent if it's still on it |
 | `agent requests [--all] [--mine] [--json]` | Lists what the agent is asking people for: ID, kind, project, question, who it was sent to, who it's asked for, and its age. `--all` includes settled requests. `--mine` keeps what's asked of you, your teams or, for admins, the workspace. A plan to approve adds the line `approve with: loomctl approve PLAN --revision REV` |
 | `agent requests answer ID TEXT...` | Answers a question |
 | `agent requests provide ID` | Sets the secret the agent asked for. The value comes from standard input, hidden on a terminal, and a value given as an argument is refused. It's never printed |
 | `agent requests done ID` | Says you connected GitHub or a cloud account |
 | `agent requests decline ID [--reason TEXT]` | Turns a request down. The agent sees the reason |
+| `agent reports [--all \| --status resolved\|closed] [--project REF] [--json]` | Lists what the watcher found: ID, severity, project, environment, title, how often and how long ago it was seen, and its GitHub issue. You get the open reports unless you pass `--all` or a `--status` |
+| `agent reports show ID [--json]` | Shows one report: its facts, what the agent's investigation found (summary, likely cause, suggestions and how sure it is) and the issue link |
+| `agent reports close ID [--reason TEXT]` | Closes a report. The reason is kept with it |
+| `agent watcher [--json]` | Says whether the watcher is watching or paused, and why if it's paused. It also lists each GitHub installation and whether it has accepted the Issues permission, so you can see why an issue hasn't been opened |
+
+`agent ask` exits 0 when the agent finishes, 1 when it fails, is stopped, or refuses the message (a 409: it's still on your last one, it's off for your workspace, or the budget is spent), 3 when `--no-wait` met a request, and 130 after Ctrl-C. A run Loomplane's safety checks stopped prints "Loomplane's safety checks stopped this answer." and exits 1.
 
 See [What needs a person](/docs/agents/what-needs-a-person#requests) for who is asked and who can answer.
+
+### Releases
+
+| Command | What it does |
+|---|---|
+| `release prepare PROJECT [--from ENV] [--to ENV] [--scope ALIAS] [--replace] [--wait] [--json]` | Asks for a release. Loomplane plans the promotion, collects evidence and has the agent review it. It prints the report's ID and path. Without `--from` and `--to` it uses the project's only staging and production environments. `--scope` takes aliases and is repeatable or comma separated. `--replace` replaces a production plan someone else has open. With `--wait` it follows the report every 3 seconds until it finishes or waits for a person, then prints it |
+| `release report ID [--json]` | Shows a release report: its state and reason, the seven gates as `pass` or `FAIL` with their details, each source's direction, commits and migrations, the soak, canaries, coverage, images and budget, and the agent's concerns under "From the agent". Text from outside Loomplane is printed in quotation marks. A report waiting for a person ends with `approve with: loomctl approve PLAN --revision REV` |
+| `release list PROJECT [--json]` | Lists a project's release reports: ID, environments, state, how many gates passed and its age |
+| `release cancel ID` | Stops a preparation that's still going |
+
+Preparing needs `deployment:create` and `agent:use` on the project. `loomctl mcp` has no tool that prepares a release, so a model can't start one through it. See [Release preparation](/docs/agents/release-preparation).
 
 ## Plans and deployments
 
@@ -138,13 +160,14 @@ Most of these review before they act and apply only with `--yes`. Many take `--w
 | `node run [--state-dir DIR] [--root-allowlist]` | Runs the node in the foreground. `--root-allowlist` trusts only a root-owned `allow.json`; the systemd unit sets it |
 | `node status [--json]` | Shows this node's config, key fingerprint, endpoints and whether it runs |
 | `node allow ENDPOINT...` | Widens what Loomplane may use here: `docker`, `dial`, `probe`, `kube` or `firecracker`. Writes `allow.json`, then tells the running node. Needs root on Linux |
-| `node leave` | Revokes this node, stops its service and removes its config. The next join makes a fresh key |
+| `node leave [--purge] [--purge-volumes [--yes-delete-volumes=NAME]]` | Revokes this node, stops its service and removes its config. The next join makes a fresh key. `--purge` also removes the containers and networks Loomplane made on this machine's Docker. `--purge-volumes` deletes its volumes and their data too, and asks you to type the node's name first; `--yes-delete-volumes=NAME` answers for you in a script |
+| `node drain NAME-OR-ID [--yes]` | Stops new placements on the node's server, after listing what runs there and warning about databases with no backups. Asks first unless you pass `--yes`. Moving what runs there is a reviewed move each, in the dashboard |
 | `node list [--json]` | Lists the organization's nodes |
 | `node revoke NAME-OR-ID` | Stops Loomplane trusting a node |
 | `node update --release TAG` | Replaces the node's binary with a signed release, and rolls back if the service won't start or stops within five seconds |
 | `node verify-release --release TAG --archive FILE --checksums FILE --bundle FILE` | Checks a downloaded release against its signature |
 
-`join`, `list` and `revoke` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
+`join`, `list`, `revoke` and `drain` take `--url` and `--key` too. `revoke NAME` only matches live nodes. A node that Loomplane revoked exits with code 77, including one that was off when you revoked it and finds out at its next connect.
 
 ## AI agents
 

@@ -43,6 +43,7 @@ vi.mock("@authsome/ui-react", () => ({
 }))
 vi.mock("@/components/shell", () => ({
   useShell: () => ({ openNewProject: () => {}, openShortcuts: () => {} }),
+  useAgentDock: () => null,
 }))
 vi.mock("@/lib/use-runs", () => ({ useRuns: () => ({ runs: [] }) }))
 
@@ -87,4 +88,18 @@ it("hides Cloud sign-in from everyone else", async () => {
   await userEvent.click(screen.getByText("Settings"))
   await screen.findByRole("menuitem", { name: "Integrations" })
   expect(screen.queryByRole("menuitem", { name: "Cloud sign-in" })).toBeNull()
+})
+
+it("shows Platform Cloud to a platform admin", async () => {
+  show(true)
+  await userEvent.click(screen.getByText("Settings"))
+  const link = await screen.findByRole("menuitem", { name: "Platform Cloud" })
+  expect(link).toHaveAttribute("href", "/platform/cloud")
+})
+
+it("hides Platform Cloud from everyone else", async () => {
+  show(false)
+  await userEvent.click(screen.getByText("Settings"))
+  await screen.findByRole("menuitem", { name: "Integrations" })
+  expect(screen.queryByRole("menuitem", { name: "Platform Cloud" })).toBeNull()
 })

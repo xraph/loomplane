@@ -749,3 +749,16 @@ func TestApprovingAPlanThatIsntReadyIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// The agent alone, as a watcher's investigation runs, makes a change call
+// without asking anyone, through the table and the preset alike: its
+// write-up of a report is one.
+func TestTheAgentAloneMakesAChange(t *testing.T) {
+	w := newWorld(t)
+	w.projects.add(orgA, "prj_mono")
+	for name, auth := range map[string]cortex.ToolAuthorizer{"table": w.a, "preset": w.shielded()} {
+		if err := w.authorize(auth, as(orgA, ""), "create_project", map[string]string{"name": "Ledger"}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

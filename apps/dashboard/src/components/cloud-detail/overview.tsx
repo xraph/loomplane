@@ -71,7 +71,6 @@ export function Overview({
   grants,
   projects,
   onTab,
-  onChanged,
 }: {
   scope: CloudScope
   owner: string
@@ -84,7 +83,6 @@ export function Overview({
   grants?: ProjectGrant[]
   projects: Project[]
   onTab: (tab: CloudTab) => void
-  onChanged: () => void
 }) {
   const { cloud, project } = scope
   const now = useNow()
@@ -280,12 +278,10 @@ export function Overview({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <EnvironmentsOnCloud
-          scope={scope}
           usage={usage}
           syncs={syncs}
           grants={grants}
           projects={projects}
-          onChanged={onChanged}
         />
         <section
           aria-label="Latest changes"

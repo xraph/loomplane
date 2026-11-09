@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/xraph/authsome/rbac"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -31,12 +32,12 @@ func TestGrantPlatformAdmin(t *testing.T) {
 
 	// The address is typed with different capitals than it was stored with.
 	for i, want := range []bool{true, false} {
-		granted, grantErr := platformadmin.Grant(ctx, users, roles, cfg.Identity.AppID, "Ada@Example.com")
+		_, granted, grantErr := platformadmin.Grant(ctx, users, roles, cfg.Identity.AppID, "Ada@Example.com")
 		if grantErr != nil || granted != want {
 			t.Fatalf("grant %d: granted=%v err=%v, want %v", i+1, granted, grantErr, want)
 		}
 	}
-	if _, err = platformadmin.Grant(ctx, users, roles, cfg.Identity.AppID, "nobody@example.com"); err == nil {
+	if _, _, err = platformadmin.Grant(ctx, users, roles, cfg.Identity.AppID, "nobody@example.com"); err == nil {
 		t.Fatal("granting an unknown email succeeded")
 	}
 
@@ -56,5 +57,30 @@ func TestGrantPlatformAdmin(t *testing.T) {
 	}
 	if owners != 1 {
 		t.Fatalf("platform-owner held %d times, want once: %+v", owners, held)
+	}
+
+	// The CLI records the grant the way grant-platform-admin does, from
+	// outside the running app, after setup's own event in the platform
+	// stream.
+	trail, closeAudit, err := platformadmin.OpenAudit(ctx, cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAudit()
+	if err = platformadmin.RecordGrant(ctx, trail, cfg.Identity.AppID, platformadmin.CLIActor, id, map[string]string{"host": "ops"}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := pgx.Connect(ctx, cfg.Database.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close(ctx) }()
+	var got string
+	if err = db.QueryRow(ctx, `SELECT tenant_id||'|'||user_id||'|'||resource_id||'|'||coalesce(metadata->>'role','')||'|'||coalesce(metadata->>'host','')
+		FROM chronicle_events WHERE action='platform_admin.granted'`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if want := platformadmin.AuditTenant + "|" + platformadmin.CLIActor + "|" + id + "|" + rbac.PlatformOwnerSlug + "|ops"; got != want {
+		t.Fatalf("grant recorded as %q, want %q", got, want)
 	}
 }

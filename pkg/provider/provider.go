@@ -127,6 +127,10 @@ type Provider struct {
 	Available bool `json:"available"`
 	// Note says what's missing, when it isn't available.
 	Note string `json:"note,omitempty"`
+	// Unlisted keeps the target out of every list a person picks from or
+	// is pointed to: provider hints, drafts and the providers API. It is
+	// reachable only through a Cloud target, as Loomplane Cloud is.
+	Unlisted bool `json:"-"`
 }
 
 // Engine returns who manages a deployment of r: Ctrl Plane for a container

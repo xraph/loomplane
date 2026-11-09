@@ -35,7 +35,7 @@ func TestManagedConnectionAdvertiseHostDefaultsAndOverrides(t *testing.T) {
 				}
 				settings, _ := json.Marshal(planning.ReviewedConnectionSettings(connection.Cloud, connection.Details))
 				labels := map[string]string{owned.LabelOrg: connection.OrgID, owned.LabelConnection: connection.ID, owned.LabelSettings: string(settings)}
-				target := &OwnedTarget{Cloud: connections.Server, Credentials: job.BuildCredentials, ServerDial: builder.Dial}
+				target := &OwnedTarget{Cloud: connections.Server, Credentials: job.BuildCredentials, ServerConnect: builder.Connect}
 				client, sessionErr := target.serverSession(connection.OrgID, connection.ID)(t.Context(), labels)
 				if sessionErr != nil {
 					t.Fatal(sessionErr)
@@ -69,7 +69,7 @@ func TestManagedConnectionRejectsRecordedIdentityDrift(t *testing.T) {
 						return
 					}
 					settings, _ := json.Marshal(planning.ReviewedConnectionSettings(connection.Cloud, connection.Details))
-					target := &OwnedTarget{Cloud: connections.Server, Credentials: job.BuildCredentials, ServerDial: builder.Dial}
+					target := &OwnedTarget{Cloud: connections.Server, Credentials: job.BuildCredentials, ServerConnect: builder.Connect}
 					client, sessionErr := target.serverSession(connection.OrgID, connection.ID)(t.Context(), map[string]string{owned.LabelOrg: connection.OrgID, owned.LabelConnection: connection.ID, owned.LabelSettings: string(settings)})
 					if sessionErr == nil {
 						client.Close()
@@ -105,7 +105,7 @@ func TestManagedConnectionRejectsChangedReviewedSettings(t *testing.T) {
 					}
 					return
 				}
-				target := &OwnedTarget{Cloud: connections.Server, Credentials: job.BuildCredentials, ServerDial: builder.Dial}
+				target := &OwnedTarget{Cloud: connections.Server, Credentials: job.BuildCredentials, ServerConnect: builder.Connect}
 				client, sessionErr := target.serverSession(connection.OrgID, connection.ID)(t.Context(), map[string]string{owned.LabelOrg: connection.OrgID, owned.LabelConnection: connection.ID, owned.LabelSettings: string(reviewed)})
 				if sessionErr == nil {
 					client.Close()

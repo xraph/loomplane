@@ -56,6 +56,13 @@ func (r *Recorder) StepFinished(provider, op, status string, took time.Duration)
 	r.observe("loomplane_deployment_step_duration_seconds", map[string]string{"provider": provider, "status": status}, took)
 }
 
+// AuditStaffCheckFailed records an authsome event that went to the app
+// level because its actor's platform roles couldn't be read, so it may
+// have been a staff event missing from the platform stream.
+func (r *Recorder) AuditStaffCheckFailed() {
+	r.count("loomplane_audit_staff_check_failures_total", nil)
+}
+
 // Planned records a plan worked out: ready, blocked or failed.
 func (r *Recorder) Planned(status string) {
 	r.count("loomplane_plans_total", map[string]string{"status": status})

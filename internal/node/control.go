@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hashicorp/yamux"
+
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
@@ -204,7 +206,7 @@ func (r *Runtime) leave(ctx context.Context) (string, error) {
 		}
 	}
 	r.leaving.Store(true)
-	if err := s.send(nodeproto.Leave{}); err != nil {
+	if err := s.send(nodeproto.Leave{}); err != nil && !leaveMayHaveGone(err) {
 		r.leaving.Store(false)
 		return "", fmt.Errorf("asking Loomplane to revoke this node: %w", err)
 	}
@@ -221,6 +223,21 @@ func (r *Runtime) leave(ctx context.Context) (string, error) {
 		r.leaving.Store(false)
 		return "", ctx.Err()
 	}
+}
+
+// leaveMayHaveGone reports whether a Leave whose send failed with err could
+// still have reached Loomplane. When it could, leave waits for the answer as
+// if the send had worked: a revoke still arrives as Revoked, an unauthorized
+// close, or a refused key at the reconnect, and a silence ends in "did not
+// confirm".
+//
+// yamux queues a frame and then waits for its writer's ack and for the
+// session's shutdown at once. A hub that reads the Leave and closes straight
+// away can win that race, so yamux.ErrSessionShutdown can come back for a
+// Leave that went out. A write timeout can come from the same wait. Any other
+// error means the frame was never queued.
+func leaveMayHaveGone(err error) bool {
+	return errors.Is(err, yamux.ErrSessionShutdown) || errors.Is(err, yamux.ErrConnectionWriteTimeout)
 }
 
 // controlCall sends one request to the node running on the socket at path.

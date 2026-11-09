@@ -22,13 +22,16 @@ var _ Store = (*PgStore)(nil)
 var _ Resolver = (*PgStore)(nil)
 
 const profileColumns = `id,org_id,project_id,name,revision,created_at,updated_at,default_provider,default_connection_id,default_region`
+
+// profileSelect adds what only the control plane writes to what a read returns.
+const profileSelect = profileColumns + `,platform_owned`
 const targetColumns = `id,org_id,project_id,cloud_id,name,display_name,provider,connection_id,region,revision,created_at,updated_at,runtime,pool_id,tags,coalesce(managed_resource_id,''),coalesce(location_id,'')`
 
 func scanProfile(row pgx.Row) (*Profile, error) {
 	var p Profile
 	var provider, connection *string
 	var region string
-	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.Name, &p.Revision, &p.CreatedAt, &p.UpdatedAt, &provider, &connection, &region); err != nil {
+	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.Name, &p.Revision, &p.CreatedAt, &p.UpdatedAt, &provider, &connection, &region, &p.PlatformOwned); err != nil {
 		return nil, storeError(err)
 	}
 	if provider != nil && connection != nil {
@@ -115,12 +118,12 @@ func (s *PgStore) CreateProfile(ctx context.Context, p *Profile) error {
 
 // GetProfile reads a Cloud only within its organization and project.
 func (s *PgStore) GetProfile(ctx context.Context, orgID, projectID, id string) (*Profile, error) {
-	return scanProfile(s.db.QueryRow(ctx, `SELECT `+profileColumns+` FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) AND id=$3`, orgID, projectID, id))
+	return scanProfile(s.db.QueryRow(ctx, `SELECT `+profileSelect+` FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) AND id=$3`, orgID, projectID, id))
 }
 
 // ListProfiles returns a deterministic list in the requested project.
 func (s *PgStore) ListProfiles(ctx context.Context, orgID, projectID string) ([]*Profile, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+profileColumns+` FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) ORDER BY name,id`, orgID, projectID)
+	rows, err := s.db.Query(ctx, `SELECT `+profileSelect+` FROM loomplane_cloud_profiles c WHERE org_id=$1 AND ($2='' OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=$2 AND NOT g.revoked)) ORDER BY name,id`, orgID, projectID)
 	if err != nil {
 		return nil, storeError(err)
 	}

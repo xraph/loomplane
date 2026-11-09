@@ -35,6 +35,7 @@ vi.mock("@authsome/ui-react", () => ({
 }))
 vi.mock("@/components/shell", () => ({
   useShell: () => ({ openNewProject: () => {}, openShortcuts: () => {} }),
+  useAgentDock: () => null,
 }))
 vi.mock("@/lib/use-runs", () => ({ useRuns: () => ({ runs: [] }) }))
 
@@ -59,6 +60,14 @@ function serve(enabled: boolean) {
           pending("areq_1"),
           pending("areq_2"),
           { ...pending("areq_3"), status: "answered" },
+        ],
+      })
+    if (path === "/api/v1/agent/reports")
+      return Response.json({
+        reports: [
+          { id: "arep_1", status: "open" },
+          { id: "arep_2", status: "open" },
+          { id: "arep_3", status: "open" },
         ],
       })
     return Response.json({ projects: [], members: [] })
@@ -112,4 +121,27 @@ it("shows no AI at all, and asks nothing of the API, when the server has AI off"
   expect(
     paths.filter((p) => p.includes("/agent/") || p.includes("/ai/"))
   ).toEqual([])
+})
+
+it("shows the open report count under Agent only when the agent is on", async () => {
+  serve(true)
+  show(true)
+  const link = await screen.findByRole("link", { name: /^Reports/ })
+  expect(link).toHaveAttribute("href", "/agent/reports")
+  await waitFor(() => expect(link).toHaveTextContent("3"))
+  cleanup()
+  forgeClient.clear()
+  const paths = serve(false)
+  show(true)
+  await waitFor(() => expect(paths).toContain("/api/v1/agent/status"))
+  expect(screen.queryByRole("link", { name: /^Reports/ })).toBeNull()
+  expect(paths).not.toContain("/api/v1/agent/reports")
+})
+
+it("asks for no reports when the server has AI off", async () => {
+  const paths = serve(true)
+  show(false)
+  await screen.findByRole("link", { name: "Overview" })
+  expect(screen.queryByRole("link", { name: /^Reports/ })).toBeNull()
+  expect(paths.filter((p) => p.includes("/agent/reports"))).toEqual([])
 })

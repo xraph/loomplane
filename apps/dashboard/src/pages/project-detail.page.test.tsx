@@ -100,6 +100,7 @@ test("the header names the project, its state and the way to deploy", async () =
     "Services",
     "Deployments",
     "Variables",
+    "Cloud",
     "Analyses",
     "Backups",
     "Settings",

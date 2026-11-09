@@ -47,3 +47,22 @@ func TestNetworkPolicyDedupesDeniedPorts(t *testing.T) {
 		t.Fatal(policy)
 	}
 }
+
+func TestNetworkPolicyUsesAllocatedAddressAndDeniedRange(t *testing.T) {
+	for _, tc := range []struct{ ip, denied string }{
+		{"192.0.2.2", "203.0.113.0/24"},
+		{"10.0.0.2", "198.51.100.0/24"},
+	} {
+		t.Run(tc.ip, func(t *testing.T) {
+			policy, err := networkPolicy("tap0", tc.ip, nil, nil, nil, nil, tc.denied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, rule := range []string{"ip saddr != " + tc.ip + " drop", "ip daddr " + tc.denied + " drop"} {
+				if !strings.Contains(policy, rule) {
+					t.Fatal("configured address rule missing", rule)
+				}
+			}
+		})
+	}
+}

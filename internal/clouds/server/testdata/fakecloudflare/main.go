@@ -1,7 +1,9 @@
 // Command fakecloudflare stands in for Cloudflare's DNS API and the zone's
-// nameserver in TestWildcardCertificateThroughDNSChallenge. It answers the
-// calls Caddy's Cloudflare module makes for one zone, accepts only the
-// expected token, serves the TXT records it was given over DNS, and says on
+// nameserver in TestWildcardCertificateThroughDNSChallenge and
+// TestNodeDeploysAndServes. It answers the calls Caddy's Cloudflare module
+// makes for one zone, and, given -account, the ones Loomplane's Cloudflare
+// connection and DNS adapter make. It accepts only the expected token,
+// serves the zone's TXT, A and AAAA records over DNS, and says on
 // :8080/status how many calls carried the token. It never prints a token.
 package main
 
@@ -28,11 +30,13 @@ type record struct {
 	Content string `json:"content"`
 	TTL     int    `json:"ttl"`
 	ZoneID  string `json:"zone_id"`
+	Proxied bool   `json:"proxied"`
+	Comment string `json:"comment"`
 }
 
 type fake struct {
-	token, zoneID, zone string
-	ip                  net.IP
+	token, zoneID, zone, account string
+	ip                           net.IP
 
 	mu                   sync.Mutex
 	records              map[string]record
@@ -42,19 +46,24 @@ type fake struct {
 
 func main() {
 	f := &fake{records: map[string]record{}}
-	var ip, cert, key string
+	var ip, cert, key, httpAPI string
 	flag.StringVar(&f.token, "token", "", "the only token accepted")
 	flag.StringVar(&f.zoneID, "zone-id", "", "Cloudflare ID of the zone")
 	flag.StringVar(&f.zone, "zone", "", "zone name")
 	flag.StringVar(&ip, "ip", "", "this server's address, the zone's nameserver")
 	flag.StringVar(&cert, "cert", "", "TLS certificate for api.cloudflare.com")
 	flag.StringVar(&key, "key", "", "TLS key")
+	flag.StringVar(&f.account, "account", "", "the Cloudflare account that owns the zone; set, the fake also answers Loomplane's own calls")
+	flag.StringVar(&httpAPI, "http-api", "", "also serve the API over plain HTTP on this address, such as :8081")
 	flag.Parse()
 	f.ip = net.ParseIP(ip).To4()
 	if f.token == "" || f.zoneID == "" || f.zone == "" || f.ip == nil {
 		log.Fatal("token, zone-id, zone and ip are required")
 	}
 	go f.serveDNS()
+	if httpAPI != "" {
+		go func() { log.Fatal(http.ListenAndServe(httpAPI, http.HandlerFunc(f.api))) }()
+	}
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/status", f.status)
@@ -102,11 +111,23 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 	f.authorized++
 	path := strings.TrimPrefix(r.URL.Path, "/client/v4")
 	records := "/zones/" + f.zoneID + "/dns_records"
+	account := "/accounts/" + f.account
+	zone := map[string]any{"id": f.zoneID, "name": f.zone, "status": "active", "name_servers": []string{"ns." + f.zone}, "account": map[string]string{"id": f.account}}
 	switch {
+	case f.account != "" && r.Method == http.MethodGet && (path == account+"/tokens/verify" || path == "/user/tokens/verify"):
+		reply(w, http.StatusOK, map[string]string{"id": "fake-token", "status": "active"})
+	case f.account != "" && r.Method == http.MethodGet && path == account:
+		reply(w, http.StatusOK, map[string]string{"id": f.account, "name": "Fake Cloudflare"})
+	case f.account != "" && strings.HasPrefix(path, account+"/registrar"):
+		// The token holds no registrar access.
+		reply(w, http.StatusForbidden, nil)
+	case f.account != "" && r.Method == http.MethodGet && path == "/zones/"+f.zoneID:
+		reply(w, http.StatusOK, zone)
 	case r.Method == http.MethodGet && path == "/zones":
 		zones := []map[string]any{}
-		if name := strings.TrimSuffix(r.URL.Query().Get("name"), "."); name == "" || name == f.zone {
-			zones = append(zones, map[string]any{"id": f.zoneID, "name": f.zone, "status": "active"})
+		q := r.URL.Query()
+		if name := strings.TrimSuffix(q.Get("name"), "."); (name == "" || name == f.zone) && (q.Get("account.id") == "" || q.Get("account.id") == f.account) {
+			zones = append(zones, zone)
 		}
 		reply(w, http.StatusOK, zones)
 	case r.Method == http.MethodGet && path == records:
@@ -120,7 +141,7 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, out)
 	case r.Method == http.MethodPost && path == records:
 		var rec record
-		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil || rec.Type != "TXT" {
+		if err := json.NewDecoder(r.Body).Decode(&rec); err != nil || !validContent(rec) {
 			reply(w, http.StatusBadRequest, nil)
 			return
 		}
@@ -129,6 +150,17 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 		rec.ID, rec.Name, rec.ZoneID = hex.EncodeToString(id), f.absolute(rec.Name), f.zoneID
 		f.records[rec.ID] = rec
 		f.created++
+		reply(w, http.StatusOK, rec)
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, records+"/"):
+		id := strings.TrimPrefix(path, records+"/")
+		rec, ok := f.records[id]
+		var in record
+		if !ok || json.NewDecoder(r.Body).Decode(&in) != nil || !validContent(in) {
+			reply(w, http.StatusBadRequest, nil)
+			return
+		}
+		rec.Type, rec.Name, rec.Content, rec.TTL, rec.Proxied, rec.Comment = in.Type, f.absolute(in.Name), in.Content, in.TTL, in.Proxied, in.Comment
+		f.records[id] = rec
 		reply(w, http.StatusOK, rec)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, records+"/"):
 		id := strings.TrimPrefix(path, records+"/")
@@ -142,6 +174,22 @@ func (f *fake) api(w http.ResponseWriter, r *http.Request) {
 	default:
 		reply(w, http.StatusNotFound, nil)
 	}
+}
+
+// validContent accepts TXT records, and A and AAAA records that hold an
+// address of their family. Cloudflare refuses anything else, Loomplane's
+// DNS Write probe among it.
+func validContent(rec record) bool {
+	ip := net.ParseIP(rec.Content)
+	switch rec.Type {
+	case "TXT":
+		return true
+	case "A":
+		return ip != nil && ip.To4() != nil
+	case "AAAA":
+		return ip != nil && ip.To4() == nil
+	}
+	return false
 }
 
 func (f *fake) serveDNS() {
@@ -198,7 +246,7 @@ func (f *fake) serveDNSStream(c net.Conn) {
 }
 
 // answer serves the zone: its SOA and NS, the nameserver's address, and
-// the TXT records the API holds. Every other name is empty.
+// the TXT, A and AAAA records the API holds. Every other name is empty.
 func (f *fake) answer(query []byte) ([]byte, error) {
 	var p dnsmessage.Parser
 	header, err := p.Start(query)
@@ -230,11 +278,19 @@ func (f *fake) answer(query []byte) ([]byte, error) {
 		err = b.NSResource(rh, dnsmessage.NSResource{NS: ns})
 	case q.Type == dnsmessage.TypeA && name == "ns."+f.zone:
 		err = b.AResource(rh, dnsmessage.AResource{A: [4]byte(f.ip)})
-	case q.Type == dnsmessage.TypeTXT:
+	case q.Type == dnsmessage.TypeTXT || q.Type == dnsmessage.TypeA || q.Type == dnsmessage.TypeAAAA:
 		f.mu.Lock()
 		for _, rec := range f.records {
-			if rec.Name == name && err == nil {
+			if rec.Name != name || err != nil {
+				continue
+			}
+			switch {
+			case q.Type == dnsmessage.TypeTXT && rec.Type == "TXT":
 				err = b.TXTResource(rh, dnsmessage.TXTResource{TXT: []string{strings.Trim(rec.Content, `"`)}})
+			case q.Type == dnsmessage.TypeA && rec.Type == "A":
+				err = b.AResource(rh, dnsmessage.AResource{A: [4]byte(net.ParseIP(rec.Content).To4())})
+			case q.Type == dnsmessage.TypeAAAA && rec.Type == "AAAA":
+				err = b.AAAAResource(rh, dnsmessage.AAAAResource{AAAA: [16]byte(net.ParseIP(rec.Content).To16())})
 			}
 		}
 		f.mu.Unlock()

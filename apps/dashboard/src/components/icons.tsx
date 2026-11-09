@@ -29,8 +29,10 @@ export {
   MagnifyingGlassIcon as NoMatchIcon,
   WebhooksLogoIcon as WebhooksIcon,
   BrainIcon as ModelsIcon,
+  SparkleIcon as AssistantIcon,
   GearSixIcon as SettingsIcon,
   UsersThreeIcon as TeamsIcon,
   SparkleIcon as AISettingsIcon,
   SignInIcon as CloudSignInIcon,
+  CloudArrowUpIcon as PlatformCloudIcon,
 } from "@phosphor-icons/react"

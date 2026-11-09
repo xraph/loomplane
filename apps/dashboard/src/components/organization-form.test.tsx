@@ -83,3 +83,17 @@ it("keeps an address you edited when the name changes, and creates with it", asy
     body: { name: "Acme Inc Engineering", slug: "acme-eng" },
   })
 })
+
+it("says what Cloud costs, in the cloud edition only", () => {
+  vi.stubEnv("VITE_LOOMPLANE_EDITION", "cloud")
+  render(<OrganizationForm onCreated={async () => {}} />)
+  expect(
+    screen.getByText(
+      "$5 a month, including $5 of usage. You'll add a card next."
+    )
+  ).toBeInTheDocument()
+  cleanup()
+  vi.unstubAllEnvs()
+  render(<OrganizationForm onCreated={async () => {}} />)
+  expect(screen.queryByText(/including \$5 of usage/)).not.toBeInTheDocument()
+})

@@ -1,15 +1,28 @@
-import { useState, type FormEvent, type ReactNode } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
   useApiKeysList,
+  useNodesDrain,
+  useNodesDrainApply,
   useNodesGet,
   useNodesList,
   useNodesRevoke,
   useNodesUpdate,
+  useNodesWorkloads,
 } from "@/client/forge/loomplane/hooks"
-import type { Node } from "@/client/forge/loomplane/types"
+import type {
+  DrainReview,
+  Node,
+  NodeWorkload,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { NodeStatus } from "@/components/nodes/node-status"
 import { Page, PageHeading } from "@/components/page"
@@ -40,7 +53,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { formatDate } from "@/lib/format"
-import { endpointBadges, gpuLabel, labelList } from "@/lib/nodes"
+import { endpointBadges, gpuLabel, ingressLine, labelList } from "@/lib/nodes"
 import { useOrganization } from "@/lib/organization"
 
 /** NodePage is one node: what Loomplane may use on it, who it is and what it runs on. */
@@ -49,7 +62,11 @@ export function NodePage({ id }: { id: string }) {
   const manage = can("nodes:manage")
   const node = useQuery(useNodesGet, { path: { id } })
   const n = node.data
-  const [dialog, setDialog] = useState<"rename" | "narrow" | "revoke">()
+  const [dialog, setDialog] = useState<
+    "rename" | "narrow" | "drain" | "revoke"
+  >()
+  const loads = useQuery(useNodesWorkloads, { path: { id } })
+  const workloads = loads.data?.workloads ?? []
   const live = !!n && n.status !== "revoked"
   const labels = n ? labelList(n) : []
 
@@ -107,6 +124,15 @@ export function NodePage({ id }: { id: string }) {
                     >
                       Narrow endpoints
                     </Button>
+                    {n.status !== "draining" &&
+                      n.endpoints.includes("docker") && (
+                        <Button
+                          variant="outline"
+                          onClick={() => setDialog("drain")}
+                        >
+                          Drain
+                        </Button>
+                      )}
                     <Button
                       variant="outline"
                       className="text-destructive hover:text-destructive"
@@ -123,18 +149,33 @@ export function NodePage({ id }: { id: string }) {
               <Identity node={n} />
               <Machine node={n} />
               <Release node={n} />
+              <Traffic node={n} />
             </div>
             <Section title="What runs here">
-              <p className="text-[13px] text-muted-foreground">
-                Nothing yet. Once deploying to nodes arrives, the services,
-                databases and domains on this machine show here.
-              </p>
+              {loads.status === "error" ? (
+                <QueryError
+                  error={loads.error}
+                  fallback="What runs here couldn't be loaded."
+                  retry={loads.refetch}
+                />
+              ) : !loads.data ? (
+                <Skeleton className="h-16 w-full rounded-lg" />
+              ) : (
+                <Workloads workloads={workloads} />
+              )}
             </Section>
             {dialog === "rename" && (
               <RenameDialog node={n} onClose={() => setDialog(undefined)} />
             )}
             {dialog === "narrow" && (
               <NarrowDialog node={n} onClose={() => setDialog(undefined)} />
+            )}
+            {dialog === "drain" && (
+              <DrainDialog
+                node={n}
+                workloads={workloads}
+                onClose={() => setDialog(undefined)}
+              />
             )}
             {dialog === "revoke" && (
               <RevokeDialog node={n} onClose={() => setDialog(undefined)} />
@@ -318,6 +359,164 @@ function Release({ node: n }: { node: Node }) {
         )}
       </Facts>
     </Section>
+  )
+}
+
+function Traffic({ node: n }: { node: Node }) {
+  return (
+    <Section title="Traffic">
+      <Facts>
+        <Fact label="Ingress">{ingressLine(n)}</Fact>
+      </Facts>
+      {n.ingressDetail && (
+        <p className="text-[13px] text-destructive">{n.ingressDetail}</p>
+      )}
+    </Section>
+  )
+}
+
+const noBackups =
+  "This database has no backups. If this machine is lost, its data is lost."
+
+/** unbacked is a database that nothing backs up, so a lost machine loses it. */
+const unbacked = (w: NodeWorkload) =>
+  w.kind === "database" && !w.hasBackupPolicy
+
+function Workloads({ workloads }: { workloads: NodeWorkload[] }) {
+  if (workloads.length === 0)
+    return (
+      <p className="text-[13px] text-muted-foreground">
+        Nothing runs on this node yet. Services, databases and jobs placed on
+        its server show here.
+      </p>
+    )
+  return (
+    <ul className="grid gap-2.5">
+      {workloads.map((w) => (
+        <li key={w.bindingId} className="grid gap-0.5 text-[13px]">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="font-medium">{w.service}</span>
+            <Badge variant="secondary">{w.kind}</Badge>
+            <span className="text-muted-foreground">
+              {w.projectId} · {w.environment}
+            </span>
+          </span>
+          {unbacked(w) && (
+            <span className="text-xs text-destructive">{noBackups}</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function DrainDialog({
+  node: n,
+  workloads,
+  onClose,
+}: {
+  node: Node
+  workloads: NodeWorkload[]
+  onClose: () => void
+}) {
+  const preview = useMutation(useNodesDrain)
+  const apply = useMutation(useNodesDrainApply)
+  const [review, setReview] = useState<DrainReview>()
+  const [error, setError] = useState("")
+  const started = useRef(false)
+  const { mutateAsync: previewDrain } = preview
+
+  // The review is the dialog's first step, so it runs when the dialog opens.
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    previewDrain({ path: { id: n.id } })
+      .then((r) => setReview(r as DrainReview))
+      .catch((err) =>
+        setError(messageOf(err, "The drain couldn't be reviewed."))
+      )
+  }, [n.id, previewDrain])
+
+  const confirm = async () => {
+    if (!review) return
+    setError("")
+    try {
+      await apply.mutateAsync({
+        path: { id: n.id },
+        body: { review: review.review },
+      })
+      toast.success(`${n.name} is draining`)
+      onClose()
+    } catch (err) {
+      setError(messageOf(err, "The drain wasn't applied."))
+    }
+  }
+
+  const running = review?.usage?.workloads ?? []
+  const lost = workloads.filter(unbacked)
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>Drain {n.name}</DialogTitle>
+          <DialogDescription>
+            Nothing new is placed on this node. What already runs there keeps
+            running until you move it, each with its own reviewed move.
+          </DialogDescription>
+        </DialogHeader>
+        {!review && !error && <Skeleton className="h-16 w-full rounded-lg" />}
+        {review && (
+          <div className="grid gap-3 text-[13px]">
+            <p>
+              The node&apos;s server holds {review.reservations}{" "}
+              {review.reservations === 1 ? "reservation" : "reservations"}.
+            </p>
+            {running.length > 0 && (
+              <ul className="grid gap-1.5">
+                {running.map((w) => (
+                  <li
+                    key={`${w.projectId}/${w.environmentId}/${w.service}`}
+                    className="flex flex-wrap items-center gap-2"
+                  >
+                    <span className="font-medium">{w.service}</span>
+                    <span className="text-muted-foreground">
+                      {w.projectId} · {w.environmentId} · {w.phase}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {lost.map((w) => (
+              <Alert key={w.bindingId} variant="destructive">
+                <AlertDescription>
+                  <span className="block font-medium">
+                    {w.service} · {w.environment}
+                  </span>
+                  <span>{noBackups}</span>
+                </AlertDescription>
+              </Alert>
+            ))}
+          </div>
+        )}
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={!review || apply.isPending}
+            onClick={() => void confirm()}
+          >
+            {apply.isPending && <Spinner />}
+            Apply reviewed drain
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

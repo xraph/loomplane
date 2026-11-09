@@ -214,6 +214,7 @@ export const binding = (
 ): Binding => ({
   id: `b_${name}`,
   name,
+  alias: "",
   subject: "resource",
   provider: "server",
   engine: "fabriq",

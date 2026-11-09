@@ -23,6 +23,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/pglock"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/setuptoken"
 )
 
@@ -425,7 +426,7 @@ func (e *Extension) setUp(ctx context.Context, req *account.SignUpRequest, name,
 		return nil, SetupResponse{}, err
 	}
 	if err := e.audit.Info(ctx, "instance.setup", "user", u.ID.String()).
-		Category("instance").AppID(e.cfg.Identity.AppID).UserID(u.ID.String()).Record(); err != nil {
+		Category("instance").AppID(e.cfg.Identity.AppID).TenantID(platformadmin.AuditTenant).UserID(u.ID.String()).Record(); err != nil {
 		e.Logger().Error("record audit event", forge.F("action", "instance.setup"), forge.F("error", err.Error()))
 	}
 	return sess, SetupResponse{

@@ -21,6 +21,9 @@ const (
 	KindAgentRequest = "agent.request"
 	KindAgentReport  = "agent.report"
 	KindAgentBudget  = "agent.budget"
+	// KindAgentRelease is how a release preparation ended: promoted,
+	// stale, stopped, blocked or failed.
+	KindAgentRelease = "agent.release"
 )
 
 const (

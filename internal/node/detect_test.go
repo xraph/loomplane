@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 
@@ -22,6 +23,30 @@ func fakeOpts(t *testing.T) DetectOptions {
 		NvidiaSMI:     func(context.Context) ([]byte, error) { return nil, errors.New("not found") },
 		Hostname:      func() (string, error) { return "box", nil },
 		Ports:         func() string { return "free" },
+		Addresses:     func() ([]net.Addr, error) { return nil, nil },
+	}
+}
+
+func TestDetectReportsPublicInterfaceAddresses(t *testing.T) {
+	o := fakeOpts(t)
+	o.Addresses = func() ([]net.Addr, error) {
+		return []net.Addr{
+			&net.IPNet{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(8, 32)},
+			&net.IPNet{IP: net.ParseIP("2001:db8::5"), Mask: net.CIDRMask(64, 128)},
+			&net.IPNet{IP: net.ParseIP("172.17.0.1"), Mask: net.CIDRMask(16, 32)},
+			&net.IPNet{IP: net.ParseIP("fe80::1"), Mask: net.CIDRMask(64, 128)},
+			&net.IPNet{IP: net.ParseIP("100.64.3.4"), Mask: net.CIDRMask(10, 32)},
+			&net.IPAddr{IP: net.ParseIP("203.0.113.7")},
+			&net.IPNet{IP: net.ParseIP("fd12::1"), Mask: net.CIDRMask(64, 128)},
+		}, nil
+	}
+	inv := Detect(context.Background(), o)
+	if want := []string{"203.0.113.7", "2001:db8::5"}; !slices.Equal(inv.PublicAddresses, want) {
+		t.Fatalf("PublicAddresses = %v, want %v", inv.PublicAddresses, want)
+	}
+	o.Addresses = func() ([]net.Addr, error) { return nil, errors.New("no interfaces") }
+	if inv = Detect(context.Background(), o); inv.PublicAddresses != nil {
+		t.Fatalf("PublicAddresses = %v after an error, want none", inv.PublicAddresses)
 	}
 }
 

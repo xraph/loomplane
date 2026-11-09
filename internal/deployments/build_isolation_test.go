@@ -44,7 +44,7 @@ func TestBuilderRejectsUnsafeWorkersBeforeDial(t *testing.T) {
 				target.BuilderSettings = planning.ReviewedBuildSettings(connections.Server, c.Details)
 			}
 			job.BuildCredentials = inventory
-			builder.Dial = func(context.Context, *server.Config) (*server.Client, error) {
+			builder.Connect = func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error) {
 				t.Fatal("unsafe build reached the host")
 				return nil, nil
 			}
