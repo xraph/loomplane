@@ -1397,3 +1397,42 @@ func TestBitbucketConnection_readsWithoutRenewing(t *testing.T) {
 		t.Fatalf("unconfigured Connection: %v", err)
 	}
 }
+
+// ReadyConnection reads the organization's ready connection to a workspace
+// as it's stored, and never renews its sign-in, even with a rejected
+// consumer.
+func TestBitbucketReadyConnection_neverRenews(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+	f.expire()
+	f.api.set(func(a *fakeBBAPI) { a.refreshErr = ErrBitbucketConsumerRejected })
+
+	got, err := f.conns.ReadyConnection(ctx, "aorg_a", "ACME")
+	if err != nil || got.ID != v.ID || got.Status != BitbucketReady {
+		t.Fatalf("ReadyConnection = %+v, %v", got, err)
+	}
+	if refreshes, lookups := f.api.counts(); refreshes != 0 || lookups != 0 {
+		t.Fatalf("%d refreshes and %d lookups to read a connection", refreshes, lookups)
+	}
+	if f.conns.consumerWasRejected() {
+		t.Fatal("reading a connection flagged the consumer")
+	}
+	if _, err := f.conns.ReadyConnection(ctx, "aorg_b", "acme"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("another organization's: %v", err)
+	}
+	if _, err := f.conns.ReadyConnection(ctx, "aorg_a", "other"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("a workspace that isn't connected: %v", err)
+	}
+	if err := f.store.SetBitbucketWorkspaceStatus(ctx, "aorg_a", v.ID, BitbucketReconnectNeeded, "again"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.conns.ReadyConnection(ctx, "aorg_a", "acme"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("one that needs connecting again: %v", err)
+	}
+	none := NewBitbucketConnections(f.store, nil, f.secrets, f.authz, nil, f.key)
+	if _, err := none.ReadyConnection(ctx, "aorg_a", "acme"); !errors.Is(err, ErrBitbucketNotConfigured) {
+		t.Fatalf("unconfigured: %v", err)
+	}
+}

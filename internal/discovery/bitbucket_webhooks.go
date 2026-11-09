@@ -100,11 +100,13 @@ func (s *Service) SetSourceHooks(h SourceHooks) { s.hooks = h }
 type HookStore = repositories.HookStore
 
 // HookConnections finds an organization's connection to a workspace, and a
-// token to act in it with. Connection reads one by ID as it's stored,
-// without renewing anything.
+// token to act in it with. Connection reads one by ID, and ReadyConnection
+// the ready one to a workspace, as they're stored, without renewing
+// anything.
 type HookConnections interface {
 	ConnectionFor(ctx context.Context, orgID, workspace string) (*repositories.BitbucketConnection, string, error)
 	Connection(ctx context.Context, orgID, id string) (*repositories.BitbucketConnection, error)
+	ReadyConnection(ctx context.Context, orgID, workspace string) (*repositories.BitbucketConnection, error)
 }
 
 // HookAPI adds and removes webhooks on Bitbucket.
@@ -389,7 +391,8 @@ func (w *BitbucketWebhooks) onState(ctx context.Context, orgID string, row *repo
 // again after a disconnect gives it a new ID, and a disconnect whose
 // cleanup failed, or a Turn on racing one, leaves the hook on the old ID.
 // The hook on Bitbucket stays as it is. With no ready connection the hook
-// is off until the workspace is connected again.
+// is off until the workspace is connected again. A sources listing reads
+// this for every repository, so it renews no token: it doesn't need one.
 func (w *BitbucketWebhooks) rebind(ctx context.Context, row *repositories.BitbucketHook) PushState {
 	repo, ok := onBitbucket(row.Repository)
 	if !ok {
@@ -397,7 +400,7 @@ func (w *BitbucketWebhooks) rebind(ctx context.Context, row *repositories.Bitbuc
 	}
 	// Only the row's own organization is asked, so a hook never moves to
 	// another organization's connection.
-	conn, _, err := w.Conns.ConnectionFor(ctx, row.OrgID, repo.Owner)
+	conn, err := w.Conns.ReadyConnection(ctx, row.OrgID, repo.Owner)
 	switch {
 	case errors.Is(err, repositories.ErrBitbucketNotConfigured):
 		return PushState{Reason: reasonNoConsumer}

@@ -561,6 +561,23 @@ func (c *BitbucketConnections) Connection(ctx context.Context, orgID, id string)
 	return c.store.GetBitbucketWorkspace(ctx, orgID, id)
 }
 
+// ReadyConnection returns the organization's ready connection to workspace
+// (a slug) as it's stored, without renewing its sign-in. None, or only one
+// that needs connecting again, is ErrWorkspaceNotFound.
+func (c *BitbucketConnections) ReadyConnection(ctx context.Context, orgID, workspace string) (*BitbucketConnection, error) {
+	if c.api == nil {
+		return nil, ErrBitbucketNotConfigured
+	}
+	row, err := c.find(ctx, orgID, workspace, true)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, ErrWorkspaceNotFound
+	}
+	return row, nil
+}
+
 // find returns the organization's connection whose slug is slug, or nil.
 // With readyOnly, one that needs connecting again doesn't count.
 func (c *BitbucketConnections) find(ctx context.Context, orgID, slug string, readyOnly bool) (*BitbucketConnection, error) {
