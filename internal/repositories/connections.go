@@ -51,7 +51,9 @@ type InstallationRecord struct {
 	CreatedBy   string
 	CreatedAt   time.Time
 	// Permissions are what the installation had accepted when Loomplane
-	// last read them, at PermissionsCheckedAt; nil when it never has.
+	// last read them; nil when it never has. PermissionsCheckedAt is when
+	// Loomplane last asked GitHub, which may be a failed attempt after
+	// that read: a failure keeps the permissions and moves only the time.
 	Permissions          map[string]string
 	PermissionsCheckedAt *time.Time
 }

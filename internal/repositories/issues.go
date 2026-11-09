@@ -40,7 +40,8 @@ type IssueAccess struct {
 }
 
 // InstallationIssues is whether one connected installation has accepted
-// the Issues permission.
+// the Issues permission. CheckedAt is when Loomplane last asked GitHub,
+// which may have failed; Accepted is from the last read that didn't.
 type InstallationIssues struct {
 	Account     string     `json:"account"`
 	AccountType string     `json:"account_type"`
