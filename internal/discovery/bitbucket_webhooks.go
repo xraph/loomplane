@@ -100,11 +100,13 @@ func (s *Service) SetSourceHooks(h SourceHooks) { s.hooks = h }
 type HookStore = repositories.HookStore
 
 // HookConnections finds an organization's connection to a workspace, and a
-// token to act in it with. Connection reads one by ID as it's stored,
-// without renewing anything.
+// token to act in it with. Connection reads one by ID, and ReadyConnection
+// the ready one to a workspace, as they're stored, without renewing
+// anything.
 type HookConnections interface {
 	ConnectionFor(ctx context.Context, orgID, workspace string) (*repositories.BitbucketConnection, string, error)
 	Connection(ctx context.Context, orgID, id string) (*repositories.BitbucketConnection, error)
+	ReadyConnection(ctx context.Context, orgID, workspace string) (*repositories.BitbucketConnection, error)
 }
 
 // HookAPI adds and removes webhooks on Bitbucket.
@@ -366,19 +368,59 @@ func (w *BitbucketWebhooks) State(ctx context.Context, orgID string, src *Source
 
 // onState is the state of a hook that's on: on while its connection can
 // still act, and off with a way back when the workspace is gone or needs
-// connecting again.
+// connecting again. A hook whose connection is gone moves to the
+// workspace's new one, if it has one.
 func (w *BitbucketWebhooks) onState(ctx context.Context, orgID string, row *repositories.BitbucketHook) PushState {
 	conn, err := w.Conns.Connection(ctx, orgID, row.ConnectionID)
 	switch {
 	case errors.Is(err, repositories.ErrBitbucketNotConfigured):
 		return PushState{Reason: reasonNoConsumer}
 	case errors.Is(err, repositories.ErrWorkspaceNotFound):
-		return PushState{Reason: reasonResume}
+		return w.rebind(ctx, row)
 	case err != nil:
 		w.warn("read the Bitbucket connection of webhook "+row.HookID, err)
 		return PushState{Reason: reasonUnknown}
 	case conn.Status != repositories.BitbucketReady:
 		return PushState{Reason: reasonResume}
+	}
+	return PushState{On: true}
+}
+
+// rebind moves an on hook whose connection is gone to its organization's
+// ready connection to the repository's workspace. Connecting a workspace
+// again after a disconnect gives it a new ID, and a disconnect whose
+// cleanup failed, or a Turn on racing one, leaves the hook on the old ID.
+// The hook on Bitbucket stays as it is. With no ready connection the hook
+// is off until the workspace is connected again. A sources listing reads
+// this for every repository, so it renews no token: it doesn't need one.
+func (w *BitbucketWebhooks) rebind(ctx context.Context, row *repositories.BitbucketHook) PushState {
+	repo, ok := onBitbucket(row.Repository)
+	if !ok {
+		return PushState{Reason: reasonResume}
+	}
+	// Only the row's own organization is asked, so a hook never moves to
+	// another organization's connection.
+	conn, err := w.Conns.ReadyConnection(ctx, row.OrgID, repo.Owner)
+	switch {
+	case errors.Is(err, repositories.ErrBitbucketNotConfigured):
+		return PushState{Reason: reasonNoConsumer}
+	case errors.Is(err, repositories.ErrWorkspaceNotFound):
+		return PushState{Reason: reasonResume}
+	case err != nil:
+		w.warn("find the Bitbucket connection for webhook "+row.HookID, err)
+		return PushState{Reason: reasonUnknown}
+	case conn.OrgID != row.OrgID || conn.Status != repositories.BitbucketReady || !strings.EqualFold(conn.WorkspaceSlug, repo.Owner):
+		return PushState{Reason: reasonResume}
+	}
+	moved := *row
+	moved.ConnectionID, moved.UpdatedAt = conn.ID, w.clock()
+	switch err := w.Hooks.UpdateBitbucketHook(ctx, &moved); {
+	case errors.Is(err, repositories.ErrHookNotFound):
+		// Released meanwhile.
+		return PushState{Reason: reasonNotSetUp}
+	case err != nil:
+		w.warn("move Bitbucket webhook "+row.HookID+" to connection "+conn.ID, err)
+		return PushState{Reason: reasonUnknown}
 	}
 	return PushState{On: true}
 }

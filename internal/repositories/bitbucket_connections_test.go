@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"sort"
 	"strings"
@@ -946,28 +948,46 @@ func TestBitbucketToken_refusedRefreshMarksReconnect(t *testing.T) {
 
 // Bitbucket turning down Loomplane's own key and secret is the operator's
 // to fix. The workspace's sign-in is still good, so nothing about it may
-// change, and it renews again once the configuration is right.
+// change: private repositories can't be read meanwhile, public ones are
+// read without it, and the same sign-in renews once the configuration is
+// right.
 func TestBitbucketToken_rejectedConsumerLeavesTheSignIn(t *testing.T) {
 	ctx := context.Background()
 	f := newBBFixture(t)
+	var warned []string
+	f.conns.SetWarn(func(msg string, err error) { warned = append(warned, msg+": "+err.Error()) })
 	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
 	v := f.connect(t, admin, "acme")
 	held, _ := f.secrets.get("aorg_a", v.ID)
 	saves := f.store.saves
+	if st, err := f.conns.Status(ctx, admin); err != nil || len(st.Problems) != 0 {
+		t.Fatalf("status before the rejection = %+v, %v", st, err)
+	}
 
 	f.api.set(func(a *fakeBBAPI) { a.refreshErr = ErrBitbucketConsumerRejected })
 	f.expire()
 	tok, err := f.conns.Token(ctx, "aorg_a", repo("acme", "api"))
-	if !errors.Is(err, ErrBitbucketConsumerRejected) || tok != "" {
-		t.Fatalf("Token with a rejected consumer = %q, %v; want ErrBitbucketConsumerRejected", tok, err)
+	if err != nil || tok != "" {
+		t.Fatalf("Token with a rejected consumer = %q, %v; want no token and no error", tok, err)
 	}
-	noTokens(t, "the error", err.Error())
+	if len(warned) != 1 || !strings.Contains(warned[0], "client_secret") {
+		t.Fatalf("the operator wasn't told: %q", warned)
+	}
+	noTokens(t, "the warning", warned[0])
 	row := f.store.row(v.ID)
 	if row.Status != BitbucketReady || row.Message != "" || f.store.saves != saves {
 		t.Fatalf("a rejected consumer changed the row: %s %q, %d saves", row.Status, row.Message, f.store.saves-saves)
 	}
 	if now, ok := f.secrets.get("aorg_a", v.ID); !ok || now != held {
 		t.Fatal("a rejected consumer touched the stored sign-in")
+	}
+	st, err := f.conns.Status(ctx, admin)
+	if err != nil || len(st.Problems) != 1 || !strings.Contains(st.Problems[0], "private repositories") {
+		t.Fatalf("status with a rejected consumer = %+v, %v", st, err)
+	}
+	noTokens(t, "the status", jsonOf(t, st))
+	if st.Workspaces[0].Status != BitbucketReady {
+		t.Fatalf("the workspace reads %s", st.Workspaces[0].Status)
 	}
 	list, err := f.conns.Repositories(ctx, admin)
 	if err != nil || len(list.Problems) != 1 {
@@ -986,6 +1006,65 @@ func TestBitbucketToken_rejectedConsumerLeavesTheSignIn(t *testing.T) {
 	if f.api.exchanges != 1 {
 		t.Fatalf("%d sign-ins, want the first one only", f.api.exchanges)
 	}
+	if st, err = f.conns.Status(ctx, admin); err != nil || len(st.Problems) != 0 {
+		t.Fatalf("status once the consumer is fixed = %+v, %v", st, err)
+	}
+}
+
+// With a rejected consumer an analysis of a public repository in a
+// connected workspace still reads it, anonymously, and a private one is
+// one Bitbucket won't show.
+func TestBitbucketToken_rejectedConsumerStillReadsPublicRepositories(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	f.connect(t, admin, "acme")
+	f.api.set(func(a *fakeBBAPI) { a.refreshErr = ErrBitbucketConsumerRejected })
+	f.expire()
+
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = append(auth, r.Header.Get("Authorization"))
+		signedIn := r.Header.Get("Authorization") != ""
+		switch r.URL.EscapedPath() {
+		case "/repositories/acme/site": // public
+			_, _ = w.Write([]byte(`{"mainbranch":{"name":"trunk"}}`))
+		case "/repositories/acme/site/refs/branches/trunk":
+			_, _ = w.Write([]byte(`{"target":{"hash":"` + sha + `"}}`))
+		case "/repositories/acme/api", "/repositories/acme/api/refs/branches/trunk": // private
+			if !signedIn {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(`{"mainbranch":{"name":"trunk"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	bb := NewBitbucket(srv.URL, srv.URL)
+
+	// What the runner does: a token for the repository, then Resolve.
+	tok, err := f.conns.Token(ctx, "aorg_a", repo("acme", "site"))
+	if err != nil {
+		t.Fatalf("repository access: %v", err)
+	}
+	got, err := bb.Resolve(ctx, repo("acme", "site"), "", tok)
+	if err != nil || got != sha {
+		t.Fatalf("Resolve the public repository = %q, %v", got, err)
+	}
+	if tok, err = f.conns.Token(ctx, "aorg_a", repo("acme", "api")); err != nil {
+		t.Fatalf("repository access: %v", err)
+	}
+	if _, err = bb.Resolve(ctx, repo("acme", "api"), "", tok); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Resolve the private repository: %v, want ErrNotFound", err)
+	}
+	for _, a := range auth {
+		if a != "" {
+			t.Fatalf("Bitbucket was sent a sign-in: %q", a)
+		}
+	}
 }
 
 // Connecting with a rejected consumer says so, and keeps nothing.
@@ -1000,6 +1079,16 @@ func TestBitbucketConnect_rejectedConsumer(t *testing.T) {
 	}
 	if rows, _ := f.store.ListBitbucketWorkspaces(ctx, "aorg_a"); len(rows) != 0 || f.secrets.len() != 0 {
 		t.Fatalf("a rejected consumer kept %d rows and %d secrets", len(rows), f.secrets.len())
+	}
+	// The card says so too, until a sign-in works.
+	st, err := f.conns.Status(ctx, admin)
+	if err != nil || len(st.Problems) != 1 || st.Problems[0] != bitbucketConsumerProblem {
+		t.Fatalf("status after a rejected connect = %+v, %v", st, err)
+	}
+	f.api.set(func(a *fakeBBAPI) { a.exchangeErr = nil })
+	f.connect(t, admin, "acme")
+	if st, err = f.conns.Status(ctx, admin); err != nil || len(st.Problems) != 0 {
+		t.Fatalf("status once a connect works = %+v, %v", st, err)
 	}
 }
 
@@ -1316,5 +1405,44 @@ func TestBitbucketConnection_readsWithoutRenewing(t *testing.T) {
 	none := NewBitbucketConnections(f.store, nil, f.secrets, f.authz, nil, f.key)
 	if _, err := none.Connection(ctx, "aorg_a", v.ID); !errors.Is(err, ErrBitbucketNotConfigured) {
 		t.Fatalf("unconfigured Connection: %v", err)
+	}
+}
+
+// ReadyConnection reads the organization's ready connection to a workspace
+// as it's stored, and never renews its sign-in, even with a rejected
+// consumer.
+func TestBitbucketReadyConnection_neverRenews(t *testing.T) {
+	ctx := context.Background()
+	f := newBBFixture(t)
+	admin := f.as(t, "aorg_a", "ausr_admin", security.RoleAdmin)
+	v := f.connect(t, admin, "acme")
+	f.expire()
+	f.api.set(func(a *fakeBBAPI) { a.refreshErr = ErrBitbucketConsumerRejected })
+
+	got, err := f.conns.ReadyConnection(ctx, "aorg_a", "ACME")
+	if err != nil || got.ID != v.ID || got.Status != BitbucketReady {
+		t.Fatalf("ReadyConnection = %+v, %v", got, err)
+	}
+	if refreshes, lookups := f.api.counts(); refreshes != 0 || lookups != 0 {
+		t.Fatalf("%d refreshes and %d lookups to read a connection", refreshes, lookups)
+	}
+	if f.conns.consumerWasRejected() {
+		t.Fatal("reading a connection flagged the consumer")
+	}
+	if _, err := f.conns.ReadyConnection(ctx, "aorg_b", "acme"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("another organization's: %v", err)
+	}
+	if _, err := f.conns.ReadyConnection(ctx, "aorg_a", "other"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("a workspace that isn't connected: %v", err)
+	}
+	if err := f.store.SetBitbucketWorkspaceStatus(ctx, "aorg_a", v.ID, BitbucketReconnectNeeded, "again"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.conns.ReadyConnection(ctx, "aorg_a", "acme"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("one that needs connecting again: %v", err)
+	}
+	none := NewBitbucketConnections(f.store, nil, f.secrets, f.authz, nil, f.key)
+	if _, err := none.ReadyConnection(ctx, "aorg_a", "acme"); !errors.Is(err, ErrBitbucketNotConfigured) {
+		t.Fatalf("unconfigured: %v", err)
 	}
 }
