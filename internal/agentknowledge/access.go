@@ -25,10 +25,11 @@ type ProjectAuthorizer interface {
 // project for the run's principal (the agent, with the person it acts
 // for), the same check that shows a report anywhere else. A report's
 // chunk that names no project needs deployment:read on the whole
-// workspace, which reaches every project. Every such chunk is dropped
-// when ctx carries no agent principal or authz is nil. The docs and
-// workspace-wide documents pass. The error joins the checks that failed;
-// their chunks are dropped too.
+// workspace, which reaches every project. A run scoped to one project
+// reads only that project's such chunks, whatever else the person may
+// read. Every such chunk is dropped when ctx carries no agent principal
+// or authz is nil. The docs and workspace-wide documents pass. The error
+// joins the checks that failed; their chunks are dropped too.
 func Readable(ctx context.Context, authz ProjectAuthorizer, chunks []knowledge.ScoredChunk) ([]knowledge.ScoredChunk, error) {
 	call, callErr := agentops.CallFrom(cortex.Invocation{Subject: cortex.Subject{
 		Scope: cortex.ScopeFromContext(ctx), Principal: cortex.PrincipalFromContext(ctx),
@@ -42,7 +43,7 @@ func Readable(ctx context.Context, authz ProjectAuthorizer, chunks []knowledge.S
 			out = append(out, c)
 			continue
 		}
-		if callErr != nil || authz == nil {
+		if callErr != nil || authz == nil || (call.Scope.ProjectID != "" && projectID != call.Scope.ProjectID) {
 			continue
 		}
 		ok, seen := allowed[projectID]

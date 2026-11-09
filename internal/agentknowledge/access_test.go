@@ -191,6 +191,15 @@ func TestReadableFailsClosed(t *testing.T) {
 	if got, err = agentknowledge.Readable(ctx, nil, chunks); err != nil || !slices.Equal(contents(got), []string{"docs", "runbook"}) {
 		t.Fatalf("Readable with no authorizer = %v, %v", contents(got), err)
 	}
+	// A run scoped to one project reads that project's reports alone, even
+	// where the person may read others. The docs and workspace-wide
+	// documents still pass.
+	scoped := cortex.WithPrincipal(cortex.WithScope(context.Background(), agentscope.Scope{OrgID: accessOrg, ProjectID: "proj_1"}.Cortex()),
+		security.AgentPrincipal(accessOrg, nil))
+	got, err = agentknowledge.Readable(scoped, fakeProjectAuthz{projects: []string{"", "proj_1", "proj_2"}}, chunks)
+	if err != nil || !slices.Equal(contents(got), []string{"docs", "runbook", "p1"}) {
+		t.Fatalf("Readable in a project's run = %v, %v", contents(got), err)
+	}
 	// A person's principal on another workspace's scope reads no report.
 	other := cortex.WithPrincipal(cortex.WithScope(context.Background(), agentscope.Scope{OrgID: "aorg_other"}.Cortex()),
 		security.AgentPrincipal(accessOrg, nil))
