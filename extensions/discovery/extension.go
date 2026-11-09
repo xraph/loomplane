@@ -186,6 +186,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		Target:  e.gitlab.WebhookTarget,
 		Sources: discovery.NewPgStore(pg).SourcesByRepository,
 		Start:   e.svc.StartFromGitLabPush,
+		Unreadable: func(_ context.Context, id string) {
+			e.Logger().Warn("a verified GitLab push couldn't be read", forge.F("connection", id))
+		},
 	})
 }
 
