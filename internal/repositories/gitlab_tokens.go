@@ -47,8 +47,10 @@ const gitlabRenewTimeout = 30 * time.Second
 // revoked before it expires reads as "can't see it" and the next connection
 // is tried; the revocation shows at the next renewal, within two hours,
 // which GitLab refuses. A lapsed connection never reads as "not found":
-// when every connection on the host has lapsed, the error is
-// ErrGitLabSignInLapsed, naming the account and host.
+// when no live connection sees the project and one on the host has lapsed,
+// a project GitLab shows anonymously still reads with no token, and any
+// other is ErrGitLabSignInLapsed, naming the oldest lapsed account and its
+// host.
 func (c *GitLabConnections) Token(ctx context.Context, orgID string, repo Repository) (string, error) {
 	conns, err := c.cfg.Store.ListConnections(ctx, orgID)
 	if err != nil {
@@ -57,17 +59,14 @@ func (c *GitLabConnections) Token(ctx context.Context, orgID string, repo Reposi
 	sortOldestFirst(conns)
 	host := canonicalGitLabHost(repo.Host)
 	var (
-		onHost, lapsedN int
-		lapsed          *GitLabConnection
-		lastErr         error
+		lapsed  *GitLabConnection
+		lastErr error
 	)
 	for _, conn := range conns {
 		if conn.OrgID != orgID || canonicalGitLabHost(conn.Host) != host {
 			continue
 		}
-		onHost++
 		if conn.LapsedAt != nil {
-			lapsedN++
 			if lapsed == nil {
 				lapsed = conn
 			}
@@ -83,7 +82,6 @@ func (c *GitLabConnections) Token(ctx context.Context, orgID string, repo Reposi
 		}
 		g, err := c.grant(ctx, conn)
 		if errors.Is(err, ErrGitLabSignInLapsed) {
-			lapsedN++
 			if lapsed == nil {
 				lapsed = conn
 			}
@@ -110,10 +108,27 @@ func (c *GitLabConnections) Token(ctx context.Context, orgID string, repo Reposi
 		// again would work.
 		return "", lastErr
 	}
-	if onHost > 0 && lapsedN == onHost {
-		return "", &GitLabSignInLapsedError{Username: lapsed.Username, Host: canonicalGitLabHost(lapsed.Host)}
+	if lapsed == nil {
+		return "", nil
 	}
-	return "", nil
+	// No live connection sees the project, but a lapsed one might. A
+	// public project reads without a token, so ask GitLab anonymously:
+	// only one that needs a sign-in is worth the lapsed error, which tells
+	// someone what to do where "not found" wouldn't.
+	h, ok, err := c.cfg.Registry.Host(ctx, orgID, lapsed.Host)
+	if err != nil {
+		return "", err
+	}
+	if ok {
+		_, err = c.client(h).Project(ctx, repo, "")
+		switch {
+		case err == nil:
+			return "", nil
+		case !errors.Is(err, ErrNotFound):
+			return "", err
+		}
+	}
+	return "", &GitLabSignInLapsedError{Username: lapsed.Username, Host: canonicalGitLabHost(lapsed.Host)}
 }
 
 // Lookup returns c as the token source of any host the registry reads.

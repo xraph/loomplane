@@ -473,6 +473,20 @@ func (f *gcFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(out)
 	case strings.HasPrefix(r.URL.EscapedPath(), "/api/v4/projects/"):
 		path, _ := url.PathUnescape(strings.TrimPrefix(r.URL.EscapedPath(), "/api/v4/projects/"))
+		if r.Header.Get("Authorization") == "" {
+			// Anonymously, only a public project shows; GitLab hides the
+			// rest behind a 404.
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			for p := range f.public {
+				if strings.EqualFold(p, path) {
+					_, _ = fmt.Fprintf(w, `{"id":1,"path_with_namespace":%q,"default_branch":"main"}`, p)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		u, ok := f.userOf(r)
 		if !ok {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -966,6 +980,53 @@ func TestGitLabToken_lapsedSignIn(t *testing.T) {
 	tok, err := f.svc.Token(context.Background(), "org-a", gcAPI)
 	if err != nil || !strings.HasPrefix(tok, "at-bob-") {
 		t.Fatalf("Token with bob connected = %q, %v", tok, err)
+	}
+}
+
+func TestGitLabToken_lapsedBesideALiveConnection(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	p := gcPrincipal("org-a", "user-1")
+	// bob is live but can't see grp/secret; alice could, but her sign-in
+	// lapsed.
+	f.connect(t, p, "instance:"+gcHost, "bob")
+	f.fake.mu.Lock()
+	f.fake.users["bob"] = gcUser{id: 2, name: "bob", projects: []string{"grp/sub/api"}}
+	f.fake.users["alice"] = gcUser{id: 1, name: "alice", projects: []string{"grp/secret", "Grp/a/web"}}
+	f.fake.mu.Unlock()
+	alice := f.connect(t, p, "instance:"+gcHost, "alice")
+	if err := f.store.MarkLapsed(context.Background(), "org-a", alice.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// bob sees grp/sub/api, so the lapsed sign-in doesn't matter.
+	tok, err := f.svc.Token(context.Background(), "org-a", gcAPI)
+	if err != nil || !strings.HasPrefix(tok, "at-bob-") {
+		t.Fatalf("Token(api) = %q, %v; want bob's", tok, err)
+	}
+	// Only alice could see grp/secret, and it isn't public: say so.
+	_, err = f.svc.Token(context.Background(), "org-a", repositories.Repository{Host: gcHost, Owner: "grp", Name: "secret"})
+	if !errors.Is(err, repositories.ErrGitLabSignInLapsed) || !strings.Contains(err.Error(), "alice") {
+		t.Fatalf("Token(secret) = %v, want alice's lapsed sign-in", err)
+	}
+	// A public project reads anonymously, lapsed sign-in or not.
+	tok, err = f.svc.Token(context.Background(), "org-a", repositories.Repository{Host: gcHost, Owner: "Grp/a", Name: "web"})
+	if err != nil || tok != "" {
+		t.Fatalf("Token(public web) = %q, %v; want no token", tok, err)
+	}
+}
+
+func TestGitLabToken_allLapsedStillReadsAPublicProject(t *testing.T) {
+	f := newGCFixture(t, allowAll, true)
+	v := f.connect(t, gcPrincipal("org-a", "user-1"), "instance:"+gcHost, "alice")
+	if err := f.store.MarkLapsed(context.Background(), "org-a", v.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := f.svc.Token(context.Background(), "org-a", repositories.Repository{Host: gcHost, Owner: "Grp/a", Name: "web"})
+	if err != nil || tok != "" {
+		t.Fatalf("Token(public web) = %q, %v; want no token", tok, err)
+	}
+	if _, err = f.svc.Token(context.Background(), "org-a", gcAPI); !errors.Is(err, repositories.ErrGitLabSignInLapsed) {
+		t.Fatalf("Token(api) = %v, want ErrGitLabSignInLapsed", err)
 	}
 }
 
