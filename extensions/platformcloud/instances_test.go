@@ -207,6 +207,7 @@ func TestStuckResetWaitsForTheGrace(t *testing.T) {
 		timeout time.Duration
 	}{
 		{"starting", cpprovider.StateStarting, startTimeout},
+		{"stopping", cpprovider.StateStopping, stopTimeout},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ic, lc := newTestInstances(false)
@@ -224,5 +225,18 @@ func TestStuckResetWaitsForTheGrace(t *testing.T) {
 				t.Fatalf("cutoff is %s old", age)
 			}
 		})
+	}
+}
+
+// A stop that died on its deadline can leave the instance stopping; a repair
+// resets it and starts the service again.
+func TestRepairRestartsAnInstanceStuckStopping(t *testing.T) {
+	ic, lc := newTestInstances(false)
+	lc.state, lc.updated = cpprovider.StateStopping, time.Now().Add(-stopTimeout-2*stuckGrace)
+	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
+		t.Fatalf("starts %v, state %s", lc.starts, lc.state)
 	}
 }

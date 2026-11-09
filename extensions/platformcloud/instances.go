@@ -75,7 +75,7 @@ const startTimeout = 14 * time.Minute
 const stopTimeout = 14 * time.Minute
 
 // stuckGrace is how long past its timeout an instance must have been starting
-// before it is reset: a host agent can still be applying after
+// or stopping before it is reset: a host agent can still be applying after
 // the client gave up, and a reset then would overlap it.
 const stuckGrace = time.Minute
 
@@ -106,6 +106,8 @@ func stuckLimit(state cpprovider.InstanceState) time.Duration {
 	switch state {
 	case cpprovider.StateStarting:
 		return startTimeout + stuckGrace
+	case cpprovider.StateStopping:
+		return stopTimeout + stuckGrace
 	}
 	return 0
 }
