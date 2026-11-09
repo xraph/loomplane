@@ -12,7 +12,6 @@ import (
 
 	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/node"
-	"github.com/xraph/loomplane/internal/platformadmin"
 )
 
 // Settings are what the commands need: the database, the schema this
@@ -203,24 +202,7 @@ func serverCommands(settings func() (Settings, error)) []cli.Command {
 				if err != nil {
 					return err
 				}
-				users, roles, closeDB, err := platformadmin.Open(ctx.Context(), s.DatabaseURL, s.AuthAppID)
-				if err != nil {
-					return err
-				}
-				defer closeDB()
-				granted, err := platformadmin.Grant(ctx.Context(), users, roles, s.AuthAppID, email)
-				if errors.Is(err, platformadmin.ErrNoUser) {
-					return fmt.Errorf("no user with email %s", email)
-				}
-				if err != nil {
-					return err
-				}
-				if !granted {
-					fmt.Printf("%s is already a platform admin.\n", email)
-					return nil
-				}
-				fmt.Printf("Granted platform-owner to %s.\n", email)
-				return nil
+				return grantPlatformAdmin(ctx.Context(), s, email, os.Stdout, liveGrant)
 			}, cli.WithUsage("loomplane admin grant-platform-admin <email>"))),
 		),
 	}

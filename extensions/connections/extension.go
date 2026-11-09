@@ -35,6 +35,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -322,10 +323,11 @@ func (a auditor) Record(ctx context.Context, action string, p security.Principal
 }
 
 // RecordApp implements connections.AppAuditor. It records the cloud and the
-// client ID, never the secret.
+// client ID, never the secret, in the staff stream: only a platform user
+// changes a sign-in app.
 func (a auditor) RecordApp(ctx context.Context, action, userID, cloud, clientID string) {
 	b := a.chronicle.Warning(ctx, action, "cloud_signin_app", cloud).
-		Category("cloud_connections").AppID(a.appID).UserID(userID).Outcome("success").
+		Category("cloud_connections").AppID(a.appID).TenantID(platformadmin.AuditTenant).UserID(userID).Outcome("success").
 		Meta("cloud", cloud).Meta("client_id", clientID)
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))

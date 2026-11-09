@@ -263,8 +263,9 @@ func refuseLookup(context.Context, string) ([]netip.Addr, error) {
 	return nil, errNotReady
 }
 
-// tenantSlug is the nexus tenant slug of a workspace.
-func tenantSlug(orgID string) string {
+// TenantSlug is the nexus tenant slug of a workspace, the one EnsureTenant
+// finds or creates for it.
+func TenantSlug(orgID string) string {
 	return "loomplane-" + strings.ToLower(strings.ReplaceAll(orgID, "_", "-"))
 }
 
@@ -303,7 +304,7 @@ func (a gatewayAdapter) EnsureTenant(ctx context.Context, orgID, budgetUSD strin
 	if err != nil {
 		return "", err
 	}
-	slug := tenantSlug(orgID)
+	slug := TenantSlug(orgID)
 	t, err := gw.Tenants().GetBySlug(ctx, slug)
 	switch {
 	case err == nil:

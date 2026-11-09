@@ -80,6 +80,8 @@ type Config struct {
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
 	Nodes         NodesConfig
+	Chronicle     ChronicleConfig
+	Hallproof     HallproofConfig
 	Mobile        MobileConfig
 }
 
@@ -480,6 +482,11 @@ func Defaults() Config {
 		},
 		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
+		Chronicle: ChronicleConfig{Checkpoints: CheckpointsConfig{
+			Enabled:       true,
+			EveryEvents:   DefaultCheckpointEveryEvents,
+			EveryInterval: DefaultCheckpointEveryInterval,
+		}},
 		Mobile: MobileConfig{
 			AndroidPackage:          DefaultAndroidPackage,
 			AndroidCertFingerprints: slices.Clone(DefaultAndroidCertFingerprints),
@@ -658,6 +665,13 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
 	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
 	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
+	r.boolean(&c.Chronicle.Checkpoints.Enabled, "chronicle.checkpoints.enabled")
+	r.integer(&c.Chronicle.Checkpoints.EveryEvents, "chronicle.checkpoints.every_events")
+	r.duration(&c.Chronicle.Checkpoints.EveryInterval, "chronicle.checkpoints.every_interval")
+	r.str(&c.Hallproof.Endpoint, "hallproof.endpoint")
+	r.str(&c.Hallproof.IngestKey, "hallproof.ingest_key")
+	r.str(&c.Hallproof.IngestKeyFile, "hallproof.ingest_key_file")
+	r.names(&c.Hallproof.StaffOrgs, "hallproof.staff_orgs")
 	r.str(&c.Mobile.AndroidPackage, "mobile.android_package")
 	// A list read appends, so a set value replaces the store app's keys
 	// rather than joining them.
@@ -685,7 +699,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Mobile.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Chronicle.Checkpoints.Validate(), c.Hallproof.Validate(), c.Mobile.Validate())
 	if c.AI.Enabled {
 		errs = append(errs, c.AI.Validate(c.Environment))
 	}

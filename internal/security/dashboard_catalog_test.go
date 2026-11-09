@@ -19,12 +19,14 @@ func TestDashboardProjectPermissionsMatchCatalog(t *testing.T) {
 	if block == nil {
 		t.Fatal("PROJECT_PERMISSIONS not found in project-permissions.ts")
 	}
-	var got []string
-	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(block[1], -1) {
+	matches := regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(block[1], -1)
+	got := make([]string, 0, len(matches))
+	for _, m := range matches {
 		got = append(got, string(m[1]))
 	}
-	var want []string
-	for _, p := range ProjectPermissions() {
+	perms := ProjectPermissions()
+	want := make([]string, 0, len(perms))
+	for _, p := range perms {
 		want = append(want, p.Name())
 	}
 	if !slices.Equal(got, want) {

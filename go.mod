@@ -333,3 +333,25 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
+
+require (
+	github.com/hallproof/witness v0.2.0
+	github.com/hallproof/witness/authsome v0.2.0
+	github.com/hallproof/witness/chronicle v0.2.0
+	github.com/hallproof/witness/cortex v0.2.0
+	github.com/hallproof/witness/dispatch v0.2.0
+	github.com/hallproof/witness/forge v0.2.0
+	github.com/hallproof/witness/grove v0.2.0
+	github.com/hallproof/witness/keysmith v0.2.0
+	github.com/hallproof/witness/nexus v0.2.0
+	github.com/hallproof/witness/relay v0.2.0
+	github.com/hallproof/witness/shield v0.2.0
+	github.com/hallproof/witness/trove v0.2.0
+	github.com/hallproof/witness/vault v0.2.0
+	github.com/hallproof/witness/warden v0.2.0
+)
+
+require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+	github.com/pquerna/otp v1.5.0 // indirect
+)

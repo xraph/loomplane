@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import App from "@/App"
 import { setInstance } from "@/lib/instance"
+import type { GateState } from "@/lib/organization"
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
@@ -11,6 +12,11 @@ const auth = vi.hoisted(() => ({
 }))
 const route = vi.hoisted(() => ({ path: "/" }))
 const invite = vi.hoisted(() => ({ token: undefined as string | undefined }))
+// What the organization gate decides: null opens it.
+const gate = vi.hoisted(() => ({
+  state: null as GateState | null,
+  activate: vi.fn(async () => undefined),
+}))
 
 vi.mock("@authsome/ui-react", () => ({ useAuth: () => auth }))
 vi.mock("@/lib/invite", () => ({ usePendingInvite: () => invite.token }))
@@ -45,8 +51,20 @@ vi.mock("@/components/auth-layout", () => ({
   }) => <section aria-label={title}>{children}</section>,
 }))
 vi.mock("@/lib/organization", () => ({
-  OrganizationGate: () => <p>signed-in shell</p>,
+  OrganizationGate: ({
+    children,
+    fallback,
+  }: {
+    children: React.ReactNode
+    fallback: (state: GateState) => React.ReactNode
+  }) => (gate.state ? fallback(gate.state) : children),
   useOrganization: () => ({}),
+}))
+vi.mock("@/lib/realtime-provider", () => ({
+  RealtimeProvider: () => <p>signed-in shell</p>,
+}))
+vi.mock("@/pages/onboarding", () => ({
+  Onboarding: () => <p>onboarding</p>,
 }))
 
 const base = { setupPending: false, waitlist: false, setupTokenRequired: false }
@@ -55,6 +73,7 @@ beforeEach(() => {
   auth.isAuthenticated = true
   auth.user = { email_verified: true, email: "a@example.com" }
   invite.token = undefined
+  gate.state = null
 })
 
 describe("cloud sign-in setup step gating", () => {
@@ -124,5 +143,26 @@ describe("cloud sign-in setup step gating", () => {
     route.path = "/invitations/accept"
     render(<App />)
     expect(screen.getByText("outlet")).toBeTruthy()
+  })
+
+  // A password sign-in after setup starts without an active organization,
+  // and the step's API calls need one.
+  it("waits for the session to enter an organization first", () => {
+    setInstance({ ...base, platformAdmin: true, cloudSignInOffer: true })
+    route.path = "/setup/cloud-sign-in"
+    gate.state = { kind: "loading" }
+    render(<App />)
+    expect(screen.queryByText("cloud sign-in step")).toBeNull()
+    expect(screen.queryByText(/^location/)).toBeNull()
+  })
+
+  it("asks for a workspace in place when the admin has none", () => {
+    setInstance({ ...base, platformAdmin: true, cloudSignInOffer: true })
+    route.path = "/setup/cloud-sign-in"
+    gate.state = { kind: "needs-organization", activate: gate.activate }
+    render(<App />)
+    expect(screen.getByText("onboarding")).toBeTruthy()
+    expect(screen.queryByText("cloud sign-in step")).toBeNull()
+    expect(screen.queryByText(/^location/)).toBeNull()
   })
 })

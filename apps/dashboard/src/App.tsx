@@ -152,10 +152,31 @@ export function App() {
   }
   if (path === stepPath) {
     if (!platformAdmin) return <Navigate to="/" replace />
+    // Its calls act in an organization like any other page's, and a
+    // password sign-in starts without one: the gate switches to it first.
     return (
-      <AuthLayout title="Set up cloud sign-in">
-        <CloudSignInStep />
-      </AuthLayout>
+      <OrganizationGate
+        fallback={(state) => {
+          switch (state.kind) {
+            case "loading":
+              return <PageLoading />
+            case "needs-organization":
+              // In place: /onboarding would only send you back here.
+              return <Onboarding activate={state.activate} />
+            case "error":
+              return (
+                <Problem
+                  title="Loomplane couldn't load your session"
+                  message={messageOf(state.error, "Reload to try again.")}
+                />
+              )
+          }
+        }}
+      >
+        <AuthLayout title="Set up cloud sign-in">
+          <CloudSignInStep />
+        </AuthLayout>
+      </OrganizationGate>
     )
   }
   if (authPaths.includes(path)) return <AuthRedirect authenticated />

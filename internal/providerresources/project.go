@@ -62,7 +62,7 @@ func (s *Service) VerifyProject(ctx context.Context, p security.Principal, proje
 	if !projectPinMatches(binding, r) {
 		return nil, nil, ErrChanged
 	}
-	run, err := s.sync(ctx, p, r.ConnectionID, false)
+	run, err := s.sync(ctx, p, r.ConnectionID, false, false)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -4,17 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/xraph/chronicle"
+	"github.com/xraph/chronicle/audit"
+	chronstore "github.com/xraph/chronicle/store"
+	chronmem "github.com/xraph/chronicle/store/memory"
 	"github.com/xraph/forge"
 	"github.com/xraph/keysmith"
 	"github.com/xraph/keysmith/store/memory"
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/nodes"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -135,5 +141,58 @@ func TestRevokeCompromisedWithholdsAListItCannotRead(t *testing.T) {
 				t.Fatalf("status %d: %s", out.Code, out.Body)
 			}
 		})
+	}
+}
+
+// An instance-wide edge token takes a platform admin, so its mint and its
+// cancel are staff actions and go to the platform stream. An organization's
+// own join token stays in that organization's stream.
+func TestKeyAuditor_instanceEdgeTokensGoToThePlatformStream(t *testing.T) {
+	ctx := t.Context()
+	mem := chronmem.New()
+	trail, err := chronicle.New(chronicle.WithStore(chronstore.NewAdapter(mem)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := keysmith.NewEngine(keysmith.WithStore(memory.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := apikeys.New(engine, "aapp_test", keyRouteAdmins{}, keyAuditor{chronicle: trail, appID: "aapp_test", log: forge.NewNoopLogger()},
+		apikeys.WithPlatformAdmins(adminsOnly{}))
+	admin := security.Principal{UserID: "admin", OrgID: "aorg_customer"}
+
+	instance, err := keys.CreateNodeJoinToken(ctx, admin, apikeys.NodeJoinScope{Edge: true, EdgeScope: apikeys.EdgeScopeInstance}, 0)
+	if err != nil {
+		t.Fatalf("mint the instance edge token: %v", err)
+	}
+	if err = keys.CancelNodeJoinToken(ctx, admin, instance.ID); err != nil {
+		t.Fatalf("cancel the instance edge token: %v", err)
+	}
+	if _, err = keys.CreateNodeJoinToken(ctx, admin, apikeys.NodeJoinScope{Edge: true, EdgeScope: apikeys.EdgeScopeOrg}, 0); err != nil {
+		t.Fatalf("mint the org edge token: %v", err)
+	}
+
+	res, err := mem.Query(ctx, &audit.Query{AppID: "aapp_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ action, scope, tenant, org string }
+	got := make([]row, 0, len(res.Events))
+	for _, ev := range res.Events {
+		got = append(got, row{ev.Action, fmt.Sprint(ev.Metadata["edge_scope"]), ev.TenantID, fmt.Sprint(ev.Metadata["org_id"])})
+	}
+	want := map[row]bool{
+		{"node.join_token.created", apikeys.EdgeScopeInstance, platformadmin.AuditTenant, "aorg_customer"}:   true,
+		{"node.join_token.cancelled", apikeys.EdgeScopeInstance, platformadmin.AuditTenant, "aorg_customer"}: true,
+		{"node.join_token.created", apikeys.EdgeScopeOrg, "aorg_customer", "<nil>"}:                          true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("recorded %+v, want %d events", got, len(want))
+	}
+	for _, r := range got {
+		if !want[r] {
+			t.Errorf("unexpected event %+v; want one of %v", r, want)
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/nodes"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -182,6 +183,11 @@ func keyError(err error) error {
 
 // keyAuditor records key changes in Chronicle, in the organization's
 // stream: the key's name, access and hint, never the key.
+//
+// An instance-wide edge token is the exception. Only a platform admin may
+// mint or cancel one, so those events are staff actions and go to the
+// platform stream, with the organization the token was made in kept as
+// org_id.
 type keyAuditor struct {
 	chronicle *chronicle.Chronicle
 	appID     string
@@ -195,9 +201,16 @@ func (a keyAuditor) Record(ctx context.Context, action string, p security.Princi
 // RecordWithMeta is Record with extra string details, such as who minted a
 // node join token and with which key.
 func (a keyAuditor) RecordWithMeta(ctx context.Context, action string, p security.Principal, k apikeys.APIKey, meta map[string]string) {
+	tenant := p.OrgID
+	if meta["edge_scope"] == apikeys.EdgeScopeInstance {
+		tenant = platformadmin.AuditTenant
+	}
 	b := a.chronicle.Warning(ctx, action, "api_key", k.ID).
-		Category("api_keys").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Category("api_keys").AppID(a.appID).TenantID(tenant).UserID(p.UserID).Outcome("success").
 		Meta("name", k.Name).Meta("access", string(k.Access)).Meta("hint", k.Hint).Meta("created_by", k.CreatedBy)
+	if tenant != p.OrgID {
+		b = b.Meta("org_id", p.OrgID)
+	}
 	for name, v := range meta {
 		b = b.Meta(name, v)
 	}

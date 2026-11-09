@@ -236,6 +236,9 @@ func TestNotifyReachesLiveSessionPastStaleLocal(t *testing.T) {
 	if m := live.next(); m.(nodeproto.Hello).Epoch != 2 {
 		t.Fatalf("hello %#v", m)
 	}
+	// Hello is written before b registers the session, and a hop to b finds
+	// no session until it has.
+	waitFor(t, "online on b", func() bool { return b.hub.Online("node_1") })
 	if !a.hub.Online("node_1") {
 		t.Fatal("test needs a's stale session still registered")
 	}

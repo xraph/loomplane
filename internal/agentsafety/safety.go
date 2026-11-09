@@ -119,8 +119,9 @@ func (s *Scanner) Untrusted(ctx context.Context, source, text string) string {
 		s.warn("untrusted text wasn't scanned: no safety engine", errScanFailed)
 		return Withheld
 	}
+	held, restore := holdIDs(tail(text, s.maxBytes()))
 	res, err := s.Engine.ScanInput(ctx, &scan.Input{
-		Text: tail(text, s.maxBytes()), Profile: presets.InfraAgentInput, Source: source, Untrusted: true,
+		Text: held, Profile: presets.InfraAgentInput, Source: source, Untrusted: true,
 	})
 	if err != nil {
 		s.warn("untrusted "+source+" text was withheld: the scan failed", sanitize(err))
@@ -129,7 +130,7 @@ func (s *Scanner) Untrusted(ctx context.Context, source, text string) string {
 	if res == nil || res.Blocked || !passes(res.Decision) || res.Redacted == "" {
 		return Withheld
 	}
-	return res.Redacted
+	return restore.Replace(res.Redacted)
 }
 
 // Outbound returns the text the agent may send: as it is when the scan
@@ -150,7 +151,8 @@ func (s *Scanner) Outbound(ctx context.Context, text string) (string, error) {
 	if !ok {
 		return "", ErrOutboundBlocked
 	}
-	res, err := s.Engine.ScanOutput(ctx, &scan.Input{Text: text, Profile: presets.InfraAgentOutput})
+	held, restore := holdIDs(text)
+	res, err := s.Engine.ScanOutput(ctx, &scan.Input{Text: held, Profile: presets.InfraAgentOutput})
 	if err != nil {
 		s.warn("outbound text was blocked: the scan failed", sanitize(err))
 		return "", ErrOutboundBlocked
@@ -163,7 +165,7 @@ func (s *Scanner) Outbound(ctx context.Context, text string) (string, error) {
 		return text, nil
 	case scan.DecisionRedact:
 		if res.Redacted != "" {
-			return res.Redacted, nil
+			return restore.Replace(res.Redacted), nil
 		}
 	}
 	return "", ErrOutboundBlocked
