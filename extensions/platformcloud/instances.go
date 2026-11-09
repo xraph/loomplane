@@ -132,9 +132,11 @@ func (ic *instances) current(ctx context.Context, p *platformcloud.Placement, ii
 	slog.WarnContext(ctx, "platform cloud: an instance was stuck; resetting it so it can start again", "instance", iid.String(), "state", string(inst.State), "since", inst.UpdatedAt)
 	if inst.State == cpprovider.StateStopping && ic.stopHost != nil && p != nil {
 		// A suspension's stop that stalled may have left the VM running:
-		// the host is told to stop it before the instance is released.
+		// the host is told to stop it before the instance is released. The
+		// host refuses a stop of ordinary running work, so a refusal must
+		// not keep the instance from being reset.
 		if stopErr := ic.stopHost(ctx, *p); stopErr != nil {
-			return nil, fmt.Errorf("stop the stuck VM: %w", stopErr)
+			slog.WarnContext(ctx, "platform cloud: the host did not stop a stuck VM; resetting the instance anyway", "instance", iid.String(), "placement", p.ID, "error", stopErr)
 		}
 	}
 	if checkErr := ic.resetStuck(ctx, iid, inst.State, time.Now().Add(-limit)); checkErr != nil {

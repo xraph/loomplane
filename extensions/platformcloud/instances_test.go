@@ -253,3 +253,17 @@ func TestRepairRestartsAnInstanceStuckStopping(t *testing.T) {
 		t.Fatalf("host stops %v, want one before the reset", lc.hostStops)
 	}
 }
+
+// The host refuses to stop ordinary running work, so a refused host stop must
+// not keep a stuck-stopping instance from being reset and redeployed.
+func TestRepairResetsAStuckStopTheHostRefuses(t *testing.T) {
+	ic, lc := newTestInstances(false)
+	ic.stopHost = func(context.Context, platformcloud.Placement) error { return errors.New("refused") }
+	lc.state, lc.updated = cpprovider.StateStopping, time.Now().Add(-stopTimeout-2*stuckGrace)
+	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if len(lc.resets) != 1 || len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
+		t.Fatalf("resets %v, starts %v, state %s", lc.resets, lc.starts, lc.state)
+	}
+}
