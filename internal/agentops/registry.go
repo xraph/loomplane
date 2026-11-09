@@ -530,10 +530,16 @@ type Deps struct {
 	// investigation.
 	InvestigationOf func(ctx context.Context, orgID, runID string) (taskID, reportID string, err error)
 	// DeliverReport queues the delivery job of a report whose delivery
-	// open_report just marked queued. The watcher's jobs set it; nil
-	// leaves delivery to the watcher's next pass, and open_report doesn't
-	// mark the delivery queued then.
-	DeliverReport func(ctx context.Context, orgID, reportID string)
+	// open_report just marked queued. aiagent sets it in
+	// extensions/aiagent/reports.go, over the job engine; nil leaves
+	// delivery to the watcher's next pass, and open_report doesn't mark
+	// the delivery queued then. An error doesn't fail open_report: it is
+	// reported through Warn, and the watcher queues the delivery again
+	// once its requeue time passes.
+	DeliverReport func(ctx context.Context, orgID, reportID string) error
+	// Warn reports what failed without failing an operation. Nil drops
+	// it.
+	Warn func(msg string, err error)
 }
 
 // PersonNamer names a person by their user ID, never by their email.

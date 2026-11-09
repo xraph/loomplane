@@ -294,6 +294,7 @@ var serviceCases = []serviceCase{
 	{"AReplayedOccurrenceNeverReopens", aReplayedOccurrenceNeverReopens},
 	{"AnOlderClearanceLeavesANewerOccurrenceOpen", anOlderClearanceLeavesANewerOccurrenceOpen},
 	{"PendingSaysWhetherTheNoticeIsBehind", pendingSaysWhetherTheNoticeIsBehind},
+	{"ListsKeepToAnEnvironmentBeforeTheLimit", listsKeepToAnEnvironmentBeforeTheLimit},
 }
 
 func TestFingerprintIsStable(t *testing.T) {
@@ -306,6 +307,9 @@ func TestFingerprintIsStable(t *testing.T) {
 }
 
 func TestFirstSignalOpensAReport(t *testing.T) { firstSignalOpensAReport(t, newMemHarness(t)) }
+func TestListsKeepToAnEnvironmentBeforeTheLimit(t *testing.T) {
+	listsKeepToAnEnvironmentBeforeTheLimit(t, newMemHarness(t))
+}
 func TestPendingSaysWhetherTheNoticeIsBehind(t *testing.T) {
 	pendingSaysWhetherTheNoticeIsBehind(t, newMemHarness(t))
 }
@@ -724,6 +728,38 @@ func peopleOnlySeeProjectsTheyCanRead(t *testing.T, h *harness) {
 		if _, err := h.svc.List(ctx, h.person(viewer), f); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("%+v: %v", f, err)
 		}
+	}
+}
+
+// A list about one environment holds that environment's reports and the
+// project-wide ones, chosen before the limit, so newer reports of other
+// environments can't push them off the page.
+func listsKeepToAnEnvironmentBeforeTheLimit(t *testing.T, h *harness) {
+	ctx := context.Background()
+	observe := func(env, component string) *Report {
+		h.clock.advance(time.Minute)
+		sig := h.signal(SignalDeploymentFailed, component, component+"#0")
+		sig.EnvironmentID = env
+		return h.observe(t, sig).Report
+	}
+	prod := observe(envProd, "service:api")
+	wide := observe("", "source:web")
+	observe("env_staging", "service:worker")
+	observe("env_staging", "service:cron")
+
+	list, err := h.svc.List(ctx, h.person(viewer), ListFilter{EnvironmentID: envProd, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Reports) != 2 || list.Reports[0].ID != wide.ID || list.Reports[1].ID != prod.ID {
+		ids := make([]string, 0, len(list.Reports))
+		for _, r := range list.Reports {
+			ids = append(ids, r.ID+"@"+r.EnvironmentID)
+		}
+		t.Fatalf("listed %v, want the project-wide report and production's", ids)
+	}
+	if list, err = h.svc.List(ctx, h.person(viewer), ListFilter{}); err != nil || len(list.Reports) != 4 {
+		t.Fatalf("every environment: %d %v", len(list.Reports), err)
 	}
 }
 

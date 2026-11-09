@@ -105,7 +105,10 @@ type Writer struct {
 type ListFilter struct {
 	Status    string // "open" (default), "resolved", "closed" or "all"
 	ProjectID string
-	Limit     int // 1..100, default 50
+	// EnvironmentID, when set, keeps that environment's reports and the
+	// ones about no environment, before the limit.
+	EnvironmentID string
+	Limit         int // 1..100, default 50
 }
 
 // ReportList is a page of reports.

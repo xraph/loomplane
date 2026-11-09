@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/xraph/loomplane/internal/agentops"
@@ -171,16 +172,16 @@ func list(ctx context.Context, d *agentops.Deps, call agentops.Call, in ListInpu
 		}
 		projectID = p.ID
 	}
-	got, err := d.Reports.List(ctx, call.Principal, agentreports.ListFilter{Status: strings.TrimSpace(in.Status), ProjectID: projectID})
+	// A run about one environment sees only that environment's reports
+	// and the project-wide ones, chosen before the page is cut.
+	got, err := d.Reports.List(ctx, call.Principal, agentreports.ListFilter{
+		Status: strings.TrimSpace(in.Status), ProjectID: projectID, EnvironmentID: call.Scope.EnvironmentID,
+	})
 	if err != nil {
 		return listOutput{}, err
 	}
 	out := listOutput{Reports: make([]ReportSummary, 0, len(got.Reports))}
 	for _, rep := range got.Reports {
-		// A run about one environment sees only that environment's.
-		if call.Scope.EnvironmentID != "" && rep.EnvironmentID != "" && rep.EnvironmentID != call.Scope.EnvironmentID {
-			continue
-		}
 		out.Reports = append(out.Reports, ReportSummary{
 			ID: rep.ID, ProjectID: rep.ProjectID, Environment: rep.Environment, Signal: rep.Signal, Component: rep.Component,
 			Status: rep.Status, Severity: rep.Severity, Title: rep.Title, Occurrences: rep.Occurrences, LastSeenAt: rep.LastSeenAt,
@@ -219,7 +220,7 @@ func open(ctx context.Context, d *agentops.Deps, call agentops.Call, in OpenInpu
 	}
 	title, summary := strings.TrimSpace(in.Title), strings.TrimSpace(in.Summary)
 	switch {
-	case title == "" || strings.ContainsAny(title, "\r\n") || utf8.RuneCountInString(title) > maxTitleRunes:
+	case title == "" || strings.ContainsFunc(title, lineBreaking) || utf8.RuneCountInString(title) > maxTitleRunes:
 		return nil, errInvalid("the title is one line of 1 to %d characters", maxTitleRunes)
 	case summary == "" || utf8.RuneCountInString(summary) > maxSummaryRunes:
 		return nil, errInvalid("the summary is 1 to %d characters", maxSummaryRunes)
@@ -273,11 +274,22 @@ func open(ctx context.Context, d *agentops.Deps, call agentops.Call, in OpenInpu
 		if err != nil {
 			return nil, err
 		}
+		// The report is open either way: the watcher queues a delivery
+		// that couldn't be queued here once its requeue time passes.
 		if queued {
-			d.DeliverReport(ctx, org, obs.Report.ID)
+			if derr := d.DeliverReport(ctx, org, obs.Report.ID); derr != nil && d.Warn != nil {
+				d.Warn("reportops: queue the delivery of report "+obs.Report.ID, derr)
+			}
 		}
 	}
 	return view(ctx, d.Safety, obs.Report), nil
+}
+
+// lineBreaking is a rune that has no place in a one-line title: a control
+// character (C0, DEL or C1, tabs included) or a line or paragraph
+// separator.
+func lineBreaking(r rune) bool {
+	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029'
 }
 
 // update writes the findings of the report the call's task investigates,

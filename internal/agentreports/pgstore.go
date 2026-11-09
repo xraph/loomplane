@@ -107,7 +107,8 @@ func (s *PgStore) Get(ctx context.Context, orgID, id string) (*Report, error) {
 func (s *PgStore) List(ctx context.Context, orgID string, projectIDs []string, f ListFilter) ([]*Report, error) {
 	return s.query(ctx, `SELECT `+reportColumns+` FROM loomplane_agent_reports
 		WHERE org_id = $1 AND project_id = ANY($2) AND ($3 = 'all' OR status = $3)
-		ORDER BY last_seen_at DESC, id DESC LIMIT $4`, orgID, projectIDs, f.Status, f.Limit)
+			AND ($5 = '' OR environment_id = '' OR environment_id = $5)
+		ORDER BY last_seen_at DESC, id DESC LIMIT $4`, orgID, projectIDs, f.Status, f.Limit, f.EnvironmentID)
 }
 
 // Open implements Store.

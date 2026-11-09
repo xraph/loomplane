@@ -50,6 +50,7 @@ func (e *Extension) registerReports(c forge.Container, projectSvc *projects.Serv
 	e.registerReportKnowledge(reports)
 	e.deps.Reports = reports
 	e.deps.DeliverReport = e.deliverReport()
+	e.deps.Warn = e.warn()
 	e.deps.InvestigationOf = investigationOf(func() runsByRun {
 		if e.runs == nil {
 			return nil
@@ -63,17 +64,21 @@ func (e *Extension) registerReports(c forge.Container, projectSvc *projects.Serv
 // watcher's delivery job, which the watch extension handles, on the
 // default queue, where the AI-off extension answers one left behind. It's
 // nil without a job engine, so open_report leaves the delivery to the
-// watcher's next pass. A delivery that can't be queued is logged; the
-// watcher queues it again once its requeue time passes.
-func (e *Extension) deliverReport() func(ctx context.Context, orgID, reportID string) {
+// watcher's next pass. open_report logs a delivery that can't be queued;
+// the watcher queues it again once its requeue time passes.
+func (e *Extension) deliverReport() func(ctx context.Context, orgID, reportID string) error {
 	if e.jobs == nil {
 		return nil
 	}
-	jobs := agentwatch.DispatchEnqueuer{Engine: e.jobs, Queue: agentruns.SweepQueue}
+	return agentwatch.DispatchEnqueuer{Engine: e.jobs, Queue: agentruns.SweepQueue}.Deliver
+}
+
+// warn is the operations' Warn: it logs, and ignores a nil error.
+func (e *Extension) warn() func(msg string, err error) {
 	log := e.Logger()
-	return func(ctx context.Context, orgID, reportID string) {
-		if err := jobs.Deliver(ctx, orgID, reportID); err != nil && log != nil {
-			log.Warn("agentwatch: queue the delivery of report "+reportID, forge.F("error", err.Error()))
+	return func(msg string, err error) {
+		if log != nil && err != nil {
+			log.Warn(msg, forge.F("error", err.Error()))
 		}
 	}
 }

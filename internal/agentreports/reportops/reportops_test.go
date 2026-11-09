@@ -52,6 +52,10 @@ type world struct {
 	staging *projects.Environment
 	runs    map[string][2]string // run ID: task ID, report ID
 	queued  []string             // reports DeliverReport was asked to deliver
+	// deliverErr is what DeliverReport answers, and warned what the
+	// operations reported through Warn.
+	deliverErr error
+	warned     []string
 }
 
 func newWorld(t *testing.T) *world {
@@ -87,11 +91,16 @@ func newWorld(t *testing.T) *world {
 			rec := w.runs[runID]
 			return rec[0], rec[1], nil
 		},
-		DeliverReport: func(_ context.Context, o, id string) {
+		DeliverReport: func(_ context.Context, o, id string) error {
+			if w.deliverErr != nil {
+				return w.deliverErr
+			}
 			if o == org {
 				w.queued = append(w.queued, id)
 			}
+			return nil
 		},
+		Warn: func(msg string, err error) { w.warned = append(w.warned, msg+": "+err.Error()) },
 	}
 	w.reg = agentops.NewRegistry()
 	agentops.Builtins(w.reg, w.deps)
@@ -103,6 +112,12 @@ func newWorld(t *testing.T) *world {
 // call runs name as cortex does, in task taskID and run runID, as the
 // workspace's agent for user, or alone when user is "".
 func (w *world) call(user, taskID, runID, name string, args any) (string, error) {
+	w.t.Helper()
+	return w.callIn(agentscope.Scope{OrgID: org}, user, taskID, runID, name, args)
+}
+
+// callIn is call in a run scoped to scope.
+func (w *world) callIn(scope agentscope.Scope, user, taskID, runID, name string, args any) (string, error) {
 	w.t.Helper()
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -118,7 +133,7 @@ func (w *world) call(user, taskID, runID, name string, args any) (string, error)
 	}
 	ctx := agentops.WithTaskID(w.t.Context(), taskID)
 	return w.reg.Dispatch(ctx, cortex.Invocation{
-		Subject: cortex.Subject{Scope: agentscope.Scope{OrgID: org}.Cortex(), Principal: p, RunID: run},
+		Subject: cortex.Subject{Scope: scope.Cortex(), Principal: p, RunID: run},
 		Call:    llm.ToolCall{ID: "call_" + name, Name: name, Arguments: string(raw)},
 	}, false)
 }
@@ -333,6 +348,13 @@ func TestOpenReportQueuesDelivery(t *testing.T) {
 		"no title":         {Project: "engines", Summary: "s"},
 		"a long title":     {Project: "engines", Title: strings.Repeat("x", 121), Summary: "s"},
 		"two lines":        {Project: "engines", Title: "a\nb", Summary: "s"},
+		"a tab":            {Project: "engines", Title: "a\tb", Summary: "s"},
+		"a NUL":            {Project: "engines", Title: "a\x00b", Summary: "s"},
+		"an escape":        {Project: "engines", Title: "a\x1b[31mb", Summary: "s"},
+		"a DEL":            {Project: "engines", Title: "a\x7fb", Summary: "s"},
+		"a C1 control":     {Project: "engines", Title: "a\u0085b", Summary: "s"},
+		"a line separator": {Project: "engines", Title: "a\u2028b", Summary: "s"},
+		"a para separator": {Project: "engines", Title: "a\u2029b", Summary: "s"},
 		"no summary":       {Project: "engines", Title: "t"},
 		"a long summary":   {Project: "engines", Title: "t", Summary: strings.Repeat("x", 2001)},
 		"no such env":      {Project: "engines", Environment: "qa", Title: "t", Summary: "s"},
@@ -345,6 +367,27 @@ func TestOpenReportQueuesDelivery(t *testing.T) {
 	}
 	if len(w.store.signals) != 2 {
 		t.Fatalf("%d signals after refusals", len(w.store.signals))
+	}
+}
+
+// A delivery job that can't be queued doesn't fail the call: it is
+// reported, and the watcher queues the delivery again later.
+func TestOpenReportSucceedsWhenTheDeliveryCantBeQueued(t *testing.T) {
+	w := newWorld(t)
+	w.deliverErr = errors.New("dispatch is down")
+	res, err := w.call(developer, "atask_chat", newRunID(), "open_report", OpenInput{Project: "engines", Title: "Slow", Summary: "It is slow."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out ReportView
+	if err = json.Unmarshal([]byte(res), &out); err != nil || out.ID == "" {
+		t.Fatalf("result %s: %v", res, err)
+	}
+	if !slices.Equal(w.store.deliveries, []string{out.ID}) || len(w.queued) != 0 {
+		t.Fatalf("delivery marked %v, queued %v", w.store.deliveries, w.queued)
+	}
+	if len(w.warned) != 1 || !strings.Contains(w.warned[0], out.ID) || !strings.Contains(w.warned[0], "dispatch is down") {
+		t.Fatalf("warned %q", w.warned)
 	}
 }
 
@@ -431,6 +474,34 @@ func TestListReportsReadsTheWorkspace(t *testing.T) {
 	}
 }
 
+// A run about one environment lists that environment's reports and the
+// project-wide ones, even when a page of newer reports from other
+// environments would fill the service's limit.
+func TestListReportsKeepsToTheRunsEnvironment(t *testing.T) {
+	w := newWorld(t)
+	mine := w.report(agentreports.Report{ID: "arep_000", Title: "staging", EnvironmentID: w.staging.ID})
+	wide := w.report(agentreports.Report{ID: "arep_001", Title: "project-wide"})
+	for i := range 60 {
+		w.report(agentreports.Report{ID: fmt.Sprintf("arep_1%02d", i), Title: "production", EnvironmentID: "env_production"})
+	}
+	scope := agentscope.Scope{OrgID: org, ProjectID: w.project.ID, EnvironmentID: w.staging.ID}
+	res, err := w.callIn(scope, viewer, "atask_chat", newRunID(), "list_reports", ListInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out listOutput
+	if err = json.Unmarshal([]byte(res), &out); err != nil {
+		t.Fatalf("result %s: %v", res, err)
+	}
+	ids := make([]string, 0, len(out.Reports))
+	for _, r := range out.Reports {
+		ids = append(ids, r.ID)
+	}
+	if !slices.Equal(ids, []string{wide.ID, mine.ID}) {
+		t.Fatalf("listed %v, want %s and %s", ids, wide.ID, mine.ID)
+	}
+}
+
 // allowAll is a tool authorizer that lets every call through: these tests
 // are about the handlers.
 type allowAll struct{}
@@ -507,12 +578,16 @@ func (s *fakeStore) List(_ context.Context, orgID string, projectIDs []string, f
 	defer s.mu.Unlock()
 	var out []*agentreports.Report
 	for _, r := range s.reports {
-		if r.OrgID == orgID && slices.Contains(projectIDs, r.ProjectID) && (f.Status == "all" || r.Status == f.Status) {
+		if r.OrgID == orgID && slices.Contains(projectIDs, r.ProjectID) && (f.Status == "all" || r.Status == f.Status) &&
+			(f.EnvironmentID == "" || r.EnvironmentID == "" || r.EnvironmentID == f.EnvironmentID) {
 			cp := *r
 			out = append(out, &cp)
 		}
 	}
 	slices.SortFunc(out, func(a, b *agentreports.Report) int { return strings.Compare(b.ID, a.ID) })
+	if f.Limit > 0 && len(out) > f.Limit {
+		out = out[:f.Limit]
+	}
 	return out, nil
 }
 

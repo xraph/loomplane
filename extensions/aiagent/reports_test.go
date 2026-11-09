@@ -2,10 +2,15 @@ package aiagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
 
+	"github.com/xraph/dispatch"
+	dispatchengine "github.com/xraph/dispatch/engine"
+	"github.com/xraph/dispatch/job"
+	dispatchmemory "github.com/xraph/dispatch/store/memory"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -15,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/agentruns"
 	"github.com/xraph/loomplane/internal/agentsafety"
 	"github.com/xraph/loomplane/internal/agentscope"
+	"github.com/xraph/loomplane/internal/agentwatch"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/environments"
@@ -117,6 +123,47 @@ func filled(v reflect.Value) bool {
 		return true
 	}
 	return false
+}
+
+// open_report's hook queues the watcher's delivery job for the report on
+// the sweep queue, and says so when it can't.
+func TestDeliverReportQueuesTheDeliveryJob(t *testing.T) {
+	store := dispatchmemory.New()
+	d, err := dispatch.New(dispatch.WithStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := dispatchengine.Build(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Extension{BaseExtension: forge.NewBaseExtension(Name, "0", "test"), jobs: func() *dispatchengine.Engine { return eng }}
+	deliver := e.deliverReport()
+	if deliver == nil {
+		t.Fatal("no hook with a job engine")
+	}
+	if err = deliver(t.Context(), "aorg_a", "arep_1"); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := store.ListJobsByState(t.Context(), job.StatePending, job.ListOpts{})
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("pending jobs %d, %v", len(jobs), err)
+	}
+	var payload agentwatch.DeliverPayload
+	if err = json.Unmarshal(jobs[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if jobs[0].Name != agentwatch.JobDeliver || jobs[0].Queue != agentruns.SweepQueue || payload.OrgID != "aorg_a" || payload.ReportID != "arep_1" {
+		t.Fatalf("queued %s on %q with %+v", jobs[0].Name, jobs[0].Queue, payload)
+	}
+
+	notReady := &Extension{BaseExtension: forge.NewBaseExtension(Name, "0", "test"), jobs: func() *dispatchengine.Engine { return nil }}
+	if err = notReady.deliverReport()(t.Context(), "aorg_a", "arep_1"); err == nil {
+		t.Fatal("a delivery with no engine ready passed")
+	}
+	if (&Extension{}).deliverReport() != nil {
+		t.Fatal("a hook without a job engine")
+	}
 }
 
 func TestReportsNeedEveryService(t *testing.T) {

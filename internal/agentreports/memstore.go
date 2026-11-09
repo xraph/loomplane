@@ -94,7 +94,8 @@ func (m *MemStore) List(_ context.Context, orgID string, projectIDs []string, f 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := m.sorted(orgID, func(r *record) bool {
-		return slices.Contains(projectIDs, r.ProjectID) && (f.Status == "all" || r.Status == f.Status)
+		return slices.Contains(projectIDs, r.ProjectID) && (f.Status == "all" || r.Status == f.Status) &&
+			(f.EnvironmentID == "" || r.EnvironmentID == "" || r.EnvironmentID == f.EnvironmentID)
 	}, newestFirst)
 	if len(out) > f.Limit {
 		out = out[:f.Limit]
