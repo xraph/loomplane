@@ -110,6 +110,16 @@ var platformCloudNotices = []struct{ kind, description string }{
 	{"platform_cloud.waiting_capacity", "Loomplane Cloud work is waiting for capacity"},
 }
 
+// WebhookEventNames lists the name of every webhook event type in the catalog.
+func WebhookEventNames() []string {
+	definitions := webhookDefinitions()
+	names := make([]string, 0, len(definitions))
+	for _, d := range definitions {
+		names = append(names, d.Name)
+	}
+	return names
+}
+
 // webhookDefinitions are every webhook event type Loomplane sends.
 func webhookDefinitions() []catalog.WebhookDefinition {
 	definitions := make([]catalog.WebhookDefinition, 0, 13+len(registrationStatuses))
