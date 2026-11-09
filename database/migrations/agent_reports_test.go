@@ -30,7 +30,11 @@ func TestAgentReportTablesAndTrigger(t *testing.T) {
 	if got := strs(t, conn, `SELECT column_name FROM information_schema.columns WHERE table_name='loomplane_github_installations' AND column_name IN ('permissions','permissions_checked_at') ORDER BY column_name`); !slices.Equal(got, []string{"permissions", "permissions_checked_at"}) {
 		t.Fatalf("installation columns: %v", got)
 	}
-	for _, index := range []string{"loomplane_agent_reports_open", "loomplane_agent_reports_evidence_deployment", "loomplane_agent_reports_evidence_plan"} {
+	for _, index := range []string{
+		"loomplane_agent_reports_open", "loomplane_agent_reports_status", "loomplane_agent_reports_project",
+		"loomplane_agent_reports_fingerprint", "loomplane_agent_reports_undelivered",
+		"loomplane_agent_reports_evidence_deployment", "loomplane_agent_reports_evidence_plan",
+	} {
 		if got := strs(t, conn, `SELECT count(*)::text FROM pg_indexes WHERE indexname='`+index+`'`); got[0] != "1" {
 			t.Fatalf("index %s: %v", index, got)
 		}
@@ -58,7 +62,11 @@ func TestAgentReportTablesAndTrigger(t *testing.T) {
 	if !slices.Equal(keys, want) {
 		t.Fatalf("report event keys %v, want %v", keys, want)
 	}
-	for _, private := range []string{"occurrence_keys", "delivery_owner", "delivery_until", "pending_notice", "notice_seq", "taken_notice_seq", "issue_comments", "run_id", "opened_by_task", "issue_number", "issue_state"} {
+	for _, private := range []string{
+		"occurrence_keys", "delivery_owner", "delivery_until", "delivery_queued_at", "pending_notice", "notice_seq", "taken_notice_seq",
+		"issue_comments", "issue_comment_at", "run_id", "opened_by_task", "issue_number", "issue_state", "checked_at",
+		"notified_revision", "issue_revision", "last_notice_at", "investigation_started_at",
+	} {
 		if slices.Contains(keys, private) {
 			t.Fatalf("report event carries %s: %s", private, raw[0])
 		}
@@ -73,7 +81,8 @@ func TestAgentReportTablesAndTrigger(t *testing.T) {
 	// Lease, queue and cursor columns never produce an event; a column the
 	// event shows produces one.
 	exec(t, conn,
-		`UPDATE loomplane_agent_reports SET delivery_owner='worker', delivery_until=now(), delivery_queued_at=now(), pending_notice='opened', notice_seq=1, taken_notice_seq=1, occurrence_keys='["k"]', issue_comments='["repeated"]', run_id='run_1', checked_at=now(), notified_revision=1 WHERE id='arep_1'`)
+		`UPDATE loomplane_agent_reports SET delivery_owner='worker', delivery_until=now(), delivery_queued_at=now(), pending_notice='opened', notice_seq=1, taken_notice_seq=1, occurrence_keys='["k"]', issue_comments='["repeated"]', run_id='run_1', checked_at=now(), notified_revision=1,
+ investigation_started_at=now(), issue_revision=1, last_notice_at=now(), issue_comment_at=now(), opened_by_task='atask_1' WHERE id='arep_1'`)
 	if got := events(); len(got) != 1 {
 		t.Fatalf("bookkeeping emitted: %v", got)
 	}
