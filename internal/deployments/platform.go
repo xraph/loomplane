@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -251,14 +252,33 @@ func (r registryOnly) Credential(ctx context.Context, orgID, connectionID string
 	if r.inner == nil {
 		return nil, nil, ErrNoCredential
 	}
+	// A source that can list connections without revealing them is asked
+	// first, so a connection that isn't one of the organization's registries
+	// is refused before its secret is decrypted.
+	if lister, ok := r.inner.(interface {
+		All(ctx context.Context, orgID string) ([]*connections.Connection, error)
+	}); ok {
+		all, err := lister.All(ctx, orgID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !slices.ContainsFunc(all, func(c *connections.Connection) bool { return isOrgRegistry(c, orgID, connectionID) }) {
+			return nil, nil, platformRefusalError("Loomplane Cloud reads only the workspace's own registry connections.")
+		}
+	}
 	c, raw, err := r.inner.Credential(ctx, orgID, connectionID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if c == nil || c.Cloud != connections.Registry || c.OrgID != orgID || c.ID != connectionID {
+	// Backstop for a source that can't be asked first.
+	if !isOrgRegistry(c, orgID, connectionID) {
 		return nil, nil, platformRefusalError("Loomplane Cloud reads only the workspace's own registry connections.")
 	}
 	return c, raw, nil
+}
+
+func isOrgRegistry(c *connections.Connection, orgID, connectionID string) bool {
+	return c != nil && c.Cloud == connections.Registry && c.OrgID == orgID && c.ID == connectionID
 }
 
 func (t *PlatformTarget) Locate(b *planning.Binding) string {

@@ -950,6 +950,50 @@ func TestRegistryOnlyCredentials(t *testing.T) {
 	}
 }
 
+// revealCounter is a credential source that can also list connections
+// without revealing them, and counts every reveal.
+type revealCounter struct {
+	conns    map[string]*connections.Connection
+	revealed []string
+}
+
+func (r *revealCounter) All(_ context.Context, orgID string) ([]*connections.Connection, error) {
+	var out []*connections.Connection
+	for _, c := range r.conns {
+		if c.OrgID == orgID {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+func (r *revealCounter) Credential(_ context.Context, _, id string) (*connections.Connection, []byte, error) {
+	r.revealed = append(r.revealed, id)
+	return r.conns[id], []byte("secret"), nil
+}
+
+// A connection that isn't one of the organization's registries is refused
+// before its secret is revealed.
+func TestRegistryOnlyChecksBeforeRevealing(t *testing.T) {
+	src := &revealCounter{conns: map[string]*connections.Connection{
+		"conn_registry": workspaceRegistry,
+		"conn_vercel":   {ID: "conn_vercel", OrgID: "org_a", Cloud: connections.Vercel},
+		"conn_foreign":  {ID: "conn_foreign", OrgID: "org_b", Cloud: connections.Registry},
+	}}
+	r := registryOnly{src}
+	for _, id := range []string{"conn_vercel", "conn_foreign", "conn_missing"} {
+		if c, raw, err := r.Credential(t.Context(), "org_a", id); err == nil || c != nil || raw != nil {
+			t.Fatalf("%s was read", id)
+		}
+	}
+	if len(src.revealed) != 0 {
+		t.Fatalf("revealed %v before the check", src.revealed)
+	}
+	if c, _, err := r.Credential(t.Context(), "org_a", "conn_registry"); err != nil || c != workspaceRegistry || len(src.revealed) != 1 {
+		t.Fatalf("registry read: %v, revealed %v", err, src.revealed)
+	}
+}
+
 // A suspension's stop goes through the same lifecycle as a user's but leaves
 // the placement for the suspension to record, so a restore starts it again.
 func TestSuspendStopKeepsThePlacementForTheRestore(t *testing.T) {
