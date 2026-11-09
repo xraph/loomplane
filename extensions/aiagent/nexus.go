@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/forge"
@@ -23,6 +24,7 @@ import (
 	shieldengine "github.com/xraph/shield/engine"
 	"github.com/xraph/shield/presets"
 
+	"github.com/xraph/loomplane/internal/agentknowledge"
 	"github.com/xraph/loomplane/internal/agentscope"
 	"github.com/xraph/loomplane/internal/agentsettings"
 	"github.com/xraph/loomplane/internal/config"
@@ -40,9 +42,10 @@ const (
 const openAIBaseURL = "https://api.openai.com/v1"
 
 // nexusOptions are the nexus extension's options: the chat providers, the
-// embeddings provider when knowledge is configured, and the gateway
-// options. The credential resolver and the dial guard are e's, bound
-// late: nexus asks for neither before it starts.
+// embeddings provider when knowledge is configured, the gateway options
+// and shield's output guard. The credential resolver, the dial guard and
+// shield's engine are e's, bound late: nexus asks for none of them before
+// it starts.
 func (e *Extension) nexusOptions() []nexusext.Option {
 	ai := e.cfg.AI
 	// Nexus no longer mounts routes; disable_routes stays set so a release
@@ -57,7 +60,18 @@ func (e *Extension) nexusOptions() []nexusext.Option {
 	for _, o := range gatewayOptions(ai, lateCredentials{e}, e.providerTransport) {
 		opts = append(opts, nexusext.WithGatewayOption(o))
 	}
+	for _, o := range guardOptions(e.shieldEngine) {
+		opts = append(opts, nexusext.WithGatewayOption(o))
+	}
 	return opts
+}
+
+// shieldEngine is shield's engine, or nil before shield registers.
+func (e *Extension) shieldEngine() *shieldengine.Engine {
+	if e.shield == nil {
+		return nil
+	}
+	return e.shield.Engine()
 }
 
 // gatewayOptions are the gateway's own options: the workspace credential
@@ -66,8 +80,12 @@ func (e *Extension) nexusOptions() []nexusext.Option {
 // guards calls to a workspace's base URL. A nil creds or transport is
 // left out, for tests.
 func gatewayOptions(ai config.AIConfig, creds provider.CredentialProvider, transport func(http.RoundTripper) http.RoundTripper) []nexus.Option {
+	overrides := prices(ai.Prices)
+	if o, ok := embeddingPrice(context.Background(), ai.Knowledge, ai.Prices); ok {
+		overrides = append(overrides, o)
+	}
 	opts := []nexus.Option{
-		nexus.WithPriceOverrides(prices(ai.Prices)...),
+		nexus.WithPriceOverrides(overrides...),
 		nexus.WithUnpricedPolicy(nexus.RefuseUnpriced),
 		nexus.WithTimeout(gatewayTimeout),
 		nexus.WithMaxRetries(gatewayMaxRetries),
@@ -94,9 +112,52 @@ func prices(ps []config.AIPrice) []model.PriceOverride {
 			continue
 		}
 		out = append(out, model.PriceOverride{Provider: p.Provider, Model: p.Model,
-			Pricing: provider.Pricing{InputPerMillion: in, OutputPerMillion: outPrice}})
+			Pricing: provider.Pricing{InputPerMillion: in, OutputPerMillion: outPrice, Free: in.IsZero() && outPrice.IsZero()}})
 	}
 	return out
+}
+
+// embeddingPrice is the price override for the server's embeddings, or ok
+// false when there is none. Nexus keys prices by provider name, and the
+// embeddings provider has its own name, so its models start unpriced:
+//   - openai: the pricing of the openai catalog row for the embedding model.
+//   - openai-compatible: the ai.prices entry for the embedding model, with
+//     its input price as the embedding price. A zero entry is free.
+func embeddingPrice(ctx context.Context, k config.AIKnowledgeConfig, ps []config.AIPrice) (model.PriceOverride, bool) {
+	override := func(p provider.Pricing) (model.PriceOverride, bool) {
+		return model.PriceOverride{Provider: agentsettings.EmbeddingsProvider, Model: k.EmbeddingModel, Pricing: p}, true
+	}
+	switch k.EmbeddingProvider {
+	case config.AIProviderOpenAI:
+		models, err := openai.New("").Models(ctx)
+		if err != nil {
+			return model.PriceOverride{}, false
+		}
+		for _, m := range models {
+			if m.ID == k.EmbeddingModel {
+				return override(m.Pricing)
+			}
+		}
+	case config.AIProviderOpenAICompatible:
+		for _, p := range ps {
+			if p.Provider != config.AIProviderOpenAICompatible || p.Model != k.EmbeddingModel {
+				continue
+			}
+			in, ierr := money.Parse(p.InputPerMillion)
+			out, oerr := money.Parse(p.OutputPerMillion)
+			if ierr != nil || oerr != nil {
+				return model.PriceOverride{}, false
+			}
+			return override(provider.Pricing{InputPerMillion: in, EmbeddingPerMillion: in, Free: in.IsZero() && out.IsZero()})
+		}
+	}
+	return model.PriceOverride{}, false
+}
+
+// embeddingsPriced reports whether nexus prices the server's embedding
+// model, so knowledge can say so rather than fail on its first embed.
+func (e *Extension) embeddingsPriced(ctx context.Context) bool {
+	return gatewayAdapter{gw: e.nexus.Gateway}.Priced(ctx, agentsettings.EmbeddingsProvider, e.cfg.AI.Knowledge.EmbeddingModel)
 }
 
 // serverKeys is the key each chat provider is built with: the server key
@@ -202,8 +263,9 @@ func refuseLookup(context.Context, string) ([]netip.Addr, error) {
 	return nil, errNotReady
 }
 
-// tenantSlug is the nexus tenant slug of a workspace.
-func tenantSlug(orgID string) string {
+// TenantSlug is the nexus tenant slug of a workspace, the one EnsureTenant
+// finds or creates for it.
+func TenantSlug(orgID string) string {
 	return "loomplane-" + strings.ToLower(strings.ReplaceAll(orgID, "_", "-"))
 }
 
@@ -242,7 +304,7 @@ func (a gatewayAdapter) EnsureTenant(ctx context.Context, orgID, budgetUSD strin
 	if err != nil {
 		return "", err
 	}
-	slug := tenantSlug(orgID)
+	slug := TenantSlug(orgID)
 	t, err := gw.Tenants().GetBySlug(ctx, slug)
 	switch {
 	case err == nil:
@@ -337,4 +399,36 @@ func (s shieldSeeder) Seed(ctx context.Context, orgID string) error {
 	}
 	eng.InvalidateProfiles(orgID)
 	return nil
+}
+
+// SystemTenant is the nexus tenant indexing the docs is billed to
+// ("loomplane-system"), never a workspace's. It is made on first use with
+// ai.knowledge.docs_budget_usd, which EnsureTenant also sets on a tenant
+// that exists, so a changed budget takes effect on the next start. The ID
+// is kept for the life of the process.
+type SystemTenant struct {
+	gateway   agentsettings.Gateway
+	budgetUSD string
+
+	mu sync.Mutex
+	id string
+}
+
+// ID returns the tenant's ID, making the tenant if it isn't there.
+func (s *SystemTenant) ID(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.id != "" {
+		return s.id, nil
+	}
+	budget := s.budgetUSD
+	if budget == "" {
+		budget = config.DefaultDocsBudgetUSD
+	}
+	id, err := s.gateway.EnsureTenant(ctx, agentknowledge.SystemOrg, budget)
+	if err != nil {
+		return "", err
+	}
+	s.id = id
+	return id, nil
 }

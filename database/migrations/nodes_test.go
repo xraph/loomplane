@@ -3,6 +3,7 @@
 package migrations
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/xraph/grove/migrate"
@@ -81,4 +82,77 @@ func TestNodeKeysAreNeverReused(t *testing.T) {
 		t.Fatalf("down left the index: %v", got)
 	}
 	exec(t, conn, `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_2','other','web-1','\x01','fp',now(),now())`)
+}
+
+func TestNodeAdoptionsKeepOneApprovalPerNode(t *testing.T) {
+	conn, ex := scratch(t)
+	if _, err := migrate.NewOrchestrator(ex, Group()).Migrate(t.Context()); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	up(t, ex, "node_adoptions")
+	exec(t, conn,
+		`INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_1','org','web-1','\x01','fp',now(),now())`,
+		`INSERT INTO loomplane_node_adoptions (node_id,org_id,cloud_id,approved_by,status,created_at,updated_at) VALUES ('node_1','org','cloud','user','waiting',now(),now())`,
+	)
+	for name, stmt := range map[string]string{
+		"a second row for one node": `INSERT INTO loomplane_node_adoptions (node_id,org_id,cloud_id,approved_by,status,created_at,updated_at) VALUES ('node_1','org','cloud','user','waiting',now(),now())`,
+		"an unknown status":         `UPDATE loomplane_node_adoptions SET status='adopting' WHERE node_id='node_1'`,
+		"a live row without Cloud":  `UPDATE loomplane_node_adoptions SET cloud_id='' WHERE node_id='node_1'`,
+		"a row for no node":         `INSERT INTO loomplane_node_adoptions (node_id,org_id,cloud_id,approved_by,status,created_at,updated_at) VALUES ('node_2','org','cloud','user','waiting',now(),now())`,
+	} {
+		if _, err := conn.Exec(t.Context(), stmt); err == nil {
+			t.Fatalf("accepted %s", name)
+		}
+	}
+	// A refused adoption keeps no Cloud.
+	exec(t, conn, `UPDATE loomplane_node_adoptions SET cloud_id='', status='failed', reason='refused' WHERE node_id='node_1'`)
+	if err := migration(t, "node_adoptions").Down(t.Context(), ex); err == nil {
+		t.Fatal("down dropped recorded adoptions")
+	}
+	exec(t, conn, `DELETE FROM loomplane_node_adoptions`)
+	down(t, ex, "node_adoptions")
+	if got := strs(t, conn, `SELECT count(*)::text FROM pg_tables WHERE tablename='loomplane_node_adoptions'`); got[0] != "0" {
+		t.Fatalf("down left the table: %v", got)
+	}
+}
+
+func TestNodePublicAddressJoinsThePayload(t *testing.T) {
+	conn, ex := scratch(t)
+	if _, err := migrate.NewOrchestrator(ex, Group()).Migrate(t.Context()); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	before := strs(t, conn, `SELECT pg_get_functiondef('loomplane_node_event_trigger'::regproc)`)[0]
+	down(t, ex, "node_public_address")
+	original := strs(t, conn, `SELECT pg_get_functiondef('loomplane_node_event_trigger'::regproc)`)[0]
+	if strings.Contains(original, "public_address") || strings.Contains(original, "ingress_detail") {
+		t.Fatalf("down kept the new payload: %s", original)
+	}
+	if got := strs(t, conn, `SELECT count(*)::text FROM information_schema.columns WHERE table_name='loomplane_nodes' AND column_name IN ('public_address','public_address_confirmed_at','ingress_applied','ingress_sent_at','ingress_detail')`); got[0] != "0" {
+		t.Fatalf("down left columns: %v", got)
+	}
+	up(t, ex, "node_public_address")
+	if again := strs(t, conn, `SELECT pg_get_functiondef('loomplane_node_event_trigger'::regproc)`)[0]; again != before {
+		t.Fatalf("up again made %s", again)
+	}
+
+	exec(t, conn, `INSERT INTO loomplane_nodes (id,org_id,name,public_key,key_fingerprint,created_at,updated_at) VALUES ('node_1','org','web-1','\x01','fp',now(),now())`)
+	count := func() string {
+		return strs(t, conn, `SELECT count(*)::text FROM loomplane_events WHERE type='node.updated'`)[0]
+	}
+	if got := count(); got != "1" {
+		t.Fatalf("insert events: %s", got)
+	}
+	// The applied mode, the send time and the detail aren't in the payload.
+	exec(t, conn, `UPDATE loomplane_nodes SET ingress_applied='none', ingress_sent_at=now(), ingress_detail='no public address answered' WHERE id='node_1'`)
+	if got := count(); got != "1" {
+		t.Fatalf("bookkeeping emitted events: %s", got)
+	}
+	exec(t, conn, `UPDATE loomplane_nodes SET public_address='203.0.113.7', public_address_confirmed_at=now(), ingress_mode='direct' WHERE id='node_1'`)
+	if got := count(); got != "2" {
+		t.Fatalf("address change events: %s", got)
+	}
+	payload := strs(t, conn, `SELECT data::text FROM loomplane_events WHERE type='node.updated' ORDER BY sequence DESC LIMIT 1`)[0]
+	if !strings.Contains(payload, `"public_address": "203.0.113.7"`) || strings.Contains(payload, "public_key") || strings.Contains(payload, "key_fingerprint") {
+		t.Fatalf("payload %s", payload)
+	}
 }

@@ -2,6 +2,7 @@ package agentruns
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,6 +16,7 @@ import (
 	"github.com/xraph/cortex/engine"
 	"github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/run"
+	"github.com/xraph/cortex/store"
 	"github.com/xraph/cortex/suspension"
 	dispatchengine "github.com/xraph/dispatch/engine"
 	"go.jetify.com/typeid/v2"
@@ -44,6 +46,8 @@ const (
 	jobRetries    = 5
 	// maxInputBytes bounds what a task starts from.
 	maxInputBytes = 64 << 10
+	// maxPrefaceBytes bounds a task's preface and its page context each.
+	maxPrefaceBytes = 4 << 10
 	// maxErrorBytes bounds the reason a failed task shows.
 	maxErrorBytes = 500
 	// startGiveUp is how long the sweep keeps queueing a start that never
@@ -71,6 +75,15 @@ type StartInput struct {
 	// refused.
 	MaxTokens int
 	Metadata  map[string]string
+	// Preface is what the model reads before Input, such as where in the
+	// dashboard a person sent a chat message from. It's kept apart from
+	// Input, which stays what the person typed: a conversation's history
+	// shows Input alone.
+	Preface string
+	// PageContext is where in the dashboard a person sent a chat message
+	// from, a JSON object agentchat writes and reads. The task stores it
+	// as it is and never reads it.
+	PageContext json.RawMessage
 	// ReleasePlanID names the plan the person asks the agent to release,
 	// at ReleaseRevision, the revision they saw. Only a route the person
 	// calls sets it: starting a release task for a plan, or confirming a
@@ -106,6 +119,9 @@ type Deps struct {
 	Wake  realtime.WakeSource
 	Now   func() time.Time
 	Warn  func(msg string, err error)
+	// Debug, when set, logs what the service drops on purpose, such as a
+	// tool outcome for a run another replica is writing.
+	Debug func(msg string, keyvals ...any)
 }
 
 // runner is what the service asks of cortex. *engine.Engine is the real
@@ -118,6 +134,9 @@ type runner interface {
 	CreateAgent(ctx context.Context, config *cortexagent.Config) error
 	UpdateAgent(ctx context.Context, config *cortexagent.Config) error
 	GetRun(ctx context.Context, runID id.AgentRunID) (*run.Run, error)
+	// Store is cortex's store: the start job reads and makes a chat's
+	// session through it.
+	Store() store.Store
 }
 
 // settingsReader is what the service reads of the agent's settings.
@@ -154,6 +173,7 @@ type Service struct {
 	wake     realtime.WakeSource
 	now      func() time.Time
 	warnFn   func(msg string, err error)
+	debugFn  func(msg string, keyvals ...any)
 	poll     time.Duration
 
 	mu      sync.RWMutex
@@ -161,6 +181,9 @@ type Service struct {
 	handler SuspensionHandler
 	// running is the runs this process's jobs are driving, by task.
 	running map[string]*localRun
+	// writers is the event writers of the runs this process is pumping,
+	// by run ID, for the tool hooks.
+	writers map[string]*eventWriter
 
 	// beforeClaim and beforeDrive, when set, run at those points of a
 	// job: tests use them to land a cancel there.
@@ -171,8 +194,8 @@ type Service struct {
 func NewService(d Deps) *Service {
 	s := &Service{
 		store: d.Store, jobs: d.Jobs, binder: d.Binder, registry: d.Registry, codec: d.Codec, wake: d.Wake,
-		now: d.Now, warnFn: d.Warn, poll: watchPoll,
-		kinds: map[Kind]KindSpec{}, running: map[string]*localRun{},
+		now: d.Now, warnFn: d.Warn, debugFn: d.Debug, poll: watchPoll,
+		kinds: map[Kind]KindSpec{}, running: map[string]*localRun{}, writers: map[string]*eventWriter{},
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -228,6 +251,12 @@ func (s *Service) warn(msg string, err error) {
 	}
 }
 
+func (s *Service) debug(msg string, keyvals ...any) {
+	if s.debugFn != nil {
+		s.debugFn(msg, keyvals...)
+	}
+}
+
 func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
@@ -268,10 +297,25 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 		return nil, invalid("a task needs something to do")
 	case len(in.Input) > maxInputBytes:
 		return nil, invalid("a task's input is up to %d KiB", maxInputBytes>>10)
+	case len(in.Preface) > maxPrefaceBytes:
+		return nil, invalid("a task's preface is up to %d KiB", maxPrefaceBytes>>10)
+	case len(in.PageContext) > maxPrefaceBytes:
+		return nil, invalid("a task's page context is up to %d KiB", maxPrefaceBytes>>10)
+	case len(in.PageContext) > 0 && !jsonObject(in.PageContext):
+		return nil, invalid("a task's page context is a JSON object")
+	case (in.Preface != "" || len(in.PageContext) > 0) && (in.Kind != KindChat || in.OnBehalfOf == nil):
+		return nil, invalid("only a person's chat message has a preface or a page context")
 	}
 	for _, key := range []string{metaReleasePlan, metaReleaseRevision} {
 		if _, reserved := in.Metadata[key]; reserved {
 			return nil, invalid("%s is Loomplane's to set", key)
+		}
+	}
+	if in.Kind != KindInvestigation || in.OnBehalfOf != nil {
+		for _, key := range []string{MetaReportID, MetaFingerprint} {
+			if _, reserved := in.Metadata[key]; reserved {
+				return nil, invalid("%s names the report of an investigation the agent runs alone", key)
+			}
 		}
 	}
 	if s.settings == nil {
@@ -343,7 +387,8 @@ func (s *Service) Start(ctx context.Context, in StartInput) (*Task, error) {
 		MaxTokens: maxTokens, Metadata: metadata, ReleasePlanID: in.ReleasePlanID, ReleaseRevision: in.ReleaseRevision,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if cerr := s.store.Create(ctx, task, Record{Principal: encoded, Input: in.Input}); cerr != nil {
+	rec := Record{Principal: encoded, Input: in.Input, Preface: in.Preface, PageContext: in.PageContext}
+	if cerr := s.store.Create(ctx, task, rec); cerr != nil {
 		return nil, cerr
 	}
 	if err = s.enqueue(ctx, JobStart, task); err != nil {
@@ -540,8 +585,9 @@ func (s *Service) Events(ctx context.Context, p security.Principal, taskID strin
 	return s.store.Events(ctx, t.OrgID, t.ID, after, limit)
 }
 
-// Cancel stops a task: its requester or someone who manages the
-// workspace's AI may.
+// Cancel stops a task: its requester, while they may use the agent on the
+// task's project (the workspace for a workspace-wide task), or someone who
+// manages the workspace's AI.
 func (s *Service) Cancel(ctx context.Context, p security.Principal, taskID string) error {
 	t, err := s.Get(ctx, p, taskID)
 	if err != nil {
@@ -554,6 +600,37 @@ func (s *Service) Cancel(ctx context.Context, p security.Principal, taskID strin
 		if rerr := s.require(ctx, p, security.AIManage, ""); rerr != nil {
 			return rerr
 		}
+	} else if rerr := s.require(ctx, p, security.AgentUse, t.ProjectID); rerr != nil {
+		// The requester stops their own task only while they may use the
+		// agent where it runs: its project, or the workspace for a
+		// workspace-wide task. A read-only key never may.
+		return rerr
+	}
+	moved, err := s.cancel(ctx, t)
+	if err != nil {
+		return err
+	}
+	if !moved {
+		return ErrNotCancelable
+	}
+	return nil
+}
+
+// CancelTask cancels one open task of the workspace for a caller that
+// holds no person. It checks no permission: the caller has decided who may
+// stop the task, as release preparation does for someone who may approve
+// production but didn't ask for the release. Another workspace's task, or
+// none, is ErrNotFound; a finished one ErrNotCancelable.
+func (s *Service) CancelTask(ctx context.Context, orgID, taskID string) error {
+	if orgID == "" || taskID == "" {
+		return ErrNotFound
+	}
+	t, err := s.store.Get(ctx, orgID, taskID)
+	if err != nil {
+		return err
+	}
+	if Terminal(t.Status) {
+		return ErrNotCancelable
 	}
 	moved, err := s.cancel(ctx, t)
 	if err != nil {
@@ -596,7 +673,16 @@ func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
 	s.stopLocal(t.ID)
 	if eng := s.engine(); eng != nil {
 		if runID, perr := id.ParseAgentRunID(t.RunID); perr == nil {
-			cerr := eng.CancelRun(s.runContext(ctx, t), runID)
+			rctx := s.runContext(ctx, t)
+			cerr := eng.CancelRun(rctx, runID)
+			// The run stopLocal just stopped writes its own end, and when
+			// that lands between CancelRun's read and its write, the write
+			// conflicts. Read it again: by then the run has ended, which
+			// is ErrInvalidState, or it's still running and this write
+			// goes in.
+			for try := 1; try < cancelTries && errors.Is(cerr, cortex.ErrRunConflict); try++ {
+				cerr = eng.CancelRun(rctx, runID)
+			}
 			if cerr != nil && !errors.Is(cerr, cortex.ErrRunNotFound) && !errors.Is(cerr, cortex.ErrInvalidState) && !errors.Is(cerr, cortex.ErrNotSuspended) {
 				return moved, cerr
 			}
@@ -604,6 +690,10 @@ func (s *Service) cancel(ctx context.Context, t *Task) (bool, error) {
 	}
 	return moved, nil
 }
+
+// cancelTries is how many times cancel asks cortex to end a run whose
+// record another writer keeps changing.
+const cancelTries = 3
 
 // runContext is ctx bound to the task when it can be, and otherwise ctx
 // with the task's cortex scope alone, which is all cancelling a run needs:
@@ -899,6 +989,10 @@ func (s *Service) stopLocal(taskID string) {
 	}
 }
 
+// credentialsUnavailable is how nexus opens the refusal of a call whose
+// credential couldn't be resolved, before the cause.
+const credentialsUnavailable = "provider credentials unavailable: "
+
 // reasons are the failures an admin can act on, which a failed task names
 // as they are instead of the chain of errors around them.
 var reasons = []error{
@@ -913,15 +1007,23 @@ func reason(why string) string {
 			return known.Error()
 		}
 	}
-	why = strings.TrimSpace(why)
-	if len(why) <= maxErrorBytes {
-		return why
+	// A gate's refusal in the middle of a run reaches here as text, wrapped
+	// by nexus: what follows nexus's words is the sentence the gate gave.
+	if _, rest, ok := strings.Cut(why, credentialsUnavailable); ok && !strings.HasPrefix(rest, "agentsettings:") && strings.TrimSpace(rest) != "" {
+		return cut(strings.TrimSpace(rest), maxErrorBytes)
 	}
-	cut := maxErrorBytes
-	for cut > 0 && !utf8RuneStart(why[cut]) {
-		cut--
+	return cut(strings.TrimSpace(why), maxErrorBytes)
+}
+
+// cut is s cut to at most n bytes, on a rune boundary.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	return why[:cut]
+	for n > 0 && !utf8RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }

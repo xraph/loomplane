@@ -157,12 +157,29 @@ func (s *Service) Sync(ctx context.Context, p security.Principal, connectionID s
 	if err := s.require(ctx, p, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	return s.sync(ctx, p, connectionID, true)
+	return s.sync(ctx, p, connectionID, true, false)
+}
+
+// runningSyncFor is how long a sync that says it's running is believed. A
+// process that died mid-sync leaves its run marked so for good.
+const runningSyncFor = 5 * time.Minute
+
+// SyncIfIdle is Sync for the syncs nobody asked for in person: the first one
+// after an account is connected, and the scheduled refresh. A sync starts
+// over any running one and fences it, which is right when someone asked for
+// the new one, and would otherwise fail the request of a person who pressed
+// Sync a moment after connecting. SyncIfIdle leaves a running sync alone and
+// answers ErrSyncRunning.
+func (s *Service) SyncIfIdle(ctx context.Context, p security.Principal, connectionID string) (*ProviderResourceSync, error) {
+	if err := s.require(ctx, p, security.CloudAccountManage); err != nil {
+		return nil, err
+	}
+	return s.sync(ctx, p, connectionID, true, true)
 }
 
 // sync is reached after either the account-management check or a persisted
 // project binding has authorized this exact resource's verification.
-func (s *Service) sync(ctx context.Context, p security.Principal, connectionID string, refreshOptIn bool) (*ProviderResourceSync, error) {
+func (s *Service) sync(ctx context.Context, p security.Principal, connectionID string, refreshOptIn, onlyIfIdle bool) (*ProviderResourceSync, error) {
 	rows, err := s.deps.Connections.All(ctx, p.OrgID)
 	if err != nil {
 		return nil, ErrDiscovery
@@ -187,6 +204,13 @@ func (s *Service) sync(ctx context.Context, p security.Principal, connectionID s
 	}
 	run := &ProviderResourceSync{ID: id.String(), OrgID: p.OrgID, ConnectionID: c.ID, Provider: c.Cloud, AccountIdentity: identity, ConnectionGeneration: c.Generation, ConnectionIdentity: connections.AccountIdentity(c.Cloud, c.Account, c.Details), RefreshOptIn: refreshOptIn, RequestedBy: p.UserID, RequestedKeyID: p.KeyID, Status: "running", StartedAt: s.now().UTC()}
 	err = s.deps.Store.Update(ctx, p.OrgID, c.Cloud, identity, c.ID, c.Generation, func(state *AccountState) error {
+		if onlyIfIdle {
+			for _, previous := range state.Syncs {
+				if previous.Status == "running" && run.StartedAt.Sub(previous.StartedAt) < runningSyncFor {
+					return ErrSyncRunning
+				}
+			}
+		}
 		state.Sequence++
 		for _, previous := range state.Syncs {
 			if previous.Status == "running" {
@@ -795,7 +819,7 @@ func (s *Service) RefreshAll(ctx context.Context) error {
 					continue
 				}
 			}
-			if _, syncErr := s.Sync(ctx, p, c.ID); syncErr != nil {
+			if _, syncErr := s.SyncIfIdle(ctx, p, c.ID); syncErr != nil && !errors.Is(syncErr, ErrSyncRunning) {
 				failures = append(failures, syncErr)
 			} else {
 				refreshed[c.Cloud+run.AccountIdentity] = true

@@ -97,7 +97,9 @@ func templateTakesGPUs(poolKind, kind string, gpus int64) error {
 
 func (s *Service) futureCapacity(ctx context.Context, plan *Plan, a *cloudprofiles.Assignment, target cloudprofiles.Target, req cloudinfra.PlacementRequest, repo string, original error) (*CapacityIntent, error) {
 	reader, ok := s.store.(capacityPolicyReader)
-	if !ok || !errors.Is(original, cloudinfra.ErrConflict) {
+	// Loomplane Cloud adds hosts itself; a workspace never asks it for
+	// future capacity, so a refusal there stays a refusal.
+	if !ok || target.Runtime == platformRuntime || !errors.Is(original, cloudinfra.ErrConflict) {
 		return nil, original
 	}
 	policy, err := reader.GetCapacityPolicy(ctx, plan.OrgID, a.CloudID)

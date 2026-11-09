@@ -38,6 +38,10 @@ const (
 	hdrHopPayload   = "X-Loomplane-Header"
 	hdrHopTimestamp = "X-Loomplane-Timestamp"
 	hdrHopAuth      = "X-Loomplane-Hop-Auth"
+	// hdrHopRefusal says why the node refused a hop's stream, beyond its
+	// reason: "not-allowed" for an endpoint it doesn't allow. A replica
+	// that doesn't know the header reads the plain refusal.
+	hdrHopRefusal = "X-Loomplane-Refusal"
 
 	hopUpgrade      = "loomplane-node-hop"
 	hopKindOpen     = "open"
@@ -200,6 +204,9 @@ func (h *Hub) serveOpen(w http.ResponseWriter, r *http.Request, q *hopRequest) {
 	switch {
 	case err == nil:
 	case errors.As(err, &re):
+		if re.notAllowed {
+			w.Header().Set(hdrHopRefusal, "not-allowed")
+		}
 		http.Error(w, re.reason, http.StatusConflict)
 		return
 	case errors.As(err, &off):
@@ -322,9 +329,9 @@ func hopDial(ctx context.Context, target string, cfg HubConfig) (net.Conn, error
 }
 
 // hopDo sends one signed hop to the replica at target. On 101 it returns the
-// upgraded connection; otherwise it returns the status and up to 1 KiB of the
-// body, and closes the connection.
-func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload []byte) (upgraded net.Conn, status int, body string, err error) {
+// upgraded connection; otherwise it returns the status, up to 1 KiB of the
+// body and the response's refusal header, and closes the connection.
+func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload []byte) (upgraded net.Conn, status int, body, refusal string, err error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, hopTimeout)
@@ -332,7 +339,7 @@ func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload
 	}
 	conn, err := hopDial(ctx, target, h.cfg)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", "", err
 	}
 	defer func() {
 		if upgraded == nil {
@@ -348,14 +355,14 @@ func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload
 	defer stop()
 	if dl, ok := ctx.Deadline(); ok {
 		if derr := conn.SetDeadline(dl); derr != nil {
-			return nil, 0, "", derr
+			return nil, 0, "", "", derr
 		}
 	}
 	// The target comes from a session row a replica wrote, and the request is
 	// signed for that replica alone.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(target, "/")+HopPath, http.NoBody) //nolint:gosec // see above
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", "", err
 	}
 	ts := strconv.FormatInt(h.now().Unix(), 10)
 	req.Header.Set(hdrHopNode, node)
@@ -369,12 +376,12 @@ func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload
 		req.Header.Set("Upgrade", hopUpgrade)
 	}
 	if werr := req.Write(conn); werr != nil {
-		return nil, 0, "", werr
+		return nil, 0, "", "", werr
 	}
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
@@ -382,15 +389,15 @@ func (h *Hub) hopDo(ctx context.Context, target, node, org, kind string, payload
 		if rerr != nil {
 			raw = nil
 		}
-		return nil, resp.StatusCode, strings.TrimSpace(string(raw)), nil
+		return nil, resp.StatusCode, strings.TrimSpace(string(raw)), resp.Header.Get(hdrHopRefusal), nil
 	}
 	if !stop() {
-		return nil, 0, "", ctx.Err()
+		return nil, 0, "", "", ctx.Err()
 	}
 	if derr := conn.SetDeadline(time.Time{}); derr != nil {
-		return nil, 0, "", derr
+		return nil, 0, "", "", derr
 	}
-	return &bufConn{Conn: conn, r: br}, resp.StatusCode, "", nil
+	return &bufConn{Conn: conn, r: br}, resp.StatusCode, "", "", nil
 }
 
 // hopOpen opens a stream through the replica that holds the node's session.
@@ -399,7 +406,7 @@ func (h *Hub) hopOpen(ctx context.Context, target string, n *Node, hdr nodeproto
 	if err != nil {
 		return nil, err
 	}
-	conn, status, body, err := h.hopDo(ctx, target, n.ID, n.OrgID, hopKindOpen, payload)
+	conn, status, body, refusal, err := h.hopDo(ctx, target, n.ID, n.OrgID, hopKindOpen, payload)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -415,7 +422,7 @@ func (h *Hub) hopOpen(ctx context.Context, target string, n *Node, hdr nodeproto
 		if reason == "" {
 			reason = "no reason given"
 		}
-		return nil, &refusedError{reason: reason}
+		return nil, &refusedError{reason: reason, notAllowed: refusal == "not-allowed"}
 	case http.StatusNotFound:
 		return nil, ErrNotFound
 	case http.StatusServiceUnavailable:
@@ -447,7 +454,7 @@ func (h *Hub) notifyRemote(nodeID string, msg any) {
 	if err = nodeproto.EncodeControl(&line, msg); err != nil {
 		return
 	}
-	_, status, body, err := h.hopDo(ctx, row.Replica, nodeID, "", hopKindNotify, line.Bytes())
+	_, status, body, _, err := h.hopDo(ctx, row.Replica, nodeID, "", hopKindNotify, line.Bytes())
 	if err != nil || status != http.StatusNoContent {
 		h.log.Warn("nodes: notifying a node through its replica", "node", nodeID, "replica", row.Replica, "status", status, "body", body, "error", err)
 	}

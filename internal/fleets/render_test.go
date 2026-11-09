@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/pkg/fleet"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 func renderFixture(t *testing.T) (fleet.TemplateRelease, fleet.Instance, fleet.CreateInstanceInput) {
@@ -40,6 +41,45 @@ config:
 	}
 	label := "example"
 	return fleet.TemplateRelease{ID: "release", FleetID: "fleet", Digest: digest, Template: *tmpl}, fleet.Instance{ID: "instance", FleetID: "fleet", StageID: "stage", EnvironmentID: "environment", ProfileID: "small", DesiredReleaseID: "release", DesiredGeneration: 1, OwnershipEpoch: 1}, fleet.CreateInstanceInput{StageID: "stage", ReleaseID: "release", ProfileID: "small", Parameters: map[string]fleet.ParameterValue{"label": {Kind: "string", StringValue: &label}}, SecretRefs: map[string]fleet.SecretRef{"token": {ID: "var_example", Version: 2}}}
+}
+
+func TestFleetScaleRenderPreservesGPUAndSharedMemory(t *testing.T) {
+	release, instance, input := renderFixture(t)
+	service := release.Template.Manifest.Services["api"]
+	service.Size = &manifest.Size{CPU: 1, Memory: 512, Shm: 32, GPU: &manifest.GPU{Kind: "gpu-a", Count: 2}}
+	release.Template.Manifest.Services["api"] = service
+	var err error
+	release.Digest, err = fleet.CanonicalDigest(&release.Template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := RenderInstance(release, instance, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := snapshot.Manifest.Services["api"].Size
+	if size.GPU == nil || size.GPU.Kind != "gpu-a" || size.GPU.Count != 2 || size.Shm != 32 || size.CPU != 0.5 || size.Memory != 256 {
+		t.Fatalf("profile dropped pinned resource requests: %+v", size)
+	}
+	size.GPU.Count = 1
+	if release.Template.Manifest.Services["api"].Size.GPU.Count != 2 {
+		t.Fatal("rendered request aliases immutable release")
+	}
+}
+
+func TestFleetScaleRenderRejectsProfileSmallerThanSharedMemory(t *testing.T) {
+	release, instance, input := renderFixture(t)
+	service := release.Template.Manifest.Services["api"]
+	service.Size = &manifest.Size{CPU: 1, Memory: 512, Shm: 300}
+	release.Template.Manifest.Services["api"] = service
+	var err error
+	release.Digest, err = fleet.CanonicalDigest(&release.Template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = RenderInstance(release, instance, input); err == nil {
+		t.Fatal("profile memory cannot contain the pinned shared memory request")
+	}
 }
 func TestInstanceRenderDeterministic(t *testing.T) {
 	release, instance, input := renderFixture(t)

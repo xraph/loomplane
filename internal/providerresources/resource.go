@@ -19,6 +19,9 @@ var (
 	ErrInvalid    = errors.New("invalid provider resource")
 	ErrDiscovery  = errors.New("resource discovery failed; check the account permissions and retry")
 	ErrUnverified = errors.New("the resource identity or connection needs verification")
+	// ErrSyncRunning is what a background sync answers when the account is
+	// already being synced: it leaves that sync alone rather than fence it.
+	ErrSyncRunning = errors.New("a sync of this account is already running")
 )
 
 // ProviderResource contains public observations. Its endpoint ID references a

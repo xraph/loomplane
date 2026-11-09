@@ -55,6 +55,9 @@ func Describe(cfg *planning.ResourceConfig, registry *recipes.Registry) (Descrip
 	if kind.Service == nil || !kind.DirectService() || len(composition.Components) != 1 || kind.Service.Recovery != kind.Name || kind.Service.BackupFormat != enginebackup.Format(kind.Name) || enginebackup.Format(kind.Name) == "" {
 		return Descriptor{}, errors.New("the service has no qualified native recovery adapter")
 	}
+	if kind.Name == "duckdb" && composition.Revision != recipes.DuckDBRecoveryRevision {
+		return Descriptor{}, errors.New("DuckDB recovery needs the reviewed read-only runtime revision; recreate this service with its qualified image")
+	}
 	component := composition.Components[0]
 	if component.Protection != recipes.ProtectionNative || component.Volume == nil || c.Protection != recipes.ProtectionNative {
 		return Descriptor{}, errors.New("the recorded component has no native protection")

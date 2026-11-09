@@ -1,0 +1,5 @@
+import type { Codec } from '../codec-runtime';
+import { codec_SourceDiff_commits } from './SourceDiff.commits';
+import { codec_SourceDiff_migrations } from './SourceDiff.migrations';
+
+export const codec_SourceDiff: Codec = {"kind": "object", "fields": {"additions": {"ts": "additions"}, "ahead_by": {"ts": "aheadBy"}, "alias": {"ts": "alias"}, "behind_by": {"ts": "behindBy"}, "commits": {"ts": "commits", "codec": () => codec_SourceDiff_commits}, "deletions": {"ts": "deletions"}, "direction": {"ts": "direction"}, "error": {"ts": "error"}, "files_changed": {"ts": "filesChanged"}, "migrations": {"ts": "migrations", "codec": () => codec_SourceDiff_migrations}, "production_commit": {"ts": "productionCommit"}, "repository": {"ts": "repository"}, "source_id": {"ts": "sourceId"}, "staging_commit": {"ts": "stagingCommit"}, "total_commits": {"ts": "totalCommits"}, "truncated": {"ts": "truncated"}}, "required": ["additions", "ahead_by", "alias", "behind_by", "commits", "deletions", "direction", "files_changed", "migrations", "production_commit", "repository", "source_id", "staging_commit", "total_commits", "truncated"]};

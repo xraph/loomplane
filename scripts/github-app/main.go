@@ -12,7 +12,9 @@
 // which git ignores.
 //
 // A webhook can't reach localhost, so it's off unless you pass -webhook,
-// for a Loomplane GitHub can reach.
+// for a Loomplane GitHub can reach. The App asks to write issues, which
+// Loomplane's agent opens one per report with; pass -no-issues if you
+// don't run the agent.
 package main
 
 import (
@@ -44,7 +46,7 @@ func main() {
 
 type options struct {
 	org, name, publicURL, webURL, apiURL, listen, config, key string
-	public, webhook                                           bool
+	public, webhook, noIssues                                 bool
 }
 
 func run() error {
@@ -59,6 +61,7 @@ func run() error {
 	flag.StringVar(&o.key, "key", ".loomplane/github-app.pem", "where the App's private key is written")
 	flag.BoolVar(&o.public, "public", true, "let any GitHub account install the App, not only its owner")
 	flag.BoolVar(&o.webhook, "webhook", false, "turn the push webhook on; GitHub must be able to reach -url")
+	flag.BoolVar(&o.noIssues, "no-issues", false, "leave out the Issues permission, which only the agent's reports use")
 	flag.Parse()
 	o.publicURL = strings.TrimRight(o.publicURL, "/")
 	o.webURL = strings.TrimRight(o.webURL, "/")
@@ -89,6 +92,7 @@ func run() error {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = page.Execute(w, map[string]string{ //nolint:errcheck // the browser sees what it got
 			"Action": newAppURL(o) + "?state=" + url.QueryEscape(state), "Manifest": string(manifest), "Owner": owner(o),
+			"Does": does(o),
 		})
 	})
 	mux.HandleFunc("GET /created", func(w http.ResponseWriter, r *http.Request) {
@@ -123,10 +127,15 @@ func run() error {
 	return nil
 }
 
-// appManifest is the App docs/github-app.md describes: it reads contents
-// and nothing else, and asks the installer to sign in during installation
-// so Loomplane can check they see the installation they claim.
+// appManifest is the App docs/github-app.md describes: it reads contents,
+// writes issues unless -no-issues, and asks the installer to sign in
+// during installation so Loomplane can check they see the installation
+// they claim.
 func appManifest(o options, redirect string) map[string]any {
+	perms := map[string]string{"contents": "read", "metadata": "read"}
+	if !o.noIssues {
+		perms["issues"] = "write"
+	}
 	m := map[string]any{
 		"name":                     o.name,
 		"url":                      o.publicURL,
@@ -134,13 +143,21 @@ func appManifest(o options, redirect string) map[string]any {
 		"callback_urls":            []string{o.publicURL + "/integrations/github/setup"},
 		"request_oauth_on_install": true,
 		"public":                   o.public,
-		"default_permissions":      map[string]string{"contents": "read", "metadata": "read"},
+		"default_permissions":      perms,
 		"hook_attributes":          map[string]any{"url": o.publicURL + "/api/v1/github/webhook", "active": o.webhook},
 	}
 	if o.webhook {
 		m["default_events"] = []string{"push"}
 	}
 	return m
+}
+
+// does is what the App's permissions let it do, for the page.
+func does(o options) string {
+	if o.noIssues {
+		return "it reads repository contents and nothing else"
+	}
+	return "it reads repository contents and opens issues for agent reports"
 }
 
 func newAppURL(o options) string {
@@ -275,7 +292,7 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 <title>Create Loomplane's GitHub App</title>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:34rem;margin:4rem auto;padding:0 1rem}button{font:inherit;padding:.5rem 1rem;border-radius:999px}</style>
 <h1>Create Loomplane's GitHub App</h1>
-<p>GitHub will show you the App's settings for {{.Owner}}: it reads repository contents and nothing else. Check them and choose Create GitHub App, and GitHub sends you back here.</p>
+<p>GitHub will show you the App's settings for {{.Owner}}: {{.Does}}. Check them and choose Create GitHub App, and GitHub sends you back here.</p>
 <form method="post" action="{{.Action}}">
 <input type="hidden" name="manifest" value="{{.Manifest}}">
 <button type="submit">Continue to GitHub</button>

@@ -483,6 +483,67 @@ func (s *Service) Values(ctx context.Context, orgID, projectID, environment, ser
 	})
 	return values, secret, err
 }
+
+// SecretValuesFor returns the plaintext of every secret variable that can
+// apply to the project in the named environment, or in any of its
+// environments when environment is "": every layer, organization-wide
+// included, every service, and the ones a more specific layer overrides.
+// An environment the project no longer has (a report about one that was
+// deleted) reads as every environment, so its organization-wide and
+// project-wide secrets are still covered.
+// It is what the agent's report delivery redacts before anything leaves
+// Loomplane, so it errs toward too many values. It checks no role, writes
+// nothing (no store row, no secret version), and nothing it returns is
+// logged or stored. A secret that can't be read is skipped and named in
+// the error, with every other value still returned.
+func (s *Service) SecretValuesFor(ctx context.Context, orgID, projectID, environment string) ([]string, error) {
+	if _, err := s.projects.GetProject(ctx, orgID, projectID); err != nil {
+		return nil, err
+	}
+	var env *projects.Environment
+	if environment != "" {
+		var err error
+		env, err = s.environment(ctx, orgID, projectID, environment)
+		if err != nil && !errors.Is(err, ErrInvalid) {
+			return nil, err
+		}
+	}
+	var candidates []*Variable
+	if env == nil {
+		org, err := s.store.ListOrganization(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+		own, err := s.store.ListProject(ctx, orgID, projectID)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, org...)
+		candidates = append(candidates, own...)
+	} else {
+		var err error
+		if candidates, err = s.store.ForEnvironment(ctx, orgID, projectID, env.ID, env.Name); err != nil {
+			return nil, err
+		}
+	}
+	values := []string{}
+	var errs []error
+	for _, v := range candidates {
+		if !v.Secret {
+			continue
+		}
+		value, err := s.revealSource(ctx, v)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("reveal %s: %w", v.Key, err))
+			continue
+		}
+		if len(value) > 0 {
+			values = append(values, string(value))
+		}
+	}
+	return values, errors.Join(errs...)
+}
+
 func (s *Service) sourceValues(ctx context.Context, orgID, projectID string, env *projects.Environment, service string) (values map[string]string, secret map[string]bool, err error) {
 	if scopeErr := s.validateSourceScope(ctx, &Variable{OrgID: orgID, ProjectID: projectID, environmentID: env.ID, Environment: env.Name}); scopeErr != nil {
 		return nil, nil, scopeErr

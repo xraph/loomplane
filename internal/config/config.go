@@ -80,6 +80,9 @@ type Config struct {
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
 	Nodes         NodesConfig
+	Chronicle     ChronicleConfig
+	Hallproof     HallproofConfig
+	Mobile        MobileConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -406,8 +409,14 @@ type CloudsConfig struct {
 	// sandbox, which never registers or charges for a real domain.
 	CloudflareRegistrarSandbox bool
 	// ACMEDirectory replaces the ACME directory certificates are ordered
-	// from. Empty means Let's Encrypt's production directory.
+	// from, for server and Kubernetes routes. Empty means Let's Encrypt's
+	// production directory.
 	ACMEDirectory string
+	// ACMERootsFile is a PEM file of the CA certificates ACMEDirectory's
+	// own TLS certificate chains to, for a directory the proxies' system
+	// roots don't trust, such as a test CA. Server proxies get a copy.
+	// Kubernetes routes don't use it. Empty uses the system roots.
+	ACMERootsFile string
 	// KubernetesInCluster lets organizations connect the Kubernetes cluster
 	// Loomplane runs in, as Loomplane's own service account. Every
 	// organization on the instance shares that account, so it's off unless
@@ -478,10 +487,19 @@ func Defaults() Config {
 			Provider:  AIProviderAnthropic,
 			Model:     DefaultAIModel,
 			Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
-			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions},
+			Knowledge: AIKnowledgeConfig{Dimensions: DefaultEmbeddingDimensions, DocsBudgetUSD: DefaultDocsBudgetUSD},
 		},
 		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
+		Chronicle: ChronicleConfig{Checkpoints: CheckpointsConfig{
+			Enabled:       true,
+			EveryEvents:   DefaultCheckpointEveryEvents,
+			EveryInterval: DefaultCheckpointEveryInterval,
+		}},
+		Mobile: MobileConfig{
+			AndroidPackage:          DefaultAndroidPackage,
+			AndroidCertFingerprints: slices.Clone(DefaultAndroidCertFingerprints),
+		},
 	}
 }
 
@@ -600,6 +618,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
+	r.str(&c.Clouds.ACMERootsFile, "clouds.acme_roots_file")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
 	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
@@ -633,6 +652,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.AI.Knowledge.EmbeddingBaseURL, "ai.knowledge.embedding_base_url")
 	r.str(&c.AI.Knowledge.EmbeddingModel, "ai.knowledge.embedding_model")
 	r.integer(&c.AI.Knowledge.Dimensions, "ai.knowledge.dimensions")
+	r.str(&c.AI.Knowledge.DocsBudgetUSD, "ai.knowledge.docs_budget_usd")
 	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
@@ -656,6 +676,21 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
 	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
 	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
+	r.boolean(&c.Chronicle.Checkpoints.Enabled, "chronicle.checkpoints.enabled")
+	r.integer(&c.Chronicle.Checkpoints.EveryEvents, "chronicle.checkpoints.every_events")
+	r.duration(&c.Chronicle.Checkpoints.EveryInterval, "chronicle.checkpoints.every_interval")
+	r.str(&c.Hallproof.Endpoint, "hallproof.endpoint")
+	r.str(&c.Hallproof.IngestKey, "hallproof.ingest_key")
+	r.str(&c.Hallproof.IngestKeyFile, "hallproof.ingest_key_file")
+	r.names(&c.Hallproof.StaffOrgs, "hallproof.staff_orgs")
+	r.str(&c.Mobile.AndroidPackage, "mobile.android_package")
+	// A list read appends, so a set value replaces the store app's keys
+	// rather than joining them.
+	var fingerprints []string
+	r.names(&fingerprints, "mobile.android_cert_fingerprints")
+	if len(fingerprints) > 0 {
+		c.Mobile.AndroidCertFingerprints = fingerprints
+	}
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -676,7 +711,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Chronicle.Checkpoints.Validate(), c.Hallproof.Validate(), c.Mobile.Validate())
 	if c.AI.Enabled {
 		errs = append(errs, c.AI.Validate(c.Environment))
 	}

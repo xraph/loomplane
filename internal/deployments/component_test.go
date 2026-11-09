@@ -90,7 +90,7 @@ func TestTargetDialFromTheTargetsNetwork(t *testing.T) {
 	// A server dials over its pinned SSH connection, opened the way a
 	// deployment opens it.
 	var dialed *server.Config
-	servers := &OwnedTarget{Cloud: connections.Server, Credentials: creds, ServerDial: func(_ context.Context, cfg *server.Config) (*server.Client, error) {
+	servers := &OwnedTarget{Cloud: connections.Server, Credentials: creds, ServerConnect: func(_ context.Context, cfg *server.Config, _ server.NodeStreams) (*server.Client, error) {
 		dialed = cfg
 		return nil, errors.New("ssh: handshake refused")
 	}}

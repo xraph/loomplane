@@ -79,23 +79,31 @@ func serve(ctx context.Context, readonly bool) error {
 		return err
 	}
 	if readonly {
-		// Initialize an empty copy before any listener starts. Imported copies
-		// already have a database and never enter this path.
-		if _, statErr := os.Stat("/data/analytics.db"); errors.Is(statErr, os.ErrNotExist) {
-			initialize, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(initialize, "/duckdb", "-batch", "-bail", "/data/analytics.db")
-			cmd.Stdin = strings.NewReader("CHECKPOINT;\n.quit\n")
-			if initErr := cmd.Run(); initErr != nil {
-				return errors.New("initialize recovery database")
-			}
-		} else if statErr != nil {
-			return statErr
+		if checkErr := validateReadonlyDatabase("/data/analytics.db"); checkErr != nil {
+			return checkErr
 		}
 	}
 	// The supervisor delivers .quit before enforcing its own bounded shutdown.
 	child := serveCommand(context.WithoutCancel(ctx), readonly)
-	return serveProcess(ctx, child, bootstrap+"CALL quack_serve('quack:0.0.0.0:9494', allow_other_hostname := true, token := '"+secret+"', disable_ssl := false, ssl_cert_file := '/etc/loomplane/node.pem', ssl_key_file := '/etc/loomplane/node-key.pem');\n", 20*time.Second)
+	return serveProcess(ctx, child, startupSQL(secret, readonly), 20*time.Second)
+}
+
+func validateReadonlyDatabase(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("recovery database is missing or invalid")
+	}
+	return nil
+}
+
+func startupSQL(secret string, readonly bool) string {
+	listener := "quack_serve('quack:0.0.0.0:9494', allow_other_hostname := true, token := '" + secret + "', disable_ssl := false, ssl_cert_file := '/etc/loomplane/node.pem', ssl_key_file := '/etc/loomplane/node-key.pem')"
+	if !readonly {
+		return bootstrap + "CALL " + listener + ";\n"
+	}
+	return bootstrap + "PREPARE loomplane_readonly_listener AS SELECT * FROM " + listener + ";\n" +
+		"SET temp_directory=''; SET enable_external_access=false; SET lock_configuration=true;\n" +
+		"EXECUTE loomplane_readonly_listener; DEALLOCATE loomplane_readonly_listener;\n"
 }
 
 func serveProcess(ctx context.Context, child *exec.Cmd, startup string, grace time.Duration) error {

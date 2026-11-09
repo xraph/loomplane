@@ -43,8 +43,10 @@ type fakeCloud struct {
 	services map[string]map[string]any
 	patches  int
 	public   map[string]bool
-	// failBuilds makes builds fail while it's set.
+	// failBuilds makes builds fail while it's set, with failDetail as
+	// what Cloud Build says when it's set.
 	failBuilds bool
+	failDetail string
 	failed     map[string]bool
 	// secrets are Secret Manager's versions by secret, and who may read
 	// each.
@@ -167,7 +169,11 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case f.polls[id] > 1:
 			status = "SUCCESS"
 		}
-		build := map[string]any{"id": id, "status": status, "statusDetail": "step 0 exited 1", "logUrl": "https://console/" + id}
+		detail := "step 0 exited 1"
+		if f.failed[id] && f.failDetail != "" {
+			detail = f.failDetail
+		}
+		build := map[string]any{"id": id, "status": status, "statusDetail": detail, "logUrl": "https://console/" + id}
 		if status == "SUCCESS" {
 			// Cloud Build reports the images it pushed; pack pushes its own.
 			ref := f.pushes[id]
@@ -604,14 +610,23 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 // hasn't got, builds once, then is ready, aliased to a path on itself so
 // the health check reaches it.
 type fakeVercelDeploys struct {
-	mu       sync.Mutex
-	srv      *httptest.Server
-	token    string
-	files    map[string]int
-	projects map[string]map[string]any
-	env      map[string]any
-	deployed []map[string]any
-	polls    int
+	mu    sync.Mutex
+	srv   *httptest.Server
+	token string
+	// projectID is the id every project made in this account gets.
+	projectID string
+	files     map[string]int
+	projects  map[string]map[string]any
+	// env is the latest value written for each key, whatever its target.
+	env map[string]any
+	// envRows are the project's variables, one per key and target, as
+	// Vercel keeps them.
+	envRows []map[string]any
+	rowSeq  int
+	// customEnvs are the project's custom environments, by slug.
+	customEnvs map[string]bool
+	deployed   []map[string]any
+	polls      int
 	// buildFails ends every build in ERROR, and dropPolls closes the
 	// connection on every status read, the way a lost answer looks.
 	buildFails, dropPolls bool
@@ -619,7 +634,7 @@ type fakeVercelDeploys struct {
 
 func newFakeVercelDeploys(t *testing.T, token string) *fakeVercelDeploys {
 	t.Helper()
-	f := &fakeVercelDeploys{token: token, files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}}
+	f := &fakeVercelDeploys{token: token, projectID: "prj_web", files: map[string]int{}, projects: map[string]map[string]any{}, env: map[string]any{}, customEnvs: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -656,15 +671,99 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && p == "/v10/projects":
 		var prj map[string]any
 		_ = json.Unmarshal(body, &prj)
-		prj["id"] = "prj_web"
-		f.projects[prj["name"].(string)], f.projects["prj_web"] = prj, prj
+		prj["id"] = f.projectID
+		f.projects[prj["name"].(string)], f.projects[f.projectID] = prj, prj
 		reply(200, prj)
-	case r.Method == http.MethodPost && p == "/v10/projects/prj_web/env":
-		var vars []map[string]any
-		_ = json.Unmarshal(body, &vars)
-		for _, v := range vars {
-			f.env[v["key"].(string)] = v["value"]
+	case r.Method == http.MethodPost && p == "/v10/projects/"+f.projectID+"/env":
+		if r.URL.Query().Has("upsert") {
+			// Vercel's upsert matches by key alone and overwrites
+			// another target's row.
+			reply(400, map[string]any{"error": map[string]any{"code": "bad_request", "message": "this fake refuses upsert: it overwrites other targets' rows"}})
+			return
 		}
+		var vars []map[string]any
+		if json.Unmarshal(body, &vars) != nil {
+			var one map[string]any
+			_ = json.Unmarshal(body, &one)
+			vars = []map[string]any{one}
+		}
+		created, failed := []any{}, []any{}
+		for _, v := range vars {
+			if f.envRowClash(v) {
+				failed = append(failed, map[string]any{"error": map[string]any{"code": "ENV_ALREADY_EXISTS", "key": v["key"], "message": "A variable with this name already exists for this target"}})
+				continue
+			}
+			f.rowSeq++
+			row := map[string]any{"id": fmt.Sprintf("env_row_%d", f.rowSeq)}
+			for _, k := range []string{"key", "value", "type", "target", "customEnvironmentIds"} {
+				if x, ok := v[k]; ok {
+					row[k] = x
+				}
+			}
+			f.envRows = append(f.envRows, row)
+			f.env[v["key"].(string)] = v["value"]
+			created = append(created, row)
+		}
+		reply(201, map[string]any{"created": created, "failed": failed})
+	case r.Method == http.MethodGet && p == "/v10/projects/"+f.projectID+"/env":
+		q := r.URL.Query()
+		envs := []any{}
+		for _, row := range f.envRows {
+			if t := q.Get("target"); t != "" && !slices.Contains(envList(row["target"]), t) {
+				continue
+			}
+			if c := q.Get("customEnvironmentId"); c != "" && !slices.Contains(envList(row["customEnvironmentIds"]), c) {
+				continue
+			}
+			listed := map[string]any{}
+			for k, x := range row {
+				if k != "value" {
+					listed[k] = x
+				}
+			}
+			envs = append(envs, listed)
+		}
+		reply(200, map[string]any{"envs": envs})
+	case (r.Method == http.MethodPatch || r.Method == http.MethodDelete) && strings.HasPrefix(p, "/v9/projects/"+f.projectID+"/env/"):
+		id := strings.TrimPrefix(p, "/v9/projects/"+f.projectID+"/env/")
+		i := slices.IndexFunc(f.envRows, func(row map[string]any) bool { return row["id"] == id })
+		if i < 0 {
+			reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Variable not found"}})
+			return
+		}
+		if r.Method == http.MethodDelete {
+			f.envRows = slices.Delete(f.envRows, i, i+1)
+			reply(200, map[string]any{})
+			return
+		}
+		var patch map[string]any
+		_ = json.Unmarshal(body, &patch)
+		for k, x := range patch {
+			f.envRows[i][k] = x
+		}
+		if v, ok := patch["value"]; ok {
+			f.env[f.envRows[i]["key"].(string)] = v
+		}
+		reply(200, f.envRows[i])
+	case r.Method == http.MethodGet && p == "/v7/deployments":
+		// A native environment lists its target's deployments before it
+		// removes anything. This fake keeps none past the build.
+		reply(200, map[string]any{"deployments": []any{}})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/"):
+		slug := strings.TrimPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/")
+		if _, ok := f.customEnvs[slug]; !ok {
+			reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Environment not found"}})
+			return
+		}
+		reply(200, map[string]any{"id": "env_" + slug, "slug": slug})
+	case r.Method == http.MethodPost && p == "/v9/projects/"+f.projectID+"/custom-environments":
+		var e map[string]any
+		_ = json.Unmarshal(body, &e)
+		slug, _ := e["slug"].(string)
+		f.customEnvs[slug] = true
+		reply(200, map[string]any{"id": "env_" + slug, "slug": slug})
+	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/"):
+		delete(f.customEnvs, strings.TrimPrefix(p, "/v9/projects/"+f.projectID+"/custom-environments/"))
 		reply(200, map[string]any{})
 	case r.Method == http.MethodPost && p == "/v2/files":
 		sum := sha1.Sum(body)
@@ -714,6 +813,40 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		reply(404, map[string]any{"error": map[string]any{"code": "not_found", "message": "Not found"}})
 	}
+}
+
+// envRowClash reports whether a row with v's key already holds one of
+// v's targets. Vercel refuses a second one without upsert.
+func (f *fakeVercelDeploys) envRowClash(v map[string]any) bool {
+	for _, row := range f.envRows {
+		if row["key"] != v["key"] {
+			continue
+		}
+		for _, k := range []string{"target", "customEnvironmentIds"} {
+			for _, t := range envList(v[k]) {
+				if slices.Contains(envList(row[k]), t) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// envList reads a decoded JSON list of strings.
+func envList(x any) []string {
+	var out []string
+	switch l := x.(type) {
+	case []any:
+		for _, v := range l {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
+		}
+	case []string:
+		out = l
+	}
+	return out
 }
 
 const webAndAPIManifest = `version: 1

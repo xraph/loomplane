@@ -30,6 +30,7 @@ var schemaOf = map[reflect.Type]func() (map[string]any, error){
 	reflect.TypeFor[defs.AddSourceInput]():         tool.Schema[defs.AddSourceInput],
 	reflect.TypeFor[defs.EnvironmentInput]():       tool.Schema[defs.EnvironmentInput],
 	reflect.TypeFor[defs.DriftInput]():             tool.Schema[defs.DriftInput],
+	reflect.TypeFor[defs.RepositoryStateInput]():   tool.Schema[defs.RepositoryStateInput],
 	reflect.TypeFor[defs.DeploymentLogsInput]():    tool.Schema[defs.DeploymentLogsInput],
 	reflect.TypeFor[defs.BindingMetricsInput]():    tool.Schema[defs.BindingMetricsInput],
 	reflect.TypeFor[defs.RecentCanariesInput]():    tool.Schema[defs.RecentCanariesInput],

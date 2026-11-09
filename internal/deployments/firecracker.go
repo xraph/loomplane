@@ -25,9 +25,67 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 )
 
+// firecrackerBackend runs one stateless application per instance on a
+// Firecracker host. Where the host is, and the scope the instance runs under
+// there, come from its session: an organization's connection opens that
+// connection's host, and Loomplane Cloud opens the platform host the
+// instance is placed on. Everything the backend does to a VM goes through
+// the same code either way.
 type firecrackerBackend struct {
-	target          *OwnedTarget
-	org, connection string
+	target *OwnedTarget
+	// session opens the host the instance runs on and names its scope
+	// there. The caller closes the client.
+	session firecrackerSession
+	// place opens the host to apply the instance on and returns what to do
+	// once the host has applied it, which may give the instance a public
+	// endpoint, and if the apply fails. Nil applies through session.
+	place func(ctx context.Context, iid id.ID, labels map[string]string, spec fc.Spec) (*fc.Client, fc.Scope, firecrackerPlaced, error)
+	// effect stops or removes the instance, running act against each
+	// host and scope it may run under. Nil acts once, through session.
+	effect func(ctx context.Context, iid id.ID, labels map[string]string, action string, act func(*fc.Client, fc.Scope) error) error
+	// redact turns a failure into what the workspace may read. Nil passes
+	// it on.
+	redact func(ctx context.Context, op string, err error) error
+	// unpublished leaves the host's own address out of the instance's
+	// endpoints and publishes no port on it.
+	unpublished bool
+}
+
+type firecrackerSession func(ctx context.Context, iid id.ID, labels map[string]string) (*fc.Client, fc.Scope, error)
+
+// firecrackerApplied runs once the host has applied an instance. A non-nil
+// endpoint is where the instance is reached publicly.
+type firecrackerApplied func(ctx context.Context, r fc.Record) (*cpprovider.Endpoint, error)
+
+// firecrackerPlaced is what place hands the apply: what to run once the host
+// has applied the instance and, if set, what to run when the apply fails
+// before that has succeeded. abandon runs on a context of its own.
+type firecrackerPlaced struct {
+	applied firecrackerApplied
+	abandon func(ctx context.Context)
+}
+
+// abandonTimeout bounds what a failed apply's abandon writes.
+const abandonTimeout = 30 * time.Second
+
+// orgFirecracker is the backend for an organization's Firecracker
+// connection: every session opens that connection's host, after the
+// connection checks it.
+func (e *OwnedTarget) orgFirecracker(org, connection string) *firecrackerBackend {
+	return &firecrackerBackend{target: e, session: func(ctx context.Context, iid id.ID, labels map[string]string) (*fc.Client, fc.Scope, error) {
+		client, err := e.firecrackerSession(ctx, org, connection, labels)
+		if err != nil {
+			return nil, fc.Scope{}, err
+		}
+		return client, fcScope(iid, labels), nil
+	}}
+}
+
+func (b *firecrackerBackend) fail(ctx context.Context, op string, err error) error {
+	if err == nil || b.redact == nil {
+		return err
+	}
+	return b.redact(ctx, op, err)
 }
 
 func (e *OwnedTarget) firecrackerSession(ctx context.Context, org, connection string, labels map[string]string) (*fc.Client, error) {
@@ -58,7 +116,9 @@ func firecrackerSpec(sp cpprovider.ServiceSpec, labels map[string]string) (fc.Sp
 	}
 	q := fc.Spec{Kind: "app", Service: labels[owned.LabelService], Image: sp.Image, VCPUs: max(1, (sp.Resources.CPUMillis+999)/1000), MemoryMiB: max(128, sp.Resources.MemoryMB), DiskMiB: 4096, Command: sp.Command, Args: sp.Args, HealthPath: labels[owned.LabelHealth]}
 	if len(sp.Ports) == 1 {
-		if sp.Ports[0].Protocol != "" && sp.Ports[0].Protocol != "tcp" {
+		// A service's port is "http" (spec) and a component's "tcp"; the
+		// VM serves either over TCP.
+		if p := sp.Ports[0].Protocol; p != "" && p != "tcp" && p != "http" {
 			return q, fc.ErrInvalid
 		}
 		q.Port = sp.Ports[0].Container
@@ -86,14 +146,41 @@ func firecrackerRegistry(raw []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{"auths": map[string]any{auth.ServerAddress: map[string]string{"auth": auth.Auth, "identitytoken": auth.IdentityToken, "registrytoken": auth.RegistryToken}}})
 }
 func (b *firecrackerBackend) Apply(ctx context.Context, iid id.ID, sp cpprovider.ServiceSpec, labels map[string]string) (*cpprovider.ProvisionResult, error) {
-	client, err := b.target.firecrackerSession(ctx, b.org, b.connection, labels)
+	out, err := b.apply(ctx, iid, sp, labels)
+	return out, b.fail(ctx, "apply", err)
+}
+
+func (b *firecrackerBackend) apply(ctx context.Context, iid id.ID, sp cpprovider.ServiceSpec, labels map[string]string) (*cpprovider.ProvisionResult, error) {
+	specLabels := labels
+	if b.unpublished {
+		specLabels = maps.Clone(labels)
+		specLabels[owned.LabelPublic] = "false"
+	}
+	spec, err := firecrackerSpec(sp, specLabels)
+	if err != nil {
+		return nil, err
+	}
+	place := b.place
+	if place == nil {
+		place = func(ctx context.Context, iid id.ID, labels map[string]string, _ fc.Spec) (*fc.Client, fc.Scope, firecrackerPlaced, error) {
+			client, scope, sessionErr := b.session(ctx, iid, labels)
+			return client, scope, firecrackerPlaced{applied: func(context.Context, fc.Record) (*cpprovider.Endpoint, error) { return nil, nil }}, sessionErr
+		}
+	}
+	client, scope, placed, err := place(ctx, iid, labels, spec)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
-	spec, err := firecrackerSpec(sp, labels)
-	if err != nil {
-		return nil, err
+	done := false
+	if placed.abandon != nil {
+		defer func() {
+			if !done {
+				after, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonTimeout)
+				defer cancel()
+				placed.abandon(after)
+			}
+		}()
 	}
 	values, err := b.target.values(ctx, labels)
 	if err != nil {
@@ -107,7 +194,7 @@ func (b *firecrackerBackend) Apply(ctx context.Context, iid id.ID, sp cpprovider
 		env = map[string]string{}
 	}
 	maps.Copy(env, values.Env)
-	q := fc.Request{Scope: fcScope(iid, labels), RuntimeIdentity: client.Details["runtime_identity"], Spec: spec, Values: fc.Values{Env: env}}
+	q := fc.Request{Scope: scope, RuntimeIdentity: client.Details["runtime_identity"], Spec: spec, Values: fc.Values{Env: env}}
 	if values.PullAuth != "" {
 		raw, e := base64.URLEncoding.DecodeString(values.PullAuth)
 		if e != nil {
@@ -135,7 +222,23 @@ func (b *firecrackerBackend) Apply(ctx context.Context, iid id.ID, sp cpprovider
 	if r.Scope != q.Scope || r.Generation != q.Authority.Generation || r.Current == nil {
 		return nil, fc.ErrConflict
 	}
-	return &cpprovider.ProvisionResult{ProviderRef: r.Scope.Key(), ServiceRefs: map[string]string{sp.Name: r.Current.ID}, Endpoints: firecrackerEndpoints(client, sp.Name, spec)}, nil
+	public, appliedErr := placed.applied(ctx, r)
+	if appliedErr != nil {
+		return nil, appliedErr
+	}
+	done = true
+	endpoints := b.endpoints(client, sp.Name, spec)
+	if public != nil {
+		endpoints = append([]cpprovider.Endpoint{*public}, endpoints...)
+	}
+	return &cpprovider.ProvisionResult{ProviderRef: r.Scope.Key(), ServiceRefs: map[string]string{sp.Name: r.Current.ID}, Endpoints: endpoints}, nil
+}
+
+func (b *firecrackerBackend) endpoints(client *fc.Client, name string, s fc.Spec) []cpprovider.Endpoint {
+	if b.unpublished {
+		s.PublishedPort = 0
+	}
+	return firecrackerEndpoints(client, name, s)
 }
 func firecrackerEndpoints(client *fc.Client, name string, s fc.Spec) []cpprovider.Endpoint {
 	if s.PublishedPort == 0 {
@@ -158,12 +261,21 @@ func readFirecracker(r fc.Record) fc.Request {
 	return q
 }
 func (b *firecrackerBackend) Status(ctx context.Context, iid id.ID, labels map[string]string) (*cpprovider.InstanceStatus, error) {
-	c, err := b.target.firecrackerSession(ctx, b.org, b.connection, labels)
+	out, err := b.status(ctx, iid, labels)
+	return out, b.fail(ctx, "status", err)
+}
+
+func (b *firecrackerBackend) status(ctx context.Context, iid id.ID, labels map[string]string) (*cpprovider.InstanceStatus, error) {
+	c, scope, err := b.session(ctx, iid, labels)
 	if err != nil {
 		return nil, err
 	}
+	if c == nil {
+		// Nothing runs it on any host now.
+		return &cpprovider.InstanceStatus{State: cpprovider.StateStopped}, nil
+	}
 	defer c.Close()
-	r, err := c.Inspect(ctx, fcScope(iid, labels))
+	r, err := c.Inspect(ctx, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -185,16 +297,25 @@ func (b *firecrackerBackend) Status(ctx context.Context, iid id.ID, labels map[s
 	} else {
 		out.State = cpprovider.StateFailed
 	}
-	out.Endpoints = firecrackerEndpoints(c, labels[owned.LabelService], r.Current.Spec)
+	out.Endpoints = b.endpoints(c, labels[owned.LabelService], r.Current.Spec)
 	return out, nil
 }
 func (b *firecrackerBackend) mutate(ctx context.Context, iid id.ID, labels map[string]string, action string) error {
-	c, err := b.target.firecrackerSession(ctx, b.org, b.connection, labels)
+	act := func(c *fc.Client, scope fc.Scope) error { return b.mutateOn(ctx, c, scope, labels, action) }
+	if b.effect != nil {
+		return b.fail(ctx, action, b.effect(ctx, iid, labels, action, act))
+	}
+	c, scope, err := b.session(ctx, iid, labels)
 	if err != nil {
-		return err
+		return b.fail(ctx, action, err)
 	}
 	defer c.Close()
-	r, err := c.Inspect(ctx, fcScope(iid, labels))
+	return b.fail(ctx, action, act(c, scope))
+}
+
+// mutateOn stops or removes what runs under scope on c's host.
+func (b *firecrackerBackend) mutateOn(ctx context.Context, c *fc.Client, scope fc.Scope, labels map[string]string, action string) error {
+	r, err := c.Inspect(ctx, scope)
 	if errors.Is(err, fc.ErrMissing) && action == "remove" {
 		return nil
 	}
@@ -241,12 +362,20 @@ func (*firecrackerBackend) Scale(context.Context, id.ID, map[string]string, cppr
 }
 
 func (b *firecrackerBackend) Logs(ctx context.Context, iid id.ID, labels map[string]string, _ cpprovider.LogOptions) (io.ReadCloser, error) {
-	client, err := b.target.firecrackerSession(ctx, b.org, b.connection, labels)
+	out, err := b.logs(ctx, iid, labels)
+	return out, b.fail(ctx, "logs", err)
+}
+
+func (b *firecrackerBackend) logs(ctx context.Context, iid id.ID, labels map[string]string) (io.ReadCloser, error) {
+	client, scope, err := b.session(ctx, iid, labels)
 	if err != nil {
 		return nil, err
 	}
+	if client == nil {
+		return io.NopCloser(strings.NewReader("")), nil
+	}
 	defer client.Close()
-	record, err := client.Inspect(ctx, fcScope(iid, labels))
+	record, err := client.Inspect(ctx, scope)
 	if err != nil {
 		return nil, err
 	}

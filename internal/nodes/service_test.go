@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -173,9 +174,58 @@ func (f *fakeStore) UpdateSettings(_ context.Context, org, id string, u Settings
 		n.Labels = u.Labels
 	}
 	if u.IngressMode != nil {
-		n.IngressMode = *u.IngressMode
+		n.IngressModeByOwner = true
+	}
+	if u.IngressMode != nil && *u.IngressMode != n.IngressMode {
+		now := time.Now().UTC()
+		n.IngressMode, n.IngressSentAt, n.IngressDetail = *u.IngressMode, &now, ""
 	}
 	return clone(n), nil
+}
+
+func (f *fakeStore) SetIngress(_ context.Context, id string, in IngressSetting) (*Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nil, ErrNotFound
+	}
+	sent := in.SentAt
+	n.IngressMode, n.PublicAddress, n.PublicAddressConfirmedAt, n.IngressDetail, n.IngressSentAt = in.Mode, in.PublicAddress, in.ConfirmedAt, in.Detail, &sent
+	return clone(n), nil
+}
+
+func (f *fakeStore) RecordIngressApplied(_ context.Context, id, mode string, epoch int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil || f.epochs[id] != epoch {
+		return ErrNotFound
+	}
+	n.IngressApplied = mode
+	return nil
+}
+
+func (f *fakeStore) MarkIngressSent(_ context.Context, id string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return ErrNotFound
+	}
+	n.IngressSentAt = &at
+	return nil
+}
+
+func (f *fakeStore) SetIngressDetail(_ context.Context, id, detail string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return ErrNotFound
+	}
+	n.IngressDetail = detail
+	return nil
 }
 func (f *fakeStore) Touch(_ context.Context, id string, at time.Time, _ nodeproto.Usage) error {
 	f.mu.Lock()
@@ -671,6 +721,24 @@ func TestJoinAdoptHook(t *testing.T) {
 	}
 }
 
+func TestJoinAdoptRefusedJoinsWithoutCloud(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{CloudID: "cld_other_org"}, true)
+	r.svc.Adopt = func(context.Context, *Node, *apikeys.NodeJoinClaim) error {
+		return fmt.Errorf("refused: %w", ErrAdoptionRefused)
+	}
+	res, err := r.svc.Join(context.Background(), signed(joinReq()))
+	if err != nil {
+		t.Fatalf("err %v", err)
+	}
+	if res.CloudID != "" {
+		t.Fatalf("join result names the refused Cloud %q", res.CloudID)
+	}
+	n, err := r.store.GetByID(context.Background(), res.NodeID)
+	if err != nil || n.Status == StatusRevoked || n.RevokedAt != nil {
+		t.Fatalf("node %+v err %v", n, err)
+	}
+}
+
 func seed(r *rig, endpoints ...nodeproto.Endpoint) string {
 	_ = r.store.Create(context.Background(), &Node{ID: "node_1", OrgID: "org_1", Name: "a", Status: StatusOnline, Endpoints: endpoints, JoinedByKeyID: "key_1"})
 	return "node_1"
@@ -810,6 +878,36 @@ func TestUpdateIngressNotifies(t *testing.T) {
 	r.sent = nil
 	if _, err := r.svc.Update(context.Background(), admin, id, Update{IngressMode: &mode}); err != nil || len(r.sent) != 0 {
 		t.Fatalf("unchanged: %v %+v", err, r.sent)
+	}
+}
+
+// Asking for direct ingress has the node's address checked: a mode that
+// changes, or one without a confirmed address. Other updates don't.
+func TestUpdateDirectChecksTheAddress(t *testing.T) {
+	r := newRig(t, apikeys.NodeJoinScope{}, true)
+	id := seed(r, nodeproto.EndpointDocker)
+	var checked []string
+	r.svc.CheckAddress = func(n *Node) { checked = append(checked, n.ID+":"+n.IngressMode) }
+	direct, none, name := nodeproto.IngressDirect, nodeproto.IngressNone, "web-2"
+	for _, u := range []Update{{Name: &name}, {IngressMode: &none}, {IngressMode: &direct}, {IngressMode: &direct}} {
+		if _, err := r.svc.Update(context.Background(), admin, id, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, _ := r.store.GetByID(context.Background(), id); !n.IngressModeByOwner {
+		t.Fatal("an owner's ingress mode wasn't marked as theirs")
+	}
+	// Direct twice, since no check confirmed an address in between.
+	if want := []string{id + ":direct", id + ":direct"}; !slices.Equal(checked, want) {
+		t.Fatalf("checked %v, want %v", checked, want)
+	}
+	// Once one is confirmed, asking for direct again checks nothing.
+	if err := r.svc.SetIngress(context.Background(), id, nodeproto.IngressDirect, "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	checked = nil
+	if _, err := r.svc.Update(context.Background(), admin, id, Update{IngressMode: &direct}); err != nil || len(checked) != 0 {
+		t.Fatalf("checked a confirmed node again: %v %v", checked, err)
 	}
 }
 

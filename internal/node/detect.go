@@ -36,6 +36,8 @@ type DetectOptions struct {
 	Hostname  func() (string, error)
 	// Ports returns "free" or "busy" for ports 80 and 443.
 	Ports func() string
+	// Addresses lists the machine's interface addresses.
+	Addresses func() ([]net.Addr, error)
 }
 
 func dockerSockets() []string {
@@ -85,6 +87,9 @@ func Detect(ctx context.Context, o DetectOptions) nodeproto.Inventory {
 	if o.Ports == nil {
 		o.Ports = checkPorts
 	}
+	if o.Addresses == nil {
+		o.Addresses = net.InterfaceAddrs
+	}
 	inv := nodeproto.Inventory{
 		OS:   osName(ctx),
 		Arch: runtime.GOARCH,
@@ -103,7 +108,30 @@ func Detect(ctx context.Context, o DetectOptions) nodeproto.Inventory {
 	}
 	inv.Ports80443 = o.Ports()
 	inv.Endpoints = slices.Clone(o.Config.Endpoints)
+	inv.PublicAddresses = publicAddresses(o.Addresses)
 	return inv
+}
+
+// publicAddresses are the interface addresses Loomplane may confirm as
+// this machine's public address, IPv4 first. Private, loopback,
+// link-local, CGNAT and unique local addresses are left out. The control
+// plane fetches a nonce from each before it routes to one, so a candidate
+// that doesn't answer from outside does no harm.
+func publicAddresses(list func() ([]net.Addr, error)) []string {
+	addrs, err := list()
+	if err != nil {
+		return nil
+	}
+	ips := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		switch v := a.(type) {
+		case *net.IPNet:
+			ips = append(ips, v.IP.String())
+		case *net.IPAddr:
+			ips = append(ips, v.IP.String())
+		}
+	}
+	return nodeproto.PublicAddresses(ips)
 }
 
 // parseNvidia turns "name, memory" CSV lines into GPUs and skips bad lines.

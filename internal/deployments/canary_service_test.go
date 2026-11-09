@@ -106,3 +106,50 @@ func TestRecentCanariesNewestFirst(t *testing.T) {
 		t.Fatalf("without deployment:read: %v", err)
 	}
 }
+
+func TestLastCanaryIsThatServicesNewestRun(t *testing.T) {
+	now := time.Now().UTC()
+	run := func(id string, age time.Duration, status string, actions ...string) *Deployment {
+		c := &Canary{Status: status, Steps: []int{100}, Weight: 100}
+		for _, a := range actions {
+			c.Services = append(c.Services, CanaryService{ActionID: a, Name: a[len("service:"):]})
+		}
+		return &Deployment{ID: id, OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Environment: "production", PlanID: "plan_" + id, Status: StatusSucceeded, Canary: c, StartedAt: now.Add(-age)}
+	}
+	m := &memStore{d: map[string]*Deployment{
+		"api_old":  run("api_old", 30*time.Hour, CanaryPromoted, "service:api"),
+		"api_fail": run("api_fail", 20*time.Hour, CanaryRolledBack, "service:api", "service:web"),
+		"plain":    {ID: "plain", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Status: StatusSucceeded, StartedAt: now},
+		"other":    run("other", time.Minute, CanaryPromoted, "service:api"),
+	}}
+	m.d["other"].EnvironmentID = "env_staging"
+	// Twelve newer canaries of web alone don't hide api's.
+	for i := range 12 {
+		id := fmt.Sprintf("web_%d", i)
+		m.d[id] = run(id, time.Duration(12-i)*time.Hour, CanaryPromoted, "service:web")
+	}
+	svc := NewService(m, projectAuthz{read: map[string]bool{"proj": true}}, nil, nil)
+	p := security.Principal{OrgID: "org"}
+
+	got, err := svc.LastCanary(t.Context(), p, "proj", "env", "service:api")
+	if err != nil || got == nil || got.DeploymentID != "api_fail" || got.Canary.Status != CanaryRolledBack || got.PlanID != "plan_api_fail" {
+		t.Fatalf("api: %+v %v", got, err)
+	}
+	if got, err = svc.LastCanary(t.Context(), p, "proj", "env", "service:web"); err != nil || got.DeploymentID != "web_11" {
+		t.Fatalf("web: %+v %v", got, err)
+	}
+	if got, err = svc.LastCanary(t.Context(), p, "proj", "env", "service:jobs"); err != nil || got != nil {
+		t.Fatalf("a service no canary ramped: %+v %v", got, err)
+	}
+	if _, err = svc.LastCanary(t.Context(), p, "proj", "env", ""); err == nil {
+		t.Fatal("an empty action must be refused")
+	}
+	if _, err = NewService(m, projectAuthz{}, nil, nil).LastCanary(t.Context(), p, "proj", "env", "service:api"); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("without deployment:read: %v", err)
+	}
+	if _, err = svc.LastCanary(t.Context(), security.Principal{OrgID: "org_b"}, "proj", "env", "service:api"); err != nil {
+		t.Fatalf("another org: %v", err)
+	} else if got, _ := svc.LastCanary(t.Context(), security.Principal{OrgID: "org_b"}, "proj", "env", "service:api"); got != nil {
+		t.Fatalf("another org read org's canary: %+v", got)
+	}
+}

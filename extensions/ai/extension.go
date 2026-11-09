@@ -36,6 +36,7 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/models"
 	"github.com/xraph/loomplane/internal/models/hfhub"
 	"github.com/xraph/loomplane/internal/models/registry"
@@ -77,13 +78,16 @@ type accruePayload struct{}
 // model reconcile with Dispatch.
 type Extension struct {
 	*forge.BaseExtension
-	cfg      config.Config
-	engineOf func() *engine.Engine
-	settings *aisettings.Service
-	agent    *agentsettings.Service
-	models   *models.Service
-	hooks    *models.Hooks
-	engine   *engine.Engine
+	// container is Register's, kept so Start can pick up the metering gate
+	// and meter an edition that bills provides.
+	container forge.Container
+	cfg       config.Config
+	engineOf  func() *engine.Engine
+	settings  *aisettings.Service
+	agent     *agentsettings.Service
+	models    *models.Service
+	hooks     *models.Hooks
+	engine    *engine.Engine
 }
 
 // New returns the extension. engineOf returns the dispatch extension's
@@ -114,6 +118,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	c := fapp.Container()
+	e.container = c
 	db, err := forge.InjectType[*grove.DB](c)
 	if err != nil {
 		return fmt.Errorf("ai needs the grove extension: %w", err)
@@ -301,6 +306,11 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 // cron leader only. The schedules need the database, which is migrated by
 // now.
 func (e *Extension) Start(ctx context.Context) error {
+	gate, meter, err := metering.Resolve(e.container)
+	if err != nil {
+		return fmt.Errorf("resolve the metering gate: %w", err)
+	}
+	e.agent.WithMetering(gate, meter)
 	def := &cron.Definition[reconcilePayload]{
 		Name: JobReconcileModels, JobName: JobReconcileModels, Schedule: reconcileModelsEvery, Queue: orchestration.Queue,
 	}

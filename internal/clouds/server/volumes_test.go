@@ -94,7 +94,7 @@ func TestUnsupportedVolumeSpecsFailBeforeOpeningTarget(t *testing.T) {
 func TestPersistentMountCannotMoveDuringRollout(t *testing.T) {
 	iid := id.New(id.PrefixInstance)
 	old := &containerInfo{}
-	old.Mounts = append(old.Mounts, struct{ Type, Name, Destination string }{"volume", VolumeName(iid, "data"), "/data"})
+	old.Mounts = append(old.Mounts, containerMount{Type: "volume", Name: VolumeName(iid, "data"), Destination: "/data"})
 	for _, volumes := range [][]cpprovider.VolumeSpec{nil, {{Name: "data", Type: "persistent", MountPath: "/elsewhere"}}, {{Name: "other", Type: "persistent", MountPath: "/data"}}} {
 		if err := checkVolumeLayout(old, iid, volumes); err == nil {
 			t.Fatalf("accepted changed storage: %+v", volumes)

@@ -60,6 +60,44 @@ type Reaper interface {
 	Reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context)
 }
 
+// DeleteEnvironmentOptions are what the caller asked of an environment's
+// deletion.
+type DeleteEnvironmentOptions struct {
+	// Keep are the IDs of bindings whose resources stay running when the
+	// environment goes. An ID that names nothing in it is ignored.
+	Keep []string
+}
+
+// ReaperWithOptions is a Reaper that reads what the caller asked of an
+// environment's deletion. The Service calls ReapWithOptions in place of
+// Reap, and with no options when a whole project goes.
+type ReaperWithOptions interface {
+	Reaper
+	ReapWithOptions(ctx context.Context, orgID, projectID, environmentID string, opts DeleteEnvironmentOptions) Reaped
+}
+
+// Reaped is what a ReaperWithOptions read before a deletion.
+type Reaped struct {
+	// Cleanup runs once the deletion has happened. It may be nil.
+	Cleanup func(context.Context)
+	// Removes are the IDs of the bindings whose resources Cleanup deletes
+	// in a provider account, and Keeps those the caller kept running.
+	Removes, Keeps []string
+}
+
+// ErrProviderRemoval is an environment deletion that would delete
+// resources in a provider account by someone who may not approve a
+// deployment. It's a security.ErrForbidden.
+var ErrProviderRemoval error = providerRemovalError{}
+
+type providerRemovalError struct{}
+
+func (providerRemovalError) Error() string {
+	return "An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself."
+}
+
+func (providerRemovalError) Is(target error) bool { return target == security.ErrForbidden }
+
 // Auditor records changes worth an audit trail. Recording must not fail the
 // change, so it returns nothing; the implementation logs its own failures.
 type Auditor interface {
@@ -109,19 +147,31 @@ func (s *Service) AddCleaner(c Cleaner) { s.cleaners = append(s.cleaners, c) }
 func (s *Service) AddReaper(r Reaper) { s.reapers = append(s.reapers, r) }
 
 // reap asks each Reaper what the deletion would leave behind and returns
-// what cleans it up, to run once the deletion has happened.
-func (s *Service) reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context) {
+// what cleans it up, to run once the deletion has happened, and the
+// bindings whose resources that removes in a provider account or keeps.
+func (s *Service) reap(ctx context.Context, orgID, projectID, environmentID string, opts DeleteEnvironmentOptions) Reaped {
 	var after []func(context.Context)
+	var out Reaped
 	for _, r := range s.reapers {
-		if f := r.Reap(ctx, orgID, projectID, environmentID); f != nil {
+		var f func(context.Context)
+		if ro, ok := r.(ReaperWithOptions); ok {
+			got := ro.ReapWithOptions(ctx, orgID, projectID, environmentID, opts)
+			f = got.Cleanup
+			out.Removes = append(out.Removes, got.Removes...)
+			out.Keeps = append(out.Keeps, got.Keeps...)
+		} else {
+			f = r.Reap(ctx, orgID, projectID, environmentID)
+		}
+		if f != nil {
 			after = append(after, f)
 		}
 	}
-	return func(ctx context.Context) {
+	out.Cleanup = func(ctx context.Context) {
 		for _, f := range after {
 			f(context.WithoutCancel(ctx))
 		}
 	}
+	return out
 }
 
 func (s *Service) sweep(ctx context.Context, orgID string) {
@@ -240,7 +290,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreatePro
 // webhook. It carries on when the caller has gone.
 func (s *Service) rollBack(ctx context.Context, proj *Project) error {
 	ctx = context.WithoutCancel(ctx)
-	reaped := s.reap(ctx, proj.OrgID, proj.ID, "")
+	reaped := s.reap(ctx, proj.OrgID, proj.ID, "", DeleteEnvironmentOptions{}).Cleanup
 	if err := s.store.DeleteProject(ctx, proj.OrgID, proj.ID); err != nil {
 		return err
 	}
@@ -420,7 +470,7 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err := s.authz.Require(ctx, p, security.ProjectDelete, id); err != nil {
 		return err
 	}
-	reaped := s.reap(ctx, p.OrgID, id, "")
+	reaped := s.reap(ctx, p.OrgID, id, "", DeleteEnvironmentOptions{}).Cleanup
 	if err := s.store.DeleteProject(ctx, p.OrgID, id); err != nil {
 		return err
 	}
@@ -497,8 +547,9 @@ func (s *Service) CreateEnvironment(ctx context.Context, p security.Principal, p
 }
 
 // DeleteEnvironment removes an environment and everything set on it. A
-// project's last environment can't go.
-func (s *Service) DeleteEnvironment(ctx context.Context, p security.Principal, projectID, envID string) error {
+// project's last environment can't go. The reapers that read options get
+// the first of opts, or none.
+func (s *Service) DeleteEnvironment(ctx context.Context, p security.Principal, projectID, envID string, opts ...DeleteEnvironmentOptions) error {
 	if err := s.authz.Require(ctx, p, security.EnvironmentManage, projectID); err != nil {
 		return err
 	}
@@ -508,13 +559,34 @@ func (s *Service) DeleteEnvironment(ctx context.Context, p security.Principal, p
 	}
 	// What the cascade is about to take is read first, and cleaned up only
 	// once the environment is gone, so a refused deletion touches nothing.
-	reaped := s.reap(ctx, p.OrgID, projectID, envID)
+	var options DeleteEnvironmentOptions
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	reaped := s.reap(ctx, p.OrgID, projectID, envID, options)
+	// Deleting what runs in a provider account is an admin's call, as
+	// approving the deployment that put it there is.
+	if len(reaped.Removes) > 0 {
+		if err := s.authz.Require(ctx, p, security.DeploymentApprove, projectID); err != nil {
+			if errors.Is(err, security.ErrForbidden) {
+				return ErrProviderRemoval
+			}
+			return err
+		}
+	}
 	if err := s.store.DeleteEnvironment(ctx, p.OrgID, projectID, envID); err != nil {
 		return err
 	}
+	attrs := map[string]any{"environment": env.Name}
+	if len(reaped.Removes) > 0 {
+		attrs["removed"] = reaped.Removes
+	}
+	if len(reaped.Keeps) > 0 {
+		attrs["kept"] = reaped.Keeps
+	}
 	s.record(ctx, AuditEvent{Action: "environment.delete", Severity: "warning", ProjectID: projectID, Principal: p,
-		Attributes: map[string]any{"environment": env.Name}})
-	reaped(ctx)
+		Attributes: attrs})
+	reaped.Cleanup(ctx)
 	s.sweep(ctx, p.OrgID)
 	return nil
 }

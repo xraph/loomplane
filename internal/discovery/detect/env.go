@@ -110,7 +110,7 @@ var viteBuiltins = map[string]bool{"MODE": true, "BASE_URL": true, "PROD": true,
 
 // envFileKind says what a dotenv-style file is: an example meant to be
 // committed, a real one that holds values, or neither.
-func envFileKind(name string) (example, real bool) {
+func envFileKind(name string) (example, committed bool) {
 	base := strings.ToLower(path.Base(name))
 	isEnv := base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env") || base == "env.example"
 	if !isEnv {
@@ -168,7 +168,7 @@ func (Env) Detect(ctx context.Context, repo discovery.Repo, r *discovery.Report)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if example, real := envFileKind(name); example || real {
+		if example, committed := envFileKind(name); example || committed {
 			data, ok := readSource(repo, name)
 			if !ok {
 				continue
@@ -184,7 +184,7 @@ func (Env) Detect(ctx context.Context, repo discovery.Repo, r *discovery.Report)
 					add(kv.key, ev, "", false, false)
 				}
 			}
-			if real {
+			if committed {
 				r.Notes = append(r.Notes, discovery.Note{Path: name,
 					Message: "This .env file is committed. Loomplane read its keys, not its values. If it holds real secrets, rotate them."})
 			}
@@ -265,7 +265,7 @@ func dotenvLines(data []byte) []dotenvLine {
 	var out []dotenvLine
 	for i, l := range strings.Split(string(data), "\n") {
 		m := dotenvKey.FindStringSubmatch(l)
-		if m == nil || strings.Contains(m[1], ".") {
+		if len(m) < 3 || strings.Contains(m[1], ".") {
 			continue
 		}
 		v := strings.TrimSpace(m[2])

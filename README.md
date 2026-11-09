@@ -132,7 +132,9 @@ An API key acts as the person who made it, with their role, and loses it when th
 
 ## Configuration
 
-Start with [config.yaml](config.yaml); your own overrides go in `config.local.yaml`, which Git ignores.
+Start with [config.yaml](config.yaml); your own overrides go in `config.local.yaml`, which Git ignores. Nearly every setting in config.yaml reads from a `LOOMPLANE_` variable, so that file is the full list, with a comment on each. The tables below are the ones you're likely to set. Keep secrets in the environment, never in the YAML.
+
+### The basics
 
 | Variable | Default | |
 |---|---|---|
@@ -141,12 +143,96 @@ Start with [config.yaml](config.yaml); your own overrides go in `config.local.ya
 | `LOOMPLANE_PUBLIC_URL` | `http://localhost:8780` | Where people reach Loomplane; https in production |
 | `LOOMPLANE_ENVIRONMENT` | `development` | `development`, `staging` or `production` |
 | `LOOMPLANE_HTTP_ADDR` | `:8780` | |
+| `LOOMPLANE_DATABASE_POOL_SIZE` | `16` | Connections each process keeps open. Raise it when the database is a slow network hop away |
+| `LOOMPLANE_DASHBOARD_DIR` | unset | The built dashboard (`pnpm --dir apps/dashboard build`) |
 | `LOOMPLANE_STORAGE_URL` | `.loomplane/storage` | Where deployment sources are kept, `file:///path` |
+| `LOOMPLANE_BACKUP_URL` | unset | An independent S3 destination for off-host recovery |
 | `LOOMPLANE_PLANNING_APPROVAL_WINDOW` | `168h` | How long a plan waits for a decision |
 | `LOOMPLANE_DRIFT_INTERVAL` | `30m` | How often deployments are checked for drift; `0` turns it off |
+| `LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED` | `true` | Signs the audit trail's streams with an Ed25519 key kept in Vault. The public key is logged at start |
+| `LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_EVENTS` | `1000` | Signs a stream once it gains this many events |
+| `LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL` | `15m` | Signs a stream that gained any event at least this often |
+| `LOOMPLANE_HALLPROOF_ENDPOINT` | unset | Your Hallproof's URL. Set it and Loomplane pushes compliance evidence about its own staff and platform there; unset, nothing is sent |
+| `LOOMPLANE_HALLPROOF_INGEST_KEY` | unset | The ingest key Hallproof gave this system. Or set `LOOMPLANE_HALLPROOF_INGEST_KEY_FILE` to a file holding it, not both |
+| `LOOMPLANE_HALLPROOF_STAFF_ORGS` | unset | The IDs of your own organizations (`aorg_...`), comma-separated. Their API keys, webhooks, agents, jobs and agent safety settings go to Hallproof as staff evidence. Unset, every organization is a customer's and nothing one owns is sent |
 | `LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS` | unset | Ranges an endpoint check from a Kubernetes target never connects to, such as `10.20.0.0/16`. Loomplane's own host, database and API are always refused |
-| `LOOMPLANE_GITHUB_*` | unset | The GitHub App for private repositories |
+| `LOOMPLANE_ANALYSIS_CONCURRENCY` | `2` | How many repositories the worker analyzes at once |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | The worker's health checks |
+
+### AI
+
+The AI section is off until you turn it on. Off, Loomplane registers no AI route, hook or setting at all, and the dashboard doesn't show it. On, you get the infra agent, the agent builder and the models section. The smallest setup is two variables:
+
+```bash
+export LOOMPLANE_AI_ENABLED=true
+export LOOMPLANE_AI_API_KEY=sk-ant-...
+```
+
+You can leave the key out too. A workspace can bring its own key, and the agent uses that.
+
+| Variable | Default | |
+|---|---|---|
+| `LOOMPLANE_AI_ENABLED` | `false` | Turns the whole AI section on |
+| `LOOMPLANE_AI_PROVIDER` | `anthropic` | The agent's provider: `anthropic`, `openai` or `openai-compatible` |
+| `LOOMPLANE_AI_API_KEY` | unset | The server's key for that provider |
+| `LOOMPLANE_AI_BASE_URL` | unset | Required for `openai-compatible`, an override otherwise. Must be https in production, because the key is sent to it |
+| `LOOMPLANE_AI_MODEL` | `claude-sonnet-5-5` | The model the agent runs on |
+| `LOOMPLANE_AI_EMBEDDING_PROVIDER` | unset | `openai` or `openai-compatible`, for the agent's knowledge (Anthropic has no embeddings API). Unset leaves knowledge off |
+| `LOOMPLANE_AI_EMBEDDING_API_KEY` | unset | |
+| `LOOMPLANE_AI_EMBEDDING_MODEL` | unset | Required once the embedding provider is set |
+| `LOOMPLANE_AI_EMBEDDING_BASE_URL` | unset | Required for `openai-compatible` |
+| `LOOMPLANE_AI_EMBEDDING_DIMENSIONS` | `1536` | Has to match the model. One embedding model serves the whole server |
+| `LOOMPLANE_AI_DOCS_BUDGET_USD` | `5.00` | What indexing the docs may spend |
+| `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror. https only (http for localhost), since the workspace's token goes there |
+
+Knowledge also needs the pgvector extension, 0.5.0 or later, in Loomplane's Postgres. Without it the agent still runs and knowledge stays off. Prices for models the built-in catalog doesn't know go under `ai.prices`, in the YAML only.
+
+### Sign-in and email
+
+Email is off until you set Resend or an SMTP host. [docs/operations.md](docs/operations.md) walks through both, plus reading local mail without a mail server.
+
+| Variable | Default | |
+|---|---|---|
+| `LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY` | unset | Sends through Resend. Set this or the SMTP host, not both |
+| `LOOMPLANE_NOTIFICATIONS_SMTP_HOST` | unset | With `_SMTP_PORT`, `_SMTP_USERNAME`, `_SMTP_PASSWORD` and `_SMTP_TLS`. Production requires TLS |
+| `LOOMPLANE_NOTIFICATIONS_FROM` | unset | The sender address |
+| `LOOMPLANE_NOTIFICATIONS_MAIL_DIR` | unset | Writes each email to this folder as an `.eml` file. Production refuses it |
+| `LOOMPLANE_REQUIRE_EMAIL_VERIFICATION` | follows mail | `true` or `false` forces it. Unset, accounts verify wherever the instance can send mail |
+| `LOOMPLANE_WAITLIST_ENABLED` | stored setting | `true` or `false` forces the waitlist on or off |
+| `LOOMPLANE_CONSOLE_PATH` | `/__console` | Where platform admins reach the console. One path segment starting with `__` |
+| `LOOMPLANE_SESSION_COOKIE` | `loomplane_session` | Change it when another authsome app shares the host, or each signs the other out |
+
+### Repositories
+
+Leave these empty and Loomplane reads public repositories only.
+
+| Variable | |
+|---|---|
+| `LOOMPLANE_GITHUB_APP_ID`, `_APP_SLUG`, `_PRIVATE_KEY` (or `_PRIVATE_KEY_FILE`), `_CLIENT_ID`, `_CLIENT_SECRET` | The GitHub App for private repositories ([docs/github-app.md](docs/github-app.md)). `LOOMPLANE_GITHUB_API_URL` and `_WEB_URL` point it at GitHub Enterprise Server |
+| `LOOMPLANE_GITHUB_WEBHOOK_SECRET` | Re-analyzes a project when its default branch moves. Empty turns webhooks off |
+| `LOOMPLANE_GITLAB_CLIENT_ID`, `_CLIENT_SECRET` | The OAuth application for private projects on gitlab.com ([docs/gitlab.md](docs/gitlab.md)). Self-managed GitLabs go under `gitlab.hosts` in the YAML |
+| `LOOMPLANE_GITLAB_ALLOW_ORGANIZATION_HOSTS` | Whether organizations may add their own self-managed GitLab. Defaults to `true` |
+| `LOOMPLANE_BITBUCKET_CLIENT_ID`, `_CLIENT_SECRET` | The OAuth consumer for private Bitbucket repositories ([docs/bitbucket.md](docs/bitbucket.md)) |
+
+### Clouds
+
+People can always connect a cloud by pasting a token. To let them sign in instead, register Loomplane's app at that cloud and set its client ID and secret here, or on the dashboard's Cloud sign-in page (Settings, platform owners and admins only). The variables win over the page.
+
+| Variable | |
+|---|---|
+| `LOOMPLANE_<CLOUD>_OAUTH_CLIENT_ID`, `_CLIENT_SECRET` | `<CLOUD>` is `CLOUDFLARE`, `DIGITALOCEAN`, `VERCEL`, `GCP` or `AZURE`. Vercel also needs `LOOMPLANE_VERCEL_OAUTH_SLUG` |
+| `LOOMPLANE_KUBERNETES_IN_CLUSTER` | Lets people connect the cluster Loomplane runs in, as Loomplane's own service account. Every organization on the instance shares it, so turn it on only where they all may deploy there |
+| `LOOMPLANE_PAUSED_PROVIDERS` | Targets whose plans can be reviewed but not carried out, such as `render,cloud-run` ([docs/operations.md](docs/operations.md)) |
+
+### Everything else
+
+| Variable | Default | |
+|---|---|---|
+| `LOOMPLANE_PUSH_ENABLED` | `true` | Push notifications to the mobile app. Off hides push settings |
+| `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` | Only XRaph's gateway can reach the store app |
+| `LOOMPLANE_NODES_ADVERTISE_URL` | unset | Where the other replicas reach this one, for node streams. Leave it empty on a single replica |
+| `LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE` | unset | The database gateway's signing keys ([docs/postgres-services.md](docs/postgres-services.md)). Empty, the gateway answers 503 |
+| `LOOMPLANE_FEDERATION_*` | off | Federation management and its agent listener ([docs/federation-runtime.md](docs/federation-runtime.md)) |
 
 Provider plugins are listed under `providers.plugins` in the YAML.
 

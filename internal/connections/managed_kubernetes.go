@@ -34,6 +34,9 @@ type ManagedCredentialResolver interface {
 }
 
 func (s *Service) managedCredential(ctx context.Context, c *Connection) ([]byte, error) {
+	if IsInstanceConnection(c) {
+		return nil, ErrChanged
+	}
 	if s.ManagedCredentials == nil || c.Cloud != Kubernetes {
 		return nil, ErrNotReady
 	}
@@ -47,9 +50,14 @@ func (s *Service) managedCredential(ctx context.Context, c *Connection) ([]byte,
 	return credential.Kubeconfig, nil
 }
 
+// IsInstanceConnection identifies complete and partial instance scope pins.
+func IsInstanceConnection(c *Connection) bool {
+	return c != nil && (c.Details["managed_instance_id"] != "" || c.Details["managed_environment_id"] != "")
+}
+
 // ManagedProjectAllowed keeps a managed namespace inside its approved project.
 func ManagedProjectAllowed(c *Connection, project string) bool {
-	if c != nil && (c.Details["managed_instance_id"] != "" || c.Details["managed_environment_id"] != "") {
+	if IsInstanceConnection(c) {
 		return false
 	}
 	return c != nil && (c.Method != MethodManagedKubernetes && c.Details["managed_attachment_id"] == "" || project != "" && c.Details["managed_project_id"] == project)

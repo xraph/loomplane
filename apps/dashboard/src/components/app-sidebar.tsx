@@ -29,22 +29,26 @@ import {
   NodesIcon,
   NotificationsIcon,
   OverviewIcon,
+  PlatformCloudIcon,
   ProjectsIcon,
   ServicesIcon,
   TeamsIcon,
   VariablesIcon,
   WebhooksIcon,
 } from "@/components/icons"
-import { useShell } from "@/components/shell"
+import { AgentOrb } from "@/components/assistant/agent-orb"
+import { useAgentDock, useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import {
+  mergeSettingsGroups,
   NavSettings,
   type SettingsGroup,
 } from "@/components/sidebar/nav-settings"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
+import { useCloudSettingsGroups } from "@/hooks/use-cloud-settings-groups"
 import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
 import {
@@ -72,6 +76,7 @@ import { isLive, type Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
 
 const agentPath = "/agent/requests"
+const reportsPath = "/agent/reports"
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
@@ -80,6 +85,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { openNewProject } = useShell()
   const features = useFeatures()
   const agent = useAgent()
+  const dock = useAgentDock()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -100,10 +106,30 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/" />,
       isActive: path === "/",
     },
+    // The agent, for whoever may talk to it: its panel, from any page.
+    ...(dock
+      ? [
+          {
+            title: "Assistant",
+            icon: <AgentOrb size={16} state={dock.activity} />,
+            link: (
+              <button
+                type="button"
+                aria-pressed={dock.open}
+                onClick={dock.toggle}
+              />
+            ),
+            isActive: dock.open,
+          },
+        ]
+      : []),
     {
       title: "Deployments",
       icon: <DeploymentsIcon />,
-      isActive: path.startsWith("/deployments") || path.startsWith(agentPath),
+      isActive:
+        path.startsWith("/deployments") ||
+        path.startsWith(agentPath) ||
+        path.startsWith(reportsPath),
       badge: waiting > 0 && (
         <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
           {waiting}
@@ -138,6 +164,14 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
                 isActive: path.startsWith(agentPath),
                 badge: agent.pending > 0 && (
                   <span className="text-weld-ink">{agent.pending}</span>
+                ),
+              },
+              {
+                title: "Reports",
+                link: <Link to="/agent/reports" />,
+                isActive: path.startsWith(reportsPath),
+                badge: agent.reports > 0 && (
+                  <span className="text-weld-ink">{agent.reports}</span>
                 ),
               },
             ]
@@ -197,6 +231,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   // Settings sit at the foot of the sidebar, apart from the pages you work
   // in, and open beside it rather than pushing the projects up.
   const at = (p: string) => path.startsWith(p)
+  const cloudGroups = useCloudSettingsGroups({ at, can })
   const settings: SettingsGroup[] = [
     {
       label: "Workspace",
@@ -283,6 +318,12 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
               link: <Link to="/platform/cloud-sign-in" />,
               isActive: at("/platform/cloud-sign-in"),
             },
+            {
+              title: "Platform Cloud",
+              icon: <PlatformCloudIcon />,
+              link: <Link to="/platform/cloud" />,
+              isActive: path === "/platform/cloud" || at("/platform/cloud/"),
+            },
           ]
         : [],
     },
@@ -303,7 +344,10 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
         />
-        <NavSettings groups={settings} className="mt-auto" />
+        <NavSettings
+          groups={mergeSettingsGroups(settings, cloudGroups)}
+          className="mt-auto"
+        />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
         <Account />

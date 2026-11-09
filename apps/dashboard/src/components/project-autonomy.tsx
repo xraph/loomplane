@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/tooltip"
 import { useAgent } from "@/lib/features"
 import { useProjectCan } from "@/lib/project-permissions"
+import { gateNames } from "@/lib/release-reports"
 
 // How long a release sits in staging before the agent may promote it alone.
 const soaks = [
@@ -45,9 +46,8 @@ function soakLabel(seconds: number): string {
  * ProjectAutonomy is whether the agent may promote this project's release
  * without asking first. New projects ask first. It shows only while the
  * agent is on, and only someone who may approve deployments changes it.
- * The setting is stored, but the promotion gate isn't in this version, so
- * the agent still asks before every production promotion and the card
- * says so.
+ * Even when it's on, the agent promotes only when every one of the seven
+ * gates holds, and the card lists them.
  */
 export function ProjectAutonomy({ project }: { project: Project }) {
   const agent = useAgent()
@@ -83,7 +83,7 @@ export function ProjectAutonomy({ project }: { project: Project }) {
         void put(
           { autonomousPromotion: v },
           v
-            ? "Saved. In this version the agent still asks before it promotes to production."
+            ? "Saved. The agent promotes a release someone asked for only when every gate holds."
             : "The agent asks before it promotes"
         )
       }
@@ -107,9 +107,7 @@ export function ProjectAutonomy({ project }: { project: Project }) {
           <span className="text-[13px] font-medium">Autonomous promotion</span>
           <p className="max-w-[56ch] text-[12.5px] leading-normal text-muted-foreground">
             Lets the agent promote a release someone asked for once every gate
-            is green. In this version it still asks a person before every
-            production promotion; the setting takes effect when the promotion
-            gate ships.
+            holds. With it off, the agent still asks before production.
           </p>
         </div>
         {mayEdit ? (
@@ -124,6 +122,22 @@ export function ProjectAutonomy({ project }: { project: Project }) {
             </TooltipContent>
           </Tooltip>
         )}
+      </div>
+      <div className="grid gap-1.5">
+        <span className="text-[13px] font-medium">
+          The agent promotes only when every gate holds
+        </span>
+        <ol className="ml-4 grid list-decimal gap-0.5 text-[12.5px] leading-normal text-muted-foreground">
+          {Object.entries(gateNames).map(([n, name]) => (
+            <li key={n}>{name}</li>
+          ))}
+        </ol>
+        <p className="max-w-[56ch] text-[12.5px] leading-normal text-muted-foreground">
+          Kubernetes, server, Vercel, DigitalOcean, Firecracker and Cloudflare
+          Workers releases always go to a person. So does a release prepared
+          from chat, one that reuses someone else&apos;s plan, and a
+          source&apos;s first production release.
+        </p>
       </div>
       <div className="grid gap-1.5">
         <span id="project-soak" className="text-[13px] font-medium">

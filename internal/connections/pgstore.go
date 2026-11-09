@@ -137,6 +137,13 @@ func (s *PgStore) SignedInWith(ctx context.Context, cloud, clientID string) (con
 	return connections, orgs, nil
 }
 
+// ReadyServersOnDaemon returns every organization's ready server
+// connections on Docker daemon daemon, for the one-daemon rule.
+func (s *PgStore) ReadyServersOnDaemon(ctx context.Context, daemon string) ([]*Connection, error) {
+	return s.list(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections
+		WHERE cloud = $1 AND status = $2 AND details->>'docker_id' = $3 ORDER BY org_id, id`, Server, StatusReady, daemon)
+}
+
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Connection, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {

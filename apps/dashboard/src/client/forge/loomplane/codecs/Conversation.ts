@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Conversation: Codec = {"kind": "object", "fields": {"created_at": {"ts": "createdAt"}, "id": {"ts": "id"}, "last_task_id": {"ts": "lastTaskId"}, "org_id": {"ts": "orgId"}, "pinned": {"ts": "pinned"}, "pinned_at": {"ts": "pinnedAt"}, "project_id": {"ts": "projectId"}, "started_by": {"ts": "startedBy"}, "status": {"ts": "status"}, "title": {"ts": "title"}, "turns": {"ts": "turns"}, "updated_at": {"ts": "updatedAt"}}, "required": ["created_at", "id", "last_task_id", "org_id", "pinned", "project_id", "started_by", "status", "title", "turns", "updated_at"]};

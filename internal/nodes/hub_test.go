@@ -427,6 +427,42 @@ func TestOpenRefused(t *testing.T) {
 	}
 }
 
+// Only a refusal for an endpoint the node doesn't allow is
+// ErrEndpointNotAllowed: the node says so with its own verdict, or, from a
+// node older than that verdict, the stored endpoints leave it out. Every
+// other refusal is ErrEndpointRefused alone, with the node's reason.
+func TestOpenRefusalKinds(t *testing.T) {
+	r := newHubRig(t, newFakeStore(), "a")
+	priv := seedNode(t, r.store, "node_1", "web-1", nodeproto.EndpointDocker, nodeproto.EndpointDial)
+	n := r.connect("node_1", priv, "")
+	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
+	for _, tc := range []struct {
+		name       string
+		endpoint   nodeproto.Endpoint
+		code       byte
+		reason     string
+		notAllowed bool
+	}{
+		{"not allowed", nodeproto.EndpointDocker, nodeproto.VerdictNotAllowed, "endpoint docker is not allowed on this node", true},
+		{"connect refused", nodeproto.EndpointDial, nodeproto.VerdictRefused, "dial 10.0.0.5:5432: connection refused", false},
+		{"unknown code", nodeproto.EndpointDocker, 7, "something new", false},
+		{"old node, not stored", nodeproto.EndpointProbe, nodeproto.VerdictRefused, "endpoint probe is not allowed on this node", true},
+		{"old node, public", nodeproto.EndpointPublic, nodeproto.VerdictRefused, "ingress is off", false},
+	} {
+		n.verdict = func(nodeproto.StreamHeader) (byte, string) { return tc.code, tc.reason }
+		_, err := r.hub.Open(context.Background(), "org_1", "node_1", nodeproto.StreamHeader{Endpoint: tc.endpoint})
+		if !errors.Is(err, ErrEndpointRefused) || errors.Is(err, ErrEndpointNotAllowed) != tc.notAllowed {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if reason, ok := RefusalReason(err); !ok || reason != tc.reason {
+			t.Fatalf("%s: reason %q %v", tc.name, reason, ok)
+		}
+	}
+	if _, ok := RefusalReason(ErrNodeOffline{Name: "web-1"}); ok {
+		t.Fatal("an offline node has a refusal reason")
+	}
+}
+
 func TestOpenRefusedReasonIsSanitized(t *testing.T) {
 	r := newHubRig(t, newFakeStore(), "a")
 	priv := seedNode(t, r.store, "node_1", "web-1")
@@ -1147,11 +1183,13 @@ func TestAllowedAuditsOnlyAChange(t *testing.T) {
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointProbe}})
 	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
 	waitFor(t, "audit", func() bool { return allowed() >= 1 })
-	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
-	n.send(nodeproto.Heartbeat{At: time.Now()}) // read in order, so the allow above is done after it
+	// Counted before the heartbeat goes out: the hub can take it before the
+	// next line runs, and then no later touch would come.
 	r.store.mu.Lock()
 	before := r.store.touches["node_1"]
 	r.store.mu.Unlock()
+	n.send(nodeproto.Allowed{Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}})
+	n.send(nodeproto.Heartbeat{At: time.Now()}) // read in order, so the allow above is done after it
 	waitFor(t, "heartbeat", func() bool {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()
@@ -1206,7 +1244,12 @@ func TestLeaveAlwaysTellsTheNode(t *testing.T) {
 		n := r.connect("node_1", priv, "")
 		n.next()
 		waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
-		n.send(nodeproto.Leave{})
+		// The hub can answer and close before yamux acks the write, and yamux
+		// then reports a shutdown for a Leave that went out. What the node
+		// reads next is the test.
+		if err := nodeproto.EncodeControl(n.ctrl, nodeproto.Leave{}); err != nil && !errors.Is(err, yamux.ErrSessionShutdown) {
+			t.Fatalf("round %d: %v", i, err)
+		}
 		select {
 		case m, ok := <-n.msgs:
 			if !ok {

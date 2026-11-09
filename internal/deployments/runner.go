@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	drt "github.com/xraph/dispatch/durable/runtime"
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -25,6 +26,8 @@ import (
 	"github.com/xraph/loomplane/internal/dbgateway"
 	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/metering"
+	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
@@ -135,6 +138,11 @@ type Job struct {
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool
+	// record is the provider environment record of a binding whose
+	// environment has been deleted, read before the deletion's cascade
+	// took it. Render's Remove reads it in place of the store's. It's nil
+	// otherwise.
+	record *ProviderEnvironment
 	// warn adds a warning to the step, or is nil.
 	warn func(error)
 }
@@ -220,6 +228,7 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
+	gate              metering.Gate
 	instances         planning.InstanceVerifier
 	managedCleanup    *ManagedCleanupExecution
 	existingResources planning.ExistingResourceResolver
@@ -259,6 +268,9 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	// Gate refuses a deployment the workspace may not run yet. Nil means
+	// metering.AllowAll.
+	Gate              metering.Gate
 	Instances         planning.InstanceVerifier
 	ManagedCleanup    *ManagedCleanupExecution
 	ExistingResources planning.ExistingResourceResolver
@@ -345,7 +357,11 @@ type ReleaseObserver interface {
 
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
-	return &Runner{instances: d.Instances, managedCleanup: d.ManagedCleanup,
+	gate := d.Gate
+	if gate == nil {
+		gate = metering.AllowAll
+	}
+	return &Runner{gate: gate, instances: d.Instances, managedCleanup: d.ManagedCleanup,
 		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
@@ -400,6 +416,12 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	stale, err := r.staleRollback(ctx, plan)
 	if err != nil {
 		return "", nil, err
+	}
+	// A teardown runs nothing, so it is never refused for billing.
+	if !plan.TeardownOnly() {
+		if gateErr := r.gate.CanRun(ctx, orgID, metering.KindDeploy, false); gateErr != nil {
+			return "", nil, gateErr
+		}
 	}
 	id, err := typeid.Generate("dep")
 	if err != nil {
@@ -860,6 +882,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		if current.Status == StatusPaused {
 			return errors.Join(ErrCapacityPaused, err)
 		}
+		// A node that is offline or refused a stream says so in its own
+		// words, which the action records in place of the raw error.
+		err = nodeFailed(err)
 		finished := r.now().UTC()
 		r.telemetry.StepFinished(action.Provider, string(action.Op), StepFailed, finished.Sub(now))
 		step.Status, step.Message, step.FinishedAt = StepFailed, err.Error(), &finished
@@ -876,6 +901,76 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	step.Status, step.FinishedAt = StepSucceeded, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, orgID, d.ID, *step)
+}
+
+// maxRefusalReason bounds how much of a node's reason for refusing a
+// stream an action records.
+const maxRefusalReason = 200
+
+// nodeOfflineMessage says why an action couldn't reach its node, when err
+// is the hub's: the node is offline, it doesn't allow the endpoint a
+// stream asked for, or it refused the stream for a reason of its own.
+// Anything else is false.
+func nodeOfflineMessage(err error) (string, bool) {
+	var refused *endpointRefusedError
+	if errors.As(err, &refused) {
+		if refused.notAllowed {
+			return fmt.Sprintf("node %s doesn't allow %s; allow it on the machine with: loomctl node allow %s", refused.node, refused.endpoint, refused.endpoint), true
+		}
+		reason, _ := nodes.RefusalReason(err)
+		if len(reason) > maxRefusalReason {
+			reason = strings.ToValidUTF8(reason[:maxRefusalReason], "") + "..."
+		}
+		if reason == "" {
+			reason = "no reason given"
+		}
+		return fmt.Sprintf("node %s refused a %s stream: %s", refused.node, refused.endpoint, reason), true
+	}
+	var off nodes.ErrNodeOffline
+	if !errors.As(err, &off) {
+		return "", false
+	}
+	if off.Since.IsZero() {
+		return fmt.Sprintf("node %s is offline; its apps keep running. Run the deploy again once it reconnects", off.Name), true
+	}
+	return fmt.Sprintf("node %s is offline since %s; its apps keep running. Run the deploy again once it reconnects", off.Name, off.Since.UTC().Format("15:04 UTC")), true
+}
+
+// nodeFailed is err in nodeOfflineMessage's words, or err itself.
+func nodeFailed(err error) error {
+	if already := (*nodeFailureError)(nil); errors.As(err, &already) {
+		return err
+	}
+	message, ok := nodeOfflineMessage(err)
+	if !ok {
+		return err
+	}
+	var refused *endpointRefusedError
+	return &nodeFailureError{message: message, err: err, final: errors.As(err, &refused) && refused.notAllowed}
+}
+
+// nodeFailureError is a node's failure as the action records it. An offline
+// node is retried within the activity's attempts, since it may reconnect,
+// and so is a stream the node refused for a reason of its own, such as a
+// dial target that wasn't up yet; an endpoint the node doesn't allow is
+// final, since only someone on the machine can allow it.
+type nodeFailureError struct {
+	message string
+	err     error
+	final   bool
+}
+
+func (e *nodeFailureError) Error() string { return e.message }
+func (e *nodeFailureError) Unwrap() error { return e.err }
+
+// As makes a final failure the durable runtime's non-retryable one.
+func (e *nodeFailureError) As(target any) bool {
+	failure, ok := target.(**drt.ApplicationError)
+	if !ok || !e.final {
+		return false
+	}
+	*failure = &drt.ApplicationError{Type: "node_endpoint_refused", Message: e.message, NonRetryable: true}
+	return true
 }
 
 // stopRequested cancels a deployment whose cancel was requested, at a point
@@ -960,27 +1055,39 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if deleting && current == nil {
 		return nil
 	}
-	connID := planConnection(plan, a, prov.Cloud)
-	if deleting && current.ConnectionID != "" {
-		// What's deleted goes through the connection that deployed it,
-		// which needn't be the one the environment deploys with now. Only
-		// a binding from before bindings recorded their connection is
-		// taken to be on the plan's.
-		connID = current.ConnectionID
-	}
-	if connID == "" {
-		if deleting {
-			return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
-				a.Name, prov.Cloud, d.Environment)
+	var connID string
+	var conn *connections.Connection
+	var cred []byte
+	var unreachable bool
+	if prov.Cloud == platformProvider {
+		// Loomplane Cloud runs on the platform's own hosts, through no
+		// connection of the organization's.
+		if a.ConnectionID != "" || deleting && current.ConnectionID != "" {
+			return fmt.Errorf("%s runs on Loomplane Cloud, which deploys through no connection; plan again", a.Name)
 		}
-		return fmt.Errorf("the plan names no %s connection", prov.Cloud)
-	}
-	conn, cred, err := r.credentials.Credential(ctx, d.OrgID, connID)
-	// A delete whose connection is gone can't reach what it deletes. That
-	// fails nothing: deleteBound stops tracking it and says so.
-	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
-	if err != nil && !unreachable {
-		return err
+	} else {
+		connID = planConnection(plan, a, prov.Cloud)
+		if deleting && current.ConnectionID != "" {
+			// What's deleted goes through the connection that deployed it,
+			// which needn't be the one the environment deploys with now. Only
+			// a binding from before bindings recorded their connection is
+			// taken to be on the plan's.
+			connID = current.ConnectionID
+		}
+		if connID == "" {
+			if deleting {
+				return fmt.Errorf("%s was deployed before Loomplane recorded which connection deployed it, and the plan names no %s connection to delete it through. Choose one for %s and plan again",
+					a.Name, prov.Cloud, d.Environment)
+			}
+			return fmt.Errorf("the plan names no %s connection", prov.Cloud)
+		}
+		conn, cred, err = r.credentials.Credential(ctx, d.OrgID, connID)
+		// A delete whose connection is gone can't reach what it deletes. That
+		// fails nothing: deleteBound stops tracking it and says so.
+		unreachable = deleting && errors.Is(err, connections.ErrNotFound)
+		if err != nil && !unreachable {
+			return err
+		}
 	}
 	if targetErr := checkExternalResourceTarget(d.OrgID, a, conn); targetErr != nil {
 		return targetErr
@@ -1064,7 +1171,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if routeErr := r.validateReleaseRoutes(ctx, job, current); routeErr != nil {
 		return routeErr
 	}
-	moving := moves(current, a, connID) || len(a.Routes) > 0
+	// A native move deploys into the shared Vercel project, on the same
+	// provider, region and connection, so only the plan says it moves.
+	moving := moves(current, a, connID) || len(a.Routes) > 0 || a.NativeMove
 	if moving && a.Op != planning.Replace && (a.Op != planning.Create || current.Drift != planning.DriftMissing) && current.Provider == a.Provider && current.Region == a.Region {
 		// Only the planner moves something to another connection, since
 		// only it deploys again what uses it, or refuses when something
@@ -1616,8 +1725,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if !ok {
 		return false, notYet(fmt.Errorf("%w: %s, which ran %s before it moved", ErrNoExecutor, old.Provider, a.Name))
 	}
+	// Loomplane Cloud ran it on the platform's own hosts, through no
+	// connection of the organization's.
+	onPlatform := old.Provider == platformProvider && old.ConnectionID == ""
 	oldConnID := old.ConnectionID
-	if oldConnID == "" {
+	if oldConnID == "" && !onPlatform {
 		// A binding from before bindings recorded their connection was
 		// deployed with the plan's connection to its cloud.
 		prov, perr := r.providers.Get(old.Provider)
@@ -1628,7 +1740,11 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 			return false, notYet(fmt.Errorf("the plan names no %s connection, which %s ran on before it moved", prov.Cloud, a.Name))
 		}
 	}
-	conn, cred, err := r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	var conn *connections.Connection
+	var cred []byte
+	if !onPlatform {
+		conn, cred, err = r.credentials.Credential(ctx, job.Deployment.OrgID, oldConnID)
+	}
 	if errors.Is(err, connections.ErrNotFound) && (job.Plan.CloudSyncID != "" || poolBinding(old)) {
 		return false, err
 	}
@@ -1645,7 +1761,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if err != nil {
 		return false, err
 	}
-	if job.Plan.CloudSyncID != "" {
+	if job.Plan.CloudSyncID != "" && !onPlatform {
 		var cfg planning.ServiceConfig
 		if err := json.Unmarshal(old.Config, &cfg); err != nil {
 			return false, err

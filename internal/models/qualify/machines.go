@@ -638,8 +638,10 @@ func Connect(ctx context.Context, m *Machine, keys Keys) (Host, error) {
 		if err == nil {
 			h := &dockerHost{cfg: cfg, client: client, values: map[string]owned.RuntimeValues{}}
 			h.runtime = &server.Runtime{
-				Session: func(ctx context.Context, _ map[string]string) (*server.Client, error) { return server.Dial(ctx, cfg) },
-				Values:  h.runtimeValues,
+				Session: func(ctx context.Context, _ map[string]string) (*server.Client, error) {
+					return server.Connect(ctx, cfg, nil)
+				},
+				Values: h.runtimeValues,
 			}
 			return h, nil
 		}
@@ -654,7 +656,7 @@ func Connect(ctx context.Context, m *Machine, keys Keys) (Host, error) {
 
 // connectOnce dials once and checks Docker and the GPUs.
 func connectOnce(ctx context.Context, cfg *server.Config) (*server.Client, error) {
-	client, err := server.Dial(ctx, cfg)
+	client, err := server.Connect(ctx, cfg, nil)
 	if err != nil {
 		return nil, err
 	}

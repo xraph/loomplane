@@ -28,6 +28,13 @@ type Config struct {
 	Username, Password, Token          string
 	TLS                                *tls.Config
 	Details                            map[string]string
+	// ScopedOnly makes DockerAuth hand out only a token the registry's
+	// token service minted for one repository: it refuses a direct token,
+	// a missing login and a registry that lets the probe through
+	// anonymously. Loomplane Cloud's shared registry sets it, so no
+	// workspace VM ever holds a credential that reaches another
+	// workspace's repository.
+	ScopedOnly bool
 }
 
 func safeURL(raw string, endpoint bool) (*url.URL, error) {

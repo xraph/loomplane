@@ -11,15 +11,18 @@ import (
 
 type Peer struct{ Fingerprint, Org, Connection string }
 type Handler struct {
-	Host  *Host
-	Peers []Peer
+	Host     *Host
+	Peers    []Peer
+	Platform string
 }
 
 func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var peer *Peer
+	platform := false
 	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.VerifiedChains[0]) > 0 {
 		sum := sha256.Sum256(r.TLS.VerifiedChains[0][0].Raw)
 		fp := hex.EncodeToString(sum[:])
+		platform = a.Platform != "" && fp == a.Platform
 		for i := range a.Peers {
 			if a.Peers[i].Fingerprint == fp {
 				peer = &a.Peers[i]
@@ -27,7 +30,11 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if peer == nil {
+	if peer == nil && !platform {
+		http.Error(w, "host client identity is not authorized", http.StatusForbidden)
+		return
+	}
+	if !platform && peer.Org == "" {
 		http.Error(w, "host client identity is not authorized", http.StatusForbidden)
 		return
 	}
@@ -40,6 +47,23 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.Version = ProtocolVersion
 		c.Limits = a.Host.Limits
 		WriteJSON(w, http.StatusOK, c)
+		return
+	}
+	if r.URL.Path == "/v1/usage" && r.Method == http.MethodGet {
+		org := ""
+		if !platform {
+			if peer.Connection == "" {
+				http.Error(w, "host client identity is not authorized", http.StatusForbidden)
+				return
+			}
+			org = peer.Org
+		}
+		samples, err := a.Host.Usage(r.Context(), org)
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, samples)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -57,7 +81,7 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, err)
 		return
 	}
-	if !q.Scope.Valid() || q.Scope.Org != peer.Org || q.Scope.Connection != peer.Connection {
+	if !q.Scope.Valid() || (platform && q.Scope.Connection != PlatformConnection) || (!platform && (q.Scope.Org != peer.Org || q.Scope.Connection != peer.Connection)) {
 		http.Error(w, "scope is not authorized", http.StatusForbidden)
 		return
 	}

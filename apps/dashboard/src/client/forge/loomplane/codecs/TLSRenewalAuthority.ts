@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_TLSRenewalAuthority: Codec = {"kind": "object", "fields": {"active": {"ts": "active"}, "created_at": {"ts": "createdAt"}, "generation": {"ts": "generation"}, "id": {"ts": "id"}, "method": {"ts": "method"}, "org_id": {"ts": "orgId"}, "owner_ref": {"ts": "ownerRef"}, "schema_version": {"ts": "schemaVersion"}, "updated_at": {"ts": "updatedAt"}, "verification_evidence_ref": {"ts": "verificationEvidenceRef"}, "verified_at": {"ts": "verifiedAt"}, "verified_by": {"ts": "verifiedBy"}}, "required": ["active", "created_at", "generation", "id", "method", "org_id", "owner_ref", "schema_version", "updated_at", "verification_evidence_ref", "verified_at", "verified_by"]};

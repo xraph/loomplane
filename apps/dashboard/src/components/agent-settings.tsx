@@ -8,6 +8,7 @@ import { type FormEvent, type ReactNode, useId, useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useAgentStatusGet,
   useAiSettingsDeleteProviderKey,
   useAiSettingsGet,
   useAiSettingsGetAgent,
@@ -176,10 +177,12 @@ function AgentForm({
     setProblems({ [where]: message })
   }
 
-  // Reads the settings again, so the form starts over from what's saved.
+  // Reads the settings again, so the form starts over from what's saved,
+  // and the agent's status, so the sidebar and the dock follow the switch.
   const refresh = async () => {
     await reload()
     invalidate(useAiSettingsGetAgent)
+    invalidate(useAgentStatusGet)
   }
 
   const toggle = async (key: "enabled" | "knowledge", value: boolean) => {
@@ -476,8 +479,8 @@ function AgentForm({
         <form onSubmit={(e) => void saveBudget(e)} className="grid">
           <div className="grid gap-4 px-4 py-4 md:px-5">
             <SettingsCardHead
-              title="Spending"
-              description="At the limit the agent stops until next month or a higher budget."
+              title="The agent's share of the AI budget"
+              description="It comes out of the workspace's budget above. At the limit the agent stops until next month or a higher budget."
             />
             <div className="grid gap-2">
               <div className="flex items-baseline justify-between gap-3">
@@ -517,7 +520,26 @@ function AgentForm({
                 className="max-w-[200px] tabular-nums"
               />
               <FieldDescription>
-                {`Up to $${room.toFixed(2)} from the workspace's AI budget.`}
+                {room > 0 ? (
+                  <>
+                    {`Up to $${room.toFixed(2)} from the workspace's AI budget.`}
+                    {Number(budget) !== room && (
+                      <>
+                        {" "}
+                        <Button
+                          type="button"
+                          variant="link"
+                          className="h-auto p-0 text-[12.5px]"
+                          onClick={() => setBudgetText(room.toFixed(2))}
+                        >
+                          {`Use all $${room.toFixed(2)}`}
+                        </Button>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  "Set the workspace's AI budget above first. The agent's comes out of it."
+                )}
               </FieldDescription>
               <FieldProblem text={problems.budget} />
             </Field>

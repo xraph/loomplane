@@ -66,7 +66,7 @@ Under the [production Compose stack](docker-production.md), run it in the API co
 docker compose exec loomplane loomplane admin grant-platform-admin you@example.com
 ```
 
-It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first.
+It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first. The grant lands in the audit trail's `platform` stream as `platform_admin.granted`, with `cli` as the actor and the operating system user and host it ran as in the metadata. A second run grants nothing and records nothing.
 
 ## Live deployment state
 
@@ -94,7 +94,7 @@ loomplane backup inspect loomplane-backup.tar.gz
 
 shows which Loomplane made a backup, when, and how many rows each table has, without restoring anything.
 
-A backup holds secrets the way the database does: cloud credentials and variables as Vault ciphertext, API keys as hashes. Reading the secrets needs the `secret_key` Loomplane ran with. Keep that key, and keep it somewhere other than beside the backups, or a restored Loomplane will start without being able to deploy.
+A backup holds secrets the way the database does: cloud credentials and variables as Vault ciphertext, API keys as hashes. Reading the secrets needs the `secret_key` Loomplane ran with. Keep that key, and keep it somewhere other than beside the backups. Without it a restored Loomplane can't deploy, and with audit checkpoints on (the default) it won't start at all: the checkpoint signing key in Vault won't decrypt. [Forge integration](forge-integration.md#chronicle) says how to rotate that key if the old `secret_key` is gone for good.
 
 What isn't in a backup: the source tarballs in `storage.url`, which Loomplane fetches again from GitHub when it needs them, and anything in your clouds. A restore brings back Loomplane's record of what runs where; the next drift check compares it with what's live.
 

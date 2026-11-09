@@ -70,9 +70,9 @@ type placementGroupFixture struct {
 	prerequisites []*domain.MemberPrerequisite
 }
 
-func newPlacementGroupFixture(t *testing.T, through ...string) *placementGroupFixture {
+func newPlacementGroupFixture(t *testing.T) *placementGroupFixture {
 	t.Helper()
-	f := newPoolFixture(t, through...)
+	f := newPoolFixture(t)
 	ctx := t.Context()
 	now := time.Now().UTC()
 	actor := security.Principal{OrgID: "org", UserID: "usr"}

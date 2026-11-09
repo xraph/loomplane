@@ -632,8 +632,8 @@ func ordinaryMember(t *testing.T, owner *setupClient, email string) *setupClient
 		t.Fatalf("invite %s: %d %s", email, status, raw)
 	}
 	_, token, _ := strings.Cut(created.AcceptPath, "token=")
-	if status, why := signUp(owner, email); status != http.StatusCreated {
-		t.Fatalf("%s sign-up: %d %+v", email, status, why)
+	if signupStatus, why := signUp(owner, email); signupStatus != http.StatusCreated {
+		t.Fatalf("%s sign-up: %d %+v", email, signupStatus, why)
 	}
 	member := &setupClient{t: t, base: owner.base, key: owner.key}
 	status, raw, cookies := member.send(http.MethodPost, "/authsome/v1/signin", map[string]string{"email": email, "password": "Correct-horse-battery-9"})

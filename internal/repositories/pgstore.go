@@ -2,7 +2,9 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/xraph/grove/drivers/pgdriver"
 )
@@ -34,7 +36,8 @@ func (s *PgStore) SaveInstallation(ctx context.Context, r *InstallationRecord) e
 
 // ListInstallations returns the organization's installations, oldest first.
 func (s *PgStore) ListInstallations(ctx context.Context, orgID string) ([]*InstallationRecord, error) {
-	rows, err := s.db.Query(ctx, `SELECT org_id, installation_id, account, account_type, created_by, created_at
+	rows, err := s.db.Query(ctx, `SELECT org_id, installation_id, account, account_type, created_by, created_at,
+		permissions, permissions_checked_at
 		FROM loomplane_github_installations WHERE org_id = $1 ORDER BY created_at, installation_id`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("list GitHub installations: %w", err)
@@ -42,17 +45,47 @@ func (s *PgStore) ListInstallations(ctx context.Context, orgID string) ([]*Insta
 	defer rows.Close() // read-only; Err below reports iteration failures
 	out := []*InstallationRecord{}
 	for rows.Next() {
-		var r InstallationRecord
-		if err := rows.Scan(&r.OrgID, &r.ID, &r.Account, &r.AccountType, &r.CreatedBy, &r.CreatedAt); err != nil {
+		var (
+			r       InstallationRecord
+			perms   []byte
+			checked *time.Time
+		)
+		if err := rows.Scan(&r.OrgID, &r.ID, &r.Account, &r.AccountType, &r.CreatedBy, &r.CreatedAt, &perms, &checked); err != nil {
 			return nil, fmt.Errorf("scan GitHub installation: %w", err)
 		}
 		r.CreatedAt = r.CreatedAt.UTC()
+		if checked != nil {
+			// Permissions count only once they've been read from GitHub.
+			if err := json.Unmarshal(perms, &r.Permissions); err != nil {
+				return nil, fmt.Errorf("read GitHub installation %d's permissions: %w", r.ID, err)
+			}
+			at := checked.UTC()
+			r.PermissionsCheckedAt = &at
+		}
 		out = append(out, &r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list GitHub installations: %w", err)
 	}
 	return out, nil
+}
+
+// SavePermissions implements Store. It does nothing for an installation
+// that's no longer connected.
+func (s *PgStore) SavePermissions(ctx context.Context, orgID string, id int64, perms map[string]string, at time.Time) error {
+	if perms == nil {
+		perms = map[string]string{}
+	}
+	raw, err := json.Marshal(perms)
+	if err != nil {
+		return fmt.Errorf("encode GitHub installation permissions: %w", err)
+	}
+	_, err = s.db.Exec(ctx, `UPDATE loomplane_github_installations SET permissions = $3::jsonb, permissions_checked_at = $4
+		WHERE org_id = $1 AND installation_id = $2`, orgID, id, string(raw), at.UTC())
+	if err != nil {
+		return fmt.Errorf("save GitHub installation permissions: %w", err)
+	}
+	return nil
 }
 
 // DeleteInstallation implements Store.

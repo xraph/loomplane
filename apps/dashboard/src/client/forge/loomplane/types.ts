@@ -127,6 +127,16 @@ export interface AgentView {
   updatedBy?: string;
 }
 
+export interface AgentreportsEvidence {
+  analysisId?: string;
+  bindingId?: string;
+  deploymentId?: string;
+  planId?: string;
+  sourceAlias?: string;
+  verdictIds?: string[];
+  watchId?: string;
+}
+
 export interface AgentrequestsTarget {
   cloud?: string;
   environment?: string;
@@ -143,6 +153,14 @@ export interface AgentsettingsStatus {
   server: boolean;
 }
 
+export interface AgentwatchStatus {
+  issues: IssuesStatus;
+  paused: boolean;
+  pausedAt?: string;
+  pausedReason?: string;
+  tickedAt?: string;
+}
+
 export interface Allocation {
   environmentId?: string;
   label: string;
@@ -150,6 +168,20 @@ export interface Allocation {
   projectId?: string;
   scope: string;
   updatedAt: string;
+}
+
+export interface Allotment {
+  diskMib: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+}
+
+export interface AllotmentBody {
+  diskMib: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
 }
 
 export interface Amount {
@@ -234,7 +266,7 @@ export interface Assignment {
   orgId: string;
   projectId: string;
   revision: number;
-  targets: Target[];
+  targets: CloudprofilesTarget[];
 }
 
 export interface AttachDefaults {
@@ -313,6 +345,7 @@ export interface BackupList {
 }
 
 export interface Binding {
+  alias: string;
   commitSha: string;
   config: string;
   connectionId: string;
@@ -334,8 +367,13 @@ export interface Binding {
   region: string;
   revision: string;
   subject: string;
+  suggestedAlias?: string;
   updatedAt: string;
   url: string;
+}
+
+export interface BindingAliasInputBody {
+  alias: string;
 }
 
 export interface BindingList {
@@ -423,7 +461,7 @@ export interface Build {
 }
 
 export interface BuildSystem {
-  evidence: Evidence;
+  evidence: DiscoveryEvidence;
   name: string;
   path: string;
   source?: string;
@@ -436,6 +474,17 @@ export interface BuildTarget {
   image?: string;
   registry?: string;
   registrySettings?: Record<string, any>;
+}
+
+export interface CLIOrganization {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+export interface CLIOrganizationList {
+  active?: string;
+  organizations: CLIOrganization[];
 }
 
 export interface Canary {
@@ -463,6 +512,16 @@ export interface CanaryService {
   image?: string;
   name: string;
   provider: string;
+}
+
+export interface CanarySummary {
+  actionIds: string[];
+  deploymentId: string;
+  finishedAt?: string;
+  planId: string;
+  reason?: string;
+  services: string[];
+  status: string;
 }
 
 export interface CanaryVerdict {
@@ -733,6 +792,15 @@ export interface ChangeInputBody {
   targetId?: string;
 }
 
+export interface ChangedService {
+  actionId: string;
+  canary: boolean;
+  lastCanary: string;
+  name: string;
+  op: string;
+  provider: string;
+}
+
 export interface CheckInputBody {
   dependency: string;
   dsn: string;
@@ -751,6 +819,11 @@ export interface CheckResult {
 
 export interface ChooseConnectionInputBody {
   connectionId: string;
+}
+
+export interface CleanupBlock {
+  reason: string;
+  until: string;
 }
 
 export interface CleanupObject {
@@ -808,6 +881,10 @@ export interface ClientClusterResourceMetrics {
   extended: Record<string, any>;
   memoryBytes?: number;
   pods?: number;
+}
+
+export interface CloseInputBody {
+  reason?: string;
 }
 
 export interface CloudAdoption {
@@ -893,6 +970,35 @@ export interface CloudForm {
   title: string;
 }
 
+export interface CloudLocation {
+  accountId?: string;
+  checkedAt: string;
+  cidrs?: string[];
+  cloudId: string;
+  connectionId?: string;
+  evidenceRef?: string;
+  evidenceRevision: number;
+  evidenceSource?: string;
+  failureDomains: FailureDomain[];
+  id: string;
+  name: string;
+  networkRefs?: string[];
+  orgId: string;
+  provider: string;
+  region: string;
+  revision: number;
+  verifiedBy?: string;
+}
+
+export interface CloudLocationDeleteInputBody {
+  cloudRevision: number;
+  revision: number;
+}
+
+export interface CloudLocationList {
+  locations: CloudLocation[];
+}
+
 export interface CloudPlacement {
   accountIdentity: string;
   allocation?: string;
@@ -964,7 +1070,7 @@ export interface CloudSyncList {
 }
 
 export interface CloudTargetList {
-  targets: (Target | null)[];
+  targets: (CloudprofilesTarget | null)[];
 }
 
 export interface CloudinfraClusterNodeCapacity {
@@ -992,6 +1098,7 @@ export interface CloudinfraClusterResourceMetrics {
 }
 
 export interface CloudinfraMoveInputBody {
+  architecture?: string;
   destinationServerId: string;
   environmentId: string;
   poolId: string;
@@ -1037,6 +1144,26 @@ export interface CloudprofilesCreateInputBody {
   region: string;
 };
   name: string;
+}
+
+export interface CloudprofilesTarget {
+  cloudId: string;
+  connectionId: string;
+  createdAt: string;
+  displayName: string;
+  id: string;
+  locationId?: string;
+  managedResourceId?: string;
+  name: string;
+  orgId: string;
+  poolId?: string;
+  projectId: string;
+  provider: string;
+  region: string;
+  revision: number;
+  runtime: string;
+  tags: string[];
+  updatedAt: string;
 }
 
 export interface CloudprofilesUpdateInputBody {
@@ -1395,6 +1522,12 @@ export interface Commands {
   start?: string;
 }
 
+export interface Compatibility {
+  controlVersions?: string[];
+  readDataVersions?: string[];
+  writeDataVersion?: string;
+}
+
 export interface CompleteCloudRoutingInputBody {
   environmentId: string;
   evidence: string;
@@ -1437,6 +1570,13 @@ export interface CompromisedRevoke {
   joinedNodes: Node[];
   joinedNodesWithheld: boolean;
   revoked: APIKey;
+}
+
+export interface Concern {
+  at: string;
+  kind: string;
+  runId: string;
+  text: string;
 }
 
 export interface ConnectGitHubInputBody {
@@ -1522,6 +1662,30 @@ export interface ConsumerOption {
   title: string;
 }
 
+export interface Conversation {
+  createdAt: string;
+  id: string;
+  lastTaskId: string;
+  orgId: string;
+  pinned: boolean;
+  pinnedAt?: string;
+  projectId: string;
+  startedBy: string;
+  status: string;
+  title: string;
+  turns: number;
+  updatedAt: string;
+}
+
+export interface ConversationList {
+  conversations: Conversation[];
+}
+
+export interface ConversationUpdateBody {
+  pinned?: boolean;
+  title?: string;
+}
+
 export interface Cost {
   estimate: boolean;
   hourlyUsd: string;
@@ -1542,6 +1706,16 @@ export interface Coverage {
 export interface CreateEnvironmentInputBody {
   kind?: string;
   name: string;
+}
+
+export interface CreateInstanceInputBody {
+  externalRef: string;
+  idempotencyKey: string;
+  parameters?: Record<string, any>;
+  profileId: string;
+  releaseId: string;
+  secretRefs?: Record<string, any>;
+  stageId: string;
 }
 
 export interface CreateInvitationInputBody {
@@ -1575,6 +1749,7 @@ export interface CreateProjectInputBody {
 export interface CreateTargetInputBody {
   connectionId: string;
   displayName: string;
+  locationId?: string;
   name: string;
   poolId?: string;
   provider: string;
@@ -1816,6 +1991,13 @@ export interface DeploymentsDeployment {
   steps: Step[];
 }
 
+export interface DiffCommit {
+  at: string;
+  author: string;
+  sha: string;
+  title: string;
+}
+
 export interface DiscoveredService {
   error?: string;
   metadata?: Record<string, any>;
@@ -1824,6 +2006,13 @@ export interface DiscoveredService {
   service: string;
   state: string;
   updatedAt: string;
+}
+
+export interface DiscoveryEvidence {
+  detail: string;
+  line?: number;
+  path: string;
+  source?: string;
 }
 
 export interface DiscoverySource {
@@ -1893,6 +2082,12 @@ export interface DomainRouteList {
   routes: (CloudinfraRoute | null)[];
 }
 
+export interface DrainPolicy {
+  maxConnectionLifetimeSeconds?: number;
+  mode: string;
+  terminationGraceSeconds: number;
+}
+
 export interface DrainReview {
   reservations: number;
   review: string;
@@ -1914,7 +2109,7 @@ export interface DurableObjectClass {
 
 export interface Edge {
   confidence: string;
-  evidence: Evidence[];
+  evidence: DiscoveryEvidence[];
   from: string;
   kind: string;
   to: string;
@@ -2008,7 +2203,7 @@ export interface EditInputBody {
   setUse?: {
   dependency: string;
   resource: string;
-  use: Use;
+  use: ManifestUse;
 };
   unlink?: {
   need: string;
@@ -2108,7 +2303,7 @@ export interface EnvLink {
 
 export interface EnvUse {
   confidence: string;
-  evidence: Evidence[];
+  evidence: DiscoveryEvidence[];
   example?: string;
   name: string;
 }
@@ -2125,6 +2320,7 @@ export interface EnvVar {
 export interface Environment {
   createdAt: string;
   id: string;
+  instanceId?: string;
   kind: string;
   name: string;
   orgId: string;
@@ -2186,11 +2382,12 @@ export interface EnvironmentUsage {
   projectName: string;
 }
 
-export interface Evidence {
-  detail: string;
-  line?: number;
-  path: string;
-  source?: string;
+export interface Event {
+  at: string;
+  data: string;
+  kind: string;
+  seq: number;
+  taskId: string;
 }
 
 export interface ExcludeInputBody {
@@ -2283,6 +2480,19 @@ export interface FabriqloomStatus {
   version: string;
 }
 
+export interface FabriqloomTenant {
+  createdAt: string;
+  id: string;
+  label: string;
+}
+
+export interface Fact {
+  label: string;
+  path?: string;
+  untrusted?: boolean;
+  value: string;
+}
+
 export interface FailedCleanup {
   attempt: number;
   deploymentId: string;
@@ -2301,6 +2511,14 @@ export interface FailedCleanupCancelInputBody {
 
 export interface FailedCleanupInputBody {
   revision: string;
+}
+
+export interface FailureDomain {
+  dependencyIds?: string[];
+  id: string;
+  kind: string;
+  source: string;
+  verified: boolean;
 }
 
 export interface FarpConfig {
@@ -2322,22 +2540,32 @@ export interface Federation {
   accessGrants?: Record<string, any>;
   destinations?: Record<string, any>;
   networkLinks?: Record<string, any>;
+  placementGroups?: Record<string, any>;
   placements?: Record<string, any>;
   serviceExports?: Record<string, any>;
 }
 
 export interface File {
+  certificateSecret?: string;
   mode?: number;
   path: string;
 }
 
 export interface Finding {
   code: string;
-  evidence?: Evidence[];
+  evidence?: DiscoveryEvidence[];
   message: string;
   name?: string;
   path?: string;
   subject?: string;
+}
+
+export interface Findings {
+  confidence: string;
+  likelyCause: string;
+  suggestions: string[];
+  summary: string;
+  writtenAt: string;
 }
 
 export interface Fit {
@@ -2345,6 +2573,28 @@ export interface Fit {
   need: Need;
   reason?: string;
   result?: Result;
+  status: string;
+}
+
+export interface Fleet {
+  controlProjectId?: string;
+  createdAt: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  revision: number;
+  status: string;
+  updatedAt: string;
+}
+
+export interface FleetOperation {
+  createdAt: string;
+  errorCode?: string;
+  generation: number;
+  id: string;
+  instanceId: string;
+  kind: string;
+  requestHash: string;
   status: string;
 }
 
@@ -2446,6 +2696,13 @@ export interface GPUUsage {
   reserved: number;
 }
 
+export interface GateCheck {
+  detail: string;
+  name: string;
+  number: number;
+  passed: boolean;
+}
+
 export interface GatewayList {
   gateways: GatewayStatus[];
 }
@@ -2471,6 +2728,7 @@ export interface GatewayStatus {
 export interface GeneratedSecret {
   bytes?: number;
   encoding?: string;
+  generator?: string;
   name: string;
   prefix?: string;
 }
@@ -2565,7 +2823,20 @@ export interface GraphSummary {
   services: number;
 }
 
+export interface GroupDestinationMappingInputBody {
+  attachmentId: string;
+  destinationId: string;
+  environmentId: string;
+  expectedRevision: number;
+  targetId: string;
+}
+
+export interface GroupVerificationResult {
+  id: string;
+}
+
 export interface HTTPProbe {
+  checker?: string;
   path: string;
   port: string;
 }
@@ -2598,6 +2869,25 @@ export interface HeldRoute {
   service: string;
 }
 
+export interface History {
+  conversation: Conversation;
+  more: boolean;
+  turns: Turn[];
+}
+
+export interface Host {
+  allotment: Allotment;
+  clientFingerprint: string;
+  endpoint: string;
+  evidence: PlatformcloudEvidence;
+  generation: number;
+  hostId: string;
+  id: string;
+  regionId: string;
+  revision: number;
+  status: string;
+}
+
 export interface HostCard {
   attached: boolean;
   domainRouteId?: string;
@@ -2605,6 +2895,38 @@ export interface HostCard {
   hostname: string;
   routes: BoardRoute[];
   status?: CloudinfraRouteStatus;
+}
+
+export interface HostInputBody {
+  allotment: {
+  diskMib: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+};
+  endpoint: string;
+  hostId: string;
+  regionId: string;
+  serverCa: string;
+}
+
+export interface HostList {
+  hosts: HostView[];
+}
+
+export interface HostView {
+  allotment: Allotment;
+  clientFingerprint: string;
+  endpoint: string;
+  evidence: PlatformcloudEvidence;
+  generation: number;
+  hostId: string;
+  id: string;
+  placements: number;
+  regionId: string;
+  revision: number;
+  status: string;
+  use: Allotment;
 }
 
 export interface HostnameUse {
@@ -2671,6 +2993,37 @@ export interface InspectInputBody {
   revision?: string;
 }
 
+export interface InstallationIssues {
+  accepted: boolean;
+  account: string;
+  accountType: string;
+  checkedAt?: string;
+  manageUrl: string;
+}
+
+export interface Instance {
+  createdAt: string;
+  desiredGeneration: number;
+  desiredReleaseId: string;
+  environmentId: string;
+  externalRef: string;
+  fleetId: string;
+  id: string;
+  observedGeneration: number;
+  observedReleaseId?: string;
+  ownershipEpoch: number;
+  profileId: string;
+  revision: number;
+  stageId: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface InstancePage {
+  items: Instance[];
+  nextCursor?: string;
+}
+
 export interface InstanceRouteStats {
   backendConns: number;
   maxConnections: number;
@@ -2705,6 +3058,18 @@ export interface Inventory {
   podman?: Runtime;
   ports80443?: string;
   publicAddresses?: string[];
+}
+
+export interface Issue {
+  error?: string;
+  number?: number;
+  state: string;
+  url?: string;
+}
+
+export interface IssuesStatus {
+  configured: boolean;
+  installations: InstallationIssues[];
 }
 
 export interface JoinToken {
@@ -2815,6 +3180,53 @@ export interface LinkedService {
   message?: string;
   reachable: boolean;
   service: string;
+}
+
+export interface LocationInputBody {
+  accountId: string;
+  checkedAt: string;
+  cidrs?: string[];
+  cloudRevision: number;
+  connectionId: string;
+  evidenceRevision: number;
+  failureDomains?: {
+  dependencyIds?: string[];
+  id: string;
+  kind: string;
+  source: string;
+  verified: boolean;
+}[];
+  id?: string;
+  name: string;
+  networkRefs?: string[];
+  provider: string;
+  region: string;
+  revision: number;
+}
+
+export interface LocationPolicy {
+  preferredLocations?: string[];
+  preferredProviders?: string[];
+  ranking?: string;
+  revision: number;
+}
+
+export interface LocationPolicyBody {
+  preferredLocations?: string[];
+  preferredProviders?: string[];
+  ranking?: string;
+  revision: number;
+}
+
+export interface LocationVerificationInputBody {
+  cloudRevision: number;
+  evidenceRef: string;
+  failureDomains: {
+  dependencyIds?: string[];
+  id: string;
+  kind: string;
+}[];
+  revision: number;
 }
 
 export interface Log {
@@ -2931,6 +3343,56 @@ export interface ManifestGPU {
   kind: string;
 }
 
+export interface ManifestUse {
+  enabled?: boolean;
+  external?: string;
+  resource?: string;
+}
+
+export interface MemberPrerequisite {
+  attachmentId: string;
+  createdAt: string;
+  drainPolicy: DrainPolicy;
+  hostnames: string[];
+  id: string;
+  namespace: string;
+  namespaceUid: string;
+  orgId: string;
+  projectId: string;
+  renewalAuthorityGeneration: number;
+  renewalAuthorityId: string;
+  revision: number;
+  schemaVersion: number;
+  timeoutVerificationId?: string;
+  tlsSecretName: string;
+  tlsSecretUid: string;
+  updatedAt: string;
+}
+
+export interface MemberPrerequisiteInputBody {
+  attachmentId: string;
+  drainPolicy: {
+  maxConnectionLifetimeSeconds?: number;
+  mode: string;
+  terminationGraceSeconds: number;
+};
+  expectedRenewalAuthorityGeneration: number;
+  expectedRevision: number;
+  expectedTlsSecretUid: string;
+  id?: string;
+  renewalAuthorityId: string;
+  tlsSecretName: string;
+}
+
+export interface MigrationFile {
+  additions: number;
+  deletions: number;
+  patch: string;
+  path: string;
+  status: string;
+  truncated: boolean;
+}
+
 export interface ModelDeploymentList {
   models: (ModelsStatus | null)[];
 }
@@ -3032,7 +3494,15 @@ export interface MoneyEstimate {
   priceDigest: string;
 }
 
+export interface MoveAll {
+  failed: string[];
+  host: Host;
+  moved: number;
+  skipped: string[];
+}
+
 export interface MoveInput {
+  architecture?: string;
   destinationServerId: string;
   environmentId: string;
   poolId: string;
@@ -3270,6 +3740,12 @@ export interface Need {
   ramGib?: number;
 }
 
+export interface NewHost {
+  clientCertificate: string;
+  clientFingerprint: string;
+  host: Host;
+}
+
 export interface NewKeyBody {
   access: string;
   expiresInDays?: number;
@@ -3282,6 +3758,8 @@ export interface Node {
   endpoints: string[];
   id: string;
   identityGeneration: number;
+  ingressApplied: string;
+  ingressDetail: string;
   ingressMode: string;
   inventory: Inventory;
   joinedBy: string;
@@ -3292,12 +3770,32 @@ export interface Node {
   name: string;
   orgId: string;
   protocolVersion: number;
+  publicAddress: string;
+  publicAddressConfirmedAt?: string;
   revokedAt?: string;
   revokedBy: string;
   role: string;
   status: string;
   updatedAt: string;
   version: string;
+}
+
+export interface NodeAdoption {
+  approvedBy: string;
+  cloudId: string;
+  createdAt: string;
+  nodeId: string;
+  nodeName: string;
+  operationId: string;
+  orgId: string;
+  reason: string;
+  serverId: string;
+  status: string;
+  updatedAt: string;
+}
+
+export interface NodeAdoptionList {
+  adoptions: (NodeAdoption | null)[];
 }
 
 export interface NodeJoinBody {
@@ -3330,6 +3828,7 @@ export interface NodeJoined {
   cloudId?: string;
   endpoints: string[];
   identityGeneration: number;
+  name?: string;
   nodeId: string;
   orgId: string;
 }
@@ -3362,6 +3861,19 @@ export interface NodeUpdateBody {
   ingressMode?: string;
   labels?: Record<string, any>;
   name?: string;
+}
+
+export interface NodeWorkload {
+  bindingId: string;
+  environment: string;
+  hasBackupPolicy: boolean;
+  kind: string;
+  projectId: string;
+  service: string;
+}
+
+export interface NodeWorkloadList {
+  workloads: NodeWorkload[];
 }
 
 export interface NodeprotoGPU {
@@ -3459,6 +3971,14 @@ export interface OpenCompatModel {
   task: string;
 }
 
+export interface OpenReport {
+  id: string;
+  openedAt: string;
+  path: string;
+  severity?: string;
+  title: string;
+}
+
 export interface Operation {
   absenceConfirmedAt?: string;
   accelerator?: Accelerator;
@@ -3500,6 +4020,11 @@ export interface OperationList {
   operations: (Operation | null)[];
 }
 
+export interface OperationResult {
+  instance: Instance;
+  operation: FleetOperation;
+}
+
 export interface OrgInvitation {
   createdAt: string;
   email: string;
@@ -3532,6 +4057,7 @@ export interface Output {
   from?: Ref;
   name: string;
   perConsumer?: boolean;
+  publicCa?: string;
   requires?: string;
   secret?: boolean;
   template?: string;
@@ -3545,13 +4071,23 @@ export interface OutputInfo {
 
 export interface Package {
   ecosystem: string;
-  evidence: Evidence[];
+  evidence: DiscoveryEvidence[];
   id: string;
   name: string;
   path: string;
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface PageContext {
+  environment?: string;
+  kind?: string;
+  label: string;
+  path: string;
+  planId?: string;
+  projectId?: string;
+  service?: string;
 }
 
 export interface PendingNodeJoinToken {
@@ -3590,6 +4126,24 @@ export interface Placement {
   serverRevision: number;
 }
 
+export interface PlacementGroupMemberReview {
+  memberId: string;
+  replicas: number;
+}
+
+export interface PlacementGroupReview {
+  generation: number;
+  groupId: string;
+  hostname: string;
+  image: string;
+  members: PlacementGroupMemberReview[];
+  minReady: number;
+  name: string;
+  revision: string;
+  routingMode: string;
+  service: string;
+}
+
 export interface PlacementUsage {
   default?: boolean;
   services: string[];
@@ -3620,6 +4174,7 @@ export interface Plan {
   manifestId: string;
   manifestRevision: number;
   orgId: string;
+  placementGroups?: PlacementGroupReview[];
   plannedAt?: string;
   problems: Finding[];
   projectId: string;
@@ -3678,6 +4233,72 @@ export interface PlanningSummary {
   keep: number;
   replace: number;
   update: number;
+}
+
+export interface PlanningTenantInputBody {
+  tenantId: string;
+}
+
+export interface PlanningTenantList {
+  tenants: FabriqloomTenant[];
+}
+
+export interface PlatformDNSSettings {
+  provider: string;
+  zone: string;
+}
+
+export interface PlatformLimits {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+}
+
+export interface PlatformcloudEvidence {
+  architecture: string;
+  checkedAt: string;
+  deniedPorts: number[];
+  ingressAddress: string;
+  isolation: boolean;
+  perOrgMemoryMib: number;
+  perOrgVcpus: number;
+  perOrgVms: number;
+  platform: boolean;
+  protocolVersion: string;
+  reason?: string;
+  runtimeIdentity: string;
+  smtActive: boolean;
+}
+
+export interface PlatformcloudTenant {
+  limits?: PlatformLimits;
+  orgId: string;
+  revision: number;
+  status: string;
+  suspendReasons: string[];
+  suspendedAt?: string;
+}
+
+export interface PlatformcloudTenantInputBody {
+  limits?: {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+};
+  status: string;
+}
+
+export interface PlatformcloudTenantList {
+  tenants: TenantRow[];
+}
+
+export interface PlatformcloudUse {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
 }
 
 export interface Point {
@@ -3779,11 +4400,18 @@ export interface Preferences {
   mailEnabled: boolean;
 }
 
+export interface PrepareInputBody {
+  from?: string;
+  replace?: boolean;
+  scope?: string[];
+  to?: string;
+}
+
 export interface Preview {
-  after?: Target;
+  after?: CloudprofilesTarget;
   afterAssignment?: Assignment;
   afterDefault?: DefaultPlacement;
-  before?: Target;
+  before?: CloudprofilesTarget;
   beforeAssignment?: Assignment;
   beforeDefault?: DefaultPlacement;
   blockers: string[];
@@ -3808,6 +4436,7 @@ export interface Profile {
   id: string;
   name: string;
   orgId: string;
+  platformOwned: boolean;
   projectId: string;
   revision: number;
   updatedAt: string;
@@ -3897,6 +4526,21 @@ export interface Provider {
   runs?: Runs[];
   scaling: boolean;
   title: string;
+  workloads?: WorkloadCapabilities;
+}
+
+export interface ProviderEnvironment {
+  createdAt: string;
+  environmentId: string;
+  mode: string;
+  permanent: boolean;
+  provider: string;
+  reason: string;
+  scope: string;
+}
+
+export interface ProviderEnvironmentList {
+  providerEnvironments: ProviderEnvironment[];
 }
 
 export interface ProviderKey {
@@ -4127,6 +4771,42 @@ export interface Reach {
   mode: string;
 }
 
+export interface ReadinessEvidence {
+  artifacts: ArtifactChoice[];
+  backupSchedule: boolean;
+  budget?: BudgetState;
+  canaries: CanarySummary[];
+  changedServices: ChangedService[];
+  collectedAt: string;
+  coverage?: Coverage;
+  dataUpdates: string[];
+  destroy: string[];
+  openReports: OpenReport[];
+  pinDifferences: string[];
+  pinsMatch: boolean;
+  planStatus: string;
+  problems: Finding[];
+  productionRelease?: ReleaseEvidence;
+  soak?: Soak;
+  sources: SourceDiff[];
+  stagingRelease?: ReleaseEvidence;
+  unavailable: Record<string, any>;
+  warnings: Finding[];
+}
+
+export interface RealtimeAgentEnd {
+  error?: string;
+  status: string;
+}
+
+export interface RealtimeAgentEvent {
+  at: string;
+  data: string;
+  kind: string;
+  seq: number;
+  taskId: string;
+}
+
 export interface RealtimeForgeGap {
   reason: string;
 }
@@ -4212,6 +4892,30 @@ export interface Ref {
   component?: string;
   dependency?: string;
   field: string;
+}
+
+export interface Region {
+  displayName: string;
+  id: string;
+  name: string;
+  revision: number;
+  status: string;
+}
+
+export interface RegionInputBody {
+  displayName: string;
+  name: string;
+  status?: string;
+}
+
+export interface RegionList {
+  regions: Region[];
+}
+
+export interface RegionUpdateBody {
+  displayName?: string;
+  revision?: number;
+  status?: string;
 }
 
 export interface RegisterDeviceInputBody {
@@ -4301,6 +5005,12 @@ export interface RegistryList {
   fitsNotice?: string;
 }
 
+export interface RegistrySettings {
+  authEndpoint: string;
+  endpoint: string;
+  repository: string;
+}
+
 export interface Release {
   canary?: string[];
   holdSeconds?: number;
@@ -4329,6 +5039,72 @@ export interface ReleaseRef {
   status: string;
 }
 
+export interface ReleaseReport {
+  concerns: Concern[];
+  createdAt: string;
+  decidedBy: string;
+  decision: string;
+  error: string;
+  evaluatedAt?: string;
+  evidence?: ReadinessEvidence;
+  finishedAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
+  gates: GateCheck[];
+  id: string;
+  orgId: string;
+  planId: string;
+  planRevision: string;
+  preview: boolean;
+  projectId: string;
+  requestId: string;
+  requestedBy: string;
+  reusedPlan: boolean;
+  runId: string;
+  scope: string[];
+  state: string;
+  stateReason: string;
+  status: string;
+  taskId: string;
+  toEnvironment: string;
+  toEnvironmentId: string;
+  updatedAt: string;
+  via: string;
+}
+
+export interface ReleaseReportEvent {
+  createdAt: string;
+  decision: string;
+  error: string;
+  evaluatedAt?: string;
+  finishedAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
+  gates: GateCheck[];
+  id: string;
+  orgId: string;
+  planId: string;
+  planRevision: string;
+  preview: boolean;
+  projectId: string;
+  requestedBy: string;
+  reusedPlan: boolean;
+  runId: string;
+  scope: string[];
+  state: string;
+  stateReason: string;
+  status: string;
+  taskId: string;
+  toEnvironment: string;
+  toEnvironmentId: string;
+  updatedAt: string;
+  via: string;
+}
+
+export interface ReleaseReportList {
+  reports: (ReleaseReport | null)[];
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -4336,6 +5112,44 @@ export interface RemoveRouteInputBody {
 export interface ReplaceInputBody {
   credential: string;
   settings?: Record<string, any>;
+}
+
+export interface Report {
+  closedBy: string;
+  component: string;
+  createdAt: string;
+  environment: string;
+  environmentId: string;
+  evidence: AgentreportsEvidence;
+  facts: Fact[];
+  findings?: Findings;
+  fingerprint: string;
+  firstSeenAt: string;
+  id: string;
+  investigation: string;
+  investigationNote: string;
+  issue: Issue;
+  lastSeenAt: string;
+  occurrences: number;
+  openedBy: string;
+  orgId: string;
+  projectId: string;
+  repository: string;
+  resolution: string;
+  resolvedAt?: string;
+  revision: number;
+  severity: string;
+  signal: string;
+  status: string;
+  takenAt?: string;
+  takenBy: string;
+  taskId: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface ReportList {
+  reports: (Report | null)[];
 }
 
 export interface Request {
@@ -4385,7 +5199,7 @@ export interface RequestList {
 }
 
 export interface Requirement {
-  evidence: Evidence;
+  evidence: DiscoveryEvidence;
   git?: string;
   name: string;
   version?: string;
@@ -4440,7 +5254,7 @@ export interface ResolvedVariable {
 
 export interface Resource {
   confidence: string;
-  evidence: Evidence[];
+  evidence: DiscoveryEvidence[];
   id: string;
   kind: string;
   needsConfirmation: boolean;
@@ -4777,6 +5591,7 @@ export interface RouteInputBody {
 
 export interface RouteOperation {
   attempt: number;
+  automatic?: boolean;
   cost?: RouteCost;
   createdAt: string;
   desiredRecord: DNSRecord;
@@ -4790,6 +5605,7 @@ export interface RouteOperation {
   message: string;
   notBefore: string;
   notices?: string[];
+  previousAddress?: string;
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
   receipts?: DNSRecord[];
@@ -4847,6 +5663,7 @@ export interface Runtime {
 export interface RuntimeAccessProfile {
   cleanupDependents: boolean;
   hpa: boolean;
+  lifecycleJobs?: boolean;
   schemaVersion: number;
 }
 
@@ -4952,6 +5769,24 @@ export interface ScalingPoolInputBody {
 
 export interface SecretInputBody {
   value: string;
+}
+
+export interface SendInputBody {
+  context?: {
+  environment?: string;
+  kind?: string;
+  label: string;
+  path: string;
+  planId?: string;
+  projectId?: string;
+  service?: string;
+};
+  message: string;
+}
+
+export interface Sent {
+  conversation: Conversation;
+  task: Task;
 }
 
 export interface Server {
@@ -5089,7 +5924,7 @@ export interface Service {
   ecosystem: string;
   entrypoint: string;
   env?: EnvUse[];
-  evidence: Evidence[];
+  evidence: DiscoveryEvidence[];
   framework?: string;
   id: string;
   image?: string;
@@ -5208,6 +6043,41 @@ export interface SettingInfo {
   title: string;
 }
 
+export interface SettingsInputBody {
+  apex: string;
+  attach: string;
+  defaultLimits: {
+  concurrentBuilds: number;
+  memoryMib: number;
+  vcpus: number;
+  vms: number;
+};
+  dns: {
+  provider: string;
+  zone: string;
+};
+  dnsAccountId?: string;
+  dnsTeamId?: string;
+  dnsToken?: string;
+  registry: {
+  authEndpoint: string;
+  endpoint: string;
+  repository: string;
+};
+  registryPassword?: string;
+  registryUsername?: string;
+}
+
+export interface SettingsView {
+  apex: string;
+  attach: string;
+  defaultLimits: PlatformLimits;
+  dns: PlatformDNSSettings;
+  dnsCredentialSaved: boolean;
+  registry: RegistrySettings;
+  registryCredentialSaved: boolean;
+}
+
 export interface SetupRequestBody {
   email: string;
   name: string;
@@ -5314,6 +6184,7 @@ export interface Source {
   id: string;
   orgId: string;
   projectId: string;
+  push?: PushState;
   ref: string;
   removedAt?: string;
   repository: string;
@@ -5332,6 +6203,25 @@ export interface SourceCounts {
   all: number;
   farp: number;
   here: number;
+}
+
+export interface SourceDiff {
+  additions: number;
+  aheadBy: number;
+  alias: string;
+  behindBy: number;
+  commits: DiffCommit[];
+  deletions: number;
+  direction: string;
+  error?: string;
+  filesChanged: number;
+  migrations: MigrationFile[];
+  productionCommit: string;
+  repository: string;
+  sourceId: string;
+  stagingCommit: string;
+  totalCommits: number;
+  truncated: boolean;
 }
 
 export interface SourceList {
@@ -5366,6 +6256,20 @@ export interface StartAnalysisInputBody {
 
 export interface StartGitLabSignInInputBody {
   hostId: string;
+}
+
+export interface StartInputBody {
+  context?: {
+  environment?: string;
+  kind?: string;
+  label: string;
+  path: string;
+  planId?: string;
+  projectId?: string;
+  service?: string;
+};
+  message: string;
+  projectId?: string;
 }
 
 export interface Step {
@@ -5404,10 +6308,10 @@ export interface StoredVolume {
 }
 
 export interface Sync {
-  after?: Target;
+  after?: CloudprofilesTarget;
   afterDefault?: DefaultPlacement;
   attempt: number;
-  before?: Target;
+  before?: CloudprofilesTarget;
   beforeDefault?: DefaultPlacement;
   cloudId: string;
   createdAt: string;
@@ -5447,6 +6351,32 @@ export interface SyncRoute {
   value?: string;
 }
 
+export interface TLSRenewalAuthority {
+  active: boolean;
+  createdAt: string;
+  generation: number;
+  id: string;
+  method: string;
+  orgId: string;
+  ownerRef: string;
+  schemaVersion: number;
+  updatedAt: string;
+  verificationEvidenceRef: string;
+  verifiedAt: string;
+  verifiedBy: string;
+}
+
+export interface TLSRenewalAuthorityInputBody {
+  active: boolean;
+  attachmentId: string;
+  expectedGeneration: number;
+  id?: string;
+  method: string;
+  ownerRef: string;
+  projectId: string;
+  verificationEvidenceRef: string;
+}
+
 export interface Target {
   cloudId: string;
   connectionId: string;
@@ -5474,6 +6404,28 @@ export interface TargetChoice {
   region?: string;
   sizeId?: string;
   source: string;
+}
+
+export interface Task {
+  createdAt: string;
+  environmentId: string;
+  error: string;
+  eventSeq: number;
+  finishedAt?: string;
+  id: string;
+  kind: string;
+  maxTokens: number;
+  metadata: Record<string, any>;
+  orgId: string;
+  projectId: string;
+  releasePlanId?: string;
+  releaseRevision?: string;
+  requestedBy: string;
+  runId: string;
+  sessionId: string;
+  status: string;
+  tokens: number;
+  updatedAt: string;
 }
 
 export interface TaskEvent {
@@ -5523,18 +6475,34 @@ export interface TeamMember {
   userId: string;
 }
 
-export interface Tenant {
+export interface Template {
+  compatibility: Compatibility;
+  config?: Record<string, any>;
+  jobs?: Record<string, any>;
+  manifest: Manifest;
+  parameters?: Record<string, any>;
+  profiles: Record<string, any>;
+  requiredCapabilities?: string[];
+  resources?: Record<string, any>;
+  schemaVersion: number;
+  secrets?: Record<string, any>;
+}
+
+export interface TemplateRelease {
   createdAt: string;
+  digest: string;
+  fleetId: string;
   id: string;
-  label: string;
+  template: Template;
 }
 
-export interface TenantInputBody {
-  tenantId: string;
-}
-
-export interface TenantList {
-  tenants: Tenant[];
+export interface TenantRow {
+  cleanupBlocked?: CleanupBlock;
+  limits: PlatformLimits;
+  orgId: string;
+  orgName: string;
+  tenant?: PlatformcloudTenant;
+  use: PlatformcloudUse;
 }
 
 export interface TestPushResult {
@@ -5548,6 +6516,18 @@ export interface Thresholds {
   p95LatencyRatio: number;
 }
 
+export interface TimeoutVerificationInputBody {
+  attachmentId: string;
+  configRevision: string;
+  drainPolicy: {
+  maxConnectionLifetimeSeconds?: number;
+  mode: string;
+  terminationGraceSeconds: number;
+};
+  evidenceRef: string;
+  expectedAttachmentRevision: number;
+}
+
 export interface TrafficReport {
   end: string;
   previousTotal: number;
@@ -5558,6 +6538,18 @@ export interface TrafficReport {
   start: string;
   step: number;
   total: number;
+}
+
+export interface Turn {
+  context?: PageContext;
+  createdAt: string;
+  error: string;
+  eventSeq: number;
+  events: Event[];
+  finishedAt?: string;
+  message: string;
+  status: string;
+  taskId: string;
 }
 
 export interface TwoStep {
@@ -5632,10 +6624,8 @@ export interface UsageSource {
   status: string;
 }
 
-export interface Use {
-  enabled?: boolean;
-  external?: string;
-  resource?: string;
+export interface UseOrganizationInputBody {
+  orgId: string;
 }
 
 export interface Variable {
@@ -5753,9 +6743,17 @@ export interface WorkerSettings {
   main: string;
 }
 
+export interface WorkloadCapabilities {
+  lifecycleJobs: boolean;
+  podGroups: boolean;
+  revision: string;
+  scalingSignals?: string[];
+  scratchVolumes: boolean;
+}
+
 export interface Workspace {
   ecosystem: string;
-  evidence: Evidence[];
+  evidence: DiscoveryEvidence[];
   members: string[];
   path: string;
   source?: string;
@@ -5765,6 +6763,30 @@ export interface Workspace {
 export interface WorkspaceBudgetInputBody {
   monthlyBudgetUsd: string;
   revision: number;
+}
+
+export interface WorkspacePlacement {
+  environment: string;
+  project: string;
+  region: string;
+  service: string;
+  state: string;
+  waitingCapacity: boolean;
+}
+
+export interface WorkspaceRegion {
+  displayName: string;
+  name: string;
+  status: string;
+}
+
+export interface WorkspaceView {
+  enabled: boolean;
+  limits: PlatformLimits;
+  placements: WorkspacePlacement[];
+  regions: WorkspaceRegion[];
+  suspendReasons: string[];
+  use: PlatformcloudUse;
 }
 
 export interface Zone {
@@ -5820,6 +6842,11 @@ export interface ZoneUpdateBody {
   projectIds: string[];
   renewProof: boolean;
   revision: number;
+}
+
+export interface fleetRequestError {
+  code: number;
+  error: string;
 }
 
 export interface AuthConfig {

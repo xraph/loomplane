@@ -67,6 +67,7 @@ import { shortSHA } from "@/lib/architecture"
 import { useDeploymentScope } from "@/lib/deployment-scope"
 import { useDeploymentWrites } from "@/lib/deployment-writes"
 import { relative, repoLabel } from "@/lib/format"
+import { listOf } from "@/lib/models"
 import { useOrganization } from "@/lib/organization"
 import {
   placementRows,
@@ -434,18 +435,24 @@ function DeployScreen({
     }
   })
   const names = rows.map((r) => r.name)
-  const changed = services.filter((s) => s.since.changed).map((s) => s.row.name)
+  // A service whose repository was removed can't deploy. Leaving it out
+  // names the rest, and the planner never checks what a plan leaves out.
+  const orphans = rows.filter((r) => r.repoGone)
+  const live = names.filter((n) => !orphans.some((r) => r.name === n))
+  const changed = services
+    .filter((s) => s.since.changed && !s.row.repoGone)
+    .map((s) => s.row.name)
   // Without what runs there, nothing can say what changed: offer them all.
   const known = !!bindings.data || bindings.status === "error"
   const fallback =
-    service && names.includes(service)
+    service && live.includes(service)
       ? [service]
       : bindings.data
         ? changed
         : known
-          ? names
+          ? live
           : []
-  const picked = (picks ?? fallback).filter((n) => names.includes(n))
+  const picked = (picks ?? fallback).filter((n) => live.includes(n))
   const toggle = (name: string) =>
     setPicks(
       picked.includes(name)
@@ -605,7 +612,7 @@ function DeployScreen({
                 size="sm"
                 variant="outline"
                 disabled={working}
-                onClick={() => setPicks(names)}
+                onClick={() => setPicks(live)}
               >
                 All
               </Button>
@@ -666,14 +673,20 @@ function DeployScreen({
                     <Checkbox
                       aria-label={`Deploy ${row.name}`}
                       checked={picked.includes(row.name)}
-                      disabled={working}
+                      disabled={working || row.repoGone}
                       onCheckedChange={() => toggle(row.name)}
                     />
                     <span className="grid min-w-0 gap-px">
                       <span className="truncate font-semibold">{row.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
+                        {row.repo ? `${row.repo} · ` : ""}
                         {kindLabel(row)}
                       </span>
+                      {row.repoGone && (
+                        <StatusPill tone="failed" className="mt-0.5">
+                          Repository removed
+                        </StatusPill>
+                      )}
                     </span>
                   </Cell>
                   <RunsOnCell runs={runs} moves={to} />
@@ -691,7 +704,7 @@ function DeployScreen({
                       size="sm"
                       variant="outline"
                       aria-label={`Change where ${row.name} runs`}
-                      disabled={working}
+                      disabled={working || row.repoGone}
                       onClick={() => setOpen(row)}
                     >
                       Change
@@ -701,6 +714,19 @@ function DeployScreen({
               ))}
             </CloudTable>
           </>
+        )}
+        {orphans.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {removedNote(project.name, orphans)}{" "}
+            <Link
+              to="/projects/$id"
+              params={{ id: project.id }}
+              search={{ tab: "deployments" }}
+              className="text-foreground underline underline-offset-4"
+            >
+              Edit loomplane.yaml
+            </Link>
+          </p>
         )}
         {excludedCount > 0 && (
           <p className="text-xs text-muted-foreground">
@@ -815,6 +841,19 @@ function DeployScreen({
  * EnvironmentChoice picks the environment, each card saying what runs there
  * now.
  */
+/**
+ * removedNote says which services lost their repository and what to do:
+ * take them out of loomplane.yaml, or add the repository back.
+ */
+function removedNote(projectName: string, orphans: PlacementRow[]): string {
+  const repos = [...new Set(orphans.flatMap((r) => (r.repo ? [r.repo] : [])))]
+  const which = repos.length
+    ? `${listOf(repos)} ${repos.length === 1 ? "was" : "were"} removed`
+    : "Their repository was removed"
+  const one = orphans.length === 1
+  return `${which} from ${projectName}, so ${listOf(orphans.map((r) => r.name))} can't deploy. Take ${one ? "it" : "them"} out of loomplane.yaml, or add the repository back.`
+}
+
 function EnvironmentChoice({
   project,
   environments,

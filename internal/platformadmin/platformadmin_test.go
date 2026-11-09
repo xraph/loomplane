@@ -29,6 +29,15 @@ func TestHoldsIgnoresOtherApps(t *testing.T) {
 	}
 }
 
+func TestIsOwner_AdminIsNot(t *testing.T) {
+	admin := []*rbac.Role{{AppID: "app", Slug: rbac.PlatformAdminSlug}}
+	owner := []*rbac.Role{{AppID: "app", Slug: rbac.PlatformOwnerSlug}}
+	otherApp := []*rbac.Role{{AppID: "other", Slug: rbac.PlatformOwnerSlug}}
+	if IsOwner(admin, "app") || !IsOwner(owner, "app") || IsOwner(otherApp, "app") {
+		t.Fatal("IsOwner")
+	}
+}
+
 type fakeUsers map[string]string
 
 func (f fakeUsers) UserIDByEmail(_ context.Context, email string) (string, error) {
@@ -65,18 +74,18 @@ func TestGrant(t *testing.T) {
 		"ausr_2": {{AppID: app, Slug: rbac.PlatformOwnerSlug}},
 	}}
 
-	if _, err := Grant(ctx, users, roles, app, "nobody@example.com"); !errors.Is(err, ErrNoUser) {
+	if _, _, err := Grant(ctx, users, roles, app, "nobody@example.com"); !errors.Is(err, ErrNoUser) {
 		t.Fatalf("unknown email: err = %v, want ErrNoUser", err)
 	}
 
-	granted, err := Grant(ctx, users, roles, app, "bob@example.com")
+	_, granted, err := Grant(ctx, users, roles, app, "bob@example.com")
 	if err != nil || granted || len(roles.assigns) != 0 {
 		t.Fatalf("existing owner: granted=%v err=%v assigns=%d, want false, nil, 0", granted, err, len(roles.assigns))
 	}
 
-	granted, err = Grant(ctx, users, roles, app, "ada@example.com")
-	if err != nil || !granted {
-		t.Fatalf("plain user: granted=%v err=%v, want true, nil", granted, err)
+	userID, granted, err := Grant(ctx, users, roles, app, "ada@example.com")
+	if err != nil || !granted || userID != "ausr_1" {
+		t.Fatalf("plain user: %q granted=%v err=%v, want ausr_1, true, nil", userID, granted, err)
 	}
 	if len(roles.assigns) != 1 || roles.assigns[0].UserID != "ausr_1" || roles.assigns[0].RoleID != "arol_"+rbac.PlatformOwnerSlug {
 		t.Fatalf("assigns = %+v, want one platform-owner assignment for ausr_1", roles.assigns)

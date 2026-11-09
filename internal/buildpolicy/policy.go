@@ -44,3 +44,41 @@ func CheckBackend(details map[string]string, backend string, pooled bool) error 
 	}
 	return Check(details, backend == "kubernetes", pooled)
 }
+
+// PlatformEvidence is what a shared platform host reports about itself. Plan 2
+// maps firecracker.Capabilities into it, so this package stays free of that import.
+type PlatformEvidence struct {
+	Isolation                               bool
+	RuntimeIdentity, HostID                 string
+	Platform, SMTActive                     bool
+	DeniedPorts                             []int
+	PerOrgVMs, PerOrgVCPUs, PerOrgMemoryMiB int
+}
+
+// CheckPlatform refuses a host that cannot safely serve every workspace.
+// Private ranges and the host's own addresses are not evidence here, because
+// networkPolicy always drops them.
+func CheckPlatform(e PlatformEvidence) error {
+	if !e.Isolation || len(e.RuntimeIdentity) != 64 || e.HostID == "" {
+		return errors.New("the platform host must pass its isolation check before accepting source")
+	}
+	if !e.Platform {
+		return errors.New("the platform host must run in platform mode")
+	}
+	if e.SMTActive {
+		return errors.New("the platform host must run with SMT off")
+	}
+	denied := map[int]bool{}
+	for _, p := range e.DeniedPorts {
+		denied[p] = true
+	}
+	for _, p := range []int{25, 465, 587} { // Mirrors firecracker.MailPorts.
+		if !denied[p] {
+			return errors.New("the platform host must deny outbound mail ports 25, 465 and 587")
+		}
+	}
+	if e.PerOrgVMs < 1 || e.PerOrgVCPUs < 1 || e.PerOrgMemoryMiB < 1 {
+		return errors.New("the platform host must set a per-organization limit on VMs, vCPUs and memory")
+	}
+	return nil
+}

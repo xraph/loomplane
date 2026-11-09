@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/config"
 )
@@ -26,8 +27,18 @@ const APIKey = "test"
 
 // ToolUse is one tool call a scripted turn makes.
 type ToolUse struct {
-	Name  string
+	Name string
+	// Input is the call's arguments. One that is a Pending holds the turn
+	// until it is ready.
 	Input any
+}
+
+// Pending is a tool input a test fills in once it knows it, such as an ID
+// the run creates. The fake serves a turn only once each of its Pending
+// inputs is ready, so a run that asks early waits for the input instead of
+// getting a null one.
+type Pending interface {
+	Ready() <-chan struct{}
 }
 
 // Turn is one scripted answer: text, tool calls or both, and the usage it
@@ -37,6 +48,14 @@ type Turn struct {
 	ToolUses     []ToolUse
 	InputTokens  int // default 100
 	OutputTokens int // default 50
+	// Deltas, when set, is the text in pieces: a stream sends one
+	// content_block_delta per piece, and Text is ignored.
+	Deltas []string
+	// DeltaGap is the pause between two deltas of a stream.
+	DeltaGap time.Duration
+	// Wait, when set, holds the turn's response until the channel closes
+	// (or the request ends).
+	Wait <-chan struct{}
 }
 
 // Captured is what one request to the fake asked for.
@@ -149,6 +168,22 @@ func (f *FakeAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	turn := f.turns[n]
+	if turn.Wait != nil {
+		select {
+		case <-turn.Wait:
+		case <-r.Context().Done():
+			return
+		}
+	}
+	for _, use := range turn.ToolUses {
+		if p, ok := use.Input.(Pending); ok {
+			select {
+			case <-p.Ready():
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}
 	blocks, err := turn.blocks(n)
 	if err != nil {
 		f.t.Errorf("agenttest: turn %d: %v", n+1, err)
@@ -177,10 +212,18 @@ type block struct {
 	Input json.RawMessage `json:"input,omitempty"`
 }
 
+// text is the turn's whole text.
+func (t Turn) text() string {
+	if t.Deltas != nil {
+		return strings.Join(t.Deltas, "")
+	}
+	return t.Text
+}
+
 func (t Turn) blocks(n int) ([]block, error) {
 	var out []block
-	if t.Text != "" || len(t.ToolUses) == 0 {
-		out = append(out, block{Type: "text", Text: t.Text})
+	if text := t.text(); text != "" || len(t.ToolUses) == 0 {
+		out = append(out, block{Type: "text", Text: text})
 	}
 	for i, u := range t.ToolUses {
 		input := json.RawMessage(`{}`)
@@ -218,8 +261,9 @@ func (t Turn) output() int {
 }
 
 // stream answers as the Messages API streams: message_start, each block
-// started, sent as one delta and stopped, message_delta with the stop
-// reason and usage, then message_stop.
+// started, sent as one delta (or the turn's Deltas, each flushed) and
+// stopped, message_delta with the stop reason and usage, then
+// message_stop.
 func (f *FakeAnthropic) stream(w http.ResponseWriter, msgID, model string, turn Turn, blocks []block) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -232,6 +276,11 @@ func (f *FakeAnthropic) stream(w http.ResponseWriter, msgID, model string, turn 
 		}
 		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, raw)
 	}
+	flush := func() {
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
 	send("message_start", map[string]any{"type": "message_start", "message": map[string]any{
 		"id": msgID, "type": "message", "role": "assistant", "model": model, "content": []any{},
 		"stop_reason": nil, "stop_sequence": nil,
@@ -242,8 +291,18 @@ func (f *FakeAnthropic) stream(w http.ResponseWriter, msgID, model string, turn 
 		case "text":
 			send("content_block_start", map[string]any{"type": "content_block_start", "index": i,
 				"content_block": map[string]any{"type": "text", "text": ""}})
-			send("content_block_delta", map[string]any{"type": "content_block_delta", "index": i,
-				"delta": map[string]any{"type": "text_delta", "text": b.Text}})
+			pieces := []string{b.Text}
+			if turn.Deltas != nil {
+				pieces = turn.Deltas
+			}
+			for k, piece := range pieces {
+				if k > 0 && turn.DeltaGap > 0 {
+					time.Sleep(turn.DeltaGap)
+				}
+				send("content_block_delta", map[string]any{"type": "content_block_delta", "index": i,
+					"delta": map[string]any{"type": "text_delta", "text": piece}})
+				flush()
+			}
 		case "tool_use":
 			send("content_block_start", map[string]any{"type": "content_block_start", "index": i,
 				"content_block": map[string]any{"type": "tool_use", "id": b.ID, "name": b.Name, "input": map[string]any{}}})
@@ -256,9 +315,7 @@ func (f *FakeAnthropic) stream(w http.ResponseWriter, msgID, model string, turn 
 		"delta": map[string]any{"stop_reason": turn.stopReason(), "stop_sequence": nil},
 		"usage": map[string]int{"output_tokens": turn.output()}})
 	send("message_stop", map[string]any{"type": "message_stop"})
-	if fl, ok := w.(http.Flusher); ok {
-		fl.Flush()
-	}
+	flush()
 }
 
 // apiError answers as the Messages API does when it refuses.

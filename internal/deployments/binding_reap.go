@@ -46,6 +46,13 @@ type BindingReaper struct {
 	Executors map[string]Executor
 	// Warn logs a leftover, or a step that failed. It may be nil.
 	Warn func(msg string, err error)
+	// Removal, when set, takes the bindings it Removes when one
+	// environment, not a whole project, is deleted: it removes them, and
+	// reports what it leaves running itself, so they get no warning here.
+	// It may be nil.
+	Removal interface {
+		Removes(b *planning.Binding) bool
+	}
 }
 
 var _ projects.Reaper = (*BindingReaper)(nil)
@@ -72,7 +79,7 @@ func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environment
 			br.warn(fmt.Sprintf("read what's deployed in the environment %s being deleted, so what it leaves running isn't reported", e.Name), berr)
 		}
 		if len(bindings) > 0 || sweeps {
-			found = append(found, reapedEnvironment{org: orgID, id: e.ID, name: e.Name, bindings: bindings})
+			found = append(found, reapedEnvironment{org: orgID, id: e.ID, name: e.Name, bindings: bindings, single: environmentID != ""})
 		}
 	}
 	if len(found) == 0 {
@@ -87,18 +94,29 @@ func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environment
 
 // finish runs once the environment is gone: it deletes the environment's
 // credentials and warns about what each binding deployed, and about what a
-// move left running.
+// move left running. Removal takes what it Removes of an environment
+// deleted on its own.
 func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
 	br.forget(ctx, r)
 	for _, b := range r.bindings {
 		if databaseGatewayOf(b) != nil || planning.ExistingResourceBinding(b) {
 			continue
 		}
-		for _, left := range append([]planning.Binding{*b}, b.Replaced...) {
-			br.warn(fmt.Sprintf("a deleted environment's %s may still run", b.Subject),
-				fmt.Errorf("the %s %s went with the environment %s, and Loomplane no longer tracks it. If %s still runs, delete it yourself, in the account that deployed it",
-					b.Subject, b.Name, r.name, locate(br.Executors[left.Provider], &left)))
+		if r.single && br.Removal != nil && br.Removal.Removes(b) {
+			continue
 		}
+		reportLeft(br.warn, br.Executors, b, r.name, append([]planning.Binding{*b}, b.Replaced...))
+	}
+}
+
+// reportLeft warns that each of left, what b deployed or what a move left
+// running, may still run now that its environment, named environment, is
+// gone.
+func reportLeft(warn func(string, error), executors map[string]Executor, b *planning.Binding, environment string, left []planning.Binding) {
+	for _, left := range left {
+		warn(fmt.Sprintf("a deleted environment's %s may still run", b.Subject),
+			fmt.Errorf("the %s %s went with the environment %s, and Loomplane no longer tracks it. If %s still runs, delete it yourself, in the account that deployed it",
+				b.Subject, b.Name, environment, locate(executors[left.Provider], &left)))
 	}
 }
 

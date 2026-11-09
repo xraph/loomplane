@@ -24,7 +24,7 @@ func (d natsDialer) Dial(_, _ string) (net.Conn, error) { return d.dial() }
 
 func (r *Runtime) natsDatabase(c *Client, iid id.ID, labels map[string]string, expectedPassword string) native.Database {
 	return native.Database{Recovery: labels[LabelRecovery] != "", Connect: func(ctx context.Context, app bool) (*client.Conn, error) {
-		info, err := r.inspect(ctx, c, ContainerName(iid), iid, labels)
+		info, err := r.ordinaryEngineSource(ctx, c, iid, labels)
 		if err != nil {
 			return nil, err
 		}

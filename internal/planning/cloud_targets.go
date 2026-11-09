@@ -12,6 +12,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
@@ -50,6 +51,10 @@ type CloudPlacement struct {
 	Region          string `json:"region,omitempty"`
 	// RegionSource records the effective manifest override before defaults resolve.
 	RegionSource string `json:"region_source,omitempty"`
+	// Platform is the room Loomplane Cloud previewed for a service on one
+	// of its targets: a region and a size, never a host. Such a placement
+	// has no connection, pool or server.
+	Platform *platformcloud.Ref `json:"platform,omitempty"`
 }
 
 // CloudPlacementError is a placement finding found before planning. Service
@@ -280,11 +285,11 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 	if len(pools) > 0 {
 		resolved = pools[0]
 	}
-	return resolveCloudPlacements(m, environment, assignment, options, resolved, nil)
+	return resolveCloudPlacements(m, environment, assignment, options, resolved, nil, nil)
 }
 
 // resolveCloudPlacements leaves held services exactly as their manifest says.
-func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, held map[string]bool, future ...map[string]*CapacityIntent) (*manifest.Manifest, map[string]CloudPlacement, error) {
+func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, platform map[string]*platformcloud.Ref, held map[string]bool, future ...map[string]*CapacityIntent) (*manifest.Manifest, map[string]CloudPlacement, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return nil, nil, err
@@ -312,7 +317,7 @@ func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment
 			return nil, nil, fmt.Errorf("%s conflicts with effective provider or target placement; remove direct placement, including defaults, to use a Cloud target", path)
 		}
 		deferred := len(future) > 0 && future[0][name] != nil
-		placement, resolvedSet, placeErr := resolveCloudPlacement(name, path, set, fallback, assignment, options, pools, deferred)
+		placement, resolvedSet, placeErr := resolveCloudPlacement(name, path, set, fallback, assignment, options, pools, platform, deferred)
 		if errors.Is(placeErr, errCapacityDeferred) {
 			s.Settings, s.Environments = resolvedSet, nil
 			out.Services[name] = s
@@ -341,8 +346,9 @@ var errCapacityDeferred = errors.New("pool capacity deferred to a later plan")
 // default when fallback is set, and returns the settings with the target's
 // provider and region in place of the Cloud's names and tags. When deferred
 // is set and the target is a pool, it returns errCapacityDeferred with the
-// settings carrying only the target's provider.
-func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bool, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, deferred bool) (CloudPlacement, manifest.Settings, error) {
+// settings carrying only the target's provider. A Loomplane Cloud target
+// takes the room platform previewed for the service, and no connection.
+func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bool, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, platform map[string]*platformcloud.Ref, deferred bool) (CloudPlacement, manifest.Settings, error) {
 	if assignment == nil {
 		return CloudPlacement{}, set, fmt.Errorf("%s needs a Cloud assigned to this environment", path)
 	}
@@ -371,6 +377,9 @@ func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bo
 	}
 	if target.LocationID != "" && (target.Region == "" || (set.Region != "" && set.Region != target.Region)) {
 		return CloudPlacement{}, set, &CloudPlacementError{Code: "cloud-location-region-mismatch", Path: path, Message: "the manifest region differs from the target location; review a migration to another target"}
+	}
+	if target.Runtime == platformRuntime {
+		return platformPlacement(name, path, set, assignment, target, platform[name])
 	}
 	connectionID := target.ConnectionID
 	var pool *cloudinfra.Placement
@@ -625,6 +634,9 @@ func (s *Service) resolvePoolsWithLocationInput(ctx context.Context, plan *Plan,
 		}
 		var evaluated locationSelection
 		if set.Placement != nil {
+			if platformErr := refusePlatformLocation(name, set, a); platformErr != nil {
+				return nil, platformErr
+			}
 			requirements, requirementErr := s.locationRequirements(plan, m, name, input.Graph, a, bindings, options, selections, held, input.Chosen, out)
 			if requirementErr != nil {
 				return nil, requirementErr

@@ -2,12 +2,15 @@ package agenttest_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/nexus/provider"
 	"github.com/xraph/nexus/providers/anthropic"
@@ -168,5 +171,88 @@ func TestFakeAnthropicFailsPastTheScript(t *testing.T) {
 	got := tb.failures()
 	if len(got) != 1 || !strings.Contains(got[0], "after the script") {
 		t.Fatalf("failures %v", got)
+	}
+}
+
+// post sends one Messages request to the fake over plain HTTP.
+func post(ctx context.Context, f *agenttest.FakeAnthropic, stream bool) (*http.Response, error) {
+	body := fmt.Sprintf(`{"model":%q,"max_tokens":64,"stream":%t,"messages":[{"role":"user","content":"hi"}]}`, config.DefaultAIModel, stream)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.URL()+"/v1/messages", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return http.DefaultClient.Do(req)
+}
+
+func TestFakeAnthropicStreamsDeltas(t *testing.T) {
+	f := agenttest.Anthropic(t, agenttest.Turn{Deltas: []string{"Hel", "lo"}, DeltaGap: time.Millisecond})
+	resp, err := post(t.Context(), f, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok {
+			continue
+		}
+		var ev struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if err = json.Unmarshal([]byte(data), &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == "content_block_delta" {
+			texts = append(texts, ev.Delta.Text)
+		}
+	}
+	if strings.Join(texts, "|") != "Hel|lo" {
+		t.Fatalf("deltas %q", texts)
+	}
+
+	// Read the way the agent reads it, the text is the deltas joined.
+	f = agenttest.Anthropic(t, agenttest.Turn{Deltas: []string{"Hel", "lo"}}, agenttest.Turn{Deltas: []string{"Hel", "lo"}})
+	for _, stream := range []bool{true, false} {
+		if got := complete(t.Context(), t, client(f), request(), stream); got.text != "Hello" {
+			t.Fatalf("stream=%t: text %q", stream, got.text)
+		}
+	}
+}
+
+func TestFakeAnthropicWaitsForItsGate(t *testing.T) {
+	gate := make(chan struct{})
+	f := agenttest.Anthropic(t, agenttest.Turn{Text: "done", Wait: gate})
+	got := make(chan error, 1)
+	go func() {
+		resp, err := post(t.Context(), f, false)
+		if err == nil {
+			_, err = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+		}
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		t.Fatalf("the request was answered before its gate opened: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request didn't complete after its gate opened")
 	}
 }

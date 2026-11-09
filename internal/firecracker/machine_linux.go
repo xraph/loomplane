@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -47,9 +48,9 @@ type managedMachine struct {
 }
 
 type runtimeReceipt struct {
-	ID, IP, Tap, NetNS string
-	PID                int
-	StartTime          string
+	ID, IP, Tap, NetNS, CounterID string
+	PID                           int
+	StartTime                     string
 }
 
 func NewDriver(cfg HostConfig, store *Store, key []byte) (MachineDriver, error) {
@@ -83,7 +84,7 @@ func NewDriver(cfg HostConfig, store *Store, key []byte) (MachineDriver, error) 
 			return nil, ErrInvalid
 		}
 	}
-	if _, e := networkPolicy("tap0", "10.0.0.2", nil, cfg.EgressCIDRs, nil, cfg.DeniedCIDRs...); e != nil {
+	if _, e := networkPolicy("tap0", "10.0.0.2", nil, cfg.EgressCIDRs, nil, cfg.DeniedPorts, cfg.DeniedCIDRs...); e != nil {
 		return nil, e
 	}
 	d := &linuxDriver{config: cfg, store: store, key: key}
@@ -161,14 +162,13 @@ func (d *linuxDriver) Check(ctx context.Context) (Capabilities, error) {
 			return Capabilities{}, ErrUnavailable
 		}
 	}
-	raw, err := json.Marshal(struct {
-		Assets              []Asset
-		CNI                 map[string]string
-		Subnet              string
-		DNS, Egress, Denied []string
-		UID                 int
-		Limits              Limits
-	}{[]Asset{d.config.Firecracker, d.config.Jailer, d.config.Kernel, d.config.RootFS}, d.config.CNIHashes, d.config.Subnet, d.config.DNS, d.config.EgressCIDRs, d.config.DeniedCIDRs, d.config.UIDBase, d.config.Limits})
+	platform, smt := d.config.Platform != nil, false
+	if platform {
+		if smt, err = smtActive("/sys/devices/system/cpu/smt"); err != nil {
+			return Capabilities{}, err
+		}
+	}
+	raw, err := identityInput(d.config)
 	if err != nil {
 		return Capabilities{}, err
 	}
@@ -178,7 +178,7 @@ func (d *linuxDriver) Check(ctx context.Context) (Capabilities, error) {
 	if d.config.HTTPSListen != "" && d.config.HTTPListen != "" {
 		ingress = d.config.AdvertiseHost
 	}
-	return Capabilities{IngressAddress: ingress, Version: ProtocolVersion, HostID: d.config.HostID, Architecture: runtime.GOARCH, RuntimeIdentity: identity, Isolation: true, Limits: d.config.Limits}, nil
+	return Capabilities{IngressAddress: ingress, Version: ProtocolVersion, HostID: d.config.HostID, Architecture: runtime.GOARCH, RuntimeIdentity: identity, Isolation: true, Limits: d.config.Limits, Platform: platform, SMTActive: smt, DeniedPorts: d.config.DeniedPorts}, nil
 }
 func (d *linuxDriver) dir(vm VM) string {
 	return filepath.Join(d.config.RuntimeDir, filepath.Base(d.config.Firecracker.Path), vm.ID, "root")
@@ -421,6 +421,15 @@ func (d *linuxDriver) Start(ctx context.Context, vm VM, s Spec) error {
 		if e := d.installPolicy(call, vm, receipt); e != nil {
 			return e
 		}
+		id, meterErr := d.installMeter(call, vm, receipt)
+		id, e := meterInstallResult(d.config.Platform != nil, id, meterErr)
+		if e != nil {
+			return e
+		}
+		if meterErr != nil {
+			log.Printf("Firecracker egress meter not installed for VM %s", vm.ID)
+		}
+		receipt.CounterID = id
 		raw, e := json.Marshal(receipt)
 		if e != nil {
 			return e
@@ -594,10 +603,11 @@ func (d *linuxDriver) removeRuntime(ctx context.Context, vm VM, disk bool) error
 		return err
 	}
 	if err == nil {
-		table := "loomplane_" + vm.ID
-		if exec.CommandContext(ctx, "nft", "list", "table", "netdev", table).Run() == nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
-			if e := exec.CommandContext(ctx, "nft", "delete", "table", "netdev", table).Run(); e != nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
-				return e
+		for _, table := range []string{"loomplane_" + vm.ID, meterTable(vm.ID)} {
+			if exec.CommandContext(ctx, "nft", "list", "table", "netdev", table).Run() == nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
+				if e := exec.CommandContext(ctx, "nft", "delete", "table", "netdev", table).Run(); e != nil { //nolint:gosec // Command arguments use the validated VM ID, never tenant command text.
+					return e
+				}
 			}
 		}
 		conf, e := d.cni()

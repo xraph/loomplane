@@ -23,6 +23,7 @@ vi.mock("@/lib/router", () => ({
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/components/shell", () => ({
   useShell: () => ({ openDeploy: () => undefined }),
+  useAgentDock: () => null,
 }))
 vi.mock("@/lib/use-runs", () => ({
   useRuns: () => ({

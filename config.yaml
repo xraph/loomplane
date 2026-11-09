@@ -17,7 +17,9 @@ http_addr: "${LOOMPLANE_HTTP_ADDR:-}"
 # value for any key named like a URL.)
 public_url: "${LOOMPLANE_PUBLIC_URL:-http://localhost:8780}"
 # 32 random bytes, base64 (openssl rand -base64 32). Authsome's token
-# encryption key is derived from it.
+# encryption key is derived from it, and so is the key the audit checkpoint
+# signing key is encrypted with. Change it and Loomplane refuses to start
+# until you restore it or rotate the checkpoint key (see chronicle below).
 secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 
 database:
@@ -74,6 +76,14 @@ push:
   # The gateway that hands notifications to Apple and Google. Only XRaph's
   # gateway can reach the store app.
   gateway_url: "${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}"
+
+# The Android app /.well-known/assetlinks.json vouches for, so links to this
+# server open in it. Empty means the store app. If you ship your own build,
+# set its package and its signing certificates' SHA-256 fingerprints
+# (comma-separated, as keytool prints them).
+mobile:
+  android_package: "${LOOMPLANE_MOBILE_ANDROID_PACKAGE:-}"
+  android_cert_fingerprints: "${LOOMPLANE_MOBILE_ANDROID_CERT_FINGERPRINTS:-}"
 
 nodes:
   # Where the other replicas of this Loomplane reach this one, for the hop
@@ -206,6 +216,7 @@ clouds:
   cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
   cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
   acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
+  acme_roots_file: "${LOOMPLANE_ACME_ROOTS_FILE:-}"
   managed_clusters:
     management_probe:
       provider: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_PROVIDER:-}"
@@ -315,6 +326,8 @@ ai:
     embedding_base_url: "${LOOMPLANE_AI_EMBEDDING_BASE_URL:-}"
     embedding_model: "${LOOMPLANE_AI_EMBEDDING_MODEL:-}"
     dimensions: "${LOOMPLANE_AI_EMBEDDING_DIMENSIONS:-1536}"
+    # What indexing the docs may spend, in USD.
+    docs_budget_usd: "${LOOMPLANE_AI_DOCS_BUDGET_USD:-5.00}"
   models:
     # The Hugging Face Hub, or a mirror of it. The workspace's Hugging Face
     # token is sent here, so it must be https (http only for localhost).
@@ -328,3 +341,32 @@ ai:
 # how to rotate. Leave it empty and the gateway endpoints answer 503.
 dbgateway:
   signing_key_file: "${LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE:-}"
+
+# The audit trail. Every API replica signs each stream's new events with an
+# Ed25519 key that Loomplane keeps in Vault and creates on first start. The
+# public key and its ID are logged at start ("audit checkpoints are signed"),
+# so you can pin them in Hallproof. A stream is signed once it gains
+# every_events events, or every_interval after its last signature if it
+# gained any. The key is encrypted under secret_key; after a change of
+# secret_key, docs/forge-integration.md (Chronicle) says how to rotate it.
+chronicle:
+  checkpoints:
+    enabled: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_ENABLED:-true}"
+    every_events: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_EVENTS:-1000}"
+    every_interval: "${LOOMPLANE_CHRONICLE_CHECKPOINTS_EVERY_INTERVAL:-15m}"
+
+# Compliance evidence. Set an endpoint and Loomplane pushes evidence about
+# its own staff, keys, roles, platform secrets and audit chain to that
+# Hallproof, never a customer's. Leave it empty and nothing of Hallproof's
+# runs. The endpoint is https, or http on this machine. Give the ingest key
+# from Hallproof as ingest_key or, for a mounted secret, ingest_key_file,
+# not both. staff_orgs lists the organization IDs (aorg_...) that are your
+# own staff's, comma-separated. Their API keys, webhooks, agents, jobs and
+# agent safety settings count as staff evidence. Every other organization
+# is a customer's, and so is every one while the list is empty, which is
+# the default.
+hallproof:
+  endpoint: "${LOOMPLANE_HALLPROOF_ENDPOINT:-}"
+  ingest_key: "${LOOMPLANE_HALLPROOF_INGEST_KEY:-}"
+  ingest_key_file: "${LOOMPLANE_HALLPROOF_INGEST_KEY_FILE:-}"
+  staff_orgs: "${LOOMPLANE_HALLPROOF_STAFF_ORGS:-}"

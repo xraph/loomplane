@@ -3,6 +3,7 @@ package cloudprofiles
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/connections"
@@ -49,11 +50,14 @@ type memoryStore struct {
 	target    *Target
 	protected bool
 	reads     int
+	// granted is a project that sees the profile through a grant rather
+	// than as its creator.
+	granted string
 }
 
 func (m *memoryStore) GetProfile(_ context.Context, org, project, id string) (*Profile, error) {
 	m.reads++
-	if m.profile == nil || m.profile.OrgID != org || m.profile.ProjectID != project || m.profile.ID != id {
+	if m.profile == nil || m.profile.OrgID != org || (m.profile.ProjectID != project && (m.granted == "" || m.granted != project)) || m.profile.ID != id {
 		return nil, ErrNotFound
 	}
 	c := *m.profile
@@ -277,5 +281,135 @@ func TestServiceUsageScopesLikeGet(t *testing.T) {
 	a.err = denied
 	if _, err = s.Usage(t.Context(), p, "", "cloud_1"); !errors.Is(err, denied) || a.permission != security.OrganizationCloudManage {
 		t.Fatalf("organization view needs Cloud management: %v %v", err, a.permission)
+	}
+}
+
+// grantingStore records project grants on top of the memory store.
+type grantingStore struct {
+	*memoryStore
+	grants int
+}
+
+func (g *grantingStore) SetProjectGrant(context.Context, string, string, string, []string, bool) (int64, error) {
+	g.grants++
+	return int64(g.grants), nil
+}
+func (g *grantingStore) GetProjectGrant(context.Context, string, string, string) (*ProjectGrant, error) {
+	return nil, ErrNotFound
+}
+
+func TestPlatformOwnedCloudIsReadOnly(t *testing.T) {
+	s, st, _ := fixture()
+	st.profile = &Profile{ID: "cloud_1", OrgID: "org_1", Name: "Loomplane Cloud", PlatformOwned: true, Revision: 1}
+	st.target = &Target{ID: "target_1", OrgID: "org_1", CloudID: "cloud_1", Name: "eu-west", DisplayName: "EU West", Runtime: "platform", Provider: "platform", Region: "eu-west", Revision: 1}
+	st.granted = "proj_1"
+	g := &grantingStore{memoryStore: st}
+	s.store = g
+	p := security.Principal{OrgID: "org_1", UserID: "user_1"}
+	ctx := t.Context()
+
+	if ErrPlatformOwned.Error() != "Loomplane Cloud is run by this instance and can't be changed here." {
+		t.Fatalf("message = %q", ErrPlatformOwned.Error())
+	}
+	for _, project := range []string{"", "proj_1"} {
+		checks := map[string]error{}
+		_, checks["rename"] = s.Update(ctx, p, project, "cloud_1", UpdateInput{Name: "Mine now", Revision: 1})
+		_, checks["default placement"] = s.SetDefaultPlacement(ctx, p, project, "cloud_1", SetDefaultPlacementInput{DefaultPlacement: &DefaultPlacement{Provider: "cloud-run", ConnectionID: "conn_1"}, Revision: 1})
+		checks["delete"] = s.Delete(ctx, p, project, "cloud_1")
+		_, checks["add target"] = s.CreateTarget(ctx, p, project, "cloud_1", CreateTargetInput{Name: "extra", Provider: "cloud-run", ConnectionID: "conn_1"})
+		_, checks["update target"] = s.UpdateTarget(ctx, p, project, "cloud_1", "target_1", UpdateTargetInput{DisplayName: "Renamed", Revision: 1})
+		checks["delete target"] = s.DeleteTarget(ctx, p, project, "cloud_1", "target_1")
+		for name, err := range checks {
+			if !errors.Is(err, ErrPlatformOwned) {
+				t.Errorf("project %q %s: err = %v, want ErrPlatformOwned", project, name, err)
+			}
+		}
+	}
+	org := map[string]error{}
+	_, org["save location"] = s.SaveLocation(ctx, p, "cloud_1", LocationInput{Name: "x", Provider: "cloud-run", ConnectionID: "conn_1"})
+	_, org["verify location"] = s.VerifyLocation(ctx, p, "cloud_1", "location_1", LocationVerificationInput{})
+	org["delete location"] = s.DeleteLocation(ctx, p, "cloud_1", "location_1", 1, 1)
+	_, org["location policy"] = s.SaveLocationPolicy(ctx, p, "cloud_1", LocationPolicy{Ranking: "latency"})
+	for name, err := range org {
+		if !errors.Is(err, ErrPlatformOwned) {
+			t.Errorf("%s: err = %v, want ErrPlatformOwned", name, err)
+		}
+	}
+	if st.profile == nil || st.profile.Name != "Loomplane Cloud" || st.profile.Revision != 1 || st.profile.DefaultPlacement != nil {
+		t.Fatalf("profile changed: %+v", st.profile)
+	}
+	if st.target == nil || st.target.Name != "eu-west" || st.target.DisplayName != "EU West" || st.target.Revision != 1 {
+		t.Fatalf("target changed: %+v", st.target)
+	}
+
+	// A workspace uses the platform Cloud through a grant, so granting stays open.
+	grant, err := s.GrantProject(ctx, p, "cloud_1", "proj_1", nil)
+	if err != nil || grant.Revision != 1 || g.grants != 1 {
+		t.Fatalf("GrantProject = %+v, %v", grant, err)
+	}
+	// Reads stay open too.
+	if _, err = s.Get(ctx, p, "proj_1", "cloud_1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceRefusesUserPlatformTargets(t *testing.T) {
+	s, st, _ := fixture()
+	_, err := s.CreateTarget(t.Context(), security.Principal{OrgID: "org_1"}, "proj_1", "cloud_1", CreateTargetInput{Name: "sneaky", Runtime: "platform", Provider: "platform", Region: "eu-west"})
+	if !errors.Is(err, ErrInvalid) || st.target != nil {
+		t.Fatalf("user platform target: %v %+v", err, st.target)
+	}
+}
+
+func TestServiceReservesPlatformCloudNames(t *testing.T) {
+	s, st, _ := fixture()
+	p := security.Principal{OrgID: "org_1"}
+	for _, reserved := range []string{PlatformCloudName, " loomplane cloud ", PlatformCloudFallbackName} {
+		if _, err := s.Create(t.Context(), p, "proj_1", CreateInput{Name: reserved}); !errors.Is(err, ErrExists) {
+			t.Fatalf("create %q: %v, want ErrExists", reserved, err)
+		}
+		if _, err := s.Update(t.Context(), p, "proj_1", "cloud_1", UpdateInput{Name: reserved, Revision: 1}); !errors.Is(err, ErrExists) {
+			t.Fatalf("rename to %q: %v, want ErrExists", reserved, err)
+		}
+	}
+	if st.profile.Name != "Production" {
+		t.Fatalf("profile renamed to %q", st.profile.Name)
+	}
+	if _, err := s.Create(t.Context(), p, "proj_1", CreateInput{Name: "Loomplane Cloud staging"}); err != nil {
+		t.Fatalf("a longer name is fine: %v", err)
+	}
+}
+
+// Accepting a target change rechecks the locked target. A Loomplane Cloud
+// target takes its own branch: it is never changed through a sync, even
+// when nothing about it moved since the review.
+func TestSyncTargetCheckRefusesPlatformTarget(t *testing.T) {
+	managed := Target{ID: "t", Runtime: "managed", Provider: "vercel", ConnectionID: "a", Region: "iad1", Revision: 2}
+	if err := checkSyncTarget(managed, 2, &managed); err != nil {
+		t.Fatalf("unchanged managed target: %v", err)
+	}
+	moved := managed
+	moved.ConnectionID = "b"
+	if err := checkSyncTarget(moved, 2, &managed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("moved managed target: %v", err)
+	}
+	platform := Target{ID: "p", Runtime: "platform", Provider: "platform", Region: "fra", Revision: 1}
+	if err := checkSyncTarget(platform, 1, &platform); !errors.Is(err, ErrPlatformOwned) {
+		t.Fatalf("platform target: %v", err)
+	}
+}
+
+// A workspace's own Cloud never takes a Loomplane Cloud target or default,
+// and the refusal says why instead of blaming a missing connection.
+func TestServiceRefusesPlatformProviderOnUserCloud(t *testing.T) {
+	s, st, _ := fixture()
+	p := security.Principal{OrgID: "org_1"}
+	_, err := s.CreateTarget(t.Context(), p, "proj_1", "cloud_1", CreateTargetInput{Name: "fra", Provider: "platform", ConnectionID: "conn_1", Region: "fra"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "Loomplane Cloud targets are created by this instance") || st.target != nil {
+		t.Fatalf("platform provider target: %v %+v", err, st.target)
+	}
+	_, err = s.SetDefaultPlacement(t.Context(), p, "proj_1", "cloud_1", SetDefaultPlacementInput{Revision: 1, DefaultPlacement: &DefaultPlacement{Provider: "platform", ConnectionID: "conn_1"}})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "Loomplane Cloud targets are created by this instance") {
+		t.Fatalf("platform default: %v", err)
 	}
 }

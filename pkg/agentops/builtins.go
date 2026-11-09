@@ -50,6 +50,7 @@ var builtins = sync.OnceValues(func() ([]Definition, map[string]Definition) {
 		Define[DeploymentInput]("canary_report", "A deployment's canary: its steps, and the verdict on each service with the reason.", RiskRead, ReadOnly()),
 		Define[RecentCanariesInput]("recent_canaries", "An environment's recent deployments that ran a canary, newest first, with their verdicts.", RiskRead, ReadOnly()),
 		Define[RollbackTargetInput]("rollback_target", "What rolling an environment back would do: the deployment it undoes and the release it restores, or why it can't.", RiskRead, ReadOnly()),
+		Define[RepositoryStateInput]("get_repository_state", "Where each repository connected to the project is now and what runs from it: the commit its branch points at, its latest release or tag, and the commit each environment deploys and whether that is behind. Use it for questions about current commits, versions, releases, tags or what's deployed where. Each repository and commit comes with its url on the Git host, and each deployment with its Loomplane path.", RiskRead, ReadOnly()),
 		Define[NoInput]("list_teams", "List the workspace's teams: name, slug, description and how many members.", RiskRead, ReadOnly()),
 
 		// Changes for the agent only.

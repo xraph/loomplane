@@ -18,6 +18,7 @@ type volumeMount struct {
 	Type          string
 	Source        string
 	Target        string
+	ReadOnly      bool
 	VolumeOptions struct{ NoCopy bool }
 }
 
@@ -78,6 +79,12 @@ func ensureVolumes(ctx context.Context, c *Client, iid id.ID, volumes []cpprovid
 		// fresh volume. Docker populates only empty volumes; retained data
 		// stays in place on later releases.
 		m.VolumeOptions.NoCopy = labels[owned.LabelFSGroup] == "" || labels[owned.LabelFSGroup] == "0"
+		if duckRecovery(labels) {
+			if checkErr := validateDuckRecoveryContract(iid, labels); checkErr != nil || v.Name != "data" || v.MountPath != "/data" {
+				return nil, errors.Join(checkErr, ErrOwned)
+			}
+			m.ReadOnly, m.VolumeOptions.NoCopy = true, true
+		}
 		mounts = append(mounts, m)
 	}
 	return mounts, nil

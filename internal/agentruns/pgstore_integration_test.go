@@ -185,3 +185,104 @@ func TestPgStoreEventsWakeTheWorkspace(t *testing.T) {
 		t.Fatalf("%d events, last %s", n, payload)
 	}
 }
+
+// A chat message's preface and page context are kept beside its input and
+// read back with the record; a task without them stores NULL and "". The
+// realtime event carries neither.
+func TestPgStoreKeepsThePrefaceAndPageContext(t *testing.T) {
+	ctx := context.Background()
+	st, pg := pgStore(t)
+	with := newTask("o", "atask_p", "arun_p", time.Now().UTC())
+	if err := st.Create(ctx, with, agentruns.Record{Principal: []byte(`{}`), Input: "Why is this slow?",
+		Preface: "where: secret page", PageContext: json.RawMessage(`{"path":"/projects/secret_page"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.Record(ctx, "o", with.ID)
+	if err != nil || rec.Input != "Why is this slow?" || rec.Preface != "where: secret page" ||
+		!strings.Contains(string(rec.PageContext), `"/projects/secret_page"`) {
+		t.Fatalf("record %+v, %v", rec, err)
+	}
+	without := newTask("o", "atask_q", "arun_q", time.Now().UTC())
+	if err = st.Create(ctx, without, agentruns.Record{Principal: []byte(`{}`), Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err = st.Record(ctx, "o", without.ID); err != nil || rec.Preface != "" || rec.PageContext != nil {
+		t.Fatalf("record %+v, %v", rec, err)
+	}
+	var stored *string
+	if err = pg.QueryRow(ctx, `SELECT page_context::text FROM loomplane_agent_tasks WHERE id = 'atask_q'`).Scan(&stored); err != nil || stored != nil {
+		t.Fatalf("page_context %v, %v", stored, err)
+	}
+	var payloads []string
+	rows, err := pg.Query(ctx, `SELECT data::text FROM loomplane_events WHERE org_id = 'o' AND type LIKE 'agent_task.%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		if err = rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, p)
+	}
+	for _, p := range payloads {
+		if strings.Contains(p, "secret page") || strings.Contains(p, "secret_page") {
+			t.Fatalf("an event carries the context: %s", p)
+		}
+	}
+}
+
+// A safety stop withholds the text of the step it stopped, and only that
+// step's, in the write that records the stop, and only in its workspace.
+func TestPgStoreWithholdsTheStoppedStep(t *testing.T) {
+	ctx := context.Background()
+	st, _ := pgStore(t)
+	task := newTask("o", "atask_s", "arun_s", time.Now().UTC())
+	if err := st.Create(ctx, task, agentruns.Record{Principal: []byte(`{}`), Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendEvents(ctx, "o", task.ID, []agentruns.NewEvent{
+		{Kind: "step", Data: json.RawMessage(`{"index":1}`)},
+		{Kind: "token", Data: json.RawMessage(`{"text":"Hello"}`)},
+		{Kind: "tool_call", Data: json.RawMessage(`{"tool":"list_projects","call_id":"c1"}`)},
+		{Kind: "step", Data: json.RawMessage(`{"index":2}`)},
+		{Kind: "token", Data: json.RawMessage(`{"text":"AKIA"}`)},
+		{Kind: "token", Data: json.RawMessage(`{"text":"..."}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stop := agentruns.NewEvent{Kind: "safety_block", Data: json.RawMessage(`{"message":"blocked"}`)}
+	if _, err := st.WithholdStep(ctx, "o2", task.ID, stop); !errors.Is(err, agentruns.ErrNotFound) {
+		t.Fatalf("o2 withheld o's text: %v", err)
+	}
+	seq, err := st.WithholdStep(ctx, "o", task.ID, stop)
+	if err != nil || seq != 7 {
+		t.Fatalf("withhold: %d, %v", seq, err)
+	}
+	evs, err := st.Events(ctx, "o", task.ID, 0, 100)
+	if err != nil || len(evs) != 7 {
+		t.Fatalf("events %+v, %v", evs, err)
+	}
+	want := []string{
+		`{"index": 1}`, `{"text": "Hello"}`, `{"tool": "list_projects", "call_id": "c1"}`, `{"index": 2}`,
+		`{"text": "", "withheld": true}`, `{"text": "", "withheld": true}`, `{"message": "blocked", "step_seq": 4}`,
+	}
+	for i, e := range evs {
+		var got, w any
+		if json.Unmarshal(e.Data, &got) != nil || json.Unmarshal([]byte(want[i]), &w) != nil {
+			t.Fatalf("event %d %s", e.Seq, e.Data)
+		}
+		g, _ := json.Marshal(got)
+		ww, _ := json.Marshal(w)
+		if string(g) != string(ww) {
+			t.Errorf("event %d: %s, want %s", e.Seq, g, ww)
+		}
+	}
+	if evs[6].Kind != "safety_block" {
+		t.Fatalf("last event %s", evs[6].Kind)
+	}
+	if got, _ := st.Get(ctx, "o", task.ID); got.EventSeq != 7 {
+		t.Fatalf("event_seq %d", got.EventSeq)
+	}
+}

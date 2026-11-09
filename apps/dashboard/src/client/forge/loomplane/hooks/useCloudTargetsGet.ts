@@ -1,5 +1,5 @@
 import { query } from '@forge-go/client-core';
 import { op_cloudTargets_get } from '../ops/cloudTargets.get';
-import type { Target } from '../types';
+import type { CloudprofilesTarget } from '../types';
 
-export const useCloudTargetsGet = /*#__PURE__*/ query<Target>(op_cloudTargets_get);
+export const useCloudTargetsGet = /*#__PURE__*/ query<CloudprofilesTarget>(op_cloudTargets_get);

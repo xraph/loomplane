@@ -37,6 +37,10 @@ var workspaceChecks = map[string]int{
 	"internal/repositories/connections.go:Connect":              1,
 	"internal/repositories/connections.go:Disconnect":           1,
 	"internal/repositories/connections.go:Repositories":         1,
+	// Whether the workspace's GitHub installations accepted the Issues
+	// permission, which AI settings shows; installations are the
+	// workspace's, not a project's.
+	"internal/repositories/connections.go:IssuesStatus": 1,
 	// A Bitbucket workspace is connected to the whole organization, like a
 	// GitHub installation, and so is a repository's push webhook.
 	"internal/repositories/bitbucket_connections.go:Status":       1,
@@ -73,6 +77,7 @@ var workspaceChecks = map[string]int{
 	"internal/connections/keyless.go:KeylessSetupFor":                         1,
 	"internal/connections/keyless.go:CreateKeyless":                           1,
 	"internal/connections/keyless.go:ReplaceKeyless":                          1,
+	"internal/connections/node.go:CreateNodeConnection":                       1,
 	"internal/connections/storage.go:storageVolumes":                          1,
 	"internal/gpus/gpus.go:Targets":                                           2,
 	"internal/cloudinfra/cluster_retirement.go:PreviewClusterRetirement":      1,
@@ -92,6 +97,8 @@ var workspaceChecks = map[string]int{
 	"extensions/identity/session.go:getSession":                               1,
 	"extensions/identity/members.go:require":                                  1,
 	"extensions/infrastructure/extension.go:status":                           1,
+	// A workspace's billing (cloud edition) is the whole workspace's.
+	"extensions/billing/routes.go:allow": 1,
 	// Endpoint credentials and synced provider resources are the
 	// workspace's, so re-checking an approver's secret:manage on them, and
 	// reading or connecting the inventory, stays at the root. Granting a
@@ -125,6 +132,14 @@ var workspaceChecks = map[string]int{
 	"internal/agentsettings/service.go:Status":            1,
 	"internal/agentauthz/codec.go:DecodePrincipal":        1,
 	"extensions/realtime/handlers.go:agentRequestReaches": 1,
+	// Reading the agent's reports is agent:use at the root, like the
+	// agent's status. Each report then needs deployment:read on its own
+	// project, checked with that project's ID so a team's grant counts.
+	"internal/agentreports/service.go:List": 1,
+	"internal/agentreports/service.go:Get":  1,
+	// The watcher's status, paused for the budget or not, is agent:use
+	// at the root, like the agent's own status.
+	"internal/agentwatch/watcher.go:Status": 1,
 }
 
 // rootChecks walks every non-test Go file under internal and extensions
@@ -210,8 +225,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 97 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8, the 6 Bitbucket ones and the 8 GitLab ones, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 103 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection and billing's, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

@@ -1,9 +1,13 @@
 // The bar above every page: where you are, search, the theme, and whatever
 // the page's app puts in its slots. The real dashboard and the mock both
-// render it, each with its own links and actions.
+// render it, each with its own links and actions. From a tablet up it's
+// three columns with equal sides, so the search sits at the bar's true
+// center whatever the crumbs and actions beside it weigh; a long trail of
+// crumbs shrinks rather than pushing it over.
 import { MonitorIcon, MoonIcon, SearchIcon, SunIcon } from "lucide-react"
 import { Fragment, type ReactElement, type ReactNode } from "react"
 
+import { InHeaderSlot } from "@/components/header-slot"
 import { useTheme } from "@/components/theme-provider"
 import {
   Breadcrumb,
@@ -43,50 +47,51 @@ export function TopBar({
   after?: ReactNode
 }) {
   return (
-    <header className="sticky top-0 z-20 flex h-[52px] shrink-0 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75 md:px-4">
-      <SidebarTrigger className="-ml-1" />
-      <Separator
-        orientation="vertical"
-        className="mr-1 data-[orientation=vertical]:h-4"
-      />
-      <Breadcrumb className="min-w-0">
-        <BreadcrumbList className="flex-nowrap">
-          {crumbs.map((c, i) => (
-            <Fragment key={i}>
-              {i > 0 && <BreadcrumbSeparator className="hidden md:block" />}
-              {/* Every crumb but the last can shrink to an ellipsis, and on
-                  narrow screens only the last shows, so the bar stays one
-                  line. */}
-              <BreadcrumbItem
-                className={cn(
-                  "min-w-0",
-                  i < crumbs.length - 1 && "hidden max-w-48 md:inline-flex"
-                )}
-              >
-                {c.link ? (
-                  <BreadcrumbLink
-                    render={c.link}
-                    className="truncate whitespace-nowrap"
+    <InHeaderSlot>
+      <header className="sticky top-0 z-20 flex h-[52px] shrink-0 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75 md:grid md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:gap-3 md:px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <SidebarTrigger className="-ml-1" />
+          <Separator
+            orientation="vertical"
+            className="mr-1 data-[orientation=vertical]:h-4"
+          />
+          <Breadcrumb className="min-w-0">
+            <BreadcrumbList className="flex-nowrap">
+              {crumbs.map((c, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <BreadcrumbSeparator className="hidden md:block" />}
+                  {/* Every crumb but the last can shrink to an ellipsis, and on
+                    narrow screens only the last shows, so the bar stays one
+                    line. */}
+                  <BreadcrumbItem
+                    className={cn(
+                      "min-w-0",
+                      i < crumbs.length - 1 && "hidden max-w-48 md:inline-flex"
+                    )}
                   >
-                    {c.label}
-                  </BreadcrumbLink>
-                ) : (
-                  <BreadcrumbPage className="truncate whitespace-nowrap">
-                    {c.label}
-                  </BreadcrumbPage>
-                )}
-              </BreadcrumbItem>
-            </Fragment>
-          ))}
-        </BreadcrumbList>
-      </Breadcrumb>
-      <div className="ml-auto flex items-center gap-1.5">
-        {before}
+                    {c.link ? (
+                      <BreadcrumbLink
+                        render={c.link}
+                        className="truncate whitespace-nowrap"
+                      >
+                        {c.label}
+                      </BreadcrumbLink>
+                    ) : (
+                      <BreadcrumbPage className="truncate whitespace-nowrap">
+                        {c.label}
+                      </BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                </Fragment>
+              ))}
+            </BreadcrumbList>
+          </Breadcrumb>
+        </div>
         <Button
           variant="outline"
           size="sm"
           onClick={onSearch}
-          className="hidden w-64 justify-start rounded-[10px] bg-subtle pl-3 text-muted-foreground shadow-none md:inline-flex"
+          className="hidden w-[clamp(14rem,32vw,28rem)] justify-start rounded-[10px] bg-subtle pl-3 text-muted-foreground shadow-none md:inline-flex"
         >
           <SearchIcon />
           Search or run a command
@@ -95,19 +100,22 @@ export function TopBar({
             <Kbd>K</Kbd>
           </KbdGroup>
         </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={onSearch}
-          aria-label="Search"
-          className="md:hidden"
-        >
-          <SearchIcon />
-        </Button>
-        <ThemeMenu />
-        {after}
-      </div>
-    </header>
+        <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
+          {before}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onSearch}
+            aria-label="Search"
+            className="md:hidden"
+          >
+            <SearchIcon />
+          </Button>
+          <ThemeMenu />
+          {after}
+        </div>
+      </header>
+    </InHeaderSlot>
   )
 }
 

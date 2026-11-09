@@ -144,7 +144,7 @@ func TestCommandsGroup(t *testing.T) {
 	for _, s := range cmds[0].Subcommands() {
 		names = append(names, s.Name())
 	}
-	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke", "update", "verify-release"} {
+	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke", "drain", "update", "verify-release"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("no node %s; have %v", want, names)
 		}
@@ -155,7 +155,7 @@ func TestEverySubcommandRefusesWindows(t *testing.T) {
 	r := newCmdRig(t)
 	r.opts.goos = "windows"
 	for _, args := range [][]string{
-		{"join", "--token", "x", "--url", "http://x"}, {"run"}, {"status"}, {"leave"}, {"allow", "docker"}, {"list"}, {"revoke", "x"}, {"update", "--release", "v1.9.0"}, {"verify-release"},
+		{"join", "--token", "x", "--url", "http://x"}, {"run"}, {"status"}, {"leave"}, {"allow", "docker"}, {"list"}, {"revoke", "x"}, {"drain", "x"}, {"update", "--release", "v1.9.0"}, {"verify-release"},
 	} {
 		err := r.run(append([]string{"node"}, args...)...)
 		if err == nil || !strings.Contains(err.Error(), "Linux and macOS") {
@@ -332,12 +332,14 @@ func TestJoinArgumentErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no token and no key": {[]string{"--url", js.URL}, "--token"},
-		"no url":              {[]string{"--token", "x"}, "--url"},
-		"bad allow":           {[]string{"--url", js.URL, "--token", "x", "--allow", "public"}, "public"},
-		"unknown allow":       {[]string{"--url", js.URL, "--token", "x", "--allow", "nonsense"}, "nonsense"},
-		"bad label":           {[]string{"--url", js.URL, "--token", "x", "--label", "nokey"}, "--label"},
-		"bad builder":         {[]string{"--url", js.URL, "--token", "x", "--builder", "shared"}, "dedicated"},
+		"no token and no key":  {[]string{"--url", js.URL}, "--token"},
+		"no url":               {[]string{"--token", "x"}, "--url"},
+		"bad allow":            {[]string{"--url", js.URL, "--token", "x", "--allow", "public"}, "public"},
+		"unknown allow":        {[]string{"--url", js.URL, "--token", "x", "--allow", "nonsense"}, "nonsense"},
+		"bad label":            {[]string{"--url", js.URL, "--token", "x", "--label", "nokey"}, "--label"},
+		"bad builder":          {[]string{"--url", js.URL, "--token", "x", "--builder", "shared"}, "dedicated"},
+		"builder with token":   {[]string{"--url", js.URL, "--token", "x", "--builder", "dedicated"}, "--builder go in the join token"},
+		"builder label, token": {[]string{"--url", js.URL, "--token", "x", "--label", "build_workers=dedicated"}, "--builder go in the join token"},
 	} {
 		r := newCmdRig(t)
 		err := r.run(append([]string{"node", "join", "--state-dir", r.dir}, tc.args...)...)

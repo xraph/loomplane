@@ -47,12 +47,15 @@ func CloudTitle(cloud string) string { return cloudTitle(cloud) }
 // signed in to the cloud. A keyless connection has none: the cloud trusts
 // Loomplane's own tokens, and Vault holds nothing for it. Nor does an
 // in-cluster one, which reaches the Kubernetes cluster Loomplane runs in
-// as Loomplane's own service account.
+// as Loomplane's own service account, or a node one, which reaches a
+// joined node through its own streams. Both of those get a marker
+// Loomplane makes on read, and neither marker is ever taken pasted.
 const (
 	MethodToken     = "token"
 	MethodOAuth     = "oauth"
 	MethodKeyless   = "keyless"
 	MethodInCluster = "in_cluster"
+	MethodNode      = "node"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone
@@ -102,7 +105,7 @@ type Connection struct {
 	OrgID      string `json:"org_id"`
 	Cloud      string `json:"cloud"`
 	Name       string `json:"name"`
-	// Method is token, oauth, keyless or in_cluster. Empty means token.
+	// Method is token, oauth, keyless, in_cluster or node. Empty means token.
 	Method string `json:"method"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.

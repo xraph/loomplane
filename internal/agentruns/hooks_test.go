@@ -140,6 +140,7 @@ func TestFailureReasonsAreClear(t *testing.T) {
 	for in, want := range map[string]string{
 		"llm: complete: nexus: agentsettings: refused a call: couldn't read the agent's provider key: the workspace's AI key couldn't be read: vault: timeout": "the workspace's AI key couldn't be read",
 		"budget: " + "this workspace has used its AI budget for the month; an admin can raise it in AI settings":                                               "this workspace has used its AI budget for the month; an admin can raise it in AI settings",
+		"llm: complete: nexus: provider credentials unavailable: Turn on the AI add-on in Settings > Billing, or add your own model key.":                      "Turn on the AI add-on in Settings > Billing, or add your own model key.",
 		"plain": "plain",
 	} {
 		if got := reason(in); got != want {
@@ -172,5 +173,33 @@ func TestRecordRequestLogsTheRequest(t *testing.T) {
 	foreign.OrgID = orgB
 	if err := w.svc.RecordRequest(t.Context(), &foreign, "areq_2", "answer"); err == nil {
 		t.Fatal("logged a request on another workspace's task")
+	}
+}
+
+func TestSafetyStopFailsTheTask(t *testing.T) {
+	w := newWorld(t)
+	h := &Hooks{Service: w.svc}
+	task := w.adaChat(t)
+	mustMove(t, w, task, StatusRunning)
+	w.engine.setRun(task.RunID, &run.Run{
+		State: run.StateIncomplete, StopReason: run.StopSafetyBlock, TokensUsed: 7,
+		Error: "cortex: publication blocked: the output guard found an AWS key",
+	})
+	sum := run.TerminalSummary{State: run.StateIncomplete, StopReason: run.StopSafetyBlock}
+	if err := h.OnRunTerminated(runCtx(task), id.Nil, mustRunID(t, task.RunID), sum); err != nil {
+		t.Fatal(err)
+	}
+	got := w.store.task(t, task.ID)
+	if got.Status != StatusFailed || got.Error != SafetyStopped || got.Tokens != 7 {
+		t.Fatalf("task %+v", got)
+	}
+
+	// A run cortex settles without its hook reaching us reads the same.
+	other := w.adaChat(t)
+	mustMove(t, w, other, StatusRunning)
+	w.engine.setRun(other.RunID, &run.Run{State: run.StateIncomplete, StopReason: run.StopSafetyBlock, Error: "cortex: blocked"})
+	w.svc.settle(t.Context(), w.engine, other, mustRunID(t, other.RunID))
+	if got = w.store.task(t, other.ID); got.Status != StatusFailed || got.Error != SafetyStopped {
+		t.Fatalf("settled task %+v", got)
 	}
 }

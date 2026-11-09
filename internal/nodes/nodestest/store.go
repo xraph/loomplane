@@ -178,9 +178,58 @@ func (s *Store) UpdateSettings(_ context.Context, org, id string, u nodes.Settin
 		n.Labels = u.Labels
 	}
 	if u.IngressMode != nil {
-		n.IngressMode = *u.IngressMode
+		n.IngressModeByOwner = true
+	}
+	if u.IngressMode != nil && *u.IngressMode != n.IngressMode {
+		now := time.Now().UTC()
+		n.IngressMode, n.IngressSentAt, n.IngressDetail = *u.IngressMode, &now, ""
 	}
 	return clone(n), nil
+}
+
+func (s *Store) SetIngress(_ context.Context, id string, in nodes.IngressSetting) (*nodes.Node, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nil, nodes.ErrNotFound
+	}
+	sent := in.SentAt
+	n.IngressMode, n.PublicAddress, n.PublicAddressConfirmedAt, n.IngressDetail, n.IngressSentAt = in.Mode, in.PublicAddress, in.ConfirmedAt, in.Detail, &sent
+	return clone(n), nil
+}
+
+func (s *Store) RecordIngressApplied(_ context.Context, id, mode string, epoch int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok || n.RevokedAt != nil || s.epochs[id] != epoch {
+		return nodes.ErrNotFound
+	}
+	n.IngressApplied = mode
+	return nil
+}
+
+func (s *Store) MarkIngressSent(_ context.Context, id string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nodes.ErrNotFound
+	}
+	n.IngressSentAt = &at
+	return nil
+}
+
+func (s *Store) SetIngressDetail(_ context.Context, id, detail string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[id]
+	if !ok || n.RevokedAt != nil {
+		return nodes.ErrNotFound
+	}
+	n.IngressDetail = detail
+	return nil
 }
 
 func (s *Store) Touch(_ context.Context, id string, at time.Time, _ nodeproto.Usage) error {

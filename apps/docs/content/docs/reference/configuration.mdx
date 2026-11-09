@@ -181,10 +181,15 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | `LOOMPLANE_AI_EMBEDDING_BASE_URL` | empty | The embedding endpoint (`ai.knowledge.embedding_base_url`). Required for `openai-compatible` |
 | `LOOMPLANE_AI_EMBEDDING_MODEL` | empty | The embedding model (`ai.knowledge.embedding_model`). Required once a provider is set. Pick one whose native size is at most 2000 dimensions, such as `text-embedding-3-small` |
 | `LOOMPLANE_AI_EMBEDDING_DIMENSIONS` | `1536` | The vector size (`ai.knowledge.dimensions`), from 1 to 2000. It must match the embedding model, and every workspace shares it, because the vector column has one fixed size. `text-embedding-3-small` at 1536 is the default |
+| `LOOMPLANE_AI_DOCS_BUDGET_USD` | `5.00` | The most indexing the docs may spend, in USD (`ai.knowledge.docs_budget_usd`). A decimal above 0 and at most 1000. Checked only when an embedding provider is set |
+
+Knowledge also needs pgvector in Postgres, and the embedding model needs a price: an OpenAI model nexus lists, or an `ai.prices` entry for an `openai-compatible` one. Without either, nothing else changes. Knowledge stays off and the settings page says why. [Knowledge](/docs/agents/knowledge) has each reason and its fix. The docs are indexed once per release, billed to a `loomplane-system` tenant and capped by `LOOMPLANE_AI_DOCS_BUDGET_USD`.
 
 With `ai.enabled` on, Loomplane checks these at startup and names the key that's wrong. With it off, none of them are checked, so a stray variable can't stop a server that doesn't run the agent.
 
 `ai.prices` has no variable. Set it in `config.local.yaml` as a list of `{provider, model, input_per_million, output_per_million}`, in decimal USD such as `"3"` or `"0.80"`. The agent uses server prices only: nexus's own catalog, plus the models you list here. A price a workspace sets on its own provider key doesn't apply to the agent, so a model nexus doesn't know needs an entry here. Each provider and model pair can appear once.
+
+Embeddings are priced the same way. For `openai`, Loomplane uses nexus's own price for the embedding model, so `text-embedding-3-small` needs no entry. For `openai-compatible`, the embedding model needs an `ai.prices` entry with provider `openai-compatible` and the model name, and its `input_per_million` is the embedding price. Without one, the server refuses every embedding. Set both amounts to `"0"` for a local model that costs nothing.
 
 ## Process and container
 

@@ -179,6 +179,11 @@ func validNodeJoinScope(sc *NodeJoinScope) error {
 			return fmt.Errorf("%w: a label is empty or too long", ErrInvalid)
 		}
 	}
+	// node join --builder dedicated puts build_workers here, and a node
+	// adopted with it builds untrusted source, so it takes no other value.
+	if workers, ok := sc.Labels["build_workers"]; ok && workers != "dedicated" {
+		return fmt.Errorf("%w: build_workers can only be dedicated", ErrInvalid)
+	}
 	allowed := nodeproto.AllowableEndpoints()
 	var endpoints []nodeproto.Endpoint
 	for _, e := range sc.Endpoints {

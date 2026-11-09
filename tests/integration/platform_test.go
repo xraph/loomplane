@@ -45,9 +45,22 @@ const (
 // LOOMPLANE_TEST_DATABASE_URL and returns its DSN.
 func freshDatabase(t *testing.T) string {
 	t.Helper()
-	admin := os.Getenv("LOOMPLANE_TEST_DATABASE_URL")
+	return freshDatabaseOn(t, "LOOMPLANE_TEST_DATABASE_URL", "set LOOMPLANE_TEST_DATABASE_URL to run the integration tests")
+}
+
+// freshPgvectorDatabase is freshDatabase on the Postgres with pgvector in
+// LOOMPLANE_TEST_PGVECTOR_URL (make up-knowledge). Without it the test is
+// skipped.
+func freshPgvectorDatabase(t *testing.T) string {
+	t.Helper()
+	return freshDatabaseOn(t, "LOOMPLANE_TEST_PGVECTOR_URL", "set LOOMPLANE_TEST_PGVECTOR_URL (make up-knowledge) to run the knowledge tests that need pgvector")
+}
+
+func freshDatabaseOn(t *testing.T, env, skip string) string {
+	t.Helper()
+	admin := os.Getenv(env)
 	if admin == "" {
-		t.Skip("set LOOMPLANE_TEST_DATABASE_URL to run the integration tests")
+		t.Skip(skip)
 	}
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, admin)
@@ -107,9 +120,9 @@ func startApp(t *testing.T, cfg config.Config, prepare func(forge.App), configur
 // startStoredWaitlist is start with no waitlist override, so the instance's
 // stored setting decides, as it does on a deploy that leaves
 // LOOMPLANE_WAITLIST_ENABLED unset.
-func startStoredWaitlist(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
+func startStoredWaitlist(t *testing.T, cfg config.Config) *running {
 	t.Helper()
-	return boot(t, cfg, nil, configure...)
+	return boot(t, cfg, nil)
 }
 
 func boot(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {

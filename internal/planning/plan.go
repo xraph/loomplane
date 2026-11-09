@@ -118,6 +118,9 @@ type Action struct {
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
 	AdoptCloudPlacement bool           `json:"adopt_cloud_placement,omitempty"`
 	CloudAdoption       *CloudAdoption `json:"cloud_adoption,omitempty"`
+	// NativeMove is a replacement that moves a Vercel service off the
+	// project of its own it runs on, into the shared project's environment.
+	NativeMove bool `json:"native_move,omitempty"`
 	// ID is stable for a subject: "service:api", "resource:db".
 	ID       string  `json:"id"`
 	Op       Op      `json:"op"`
@@ -746,6 +749,19 @@ type Plan struct {
 	DecisionNote string     `json:"decision_note"`
 }
 
+// TeardownOnly reports whether the plan only removes things: every action
+// deletes or keeps. Removing is never gated on billing, so a workspace can
+// always clean up. It fails closed: an op it doesn't know, or an empty one,
+// counts as running something.
+func (p *Plan) TeardownOnly() bool {
+	for _, a := range p.Actions {
+		if a.Op != Delete && a.Op != Keep {
+			return false
+		}
+	}
+	return true
+}
+
 // Open reports whether the plan may still be decided or is still planning.
 func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == StatusReady }
 
@@ -813,15 +829,21 @@ func (p *Plan) normalize() {
 // or provider resource. Deployments write bindings; planning reads them to
 // know what exists.
 type Binding struct {
-	ID            string          `json:"id" forge:"id"`
-	OrgID         string          `json:"org_id"`
-	ProjectID     string          `json:"project_id"`
-	EnvironmentID string          `json:"environment_id"`
-	Subject       Subject         `json:"subject"`
-	Name          string          `json:"name"`
-	Provider      string          `json:"provider"`
-	Region        string          `json:"region"`
-	Engine        provider.Engine `json:"engine"`
+	ID            string  `json:"id" forge:"id"`
+	OrgID         string  `json:"org_id"`
+	ProjectID     string  `json:"project_id"`
+	EnvironmentID string  `json:"environment_id"`
+	Subject       Subject `json:"subject"`
+	Name          string  `json:"name"`
+	// Alias is the name people gave what the binding runs, or empty. It
+	// names nothing in the cloud, and a redeploy keeps it.
+	Alias string `json:"alias"`
+	// SuggestedAlias is the alias Loomplane proposes while none is set. It
+	// isn't stored.
+	SuggestedAlias string          `json:"suggested_alias,omitempty"`
+	Provider       string          `json:"provider"`
+	Region         string          `json:"region"`
+	Engine         provider.Engine `json:"engine"`
 	// ExternalID is the Ctrl Plane instance's ID, or the provider's ID for
 	// a resource Loomplane manages itself.
 	ExternalID string `json:"external_id"`
@@ -902,6 +924,11 @@ type Store interface {
 	// RecordDrift stores what a drift check found.
 	RecordDrift(ctx context.Context, orgID, id, drift, message string, at time.Time) error
 	PutBinding(ctx context.Context, b *Binding) error
+	// GetBinding returns one binding of the organization, or ErrNotFound.
+	GetBinding(ctx context.Context, orgID, id string) (*Binding, error)
+	// SetBindingAlias names what a binding runs; empty clears it. It
+	// returns ErrAliasTaken when another binding of the environment has it.
+	SetBindingAlias(ctx context.Context, orgID, id, alias string) error
 	DeleteBinding(ctx context.Context, orgID, id string) error
 	// SetReplaced records what a binding's action ran as before it moved
 	// and still needs removing, replacing what was recorded.

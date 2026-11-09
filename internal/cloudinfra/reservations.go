@@ -47,7 +47,7 @@ func digest(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 func (s *Service) PreviewDrain(ctx context.Context, p security.Principal, cloud, id string) (*DrainReview, error) {
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	st, ok := s.Store.(*PgStore)
@@ -76,7 +76,7 @@ func (s *PgStore) previewDrain(ctx context.Context, org, cloud, id string) (*Dra
 	return review, nil
 }
 func (s *Service) ApplyDrain(ctx context.Context, p security.Principal, cloud, id string, in ApplyInput) (*Server, error) {
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	if p.ReadOnly {
@@ -126,7 +126,7 @@ func (s *Service) ApplyDrain(ctx context.Context, p security.Principal, cloud, i
 // PreviewMove selects an explicit stateless destination. Accepting it prepares
 // the next deployment plan; the project still reviews that plan before effects.
 func (s *Service) PreviewMove(ctx context.Context, p security.Principal, cloud string, in MoveInput) (*MoveReview, error) {
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	st, ok := s.Store.(*PgStore)
@@ -206,7 +206,7 @@ func (s *Service) AcceptMove(ctx context.Context, p security.Principal, cloud st
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	if _, err := s.authorize(ctx, p, cloud); err != nil {
+	if _, err := s.authorizeChange(ctx, p, cloud); err != nil {
 		return nil, err
 	}
 	st, ok := s.Store.(*PgStore)

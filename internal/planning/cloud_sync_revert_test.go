@@ -3,9 +3,11 @@ package planning
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 func TestCloudCompensationUsesSavedSourceAndRetainedIdentity(t *testing.T) {
@@ -100,5 +102,23 @@ func TestCloudCompensationMixedRuntimeAlwaysReviewsRecreation(t *testing.T) {
 		if c == nil || c.Retained || c.ServerAttempt != (tc.original == "server") {
 			t.Fatal(tc, c)
 		}
+	}
+}
+
+// A revert onto the Loomplane Cloud an environment left is the same
+// environment move back. A target change on a Loomplane Cloud target never
+// happened, so it has nothing to revert, and says so in its own branch.
+func TestCloudRevertPlatformTarget(t *testing.T) {
+	st := &platformSyncStore{}
+	p := security.Principal{OrgID: "org", UserID: "user"}
+	moved := &cloudprofiles.Preview{Input: cloudprofiles.ChangeInput{CloudID: "cloud_user", EnvironmentID: "env"}, BeforeAssignment: &cloudprofiles.Assignment{CloudID: "cloud_platform"}}
+	in, err := revertChangeInput(t.Context(), st, p, "proj", &cloudprofiles.Sync{}, moved)
+	if err != nil || in.CloudID != "cloud_platform" || in.EnvironmentID != "env" || in.Revision != 1 {
+		t.Fatalf("revert onto Loomplane Cloud: %+v %v", in, err)
+	}
+	before, after := *platformTarget, *platformTarget
+	sync := &cloudprofiles.Sync{CloudID: "cloud_platform", TargetID: platformTarget.ID, Before: &before, After: &after}
+	if _, err = revertChangeInput(t.Context(), st, p, "proj", sync, &cloudprofiles.Preview{}); !errors.Is(err, cloudprofiles.ErrPlatformOwned) {
+		t.Fatalf("revert of a Loomplane Cloud target change: %v", err)
 	}
 }

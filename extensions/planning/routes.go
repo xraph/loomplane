@@ -259,6 +259,12 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithQuerySchema(BindingQuery{}),
 			forge.WithResponseSchema(http.StatusOK, "Bindings", BindingList{}),
 		}},
+		{http.MethodPatch, "/projects/:id/bindings/:binding", e.setBindingAlias, []forge.RouteOption{
+			forge.WithName("bindings.setAlias"),
+			forge.WithSummary("Name what a binding runs; the alias changes no cloud resource, and empty clears it"),
+			forge.WithRequestSchema(planning.BindingAliasInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The binding", planning.Binding{}),
+		}},
 	}
 	activityRoutes := []route{
 		{http.MethodGet, "/activity", e.getActivity, []forge.RouteOption{
@@ -422,12 +428,19 @@ func (e *Extension) listProviders(c forge.Context) error {
 	if _, err := principal(c); err != nil {
 		return err
 	}
-	list := e.plans.Providers()
+	return c.JSON(http.StatusOK, listedProviders(e.plans.Providers()))
+}
+
+// listedProviders are the providers a person may pick from. An unlisted
+// one, such as Loomplane Cloud, is reached only through a Cloud target.
+func listedProviders(list []*provider.Provider) ProviderList {
 	out := ProviderList{Providers: make([]provider.Provider, 0, len(list))}
 	for _, p := range list {
-		out.Providers = append(out.Providers, *p)
+		if !p.Unlisted {
+			out.Providers = append(out.Providers, *p)
+		}
 	}
-	return c.JSON(http.StatusOK, out)
+	return out
 }
 
 func (e *Extension) listPlans(c forge.Context) error {
@@ -513,6 +526,22 @@ func (e *Extension) listBindings(c forge.Context) error {
 		out.Bindings = append(out.Bindings, *b)
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) setBindingAlias(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in planning.BindingAliasInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"alias": "..."}`)
+	}
+	b, err := e.plans.SetBindingAlias(c.Request().Context(), p, c.Param("id"), c.Param("binding"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, b)
 }
 
 func (e *Extension) listDeployed(c forge.Context) error {

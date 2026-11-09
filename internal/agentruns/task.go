@@ -136,7 +136,7 @@ type Event struct {
 	Seq    int64  `json:"seq"`
 	// Kind is a cortex stream type (run_started, step, tool_call, token,
 	// checkpoint, suspended, safety_block, incomplete, done, error), or
-	// "request" or "status".
+	// "tool_result", "request" or "status".
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data"`
 	At   time.Time       `json:"at"`
@@ -146,7 +146,22 @@ type Event struct {
 const (
 	EventRequest = "request"
 	EventStatus  = "status"
+	// EventToolResult is how a tool call ended: {tool, call_id, outcome,
+	// message}, outcome "ok", "failed" or "denied". It follows its
+	// tool_call in the log.
+	EventToolResult = "tool_result"
 )
+
+// The outcomes of a tool_result event.
+const (
+	OutcomeOK     = "ok"
+	OutcomeFailed = "failed"
+	OutcomeDenied = "denied"
+)
+
+// MetaTitle is the StartInput.Metadata key of a conversation's title,
+// which its cortex session takes when the start job makes it.
+const MetaTitle = "title"
 
 // ListFilter narrows List.
 type ListFilter struct {
@@ -161,6 +176,15 @@ type ListFilter struct {
 const (
 	metaReleasePlan     = "release_plan_id"
 	metaReleaseRevision = "release_revision"
+)
+
+// The metadata keys that name the report an investigation is about. Only
+// an investigation the agent runs alone, which only the watcher starts,
+// may carry them: Start refuses them on any other task, so a chat can
+// never name a report as its own.
+const (
+	MetaReportID    = "report_id"
+	MetaFingerprint = "fingerprint"
 )
 
 var (

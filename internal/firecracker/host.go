@@ -201,6 +201,7 @@ func (h *Host) reserve(ctx context.Context, scope Scope, s Spec) (int, error) {
 	}
 	used := map[int]bool{}
 	cpus, mem, disk := s.VCPUs, s.MemoryMiB+128, s.DiskMiB
+	orgVMs, orgCPUs, orgMem := 1, s.VCPUs, s.MemoryMiB+128
 	for _, r := range all {
 		if r.Scope != scope && r.Current != nil && s.PublishedPort != 0 && r.Current.Spec.PublishedPort == s.PublishedPort {
 			return 0, ErrConflict
@@ -220,7 +221,17 @@ func (h *Host) reserve(ctx context.Context, scope Scope, s Spec) (int, error) {
 			cpus += v.Spec.VCPUs
 			mem += v.Spec.MemoryMiB + 128
 			disk += v.Spec.DiskMiB
+			// The backstop leaves out the scope's own Current VM, which the
+			// replacement supersedes, so a redeploy may briefly hold one extra.
+			if r.Scope.Org == scope.Org && (r.Scope != scope || r.Current == nil || v.ID != r.Current.ID) {
+				orgVMs++
+				orgCPUs += v.Spec.VCPUs
+				orgMem += v.Spec.MemoryMiB + 128
+			}
 		}
+	}
+	if o := h.Limits.PerOrg; o.VMs > 0 && (orgVMs > o.VMs || orgCPUs > o.VCPUs || orgMem > o.MemoryMiB) {
+		return 0, ErrCapacity
 	}
 	if len(used) >= h.Limits.VMs || cpus > h.Limits.VCPUs || mem > h.Limits.MemoryMiB || disk > h.Limits.DiskMiB {
 		return 0, ErrCapacity
@@ -346,3 +357,48 @@ func (h *Host) Guest(ctx context.Context, q Request, action string, body io.Read
 }
 
 func firecrackerSameSpec(a, b Spec) bool { return reflect.DeepEqual(a, b) }
+
+// Usage reports egress for current and pending VMs. A VM stays pending until its
+// guest reports ready, and one that never does keeps running, so it is metered
+// too. org "" means every org.
+func (h *Host) Usage(ctx context.Context, org string) ([]UsageSample, error) {
+	reader, ok := h.Driver.(UsageReader)
+	if !ok || h.Store == nil {
+		return []UsageSample{}, nil
+	}
+	records, err := h.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var vms []VM
+	scopes := map[string]Scope{}
+	for _, r := range records {
+		if org != "" && r.Scope.Org != org {
+			continue
+		}
+		for _, vm := range []*VM{r.Current, r.Pending} {
+			if vm == nil {
+				continue
+			}
+			if _, dup := scopes[vm.ID]; dup {
+				continue
+			}
+			vms = append(vms, *vm)
+			scopes[vm.ID] = r.Scope
+		}
+	}
+	samples, err := reader.Usage(ctx, vms)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UsageSample, 0, len(samples))
+	for _, s := range samples {
+		scope, ok := scopes[s.VMID]
+		if !ok {
+			continue
+		}
+		s.Scope = scope
+		out = append(out, s)
+	}
+	return out, nil
+}

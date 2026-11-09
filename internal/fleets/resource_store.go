@@ -14,7 +14,12 @@ import (
 var _ ResourceBindingStore = (*PgStore)(nil)
 
 func (s *PgStore) ListInstanceResourceBindings(ctx context.Context, scope FleetScope, instance string) ([]ResourceBinding, error) {
-	rows, err := s.db.Query(ctx, `SELECT b.body FROM loomplane_fleet_resource_bindings b JOIN loomplane_fleet_instances i ON i.org_id=b.org_id AND i.id=b.instance_id AND i.environment_id=b.environment_id AND i.desired_generation=b.generation AND i.ownership_epoch=b.ownership_epoch WHERE b.org_id=$1 AND b.project_id=$2 AND b.fleet_id=$3 AND b.instance_id=$4 ORDER BY b.name`, scope.OrgID, scope.ProjectID, scope.FleetID, instance)
+	rows, err := s.db.Query(ctx, `SELECT b.body,EXISTS(SELECT 1 FROM loomplane_fleet_resource_bindings peer
+ WHERE peer.resource_id=b.resource_id AND peer.incarnation=b.incarnation
+ AND (peer.org_id<>b.org_id OR peer.instance_id<>b.instance_id)
+ AND (peer.ownership='owned' OR b.ownership='owned' OR peer.principal_id=b.principal_id
+  OR peer.body::jsonb->>'access_scope'=b.body::jsonb->>'access_scope'))
+ FROM loomplane_fleet_resource_bindings b JOIN loomplane_fleet_instances i ON i.org_id=b.org_id AND i.id=b.instance_id AND i.environment_id=b.environment_id AND i.desired_generation=b.generation AND i.ownership_epoch=b.ownership_epoch WHERE b.org_id=$1 AND b.project_id=$2 AND b.fleet_id=$3 AND b.instance_id=$4 ORDER BY b.name`, scope.OrgID, scope.ProjectID, scope.FleetID, instance)
 	if err != nil {
 		return nil, err
 	}
@@ -23,8 +28,12 @@ func (s *PgStore) ListInstanceResourceBindings(ctx context.Context, scope FleetS
 	for rows.Next() {
 		var raw string
 		var b ResourceBinding
-		if checkErr := rows.Scan(&raw); checkErr != nil {
+		var ownershipConflict bool
+		if checkErr := rows.Scan(&raw, &ownershipConflict); checkErr != nil {
 			return nil, checkErr
+		}
+		if ownershipConflict {
+			return nil, ErrConflict
 		}
 		if checkErr := json.Unmarshal([]byte(raw), &b); checkErr != nil {
 			return nil, checkErr
@@ -35,7 +44,10 @@ func (s *PgStore) ListInstanceResourceBindings(ctx context.Context, scope FleetS
 }
 
 // SaveInstanceResourceBinding records pins only. Runtime access still requires a
-// live provider scope check through ResolveResourceBindings.
+// live provider scope check through ResolveResourceBindings. ResourceID and
+// Incarnation must be globally comparable physical pins across organization-local
+// connections. The installed provider pin verifier must establish that identity
+// before runtime access.
 func (s *PgStore) SaveInstanceResourceBinding(ctx context.Context, scope FleetScope, snapshot InstanceSnapshot, b ResourceBinding) (err error) {
 	if !bindingMatchesSnapshot(b, scope, snapshot) {
 		return ErrInvalid
@@ -89,6 +101,18 @@ func (s *PgStore) SaveInstanceResourceBinding(ctx context.Context, scope FleetSc
 	if !valid {
 		return ErrConflict
 	}
+	// The source gate serializes physical ownership and private access scope claims.
+	var ownershipConflict bool
+	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1 FROM loomplane_fleet_resource_bindings
+ WHERE resource_id=$2 AND incarnation=$3
+ AND (((ownership='owned' OR $4='owned') AND (org_id<>$1 OR instance_id<>$5 OR ownership<>$4))
+  OR ((org_id<>$1 OR instance_id<>$5) AND (body::jsonb->>'access_scope'=$6 OR principal_id=$7))))`, scope.OrgID, b.ResourceID, b.Incarnation, b.Ownership, b.InstanceID, b.AccessScope, b.PrincipalID).Scan(&ownershipConflict); checkErr != nil {
+		return checkErr
+	}
+	if ownershipConflict {
+		return ErrConflict
+	}
 	var existing string
 	err = tx.QueryRow(ctx, `SELECT body FROM loomplane_fleet_resource_bindings WHERE org_id=$1 AND instance_id=$2 AND generation=$3 AND name=$4`, scope.OrgID, b.InstanceID, b.Generation, b.Name).Scan(&existing)
 	if err == nil {
@@ -101,14 +125,6 @@ func (s *PgStore) SaveInstanceResourceBinding(ctx context.Context, scope FleetSc
 		return err
 	}
 	err = nil
-	// The source gate serializes claims, including different instance rows.
-	var ownershipConflict bool
-	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_fleet_resource_bindings WHERE org_id=$1 AND resource_id=$2 AND incarnation=$3 AND (ownership='owned' OR $4='owned') AND (instance_id<>$5 OR ownership<>$4))`, scope.OrgID, b.ResourceID, b.Incarnation, b.Ownership, b.InstanceID).Scan(&ownershipConflict); checkErr != nil {
-		return checkErr
-	}
-	if ownershipConflict {
-		return ErrConflict
-	}
 	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_resource_principals(org_id,fleet_id,instance_id,resource_id,incarnation,principal_id) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, scope.OrgID, scope.FleetID, b.InstanceID, b.ResourceID, b.Incarnation, b.PrincipalID); err != nil {
 		return storeError(err)
 	}

@@ -63,6 +63,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/pools/:poolId", "cloudPools.update", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/check", "cloudServers.check", e.checkServer, nil, infra.Server{}, http.StatusOK},
 		{http.MethodGet, "/servers", "cloudServers.list", e.list, nil, ServerList{}, http.StatusOK},
+		{http.MethodGet, "/node-adoptions", "cloudNodeAdoptions.list", e.nodeAdoptions, nil, NodeAdoptionList{}, http.StatusOK},
 		{http.MethodGet, "/capacity-policy", "cloudCapacity.getPolicy", e.capacityPolicy, nil, CapacityPolicyView{}, http.StatusOK},
 		{http.MethodPost, "/capacity-policy", "cloudCapacity.savePolicy", e.saveCapacityPolicy, CapacityPolicyInput{}, CapacityPolicyView{}, http.StatusOK},
 		{http.MethodGet, "/expansions", "cloudCapacity.listExpansions", e.expansions, nil, ExpansionList{}, http.StatusOK},
@@ -134,7 +135,7 @@ func result(c forge.Context, status int, value any, err error) error {
 	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift), errors.Is(err, projects.ErrFleetManaged):
 		code = http.StatusConflict
 	// A key whose saved authority can't act for capacity is refused, not a server error.
-	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected):
+	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected), errors.Is(err, cloudprofiles.ErrPlatformOwned):
 		code = http.StatusForbidden
 	case errors.Is(err, provider.ErrInfrastructureUnsupported):
 		code = http.StatusUnprocessableEntity

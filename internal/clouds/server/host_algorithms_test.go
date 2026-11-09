@@ -74,7 +74,7 @@ func TestDialSelectsPinnedHostAlgorithm(t *testing.T) {
 				done <- nil
 				_ = remote.Wait()
 			}()
-			client, dialErr := Dial(t.Context(), &Config{Address: listener.Addr().String(), User: "test", Socket: "/var/run/docker.sock", HostKey: test.pinned.PublicKey(), Signer: user})
+			client, dialErr := Connect(t.Context(), &Config{Address: listener.Addr().String(), User: "test", Socket: "/var/run/docker.sock", HostKey: test.pinned.PublicKey(), Signer: user}, nil)
 			if dialErr != nil {
 				t.Fatal(dialErr)
 			}

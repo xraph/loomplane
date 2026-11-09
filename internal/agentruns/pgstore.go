@@ -76,11 +76,16 @@ func (s *PgStore) Create(ctx context.Context, t *Task, rec Record) error {
 	if err != nil {
 		return err
 	}
+	var pageContext []byte // NULL without one
+	if len(rec.PageContext) > 0 {
+		pageContext = rec.PageContext
+	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_agent_tasks (id, org_id, project_id, environment_id, kind, run_id,
-			session_id, status, requested_by, principal, input, max_tokens, metadata, enqueued_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $14)`,
+			session_id, status, requested_by, principal, input, max_tokens, metadata, enqueued_at, created_at, updated_at,
+			input_preface, page_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14, $14, $15, $16)`,
 		t.ID, t.OrgID, t.ProjectID, t.EnvironmentID, string(t.Kind), t.RunID, t.SessionID, t.Status, t.RequestedBy,
-		rec.Principal, rec.Input, t.MaxTokens, metadata, t.CreatedAt)
+		rec.Principal, rec.Input, t.MaxTokens, metadata, t.CreatedAt, rec.Preface, pageContext)
 	if err != nil {
 		return fmt.Errorf("create agent task: %w", err)
 	}
@@ -100,13 +105,18 @@ func (s *PgStore) ByRun(ctx context.Context, orgID, runID string) (*Task, error)
 // Record implements Store.
 func (s *PgStore) Record(ctx context.Context, orgID, id string) (*Record, error) {
 	var rec Record
-	err := s.db.QueryRow(ctx, `SELECT principal, input FROM loomplane_agent_tasks WHERE org_id = $1 AND id = $2`, orgID, id).
-		Scan(&rec.Principal, &rec.Input)
+	var pageContext []byte
+	err := s.db.QueryRow(ctx, `SELECT principal, input, input_preface, page_context
+		FROM loomplane_agent_tasks WHERE org_id = $1 AND id = $2`, orgID, id).
+		Scan(&rec.Principal, &rec.Input, &rec.Preface, &pageContext)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read agent task record: %w", err)
+	}
+	if len(pageContext) > 0 {
+		rec.PageContext = pageContext
 	}
 	return &rec, nil
 }
@@ -252,6 +262,39 @@ func appendEvents(ctx context.Context, tx driver.Tx, orgID, taskID string, event
 		return 0, err
 	}
 	return seq, nil
+}
+
+// WithholdStep implements Store. The task's row is locked first, as
+// appendEvents locks it, so no event lands between the rewrite and e.
+func (s *PgStore) WithholdStep(ctx context.Context, orgID, taskID string, e NewEvent) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(tx)
+	var seq int64
+	err = tx.QueryRow(ctx, `SELECT event_seq FROM loomplane_agent_tasks WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, taskID).Scan(&seq)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	var step int64
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM loomplane_agent_run_events
+		WHERE org_id = $1 AND task_id = $2 AND kind = 'step'`, orgID, taskID).Scan(&step); err != nil {
+		return 0, fmt.Errorf("find the stopped step: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_agent_run_events SET data = $3
+		WHERE org_id = $1 AND task_id = $2 AND kind = 'token' AND seq > $4`,
+		orgID, taskID, []byte(withheldText), step); err != nil {
+		return 0, fmt.Errorf("withhold agent run text: %w", err)
+	}
+	e.Data = withStep(e.Data, step)
+	if seq, err = appendEvents(ctx, tx, orgID, taskID, []NewEvent{e}); err != nil {
+		return 0, err
+	}
+	return seq, tx.Commit()
 }
 
 // Events implements Store.

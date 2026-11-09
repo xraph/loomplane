@@ -109,7 +109,7 @@ func TestAIDefaults(t *testing.T) {
 		Provider:  "anthropic",
 		Model:     "claude-sonnet-5-5",
 		Models:    AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL},
-		Knowledge: AIKnowledgeConfig{Dimensions: 1536},
+		Knowledge: AIKnowledgeConfig{Dimensions: 1536, DocsBudgetUSD: "5.00"},
 	}
 	if got := Defaults().AI; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Defaults().AI = %+v, want %+v", got, want)
@@ -147,7 +147,7 @@ func TestAIAgentFromSource(t *testing.T) {
 			Provider: "openai-compatible", Model: "llama-3.3-70b", InputPerMillion: "0.6", OutputPerMillion: "0.6",
 		}},
 		Knowledge: AIKnowledgeConfig{
-			EmbeddingProvider: "openai", EmbeddingAPIKey: "e", EmbeddingModel: "text-embedding-3-small", Dimensions: 1536,
+			EmbeddingProvider: "openai", EmbeddingAPIKey: "e", EmbeddingModel: "text-embedding-3-small", Dimensions: 1536, DocsBudgetUSD: "5.00",
 		},
 	}
 	if !reflect.DeepEqual(c.AI, want) {
@@ -265,6 +265,7 @@ func TestConfigYAMLWiresAIAgentVariables(t *testing.T) {
 		`    embedding_base_url: "${LOOMPLANE_AI_EMBEDDING_BASE_URL:-}"`,
 		`    embedding_model: "${LOOMPLANE_AI_EMBEDDING_MODEL:-}"`,
 		`    dimensions: "${LOOMPLANE_AI_EMBEDDING_DIMENSIONS:-1536}"`,
+		`    docs_budget_usd: "${LOOMPLANE_AI_DOCS_BUDGET_USD:-5.00}"`,
 	}
 	inAI := false
 	found := map[string]bool{}
@@ -283,5 +284,50 @@ func TestConfigYAMLWiresAIAgentVariables(t *testing.T) {
 		if !found[w] {
 			t.Errorf("config.yaml has no %q under ai:", w)
 		}
+	}
+}
+
+func TestDocsBudgetDefault(t *testing.T) {
+	if got := Defaults().AI.Knowledge.DocsBudgetUSD; got != "5.00" {
+		t.Fatalf("default docs budget = %q, want 5.00", got)
+	}
+	c, err := FromSource(mapGetter{"database.url": testDSN, "ai.knowledge.docs_budget_usd": "12.50"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.AI.Knowledge.DocsBudgetUSD; got != "12.50" {
+		t.Fatalf("docs budget = %q, want 12.50", got)
+	}
+}
+
+func TestDocsBudgetValidation(t *testing.T) {
+	for _, bad := range []string{"0", "0.00", "-1", "cheap", "1000.01"} {
+		a := validAI()
+		a.Knowledge = AIKnowledgeConfig{EmbeddingProvider: AIProviderOpenAI, EmbeddingModel: "text-embedding-3-small", Dimensions: 1536, DocsBudgetUSD: bad}
+		err := a.Validate(EnvDevelopment)
+		if err == nil || !strings.Contains(err.Error(), "ai.knowledge.docs_budget_usd") {
+			t.Errorf("budget %q: Validate() = %v, want an error naming ai.knowledge.docs_budget_usd", bad, err)
+		}
+		a.Knowledge.EmbeddingProvider, a.Knowledge.EmbeddingModel = "", ""
+		if err := a.Validate(EnvDevelopment); err != nil {
+			t.Errorf("budget %q with knowledge off: %v", bad, err)
+		}
+	}
+	for _, good := range []string{"5.00", "0.01", "1000", "1000.00"} {
+		a := validAI()
+		a.Knowledge = AIKnowledgeConfig{EmbeddingProvider: AIProviderOpenAI, EmbeddingModel: "text-embedding-3-small", Dimensions: 1536, DocsBudgetUSD: good}
+		if err := a.Validate(EnvDevelopment); err != nil {
+			t.Errorf("budget %q refused: %v", good, err)
+		}
+	}
+}
+
+func TestConfigYAMLWiresDocsBudget(t *testing.T) {
+	raw, err := os.ReadFile("../../config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `docs_budget_usd: "${LOOMPLANE_AI_DOCS_BUDGET_USD:-5.00}"`) {
+		t.Fatal("config.yaml has no docs_budget_usd line")
 	}
 }

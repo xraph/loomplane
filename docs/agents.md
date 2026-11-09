@@ -4,6 +4,8 @@
 
 This is not Loomplane's built-in agent. The built-in agent runs inside Loomplane as your workspace's agent, with its own settings, budget and requests (see the docs under AI agents). `loomctl mcp` serves your own key's tools to an agent that lives outside Loomplane. Both are built from one definition of every operation.
 
+You can also talk to the built-in agent from a terminal. `loomctl agent` opens a conversation at a prompt, and `loomctl agent ask "<prompt>"` asks one thing, prints the answer and exits (`--project`, `--conversation`, `--json`, and `--no-wait` to exit with status 3 when the agent waits for a person). The same conversations are in the dashboard's Assistant and its ⌘J panel. See the docs under AI agents.
+
 ## Setting it up
 
 Make an API key under Settings, API keys. Then add loomctl to your agent's MCP configuration:
@@ -41,6 +43,10 @@ For Claude Code, that's `claude mcp add loomplane --env LOOMPLANE_URL=... --env 
 | `approve_plan`, `retry_deployment`, `create_rollback` | Only with `--allow-deploy`. `create_rollback` plans an environment back to its previous successful release and takes a `reason`. Data-bearing resources stay as they are, and nothing changes until the plan is approved |
 
 The manifest's JSON schema is the resource `loomplane://schema/loomplane.yaml`, so an agent writing one knows every field. A manifest that doesn't parse comes back as an error listing each problem with its line, which an agent can fix and save again.
+
+## Release preparation
+
+The built-in agent can prepare a release to production on request. A person starts it from the dashboard, with `loomctl release prepare`, or in a chat with the agent. Loomplane plans the promotion, collects evidence and has the agent review it, then reports seven gates. If all seven hold, and the person asked from the dashboard or `loomctl` and may approve deployments, the agent may approve the plan. Otherwise it waits for a person. `loomctl mcp` offers no tool that prepares a release. The gates, and what always goes to a person, are in the docs under AI agents, Release preparation.
 
 ## What it can't do
 

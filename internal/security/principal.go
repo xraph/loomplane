@@ -13,6 +13,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/metering"
 )
 
 // Errors a request can fail with before it reaches a handler.
@@ -88,6 +90,8 @@ func StatusFor(err error) int {
 	switch {
 	case errors.Is(err, ErrUnauthenticated):
 		return http.StatusUnauthorized
+	case errors.Is(err, metering.ErrBlocked):
+		return http.StatusPaymentRequired
 	case errors.Is(err, ErrNoOrganization), errors.Is(err, ErrForbidden), errors.Is(err, ErrNotMember), errors.Is(err, ErrEmailNotVerified):
 		return http.StatusForbidden
 	case errors.Is(err, ErrOrgMismatch):

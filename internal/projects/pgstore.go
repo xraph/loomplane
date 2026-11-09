@@ -19,6 +19,10 @@ const pgUniqueViolation = "23505"
 // pgForeignKeyViolation is Postgres's SQLSTATE for a foreign key failure.
 const pgForeignKeyViolation = "23503"
 
+// pgCheckViolation is Postgres's SQLSTATE for a check failure, which the
+// cleanup history guards raise to refuse a delete.
+const pgCheckViolation = "23514"
+
 // PgStore is the Postgres Store, over the grove pgdriver pool the grove
 // extension owns. The schema is migration group "loomplane"
 // (database/migrations).
@@ -269,6 +273,9 @@ func (s *PgStore) DeleteProject(ctx context.Context, orgID, id string) error {
 		return ErrFleetManaged
 	}
 	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_projects WHERE org_id = $1 AND id = $2`, orgID, id)
+	if isRetained(err) {
+		return fmt.Errorf("%w: %w", ErrHistoryRetained, err)
+	}
 	if err != nil {
 		return fmt.Errorf("delete project: %w", err)
 	}
@@ -350,6 +357,9 @@ func (s *PgStore) DeleteEnvironment(ctx context.Context, orgID, projectID, id st
 		return ErrLastEnvironment
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM loomplane_environments WHERE project_id = $1 AND id = $2`, projectID, id); err != nil {
+		if isRetained(err) {
+			return fmt.Errorf("%w: %w", ErrHistoryRetained, err)
+		}
 		return fmt.Errorf("delete environment: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -424,6 +434,14 @@ func teamWriteError(err error) error {
 		return ErrTeamNotFound
 	}
 	return fmt.Errorf("set responsible team: %w", err)
+}
+
+// isRetained reports whether the database refused a delete to keep history:
+// a foreign key that restricts it, or a guard that raises a check violation
+// for cleanup records that must be retained.
+func isRetained(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && (pgErr.Code == pgForeignKeyViolation || pgErr.Code == pgCheckViolation)
 }
 
 func isUniqueViolation(err error) bool {

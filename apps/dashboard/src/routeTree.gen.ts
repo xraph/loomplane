@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
+import { Route as AssistantRouteImport } from "./routes/assistant"
 import { Route as DeviceRouteImport } from "./routes/device"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
@@ -46,17 +47,23 @@ import { Route as NodesIndexRouteImport } from "./routes/nodes.index"
 import { Route as NodesIdRouteImport } from "./routes/nodes.$id"
 import { Route as NotificationsIndexRouteImport } from "./routes/notifications.index"
 import { Route as NotificationsSettingsRouteImport } from "./routes/notifications.settings"
+import { Route as PlatformPageRouteImport } from "./routes/platform.$page"
+import { Route as PlatformCloudRouteImport } from "./routes/platform.cloud"
 import { Route as PlatformCloudSignInRouteImport } from "./routes/platform.cloud-sign-in"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
+import { Route as ReleaseReportsIdRouteImport } from "./routes/release-reports.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
+import { Route as SettingsPageRouteImport } from "./routes/settings.$page"
 import { Route as SettingsAiRouteImport } from "./routes/settings.ai"
 import { Route as SettingsApiKeysRouteImport } from "./routes/settings.api-keys"
 import { Route as SetupCloudSignInRouteImport } from "./routes/setup_.cloud-sign-in"
 import { Route as WorkspacesNewRouteImport } from "./routes/workspaces.new"
+import { Route as AgentReportsIndexRouteImport } from "./routes/agent.reports.index"
+import { Route as AgentReportsIdRouteImport } from "./routes/agent.reports.$id"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
 import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
@@ -65,9 +72,11 @@ import { Route as IntegrationsConnectCloudRouteImport } from "./routes/integrati
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 import { Route as IntegrationsGitlabCallbackRouteImport } from "./routes/integrations.gitlab.callback"
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
+import { Route as ProjectsIdFleetRouteImport } from "./routes/projects.$id_.fleet"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
 import { Route as ProjectsIdServicesServiceRouteImport } from "./routes/projects.$id_.services.$service"
 import { Route as ProjectsIdAiModelsResourceRouteImport } from "./routes/projects.$id_.ai.models.$resource"
+import { Route as ProjectsIdFleetInstancesInstanceIdRouteImport } from "./routes/projects.$id_.fleet_.instances.$instanceId"
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -82,6 +91,11 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AssistantRoute = AssistantRouteImport.update({
+  id: "/assistant",
+  path: "/assistant",
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeviceRoute = DeviceRouteImport.update({
@@ -254,6 +268,16 @@ const NotificationsSettingsRoute = NotificationsSettingsRouteImport.update({
   path: "/notifications/settings",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlatformPageRoute = PlatformPageRouteImport.update({
+  id: "/platform/$page",
+  path: "/platform/$page",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlatformCloudRoute = PlatformCloudRouteImport.update({
+  id: "/platform/cloud",
+  path: "/platform/cloud",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PlatformCloudSignInRoute = PlatformCloudSignInRouteImport.update({
   id: "/platform/cloud-sign-in",
   path: "/platform/cloud-sign-in",
@@ -267,6 +291,11 @@ const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
 const ProjectsIdRoute = ProjectsIdRouteImport.update({
   id: "/projects/$id",
   path: "/projects/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReleaseReportsIdRoute = ReleaseReportsIdRouteImport.update({
+  id: "/release-reports/$id",
+  path: "/release-reports/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
@@ -289,6 +318,11 @@ const ServicesCatalogRoute = ServicesCatalogRouteImport.update({
   path: "/services/catalog",
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsPageRoute = SettingsPageRouteImport.update({
+  id: "/settings/$page",
+  path: "/settings/$page",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsAiRoute = SettingsAiRouteImport.update({
   id: "/settings/ai",
   path: "/settings/ai",
@@ -307,6 +341,16 @@ const SetupCloudSignInRoute = SetupCloudSignInRouteImport.update({
 const WorkspacesNewRoute = WorkspacesNewRouteImport.update({
   id: "/workspaces/new",
   path: "/workspaces/new",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentReportsIndexRoute = AgentReportsIndexRouteImport.update({
+  id: "/agent/reports/",
+  path: "/agent/reports/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentReportsIdRoute = AgentReportsIdRouteImport.update({
+  id: "/agent/reports/$id",
+  path: "/agent/reports/$id",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AiModelsIndexRoute = AiModelsIndexRouteImport.update({
@@ -353,6 +397,11 @@ const IntegrationsOauthCallbackRoute =
     path: "/integrations/oauth/callback",
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdFleetRoute = ProjectsIdFleetRouteImport.update({
+  id: "/projects/$id_/fleet",
+  path: "/projects/$id/fleet",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIdCatalogResourceRoute =
   ProjectsIdCatalogResourceRouteImport.update({
     id: "/projects/$id_/catalog/$resource",
@@ -371,11 +420,18 @@ const ProjectsIdAiModelsResourceRoute =
     path: "/projects/$id/ai/models/$resource",
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdFleetInstancesInstanceIdRoute =
+  ProjectsIdFleetInstancesInstanceIdRouteImport.update({
+    id: "/projects/$id_/fleet_/instances/$instanceId",
+    path: "/projects/$id/fleet/instances/$instanceId",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/assistant": typeof AssistantRoute
   "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
@@ -403,10 +459,14 @@ export interface FileRoutesByFullPath {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/$page": typeof PlatformPageRoute
+  "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/$page": typeof SettingsPageRoute
   "/settings/ai": typeof SettingsAiRoute
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
@@ -421,6 +481,7 @@ export interface FileRoutesByFullPath {
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
+  "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
@@ -428,15 +489,19 @@ export interface FileRoutesByFullPath {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/projects/$id/fleet": typeof ProjectsIdFleetRoute
+  "/agent/reports/": typeof AgentReportsIndexRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
   "/projects/$id/ai/models/$resource": typeof ProjectsIdAiModelsResourceRoute
+  "/projects/$id/fleet/instances/$instanceId": typeof ProjectsIdFleetInstancesInstanceIdRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/assistant": typeof AssistantRoute
   "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
@@ -464,10 +529,14 @@ export interface FileRoutesByTo {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/$page": typeof PlatformPageRoute
+  "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/$page": typeof SettingsPageRoute
   "/settings/ai": typeof SettingsAiRoute
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup/cloud-sign-in": typeof SetupCloudSignInRoute
@@ -482,6 +551,7 @@ export interface FileRoutesByTo {
   "/projects": typeof ProjectsIndexRoute
   "/resources": typeof ResourcesIndexRoute
   "/services": typeof ServicesIndexRoute
+  "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
@@ -489,16 +559,20 @@ export interface FileRoutesByTo {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/projects/$id/fleet": typeof ProjectsIdFleetRoute
+  "/agent/reports": typeof AgentReportsIndexRoute
   "/ai/models": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
   "/projects/$id/ai/models/$resource": typeof ProjectsIdAiModelsResourceRoute
+  "/projects/$id/fleet/instances/$instanceId": typeof ProjectsIdFleetInstancesInstanceIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/assistant": typeof AssistantRoute
   "/device": typeof DeviceRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
@@ -526,10 +600,14 @@ export interface FileRoutesById {
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/nodes/$id": typeof NodesIdRoute
   "/notifications/settings": typeof NotificationsSettingsRoute
+  "/platform/$page": typeof PlatformPageRoute
+  "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
   "/projects/$id": typeof ProjectsIdRoute
+  "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/services/catalog": typeof ServicesCatalogRoute
+  "/settings/$page": typeof SettingsPageRoute
   "/settings/ai": typeof SettingsAiRoute
   "/settings/api-keys": typeof SettingsApiKeysRoute
   "/setup_/cloud-sign-in": typeof SetupCloudSignInRoute
@@ -544,6 +622,7 @@ export interface FileRoutesById {
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
   "/services/": typeof ServicesIndexRoute
+  "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/bitbucket/callback": typeof IntegrationsBitbucketCallbackRoute
@@ -551,10 +630,13 @@ export interface FileRoutesById {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/projects/$id_/fleet": typeof ProjectsIdFleetRoute
+  "/agent/reports/": typeof AgentReportsIndexRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id_/services/$service": typeof ProjectsIdServicesServiceRoute
   "/projects/$id_/ai/models/$resource": typeof ProjectsIdAiModelsResourceRoute
+  "/projects/$id_/fleet_/instances/$instanceId": typeof ProjectsIdFleetInstancesInstanceIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -562,6 +644,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/assistant"
     | "/device"
     | "/forgot-password"
     | "/infrastructure"
@@ -589,10 +672,14 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/$page"
+    | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
+    | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/$page"
     | "/settings/ai"
     | "/settings/api-keys"
     | "/setup/cloud-sign-in"
@@ -607,6 +694,7 @@ export interface FileRouteTypes {
     | "/projects/"
     | "/resources/"
     | "/services/"
+    | "/agent/reports/$id"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/bitbucket/callback"
@@ -614,15 +702,19 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
+    | "/projects/$id/fleet"
+    | "/agent/reports/"
     | "/ai/models/"
     | "/projects/$id/catalog/$resource"
     | "/projects/$id/services/$service"
     | "/projects/$id/ai/models/$resource"
+    | "/projects/$id/fleet/instances/$instanceId"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/assistant"
     | "/device"
     | "/forgot-password"
     | "/infrastructure"
@@ -650,10 +742,14 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/$page"
+    | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
+    | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/$page"
     | "/settings/ai"
     | "/settings/api-keys"
     | "/setup/cloud-sign-in"
@@ -668,6 +764,7 @@ export interface FileRouteTypes {
     | "/projects"
     | "/resources"
     | "/services"
+    | "/agent/reports/$id"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/bitbucket/callback"
@@ -675,15 +772,19 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
+    | "/projects/$id/fleet"
+    | "/agent/reports"
     | "/ai/models"
     | "/projects/$id/catalog/$resource"
     | "/projects/$id/services/$service"
     | "/projects/$id/ai/models/$resource"
+    | "/projects/$id/fleet/instances/$instanceId"
   id:
     | "__root__"
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/assistant"
     | "/device"
     | "/forgot-password"
     | "/infrastructure"
@@ -711,10 +812,14 @@ export interface FileRouteTypes {
     | "/invitations/accept"
     | "/nodes/$id"
     | "/notifications/settings"
+    | "/platform/$page"
+    | "/platform/cloud"
     | "/platform/cloud-sign-in"
     | "/projects/$id"
+    | "/release-reports/$id"
     | "/services/$kind"
     | "/services/catalog"
+    | "/settings/$page"
     | "/settings/ai"
     | "/settings/api-keys"
     | "/setup_/cloud-sign-in"
@@ -729,6 +834,7 @@ export interface FileRouteTypes {
     | "/projects/"
     | "/resources/"
     | "/services/"
+    | "/agent/reports/$id"
     | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/bitbucket/callback"
@@ -736,16 +842,20 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
+    | "/projects/$id_/fleet"
+    | "/agent/reports/"
     | "/ai/models/"
     | "/projects/$id_/catalog/$resource"
     | "/projects/$id_/services/$service"
     | "/projects/$id_/ai/models/$resource"
+    | "/projects/$id_/fleet_/instances/$instanceId"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
+  AssistantRoute: typeof AssistantRoute
   DeviceRoute: typeof DeviceRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
@@ -773,10 +883,14 @@ export interface RootRouteChildren {
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   NodesIdRoute: typeof NodesIdRoute
   NotificationsSettingsRoute: typeof NotificationsSettingsRoute
+  PlatformPageRoute: typeof PlatformPageRoute
+  PlatformCloudRoute: typeof PlatformCloudRoute
   PlatformCloudSignInRoute: typeof PlatformCloudSignInRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
+  ReleaseReportsIdRoute: typeof ReleaseReportsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   ServicesCatalogRoute: typeof ServicesCatalogRoute
+  SettingsPageRoute: typeof SettingsPageRoute
   SettingsAiRoute: typeof SettingsAiRoute
   SettingsApiKeysRoute: typeof SettingsApiKeysRoute
   SetupCloudSignInRoute: typeof SetupCloudSignInRoute
@@ -791,6 +905,7 @@ export interface RootRouteChildren {
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
+  AgentReportsIdRoute: typeof AgentReportsIdRoute
   AiModelsSplatRoute: typeof AiModelsSplatRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsBitbucketCallbackRoute: typeof IntegrationsBitbucketCallbackRoute
@@ -798,10 +913,13 @@ export interface RootRouteChildren {
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsGitlabCallbackRoute: typeof IntegrationsGitlabCallbackRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
+  ProjectsIdFleetRoute: typeof ProjectsIdFleetRoute
+  AgentReportsIndexRoute: typeof AgentReportsIndexRoute
   AiModelsIndexRoute: typeof AiModelsIndexRoute
   ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
   ProjectsIdServicesServiceRoute: typeof ProjectsIdServicesServiceRoute
   ProjectsIdAiModelsResourceRoute: typeof ProjectsIdAiModelsResourceRoute
+  ProjectsIdFleetInstancesInstanceIdRoute: typeof ProjectsIdFleetInstancesInstanceIdRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -825,6 +943,13 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/assistant": {
+      id: "/assistant"
+      path: "/assistant"
+      fullPath: "/assistant"
+      preLoaderRoute: typeof AssistantRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/device": {
@@ -1065,6 +1190,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof NotificationsSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/platform/$page": {
+      id: "/platform/$page"
+      path: "/platform/$page"
+      fullPath: "/platform/$page"
+      preLoaderRoute: typeof PlatformPageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/platform/cloud": {
+      id: "/platform/cloud"
+      path: "/platform/cloud"
+      fullPath: "/platform/cloud"
+      preLoaderRoute: typeof PlatformCloudRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/platform/cloud-sign-in": {
       id: "/platform/cloud-sign-in"
       path: "/platform/cloud-sign-in"
@@ -1084,6 +1223,13 @@ declare module "@tanstack/react-router" {
       path: "/projects/$id"
       fullPath: "/projects/$id"
       preLoaderRoute: typeof ProjectsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/release-reports/$id": {
+      id: "/release-reports/$id"
+      path: "/release-reports/$id"
+      fullPath: "/release-reports/$id"
+      preLoaderRoute: typeof ReleaseReportsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/resources/": {
@@ -1114,6 +1260,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ServicesCatalogRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/settings/$page": {
+      id: "/settings/$page"
+      path: "/settings/$page"
+      fullPath: "/settings/$page"
+      preLoaderRoute: typeof SettingsPageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/settings/ai": {
       id: "/settings/ai"
       path: "/settings/ai"
@@ -1140,6 +1293,20 @@ declare module "@tanstack/react-router" {
       path: "/workspaces/new"
       fullPath: "/workspaces/new"
       preLoaderRoute: typeof WorkspacesNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/agent/reports/": {
+      id: "/agent/reports/"
+      path: "/agent/reports"
+      fullPath: "/agent/reports/"
+      preLoaderRoute: typeof AgentReportsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/agent/reports/$id": {
+      id: "/agent/reports/$id"
+      path: "/agent/reports/$id"
+      fullPath: "/agent/reports/$id"
+      preLoaderRoute: typeof AgentReportsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/ai/models/": {
@@ -1198,6 +1365,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IntegrationsOauthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/projects/$id_/fleet": {
+      id: "/projects/$id_/fleet"
+      path: "/projects/$id/fleet"
+      fullPath: "/projects/$id/fleet"
+      preLoaderRoute: typeof ProjectsIdFleetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/projects/$id_/catalog/$resource": {
       id: "/projects/$id_/catalog/$resource"
       path: "/projects/$id/catalog/$resource"
@@ -1219,6 +1393,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdAiModelsResourceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/projects/$id_/fleet_/instances/$instanceId": {
+      id: "/projects/$id_/fleet_/instances/$instanceId"
+      path: "/projects/$id/fleet/instances/$instanceId"
+      fullPath: "/projects/$id/fleet/instances/$instanceId"
+      preLoaderRoute: typeof ProjectsIdFleetInstancesInstanceIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -1226,6 +1407,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
+  AssistantRoute: AssistantRoute,
   DeviceRoute: DeviceRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
@@ -1253,10 +1435,14 @@ const rootRouteChildren: RootRouteChildren = {
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   NodesIdRoute: NodesIdRoute,
   NotificationsSettingsRoute: NotificationsSettingsRoute,
+  PlatformPageRoute: PlatformPageRoute,
+  PlatformCloudRoute: PlatformCloudRoute,
   PlatformCloudSignInRoute: PlatformCloudSignInRoute,
   ProjectsIdRoute: ProjectsIdRoute,
+  ReleaseReportsIdRoute: ReleaseReportsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   ServicesCatalogRoute: ServicesCatalogRoute,
+  SettingsPageRoute: SettingsPageRoute,
   SettingsAiRoute: SettingsAiRoute,
   SettingsApiKeysRoute: SettingsApiKeysRoute,
   SetupCloudSignInRoute: SetupCloudSignInRoute,
@@ -1271,6 +1457,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsIndexRoute: ProjectsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
+  AgentReportsIdRoute: AgentReportsIdRoute,
   AiModelsSplatRoute: AiModelsSplatRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsBitbucketCallbackRoute: IntegrationsBitbucketCallbackRoute,
@@ -1278,10 +1465,14 @@ const rootRouteChildren: RootRouteChildren = {
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsGitlabCallbackRoute: IntegrationsGitlabCallbackRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
+  ProjectsIdFleetRoute: ProjectsIdFleetRoute,
+  AgentReportsIndexRoute: AgentReportsIndexRoute,
   AiModelsIndexRoute: AiModelsIndexRoute,
   ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,
   ProjectsIdServicesServiceRoute: ProjectsIdServicesServiceRoute,
   ProjectsIdAiModelsResourceRoute: ProjectsIdAiModelsResourceRoute,
+  ProjectsIdFleetInstancesInstanceIdRoute:
+    ProjectsIdFleetInstancesInstanceIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -46,7 +46,7 @@ func TestListNodeJoinTokensShowsOnlyUnspent(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := func(ts []PendingNodeJoinToken) []string {
-		var out []string
+		out := make([]string, 0, len(ts))
 		for _, tk := range ts {
 			out = append(out, tk.ID)
 		}

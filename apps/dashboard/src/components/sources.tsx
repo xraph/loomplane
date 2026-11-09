@@ -9,6 +9,8 @@ import { messageOf } from "@/client/errors"
 import {
   useAnalysesCreate,
   useBitbucketWebhookEnable,
+  useManifestsCurrent,
+  useManifestsSave,
   useProjectsGet,
   useProjectsGraph,
   useProjectsList,
@@ -41,6 +43,7 @@ import {
 import { QueryError } from "@/components/query-error"
 import { RepositoryPicker } from "@/components/repository-picker"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -59,14 +62,17 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { isActive, shortSHA, stepLabel } from "@/lib/architecture"
 import { relative, repositoryHost, repositoryURL } from "@/lib/format"
+import { listOf } from "@/lib/models"
 import { useOrganization } from "@/lib/organization"
+import { servicesInRepo, withoutServices } from "@/lib/placement"
 import { useProjectCan } from "@/lib/project-permissions"
 import { useNow } from "@/lib/use-runs"
 
 /**
  * refreshRepositories re-reads the project after its sources change: the
  * page, the project list and the sidebar all show the repositories it
- * builds from, and the generated client only refreshes the sources list.
+ * builds from, the graph and the deploy screen show what's in them, and
+ * the generated client only refreshes the sources list.
  */
 function refreshRepositories(
   invalidate: ReturnType<typeof useInvalidate>,
@@ -74,6 +80,7 @@ function refreshRepositories(
 ) {
   invalidate(useProjectsGet, { path: { id: projectID } })
   invalidate(useProjectsList)
+  invalidate(useProjectsGraph, { path: { id: projectID } })
 }
 
 /**
@@ -386,32 +393,107 @@ function RemoveSource({
   onDone: () => void
 }) {
   const remove = useMutation(useSourcesDelete)
+  const save = useMutation(useManifestsSave)
   const invalidate = useInvalidate()
+  const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
+  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
+  const [keep, setKeep] = useState(false)
+  const manifest = current.data?.manifest
+  const graph = view.data?.graph
+  // The services in this repository can't deploy once it's gone, so the
+  // dialog offers to take them out of loomplane.yaml in the same step.
+  const names =
+    source && manifest && graph
+      ? servicesInRepo(manifest, graph, source.alias)
+      : []
+  const dropped =
+    manifest && names.length ? withoutServices(manifest, names) : null
+  const drop = !!dropped && !keep
+  const them = names.length === 1 ? "it" : "them"
+  const close = () => {
+    setKeep(false)
+    onDone()
+  }
   const confirm = async () => {
     if (!source) return
     try {
       await remove.mutateAsync({
         path: { id: project.id, alias: source.alias },
       })
-      refreshRepositories(invalidate, project.id)
-      toast.success(`Removed ${source.alias}`)
-      onDone()
     } catch (err) {
       toast.error(messageOf(err, "The repository wasn't removed."))
+      return
     }
+    refreshRepositories(invalidate, project.id)
+    if (drop && current.data) {
+      try {
+        await save.mutateAsync({
+          path: { id: project.id },
+          body: {
+            manifest: dropped.manifest,
+            baseRevision: current.data.revision,
+          },
+        })
+        invalidate(useManifestsCurrent)
+        toast.success(`Removed ${source.alias}`, {
+          description: `${listOf(names)} ${names.length === 1 ? "is" : "are"} out of loomplane.yaml.`,
+        })
+      } catch (err) {
+        toast.error(
+          `Removed ${source.alias}, but loomplane.yaml wasn't changed`,
+          {
+            description: messageOf(
+              err,
+              `Take ${listOf(names)} out of it yourself.`
+            ),
+          }
+        )
+      }
+    } else {
+      toast.success(`Removed ${source.alias}`)
+    }
+    close()
   }
   return (
     <CloudConfirm
       open={!!source}
-      onOpenChange={(open) => !open && onDone()}
+      onOpenChange={(open) => !open && close()}
       title={`Remove ${source?.alias ?? "repository"}?`}
       confirmLabel="Remove"
-      pending={remove.isPending}
+      pending={remove.isPending || save.isPending}
       onConfirm={() => void confirm()}
     >
       Loomplane stops analyzing it. The alias {source?.alias} stays taken, so
       plans made with it keep meaning {source?.repository}, and you can&apos;t
       give it to another repository later.
+      {dropped && (
+        <>
+          <span className="mt-3 flex items-start gap-2.5 text-foreground">
+            <Checkbox
+              aria-label={`Also take ${listOf(names)} out of loomplane.yaml`}
+              checked={drop}
+              onCheckedChange={(on) => setKeep(!on)}
+              className="mt-0.5"
+            />
+            <span>
+              Also take <span className="font-mono">{listOf(names)}</span> out
+              of loomplane.yaml.
+            </span>
+          </span>
+          <span className="mt-1.5 block pl-6.5">
+            {drop
+              ? `Where ${names.length === 1 ? "it runs" : "they run"}, the next deploy there deletes ${them} once you approve the plan.`
+              : `${names.length === 1 ? "It stays" : "They stay"} and keep${names.length === 1 ? "s" : ""} running where deployed, but can't deploy again until you add the repository back or take ${them} out.`}
+            {drop &&
+              dropped.gateways.length > 0 &&
+              ` The ${listOf(dropped.gateways)} ${
+                dropped.gateways.length === 1
+                  ? `gateway only routes to ${them}, so it goes`
+                  : `gateways only route to ${them}, so they go`
+              } too.`}
+          </span>
+        </>
+      )}
     </CloudConfirm>
   )
 }

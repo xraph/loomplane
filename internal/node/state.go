@@ -66,6 +66,9 @@ type Config struct {
 	IngressMode    string               `json:"ingress_mode"`
 	DockerSocket   string               `json:"docker_socket,omitempty"`
 	Edge           bool                 `json:"edge,omitempty"`
+	// Name is the node's name as it joined. node leave --purge-volumes asks
+	// for it before deleting data. A rename in Loomplane doesn't reach it.
+	Name string `json:"name,omitempty"`
 }
 
 func (s State) uid() int {

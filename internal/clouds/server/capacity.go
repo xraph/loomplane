@@ -2,33 +2,18 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 )
 
 // EffectiveCapacity bounds daemon facts by the daemon's visible cgroup limits.
 // Unknown layouts fail closed so callers cannot reserve the outer host budget.
 func (c *Client) EffectiveCapacity(ctx context.Context, cpus int, memory int64) (cpuMillis, memoryBytes int64, err error) {
-	session, err := c.ssh.NewSession()
+	limitCPU, limitMemory, err := c.access.CgroupLimits(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
-	defer session.Close()
-	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
-	defer stop()
-	out, err := session.Output(effectiveCapacityCommand)
-	if err != nil {
-		return 0, 0, errors.New("effective Docker cgroup limits are unavailable")
-	}
-	var limits struct {
-		CPU    int64 `json:"cpu"`
-		Memory int64 `json:"memory"`
-	}
-	if checkErr := json.Unmarshal(out, &limits); checkErr != nil {
-		return 0, 0, checkErr
-	}
-	cpu := min(int64(cpus)*1000, limits.CPU)
-	mem := min(memory, limits.Memory)
+	cpu := min(int64(cpus)*1000, limitCPU)
+	mem := min(memory, limitMemory)
 	if cpu <= 0 || mem <= 0 {
 		return 0, 0, errors.New("effective Docker capacity is invalid")
 	}

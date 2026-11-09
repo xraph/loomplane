@@ -138,6 +138,19 @@ func name(value string) (string, error) {
 	return value, nil
 }
 
+// cloudName is name for a Cloud the organization owns, which can't take a
+// name the platform-owned Loomplane Cloud uses.
+func cloudName(value string) (string, error) {
+	value, err := name(value)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(value, PlatformCloudName) || strings.EqualFold(value, PlatformCloudFallbackName) {
+		return "", fmt.Errorf("%w: %q is reserved for the Cloud this instance runs, so choose another name", ErrExists, value)
+	}
+	return value, nil
+}
+
 // normalizeTags returns sorted, distinct tags or explains the first bad one.
 func normalizeTags(in []string) ([]string, error) {
 	out := make([]string, 0, len(in))
@@ -186,6 +199,19 @@ func (s *Service) record(ctx context.Context, p security.Principal, projectID, a
 	}
 }
 
+// writable reads a Cloud the caller is about to change and refuses the
+// platform-owned Loomplane Cloud, which only the control plane writes.
+func (s *Service) writable(ctx context.Context, orgID, projectID, id string) (*Profile, error) {
+	c, err := s.store.GetProfile(ctx, orgID, projectID, id)
+	if err != nil {
+		return nil, err
+	}
+	if c.PlatformOwned {
+		return nil, ErrPlatformOwned
+	}
+	return c, nil
+}
+
 // List returns the project's Clouds ordered by name and ID.
 func (s *Service) List(ctx context.Context, p security.Principal, projectID string) ([]*Profile, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountRead); err != nil {
@@ -199,7 +225,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	value, err := name(in.Name)
+	value, err := cloudName(in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -233,14 +259,14 @@ func (s *Service) Update(ctx context.Context, p security.Principal, projectID, i
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	c, err := s.writable(ctx, p.OrgID, projectID, id)
 	if err != nil {
 		return nil, err
 	}
 	if in.Revision != c.Revision {
 		return nil, ErrConflict
 	}
-	value, err := name(in.Name)
+	value, err := cloudName(in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +288,7 @@ func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal,
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	c, err := s.store.GetProfile(ctx, p.OrgID, projectID, id)
+	c, err := s.writable(ctx, p.OrgID, projectID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +313,9 @@ func (s *Service) SetDefaultPlacement(ctx context.Context, p security.Principal,
 // Delete removes an unassigned Cloud and its targets.
 func (s *Service) Delete(ctx context.Context, p security.Principal, projectID, id string) error {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
+		return err
+	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, id); err != nil {
 		return err
 	}
 	if err := s.store.DeleteProfile(ctx, p.OrgID, projectID, id); err != nil {
@@ -320,7 +349,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
-	if _, err := s.store.GetProfile(ctx, p.OrgID, projectID, cloudID); err != nil {
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
 		return nil, err
 	}
 	in.Name = strings.TrimSpace(in.Name)
@@ -338,6 +367,9 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	in.Provider, in.ConnectionID, in.Region = strings.TrimSpace(in.Provider), strings.TrimSpace(in.ConnectionID), strings.TrimSpace(in.Region)
 	if in.Runtime == "" {
 		in.Runtime = "managed"
+	}
+	if platformErr := refusePlatformProvider(in); platformErr != nil {
+		return nil, platformErr
 	}
 	if in.PoolID != "" && (in.Runtime != "server" || in.Provider != "server" || in.ConnectionID != "") {
 		return nil, ErrInvalid
@@ -378,6 +410,9 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	return target, nil
 }
 func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput, projectIDs ...string) error {
+	if err := refusePlatformProvider(in); err != nil {
+		return err
+	}
 	if in.PoolID != "" {
 		return nil
 	}
@@ -417,6 +452,9 @@ func (s *Service) UpdateTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return nil, err
 	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
+		return nil, err
+	}
 	target, err := s.store.GetTarget(ctx, p.OrgID, projectID, cloudID, id)
 	if err != nil {
 		return nil, err
@@ -453,6 +491,9 @@ func (s *Service) DeleteTarget(ctx context.Context, p security.Principal, projec
 	if err := s.scope(ctx, p, projectID, security.CloudAccountManage); err != nil {
 		return err
 	}
+	if _, err := s.writable(ctx, p.OrgID, projectID, cloudID); err != nil {
+		return err
+	}
 	if err := s.store.DeleteTarget(ctx, p.OrgID, projectID, cloudID, id); err != nil {
 		return err
 	}
@@ -472,4 +513,14 @@ func (s *Service) EnvironmentCloud(ctx context.Context, p security.Principal, pr
 		return nil, 0, fmt.Errorf("%w: assignment storage unavailable", ErrInvalid)
 	}
 	return reader.EnvironmentCloud(ctx, p.OrgID, projectID, environmentID)
+}
+
+// refusePlatformProvider refuses a Loomplane Cloud target or default on a
+// Cloud a workspace runs. The instance makes those targets on its own
+// Loomplane Cloud, and no connection of the workspace's reaches them.
+func refusePlatformProvider(in CreateTargetInput) error {
+	if strings.TrimSpace(in.Provider) == "platform" || in.Runtime == "platform" {
+		return fmt.Errorf("%w: Loomplane Cloud targets are created by this instance on its own Loomplane Cloud; choose a provider you connect", ErrInvalid)
+	}
+	return nil
 }

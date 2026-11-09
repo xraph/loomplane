@@ -660,3 +660,19 @@ func TestConcurrentBudgetWritesOneWins(t *testing.T) {
 		t.Fatalf("stale release: %v", err)
 	}
 }
+
+func TestEnabledOrgsListsOnlyEnabledWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	for _, s := range []*agentsettings.Settings{
+		{OrgID: "org_c", Enabled: true}, {OrgID: "org_a", Enabled: true}, {OrgID: "org_b"},
+	} {
+		if err := h.store.Save(ctx, s, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := h.svc.EnabledOrgs(ctx)
+	if err != nil || !slices.Equal(got, []string{"org_a", "org_c"}) {
+		t.Fatalf("EnabledOrgs = %v, %v; want [org_a org_c]", got, err)
+	}
+}

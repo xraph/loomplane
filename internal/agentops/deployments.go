@@ -34,7 +34,13 @@ var errProductionRetry = fmt.Errorf("%w: retry production deployments from the d
 // Outputs.
 type (
 	deploymentsOutput struct {
-		Deployments []*deployments.Deployment `json:"deployments"`
+		Deployments []linkedDeployment `json:"deployments"`
+	}
+	// linkedDeployment is a deployment with its page in the dashboard,
+	// relative to the workspace: the page of the plan that started it.
+	linkedDeployment struct {
+		*deployments.Deployment
+		Path string `json:"path,omitempty"`
 	}
 	logsOutput struct {
 		DeploymentID string `json:"deployment_id"`
@@ -46,6 +52,11 @@ type (
 	}
 )
 
+// linkDeployment is quoteDeployment with the deployment's dashboard path.
+func (d *Deps) linkDeployment(ctx context.Context, dep *deployments.Deployment) linkedDeployment {
+	return linkedDeployment{Deployment: d.quoteDeployment(ctx, dep), Path: deploymentPath(dep.PlanID)}
+}
+
 func registerDeployments(r *Registry, d *Deps) {
 	Register(r, def("list_deployments"), security.DeploymentRead, func(ctx context.Context, call Call, in defs.ProjectInput) (deploymentsOutput, error) {
 		p, err := d.findProject(ctx, call, in.Project)
@@ -56,52 +67,52 @@ func registerDeployments(r *Registry, d *Deps) {
 		if err != nil {
 			return deploymentsOutput{}, err
 		}
-		out := deploymentsOutput{Deployments: make([]*deployments.Deployment, 0, len(list))}
+		out := deploymentsOutput{Deployments: make([]linkedDeployment, 0, len(list))}
 		for _, dep := range list {
 			if call.Scope.EnvironmentID != "" && dep.EnvironmentID != call.Scope.EnvironmentID {
 				continue
 			}
-			out.Deployments = append(out.Deployments, d.quoteDeployment(ctx, dep))
+			out.Deployments = append(out.Deployments, d.linkDeployment(ctx, dep))
 		}
 		return out, nil
 	})
 
-	Register(r, def("get_deployment"), security.DeploymentRead, func(ctx context.Context, call Call, in defs.DeploymentInput) (*deployments.Deployment, error) {
+	Register(r, def("get_deployment"), security.DeploymentRead, func(ctx context.Context, call Call, in defs.DeploymentInput) (linkedDeployment, error) {
 		dep, err := d.deployment(ctx, call, in.DeploymentID)
 		if err != nil {
-			return nil, err
+			return linkedDeployment{}, err
 		}
-		return d.quoteDeployment(ctx, dep), nil
+		return d.linkDeployment(ctx, dep), nil
 	})
 
-	Register(r, def("deployment_for_plan"), security.DeploymentRead, func(ctx context.Context, call Call, in defs.PlanInput) (*deployments.Deployment, error) {
+	Register(r, def("deployment_for_plan"), security.DeploymentRead, func(ctx context.Context, call Call, in defs.PlanInput) (linkedDeployment, error) {
 		if _, err := d.plan(ctx, call, in.PlanID); err != nil {
-			return nil, err
+			return linkedDeployment{}, err
 		}
 		dep, err := d.Deployments.ForPlan(ctx, call.Principal, in.PlanID)
 		if err != nil {
-			return nil, err
+			return linkedDeployment{}, err
 		}
-		return d.quoteDeployment(ctx, dep), nil
+		return d.linkDeployment(ctx, dep), nil
 	})
 
-	Register(r, def("retry_deployment"), security.DeploymentApprove, func(ctx context.Context, call Call, in defs.DeploymentInput) (*deployments.Deployment, error) {
+	Register(r, def("retry_deployment"), security.DeploymentApprove, func(ctx context.Context, call Call, in defs.DeploymentInput) (linkedDeployment, error) {
 		dep, err := d.deployment(ctx, call, in.DeploymentID)
 		if err != nil {
-			return nil, err
+			return linkedDeployment{}, err
 		}
 		kind, err := d.environmentKind(ctx, call, dep.ProjectID, dep.EnvironmentID)
 		if err != nil {
-			return nil, err
+			return linkedDeployment{}, err
 		}
 		if !NonProduction(kind) {
-			return nil, errProductionRetry
+			return linkedDeployment{}, errProductionRetry
 		}
 		dep, err = d.Deployments.Retry(ctx, call.Principal, in.DeploymentID)
 		if err != nil {
-			return nil, err
+			return linkedDeployment{}, err
 		}
-		return d.quoteDeployment(ctx, dep), nil
+		return d.linkDeployment(ctx, dep), nil
 	}, RiskFrom(func(ctx context.Context, call Call, in defs.DeploymentInput) (defs.Risk, error) {
 		dep, err := d.deployment(ctx, call, in.DeploymentID)
 		if err != nil {

@@ -107,8 +107,8 @@ func TestEnvFileKind(t *testing.T) {
 		{"environment.ts", false, false},
 	}
 	for _, tt := range tests {
-		if ex, real := envFileKind(tt.name); ex != tt.example || real != tt.real {
-			t.Errorf("envFileKind(%q) = %v, %v", tt.name, ex, real)
+		if ex, committed := envFileKind(tt.name); ex != tt.example || committed != tt.real {
+			t.Errorf("envFileKind(%q) = %v, %v", tt.name, ex, committed)
 		}
 	}
 }
