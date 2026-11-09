@@ -198,7 +198,7 @@ export function Repositories({ project }: { project: Project }) {
         <CloudTable
           label="Repositories"
           columns="120px minmax(0,1.3fr) minmax(0,1fr) 150px"
-          head={["Alias", "Repository", "Last read", ""]}
+          head={sourceColumns}
         >
           {list.map((s) => {
             const state = states.get(s.alias)
@@ -271,6 +271,7 @@ export function Repositories({ project }: { project: Project }) {
                     push={push}
                     projectID={project.id}
                     mayTurnOn={mayConnect}
+                    span={sourceColumns.length}
                   />
                 )}
               </Fragment>
@@ -292,6 +293,9 @@ export function Repositories({ project }: { project: Project }) {
   )
 }
 
+/** sourceColumns heads the Repositories table; the last is the actions. */
+const sourceColumns = ["Alias", "Repository", "Last read", ""]
+
 /**
  * pushOff is what a source says when a push to its repository doesn't
  * re-analyze it. Hosts that have no say send nothing.
@@ -303,18 +307,21 @@ function pushOff(s: DiscoverySource): PushState | undefined {
 /**
  * PushNotice says why pushes don't re-analyze a source, with a button that
  * tries to add the webhook again. Only Bitbucket sources carry the state, and
- * its webhook is the one that button adds.
+ * its webhook is the one that button adds. It's a row of its own with one
+ * cell across all span columns, so a screen reader reads it whole.
  */
 function PushNotice({
   source,
   push,
   projectID,
   mayTurnOn,
+  span,
 }: {
   source: DiscoverySource
   push: PushState
   projectID: string
   mayTurnOn: boolean
+  span: number
 }) {
   const enable = useMutation(useBitbucketWebhookEnable)
   const invalidate = useInvalidate()
@@ -333,32 +340,38 @@ function PushNotice({
   return (
     <div
       role="row"
-      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 bg-subtle px-4 py-2 text-xs text-muted-foreground not-last:border-b"
+      className="bg-subtle px-4 py-2 text-xs text-muted-foreground not-last:border-b"
     >
-      <div role="cell" className="min-w-0 flex-[1_1_240px]">
-        <span className="font-medium text-weld-ink">
-          Pushes don&apos;t re-analyze {source.alias}.
-        </span>{" "}
-        {push.reason ? sentence(push.reason) : null}
-        {failure && (
-          <p role="alert" className="mt-1 text-destructive">
-            {failure}
-          </p>
+      <div
+        role="cell"
+        aria-colspan={span}
+        className="flex flex-wrap items-center gap-x-3 gap-y-1.5"
+      >
+        <div className="min-w-0 flex-[1_1_240px]">
+          <span className="font-medium text-weld-ink">
+            Pushes don&apos;t re-analyze {source.alias}.
+          </span>{" "}
+          {push.reason ? sentence(push.reason) : null}
+          {failure && (
+            <p role="alert" className="mt-1 text-destructive">
+              {failure}
+            </p>
+          )}
+        </div>
+        {mayTurnOn && (
+          <div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={enable.isPending}
+              onClick={() => void turnOn()}
+            >
+              {enable.isPending && <Spinner />}
+              Turn on
+            </Button>
+          </div>
         )}
       </div>
-      {mayTurnOn && (
-        <div role="cell">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={enable.isPending}
-            onClick={() => void turnOn()}
-          >
-            {enable.isPending && <Spinner />}
-            Turn on
-          </Button>
-        </div>
-      )}
     </div>
   )
 }
