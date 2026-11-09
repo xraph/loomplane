@@ -65,6 +65,11 @@ type Store interface {
 	DeleteInstallation(ctx context.Context, orgID string, id int64) error
 	// SavePermissions records what an installation had accepted at at.
 	SavePermissions(ctx context.Context, orgID string, id int64, perms map[string]string, at time.Time) error
+	// DeferPermissionsCheck records a failed read of an installation's
+	// permissions at at, so the next read waits PermissionsTTL. The
+	// permissions stay as they were. It does nothing for an installation
+	// whose permissions were never read, or were checked after at.
+	DeferPermissionsCheck(ctx context.Context, orgID string, id int64, at time.Time) error
 }
 
 // GitHubInstallation is a connected installation, as the API shows it.
@@ -108,7 +113,12 @@ type Connections struct {
 	audit    Auditor
 	stateKey []byte
 	now      func() time.Time
+	warn     func(msg string, err error)
 }
+
+// SetWarn sets where failures that don't fail the call are reported. No
+// error it's given holds a token.
+func (c *Connections) SetWarn(fn func(msg string, err error)) { c.warn = fn }
 
 // NewConnections returns Connections. app is nil when no GitHub App is
 // configured; audit may be nil.
@@ -359,7 +369,9 @@ func (c *Connections) access(ctx context.Context, orgID, key string) (IssueAcces
 
 // permissions brings rec's permissions up to date when they're older
 // than PermissionsTTL. When GitHub can't be asked it keeps the stored
-// ones, and fails only when none were ever read.
+// ones, reports the failure, and records the attempt, so the next read
+// waits PermissionsTTL too rather than asking GitHub on every call
+// through an outage. It fails only when none were ever read.
 func (c *Connections) permissions(ctx context.Context, rec *InstallationRecord) error {
 	now := c.now().UTC()
 	if rec.PermissionsCheckedAt != nil && now.Sub(*rec.PermissionsCheckedAt) < PermissionsTTL {
@@ -367,10 +379,17 @@ func (c *Connections) permissions(ctx context.Context, rec *InstallationRecord) 
 	}
 	inst, err := c.app.Installation(ctx, rec.ID)
 	if err != nil {
-		if rec.PermissionsCheckedAt != nil {
-			return nil
+		err = fmt.Errorf("read %s's GitHub App permissions: %w", rec.Account, err)
+		if rec.PermissionsCheckedAt == nil {
+			return err
 		}
-		return fmt.Errorf("read %s's GitHub App permissions: %w", rec.Account, err)
+		c.warnf("keep the last known GitHub App permissions of "+rec.Account, err)
+		if derr := c.store.DeferPermissionsCheck(ctx, rec.OrgID, rec.ID, now); derr != nil {
+			c.warnf("record the failed read of "+rec.Account+"'s GitHub App permissions", derr)
+		} else {
+			rec.PermissionsCheckedAt = &now
+		}
+		return nil
 	}
 	if err := c.store.SavePermissions(ctx, rec.OrgID, rec.ID, inst.Permissions, now); err != nil {
 		return err
@@ -396,10 +415,13 @@ func (c *Connections) IssuesStatus(ctx context.Context, p security.Principal) (*
 		return nil, err
 	}
 	for _, r := range recs {
-		if err := c.permissions(ctx, r); err != nil && r.PermissionsCheckedAt == nil {
-			// GitHub couldn't be asked, and nothing was ever read: the row
-			// shows as not accepted, without a check time.
-			r.Permissions = nil
+		if err := c.permissions(ctx, r); err != nil {
+			c.warnf("refresh the Issues status of "+r.Account, err)
+			if r.PermissionsCheckedAt == nil {
+				// GitHub couldn't be asked, and nothing was ever read: the
+				// row shows as not accepted, without a check time.
+				r.Permissions = nil
+			}
 		}
 		_, manage := c.app.AccountURLs(r.Account, r.AccountType, r.ID)
 		st.Installations = append(st.Installations, InstallationIssues{
@@ -408,6 +430,12 @@ func (c *Connections) IssuesStatus(ctx context.Context, p security.Principal) (*
 		})
 	}
 	return st, nil
+}
+
+func (c *Connections) warnf(msg string, err error) {
+	if c.warn != nil && err != nil {
+		c.warn(msg, err)
+	}
 }
 
 func (c *Connections) view(r *InstallationRecord) GitHubInstallation {

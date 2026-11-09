@@ -244,6 +244,17 @@ func (s *memInstallations) SavePermissions(_ context.Context, orgID string, id i
 	return nil
 }
 
+func (s *memInstallations) DeferPermissionsCheck(_ context.Context, orgID string, id int64, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.recs {
+		if r.OrgID == orgID && r.ID == id && r.PermissionsCheckedAt != nil && r.PermissionsCheckedAt.Before(at) {
+			r.PermissionsCheckedAt = &at
+		}
+	}
+	return nil
+}
+
 // expire makes Loomplane ask GitHub for the permissions again, as it does
 // once PermissionsTTL has passed.
 func (s *memInstallations) expire() {

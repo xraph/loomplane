@@ -107,7 +107,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	pg := pgdriver.Unwrap(db)
 	e.svc = discovery.NewService(discovery.NewPgStore(pg), projects.NewPgStore(pg), authz,
 		orchestration.NewEnqueuer(eng), projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()))
-	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}); err != nil {
+	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
 		return err
 	}
 	if e.bitbucket, err = bitbucketConnections(e.cfg, db, authz,
@@ -190,8 +190,9 @@ func (e *Extension) Register(fapp forge.App) error {
 }
 
 // connections builds the organization GitHub connections, over the
-// configured GitHub App or none.
-func connections(cfg config.Config, pg *pgdriver.PgDB, authz repositories.Authorizer, audit repositories.Auditor) (*repositories.Connections, error) {
+// configured GitHub App or none. What fails without failing a call goes
+// to log.
+func connections(cfg config.Config, pg *pgdriver.PgDB, authz repositories.Authorizer, audit repositories.Auditor, log forge.Logger) (*repositories.Connections, error) {
 	stateKey, err := security.DeriveKey(cfg.SecretKey, repositories.StateKeyLabel)
 	if err != nil {
 		return nil, err
@@ -205,7 +206,13 @@ func connections(cfg config.Config, pg *pgdriver.PgDB, authz repositories.Author
 		}
 		app = a
 	}
-	return repositories.NewConnections(repositories.NewPgStore(pg), app, authz, audit, stateKey), nil
+	conns := repositories.NewConnections(repositories.NewPgStore(pg), app, authz, audit, stateKey)
+	conns.SetWarn(func(msg string, err error) {
+		if log != nil && err != nil {
+			log.Warn("github: "+msg, forge.F("error", err.Error()))
+		}
+	})
+	return conns, nil
 }
 
 func newGitHubApp(g config.GitHubConfig) (*repositories.App, error) {
@@ -329,7 +336,7 @@ func (w *Worker) Register(fapp forge.App) error {
 	pg := pgdriver.Unwrap(db)
 	// The worker mints repository tokens; it never decides who may, so
 	// its Connections get no Authorizer or auditor.
-	conns, err := connections(w.cfg, pg, nil, nil)
+	conns, err := connections(w.cfg, pg, nil, nil, w.Logger())
 	if err != nil {
 		return err
 	}

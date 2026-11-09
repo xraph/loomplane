@@ -74,6 +74,17 @@ func (s *permStore) SavePermissions(_ context.Context, orgID string, id int64, p
 	return nil
 }
 
+func (s *permStore) DeferPermissionsCheck(_ context.Context, orgID string, id int64, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.recs {
+		if r.OrgID == orgID && r.ID == id && r.PermissionsCheckedAt != nil && r.PermissionsCheckedAt.Before(at) {
+			r.PermissionsCheckedAt = &at
+		}
+	}
+	return nil
+}
+
 func (s *permStore) saved() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -310,7 +321,11 @@ func TestAccessKeepsLastKnownPermissionsWhenGitHubFails(t *testing.T) {
 		t.Fatalf("Access = %+v, %v", acc, err)
 	}
 	if f.store.saved() != 1 {
-		t.Fatalf("saved the failure: %d", f.store.saved())
+		t.Fatalf("saved the failure as permissions: %d", f.store.saved())
+	}
+	recs, err := f.store.ListInstallations(ctx, issuesOrg)
+	if err != nil || len(recs) != 1 || recs[0].Permissions[repositories.IssuesPermission] != "write" {
+		t.Fatalf("the last known permissions after a failure: %+v, %v", recs, err)
 	}
 
 	// With nothing ever read, there's nothing to fall back on.
@@ -319,6 +334,45 @@ func TestAccessKeepsLastKnownPermissionsWhenGitHubFails(t *testing.T) {
 	f.gh.FailNext("/app/installations/43", http.StatusInternalServerError)
 	if _, err := f.conns.Access(ctx, issuesOrg, "globex/api"); err == nil {
 		t.Fatal("a GitHub failure with no stored permissions passed")
+	}
+}
+
+// A failed read counts as a check: while GitHub is down, Access asks it
+// again only once PermissionsTTL has passed, not on every call.
+func TestAccessBacksOffWhileGitHubFails(t *testing.T) {
+	ctx := context.Background()
+	f := newIssuesFixture(t, withoutIssues)
+	if err := f.store.SavePermissions(ctx, issuesOrg, acmeID, withIssues, f.clock.now().Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	asked := func() int {
+		n := 0
+		for _, r := range f.gh.Requests() {
+			if r == "GET /app/installations/42" {
+				n++
+			}
+		}
+		return n
+	}
+	for range 3 {
+		f.gh.FailNext("/app/installations/42", http.StatusInternalServerError)
+	}
+	if acc, err := f.conns.Access(ctx, issuesOrg, "acme/api"); err != nil || !acc.Accepted {
+		t.Fatalf("the first Access = %+v, %v", acc, err)
+	}
+	f.clock.add(time.Second)
+	if acc, err := f.conns.Access(ctx, issuesOrg, "acme/api"); err != nil || !acc.Accepted {
+		t.Fatalf("Access right after the failure = %+v, %v", acc, err)
+	}
+	if n := asked(); n != 1 {
+		t.Fatalf("asked GitHub %d times within the TTL of a failure, want 1", n)
+	}
+	f.clock.add(repositories.PermissionsTTL)
+	if acc, err := f.conns.Access(ctx, issuesOrg, "acme/api"); err != nil || !acc.Accepted {
+		t.Fatalf("Access after the TTL = %+v, %v", acc, err)
+	}
+	if n := asked(); n != 2 {
+		t.Fatalf("asked GitHub %d times once the TTL passed, want 2", n)
 	}
 }
 
@@ -520,6 +574,20 @@ func TestIssuesStatusListsEveryInstallation(t *testing.T) {
 
 	if _, err = f.conns.IssuesStatus(ctx, security.Principal{OrgID: issuesOrg, UserID: "ausr_nobody"}); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("someone without a role: %v", err)
+	}
+
+	// A refresh GitHub refused is reported, and the row shows what was
+	// last read.
+	var warned []string
+	f.conns.SetWarn(func(msg string, err error) { warned = append(warned, msg+": "+err.Error()) })
+	f.clock.add(repositories.PermissionsTTL)
+	f.gh.FailNext("/app/installations/43", http.StatusInternalServerError)
+	st, err = f.conns.IssuesStatus(ctx, dev)
+	if err != nil || len(st.Installations) != 2 {
+		t.Fatalf("IssuesStatus with GitHub failing = %+v, %v", st, err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "globex") {
+		t.Fatalf("warned %q, want globex's refresh", warned)
 	}
 
 	none := repositories.NewConnections(&permStore{}, nil, f.authz, nil, nil)

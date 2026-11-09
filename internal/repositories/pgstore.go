@@ -88,6 +88,16 @@ func (s *PgStore) SavePermissions(ctx context.Context, orgID string, id int64, p
 	return nil
 }
 
+// DeferPermissionsCheck implements Store.
+func (s *PgStore) DeferPermissionsCheck(ctx context.Context, orgID string, id int64, at time.Time) error {
+	_, err := s.db.Exec(ctx, `UPDATE loomplane_github_installations SET permissions_checked_at = $3
+		WHERE org_id = $1 AND installation_id = $2 AND permissions_checked_at < $3`, orgID, id, at.UTC())
+	if err != nil {
+		return fmt.Errorf("record the GitHub installation permissions check: %w", err)
+	}
+	return nil
+}
+
 // DeleteInstallation implements Store.
 func (s *PgStore) DeleteInstallation(ctx context.Context, orgID string, id int64) error {
 	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_github_installations WHERE org_id = $1 AND installation_id = $2`, orgID, id)

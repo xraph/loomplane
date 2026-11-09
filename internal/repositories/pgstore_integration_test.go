@@ -47,6 +47,29 @@ func TestPgStoreKeepsInstallationPermissions(t *testing.T) {
 		t.Fatalf("after a read: %+v, %v", recs[0], err)
 	}
 
+	// A failed read moves only the check time, forward, and only once
+	// something was read.
+	failed := at.Add(5 * time.Minute)
+	if err = s.DeferPermissionsCheck(ctx, "aorg_a", 42, failed); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeferPermissionsCheck(ctx, "aorg_a", 42, at); err != nil {
+		t.Fatal(err)
+	}
+	recs, err = s.ListInstallations(ctx, "aorg_a")
+	if err != nil || !maps.Equal(recs[0].Permissions, perms) || recs[0].PermissionsCheckedAt == nil || !recs[0].PermissionsCheckedAt.Equal(failed) {
+		t.Fatalf("after a failed read: %+v, %v", recs[0], err)
+	}
+	if err = s.SaveInstallation(ctx, &repositories.InstallationRecord{OrgID: "aorg_c", ID: 7, Account: "initech", AccountType: "Organization", CreatedBy: "ausr_c", CreatedAt: created}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeferPermissionsCheck(ctx, "aorg_c", 7, failed); err != nil {
+		t.Fatal(err)
+	}
+	if recs, err = s.ListInstallations(ctx, "aorg_c"); err != nil || recs[0].PermissionsCheckedAt != nil {
+		t.Fatalf("a failed first read was recorded as a check: %+v, %v", recs[0], err)
+	}
+
 	// Reconnecting refreshes the account, and keeps what was read.
 	if err = s.SaveInstallation(ctx, &repositories.InstallationRecord{OrgID: "aorg_a", ID: 42, Account: "Acme", AccountType: "Organization", CreatedBy: "ausr_a", CreatedAt: created}); err != nil {
 		t.Fatal(err)

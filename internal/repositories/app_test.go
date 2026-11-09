@@ -218,6 +218,15 @@ func (m *memInstallations) SavePermissions(_ context.Context, orgID string, id i
 	return nil
 }
 
+func (m *memInstallations) DeferPermissionsCheck(_ context.Context, orgID string, id int64, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.recs[key(orgID, id)]; ok && r.PermissionsCheckedAt != nil && r.PermissionsCheckedAt.Before(at) {
+		r.PermissionsCheckedAt = &at
+	}
+	return nil
+}
+
 func (m *memInstallations) DeleteInstallation(_ context.Context, orgID string, id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
