@@ -200,6 +200,14 @@ func TestReadableFailsClosed(t *testing.T) {
 	if err != nil || !slices.Equal(contents(got), []string{"docs", "runbook", "p1"}) {
 		t.Fatalf("Readable in a project's run = %v, %v", contents(got), err)
 	}
+	// So does a person's chat scoped to proj_1, though the person may read
+	// proj_2's reports too.
+	chat := cortex.WithPrincipal(cortex.WithScope(context.Background(), agentscope.Scope{OrgID: accessOrg, ProjectID: "proj_1"}.Cortex()),
+		security.AgentPrincipal(accessOrg, &security.Principal{OrgID: accessOrg, UserID: onP1}))
+	got, err = agentknowledge.Readable(chat, fakeProjectAuthz{projects: []string{"proj_1", "proj_2"}}, chunks)
+	if err != nil || !slices.Equal(contents(got), []string{"docs", "runbook", "p1"}) {
+		t.Fatalf("Readable in a person's project chat = %v, %v", contents(got), err)
+	}
 	// A person's principal on another workspace's scope reads no report.
 	other := cortex.WithPrincipal(cortex.WithScope(context.Background(), agentscope.Scope{OrgID: "aorg_other"}.Cortex()),
 		security.AgentPrincipal(accessOrg, nil))
