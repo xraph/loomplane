@@ -58,15 +58,26 @@ type instances struct {
 	regions   regions
 	ctrl      lifecycle
 	authority fc.Issuer
-	// resetStuck turns an instance that has said starting since before
-	// since into failed, so it can be started again. A start whose own
-	// failure write ran on a dead context leaves it starting for good.
-	resetStuck func(ctx context.Context, iid id.ID, since time.Time) error
+	// resetStuck turns a platform instance that has said state (starting
+	// or stopping) since before since into failed, so it can be started
+	// again. A start or stop whose own failure write ran on a dead context
+	// leaves it that way for good. Instances of other providers are never
+	// touched.
+	resetStuck func(ctx context.Context, iid id.ID, state cpprovider.InstanceState, since time.Time) error
 }
 
 // startTimeout bounds one start: one service's apply, image pull included.
 // An instance starting for longer than this is stuck.
 const startTimeout = 14 * time.Minute
+
+// stopTimeout bounds one stop. An instance stopping for longer than this is
+// stuck.
+const stopTimeout = 14 * time.Minute
+
+// stuckGrace is how long past its timeout an instance must have been starting
+// before it is reset: a host agent can still be applying after
+// the client gave up, and a reset then would overlap it.
+const stuckGrace = time.Minute
 
 // fresh is a context that outlives ctx's cancellation, keeps its values and
 // has a deadline of its own. What a VM's stop or start writes once it has
@@ -83,20 +94,35 @@ var (
 
 func newInstances(svc *platformcloud.Service, target *deployments.PlatformTarget, pg *pgdriver.PgDB) *instances {
 	return &instances{svc: svc, regions: target, ctrl: target.Ctrl.Instances, authority: target.Authority,
-		resetStuck: func(ctx context.Context, iid id.ID, since time.Time) error {
-			_, err := pg.Exec(ctx, `UPDATE cp_instances SET state='failed',updated_at=now() WHERE id=$1 AND state='starting' AND updated_at<$2`, iid.String(), since)
+		resetStuck: func(ctx context.Context, iid id.ID, state cpprovider.InstanceState, since time.Time) error {
+			_, err := pg.Exec(ctx, `UPDATE cp_instances SET state='failed',updated_at=now() WHERE id=$1 AND state=$2 AND updated_at<$3 AND provider_name LIKE 'platform.%'`, iid.String(), string(state), since)
 			return err
 		}}
 }
 
-// current reads the instance, turning one stuck starting into failed first.
+// stuckLimit is how long an instance may say state before it is stuck, or
+// zero when state is not one that gets stuck.
+func stuckLimit(state cpprovider.InstanceState) time.Duration {
+	switch state {
+	case cpprovider.StateStarting:
+		return startTimeout + stuckGrace
+	}
+	return 0
+}
+
+// current reads the instance, turning one stuck starting or stopping into
+// failed first, so restore, repair and move can proceed.
 func (ic *instances) current(ctx context.Context, iid id.ID) (*cpinstance.Instance, error) {
 	inst, err := ic.ctrl.Get(ctx, iid)
-	if err != nil || inst.State != cpprovider.StateStarting || time.Since(inst.UpdatedAt) <= startTimeout || ic.resetStuck == nil {
+	if err != nil || ic.resetStuck == nil {
 		return inst, err
 	}
-	slog.WarnContext(ctx, "platform cloud: an instance was stuck starting; starting it again", "instance", iid.String(), "since", inst.UpdatedAt)
-	if checkErr := ic.resetStuck(ctx, iid, time.Now().Add(-startTimeout)); checkErr != nil {
+	limit := stuckLimit(inst.State)
+	if limit == 0 || time.Since(inst.UpdatedAt) <= limit {
+		return inst, err
+	}
+	slog.WarnContext(ctx, "platform cloud: an instance was stuck; resetting it so it can start again", "instance", iid.String(), "state", string(inst.State), "since", inst.UpdatedAt)
+	if checkErr := ic.resetStuck(ctx, iid, inst.State, time.Now().Add(-limit)); checkErr != nil {
 		return nil, checkErr
 	}
 	return ic.ctrl.Get(ctx, iid)
@@ -112,7 +138,7 @@ func (ic *instances) start(ctx context.Context, iid id.ID) error {
 // stopForMove stops the instance as a suspension does, so its placement
 // stays live, on a fresh context.
 func (ic *instances) stopForMove(ctx context.Context, iid id.ID) error {
-	run, cancel := fresh(ctx, startTimeout)
+	run, cancel := fresh(ctx, stopTimeout)
 	defer cancel()
 	return ic.ctrl.Stop(deployments.WithPlatformSuspend(run), iid)
 }

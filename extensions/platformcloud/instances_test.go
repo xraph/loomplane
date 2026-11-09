@@ -53,6 +53,8 @@ type fakeLifecycle struct {
 	onStart func(ctx context.Context)
 	// liveStarts records whether each start's context was still live.
 	liveStarts []bool
+	// resets records the cutoff of each reset the control asked for.
+	resets []time.Time
 }
 
 func (f *fakeLifecycle) Get(context.Context, id.ID) (*cpinstance.Instance, error) {
@@ -87,10 +89,11 @@ func (f *fakeLifecycle) Start(ctx context.Context, _ id.ID) error {
 func newTestInstances(room bool) (*instances, *fakeLifecycle) {
 	lc := &fakeLifecycle{state: cpprovider.StateRunning, updated: time.Now()}
 	ic := &instances{svc: &fakePlacements{room: room}, regions: noRegions{}, ctrl: lc}
-	ic.resetStuck = func(context.Context, id.ID, time.Time) error {
+	ic.resetStuck = func(_ context.Context, _ id.ID, state cpprovider.InstanceState, since time.Time) error {
 		lc.mu.Lock()
 		defer lc.mu.Unlock()
-		if lc.state == cpprovider.StateStarting {
+		lc.resets = append(lc.resets, since)
+		if lc.state == state && lc.updated.Before(since) {
 			lc.state, lc.updated = cpprovider.StateFailed, time.Now()
 		}
 		return nil
@@ -180,7 +183,7 @@ func TestMoveSurvivesACancelledRequest(t *testing.T) {
 // failure write died leaves it, is started again by a repair.
 func TestRepairRestartsAnInstanceStuckStarting(t *testing.T) {
 	ic, lc := newTestInstances(false)
-	lc.state, lc.updated = cpprovider.StateStarting, time.Now().Add(-2*startTimeout)
+	lc.state, lc.updated = cpprovider.StateStarting, time.Now().Add(-2*(startTimeout+stuckGrace))
 	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -192,5 +195,34 @@ func TestRepairRestartsAnInstanceStuckStarting(t *testing.T) {
 	lc.state = cpprovider.StateStarting
 	if err := ic.Redeploy(t.Context(), testIID.String()); err == nil || len(lc.starts) != 0 {
 		t.Fatalf("a fresh start was restarted: %v, %v", err, lc.starts)
+	}
+}
+
+// The reset waits a grace beyond the timeout: an instance past the timeout
+// but inside the grace is left alone, one past both is reset.
+func TestStuckResetWaitsForTheGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   cpprovider.InstanceState
+		timeout time.Duration
+	}{
+		{"starting", cpprovider.StateStarting, startTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ic, lc := newTestInstances(false)
+			lc.state, lc.updated = tc.state, time.Now().Add(-tc.timeout-stuckGrace/2)
+			inst, err := ic.current(t.Context(), testIID)
+			if err != nil || inst.State != tc.state || len(lc.resets) != 0 {
+				t.Fatalf("inside the grace: %v, state %s, resets %v", err, inst.State, lc.resets)
+			}
+			lc.updated = time.Now().Add(-tc.timeout - stuckGrace - time.Second)
+			inst, err = ic.current(t.Context(), testIID)
+			if err != nil || inst.State != cpprovider.StateFailed || len(lc.resets) != 1 {
+				t.Fatalf("past the grace: %v, state %s, resets %v", err, inst.State, lc.resets)
+			}
+			if age := time.Since(lc.resets[0]); age < tc.timeout+stuckGrace-time.Second || age > tc.timeout+stuckGrace+time.Minute {
+				t.Fatalf("cutoff is %s old", age)
+			}
+		})
 	}
 }
