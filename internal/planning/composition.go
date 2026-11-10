@@ -1099,3 +1099,47 @@ func (p *planner) composedBindings() map[string]composedBinding {
 	}
 	return out
 }
+
+// componentReaddress plans again what reads a component this plan
+// replaces in a routed release, since its replacement answers at a new
+// address: a kept sibling that reads it, and its kept composed resource,
+// when one of the kind's outputs reads it, so the resource publishes the
+// new address and what uses it is readdressed. A component nothing reads
+// changes nothing else. It reports whether it planned anything again.
+func (p *planner) componentReaddress() bool {
+	changed := false
+	for _, c := range p.actions {
+		if c.Op != Replace || len(c.Routes) == 0 || c.Resource == nil || c.Resource.Component == nil {
+			continue
+		}
+		parent, part := c.Resource.Component.Resource, c.Resource.Component.Component.Name
+		for _, other := range p.actions {
+			if other == c || other.Op != Keep || other.Resource == nil {
+				continue
+			}
+			switch {
+			case other.Resource.Composition != nil && other.Name == parent && outputsRead(other.Resource.Composition.Outputs, part):
+				other.Op, other.Reason = Update, fmt.Sprintf("%s gets a new instance, so %s publishes its new address.", c.Name, parent)
+				p.componentMoved[parent] = true
+				changed = true
+			case other.Resource.Component != nil && other.Resource.Component.Resource == parent && envReads(other.Resource.Component.Component.Env, part):
+				other.Op, other.Reason = Update, fmt.Sprintf("%s gets a new instance, so %s gets its new address.", c.Name, other.Name)
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// readsComponent reports whether a ref or a template reads component part.
+func readsComponent(from *recipes.Ref, template, part string) bool {
+	return (from != nil && from.Component == part) || strings.Contains(template, "${component:"+part+":")
+}
+
+func outputsRead(outputs []recipes.Output, part string) bool {
+	return slices.ContainsFunc(outputs, func(o recipes.Output) bool { return readsComponent(o.From, o.Template, part) })
+}
+
+func envReads(env []recipes.EnvVar, part string) bool {
+	return slices.ContainsFunc(env, func(e recipes.EnvVar) bool { return readsComponent(e.From, e.Template, part) })
+}

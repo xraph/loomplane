@@ -605,3 +605,67 @@ func TestDeletingRoutedWorkloadsIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// edgeWithWeb is edgeApp with a service that uses the composed resource.
+const edgeWithWeb = edgeApp + "services:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [edge]}\n"
+
+// olderAPI makes the bound api run an older image, so a plan updates it.
+func olderAPI(bound []*Binding) {
+	for _, b := range bound {
+		if b.Name == "edge--api" {
+			b.Config = bytes.Replace(b.Config, []byte(`"image":"registry.example/sample-api@sha256:`), []byte(`"image":"registry.example/sample-api-old@sha256:`), 1)
+		}
+	}
+}
+
+// A replaced routed component gets a new address, so what reads it is
+// deployed again: a sibling that reads it, its composed resource, which
+// publishes it, and the services that use that resource.
+func TestReplacingARoutedComponentReaddressesItsReaders(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	bound := boundAll(t, routedPlan(t, edgeWithWeb, kinds, nil))
+	if r := routedPlan(t, edgeWithWeb, kinds, bound, "edge--api"); findAction(r, "resource:edge").Op != Keep || findAction(r, "service:web").Op != Keep {
+		t.Fatalf("an unchanged plan readdressed: %+v", r.Actions)
+	}
+	olderAPI(bound)
+	r := routedPlan(t, edgeWithWeb, kinds, bound, "edge--api")
+	if !r.Executable {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	for id, reason := range map[string]string{
+		"resource:edge--worker": "edge--api gets a new instance, so edge--worker gets its new address.",
+		"resource:edge":         "edge--api gets a new instance, so edge publishes its new address.",
+		"service:web":           "edge moves, so web gets its new address.",
+	} {
+		if a := findAction(r, id); a == nil || a.Op != Update || a.Reason != reason {
+			t.Errorf("%s: %+v, want an update: %q", id, a, reason)
+		}
+	}
+}
+
+// A replaced component that nothing reads leaves its composed resource
+// and siblings as they are: nothing needs its new address.
+func TestReplacingAComponentNothingReadsKeepsItsParent(t *testing.T) {
+	k := recipestest.Sample()
+	k.Outputs = []recipes.Output{{Name: "url", EnvKey: "SAMPLE_URL", From: &recipes.Ref{Component: "worker", Field: "url:health"}}}
+	for i := range k.Components {
+		if k.Components[i].Name == "worker" {
+			k.Components[i].Env = nil
+		}
+	}
+	kinds := recipes.NewRegistry()
+	if err := kinds.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	bound := boundAll(t, routedPlan(t, edgeWithWeb, kinds, nil))
+	olderAPI(bound)
+	r := routedPlan(t, edgeWithWeb, kinds, bound, "edge--api")
+	if a := findAction(r, "resource:edge--api"); a == nil || a.Op != Replace {
+		t.Fatalf("the api: %+v", a)
+	}
+	for _, id := range []string{"resource:edge", "resource:edge--worker", "service:web"} {
+		if a := findAction(r, id); a == nil || a.Op != Keep {
+			t.Errorf("%s: %+v, want it kept", id, a)
+		}
+	}
+}

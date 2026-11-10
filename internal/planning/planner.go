@@ -198,6 +198,8 @@ func Compute(in Input) *Result {
 		replaced:  map[string][]holder{},
 		addressed: map[string][]string{},
 		removing:  map[string]bool{},
+
+		componentMoved: map[string]bool{},
 	}
 	for _, b := range in.Bindings {
 		p.bindings[actionID(b.Subject, b.Name)] = b
@@ -214,6 +216,7 @@ func Compute(in Input) *Result {
 	p.checkServerGPUs()
 	p.readdress()
 	for p.routedReplacements() {
+		p.componentReaddress()
 		p.readdress()
 	}
 	p.readdress()
@@ -285,6 +288,10 @@ type planner struct {
 	// which a deployment may need a connection to even when nothing else
 	// in the plan uses them.
 	removing map[string]bool
+	// componentMoved are the composed resources this plan updates to
+	// publish the new address of a component it replaces, by name. What
+	// uses one gets that address (see readdressed).
+	componentMoved map[string]bool
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -909,6 +916,8 @@ func (p *planner) readdressed(dep *Action, e EnvLink, target string) (string, bo
 		how = "replaces " + dep.Name
 	case dep.Op == Create && p.bindings[dep.ID] != nil:
 		how = "creates " + dep.Name + " again"
+	case dep.Op == Update && p.componentMoved[dep.Name]:
+		how = "publishes the new address of " + dep.Name
 	default:
 		return "", false
 	}
