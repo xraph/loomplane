@@ -264,9 +264,9 @@ function AddForm({
   const projects = useQuery(useProjectsList)
   const [chosen, setChosen] = useState("")
   // A database's own service project isn't where an app-project kind
-  // goes: catalog deploys make those with the database icon.
+  // goes, whatever icon either has.
   const list = (projects.data?.projects ?? []).filter(
-    (p) => p.icon !== "database"
+    (p) => p.kind !== "service"
   )
   const project = list.find((p) => p.id === chosen) ?? list[0]
   return (

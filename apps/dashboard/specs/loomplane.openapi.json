@@ -5504,6 +5504,81 @@
         }
       }
     },
+    "/api/v1/connections/{id}/fence-repair": {
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Clear a reviewed dirty mark on a server's fence journal, keeping its epochs",
+        "operationId": "connectionFenceRepair.apply",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FenceRepairInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The fence journal after the repair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FenceRepair"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/fence-repair/review": {
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Read a server's fence journal and the execs still running in Loomplane's containers, without changing anything",
+        "operationId": "connectionFenceRepair.review",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The fence journal review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FenceRepair"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}/gpus": {
       "get": {
         "tags": [
@@ -9038,6 +9113,44 @@
         }
       }
     },
+    "/api/v1/platform/cloud/hosts/{host}/rotate-certificate": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it",
+        "operationId": "platformCloudHosts.rotateCertificate",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The host and its next client certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewCertificate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The host is retired or still trusts the certificate the last rotation replaced"
+          }
+        }
+      }
+    },
     "/api/v1/platform/cloud/hosts/{host}/drain": {
       "post": {
         "tags": [
@@ -11046,6 +11159,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RouteSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/deletion": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "What deleting a project would remove from provider accounts first, and whether it would be refused. Changes nothing.",
+        "operationId": "projects.deletion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deletion preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreview"
                 }
               }
             }
@@ -24042,6 +24187,13 @@
           "icon": {
             "type": "string"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "service"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -26793,6 +26945,45 @@
           }
         }
       },
+      "FenceRepair": {
+        "type": "object",
+        "required": [
+          "daemon",
+          "dirty",
+          "review",
+          "running",
+          "repaired"
+        ],
+        "properties": {
+          "daemon": {
+            "type": "string"
+          },
+          "dirty": {},
+          "repaired": {
+            "type": "boolean"
+          },
+          "review": {
+            "type": "string"
+          },
+          "running": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningExec"
+            }
+          }
+        }
+      },
+      "FenceRepairInputBody": {
+        "type": "object",
+        "required": [
+          "review"
+        ],
+        "properties": {
+          "review": {
+            "type": "string"
+          }
+        }
+      },
       "File": {
         "type": "object",
         "required": [
@@ -27973,6 +28164,9 @@
           "allotment": {
             "$ref": "#/components/schemas/Allotment"
           },
+          "client_expires_at": {
+            "type": "string"
+          },
           "client_fingerprint": {
             "type": "string"
           },
@@ -27989,6 +28183,15 @@
             "type": "string"
           },
           "id": {
+            "type": "string"
+          },
+          "next_expires_at": {
+            "type": "string"
+          },
+          "next_fingerprint": {
+            "type": "string"
+          },
+          "previous_fingerprint": {
             "type": "string"
           },
           "region_id": {
@@ -28109,11 +28312,18 @@
           "generation",
           "revision",
           "use",
-          "placements"
+          "placements",
+          "certificate"
         ],
         "properties": {
           "allotment": {
             "$ref": "#/components/schemas/Allotment"
+          },
+          "certificate": {
+            "$ref": "#/components/schemas/CertificateView"
+          },
+          "client_expires_at": {
+            "type": "string"
           },
           "client_fingerprint": {
             "type": "string"
@@ -28133,8 +28343,17 @@
           "id": {
             "type": "string"
           },
+          "next_expires_at": {
+            "type": "string"
+          },
+          "next_fingerprint": {
+            "type": "string"
+          },
           "placements": {
             "type": "integer"
+          },
+          "previous_fingerprint": {
+            "type": "string"
           },
           "region_id": {
             "type": "string"
@@ -33625,6 +33844,7 @@
           "description",
           "icon",
           "color",
+          "kind",
           "repositories",
           "exclusions",
           "autonomous_promotion",
@@ -33667,6 +33887,13 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "service"
+            ]
           },
           "min_staging_soak_seconds": {
             "type": "integer"
@@ -33805,6 +34032,23 @@
         ],
         "properties": {
           "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DeletionPreview": {
+        "type": "object",
+        "required": [
+          "removes"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "string"
+          },
+          "removes": {
             "type": "array",
             "items": {
               "type": "string"
@@ -37698,6 +37942,25 @@
             "type": "boolean"
           },
           "tls_error": {
+            "type": "string"
+          }
+        }
+      },
+      "RunningExec": {
+        "type": "object",
+        "required": [
+          "container",
+          "name",
+          "exec"
+        ],
+        "properties": {
+          "container": {
+            "type": "string"
+          },
+          "exec": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -41745,6 +42008,51 @@
         "properties": {
           "alias": {
             "type": "string"
+          }
+        }
+      },
+      "CertificateView": {
+        "type": "object",
+        "required": [
+          "warning",
+          "rotation"
+        ],
+        "properties": {
+          "days_left": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "rotation": {
+            "type": "string"
+          },
+          "warning": {
+            "type": "string"
+          }
+        }
+      },
+      "NewCertificate": {
+        "type": "object",
+        "required": [
+          "host",
+          "client_certificate",
+          "client_fingerprint",
+          "expires_at"
+        ],
+        "properties": {
+          "client_certificate": {
+            "type": "string"
+          },
+          "client_fingerprint": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Host"
           }
         }
       }

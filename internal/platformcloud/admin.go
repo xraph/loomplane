@@ -105,6 +105,8 @@ type HostView struct {
 	Use Allotment `json:"use"`
 	// Placements counts the host's live placements, builds included.
 	Placements int `json:"placements"`
+	// Certificate is how the host's client certificate stands.
+	Certificate CertificateView `json:"certificate"`
 }
 
 // Hosts lists every host, retired ones included, with what each one's
@@ -115,12 +117,13 @@ func (s *Service) Hosts(ctx context.Context) ([]HostView, error) {
 		return nil, err
 	}
 	out := make([]HostView, 0, len(hosts))
+	now := s.now().UTC()
 	for _, h := range hosts {
 		use, useErr := s.store.HostUse(ctx, h.ID)
 		if useErr != nil {
 			return nil, useErr
 		}
-		out = append(out, HostView{Host: h, Use: use, Placements: use.VMs})
+		out = append(out, HostView{Host: h, Use: use, Placements: use.VMs, Certificate: certificateView(&h, now)})
 	}
 	return out, nil
 }

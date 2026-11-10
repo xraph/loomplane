@@ -38,11 +38,14 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 				// processed the exit event.
 				exitPending              bool
 				clean, completesResponse bool
+				// finished leaves the journal dirty with an exec Docker shows
+				// finished, which the SSH helper's next takeover clears.
+				finished bool
 			}{
 				{name: "complete", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, completesResponse: true},
 				{name: "not_ready_exit_completed", frame: "\x02\x00\x00\x00\x00\x00\x00\x02no", clean: true, completesResponse: true},
-				{name: "truncated_header", frame: "\x01\x00"},
-				{name: "truncated_payload", frame: "\x01\x00\x00\x00\x00\x00\x00\x05no"},
+				{name: "truncated_header", frame: "\x01\x00", finished: true},
+				{name: "truncated_payload", frame: "\x01\x00\x00\x00\x00\x00\x00\x05no", finished: true},
 				{name: "still_running", running: true},
 				{name: "exit_code_pending", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", exitPending: true, clean: true, completesResponse: true},
 				{name: "detached", detach: true, clean: true},
@@ -124,12 +127,19 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					var state struct{ Dirty bool }
+					var state struct{ Dirty json.RawMessage }
 					if err = json.Unmarshal(raw, &state); err != nil {
 						t.Fatal(err)
 					}
-					if state.Dirty == tc.clean {
-						t.Fatalf("journal dirty %v, want %v: %s", state.Dirty, !tc.clean, diagnostics.String())
+					if dirty := string(state.Dirty) != "false"; dirty == tc.clean {
+						t.Fatalf("journal dirty %s, want dirty %v: %s", state.Dirty, !tc.clean, diagnostics.String())
+					}
+					// The SSH helper records which exec it started.
+					if host == "ssh" && !tc.clean && starts.Load() != 0 {
+						var mark map[string]string
+						if err = json.Unmarshal(state.Dirty, &mark); err != nil || mark["mode"] != "exec" || mark["exec"] != execution || mark["container"] != container {
+							t.Fatalf("dirty mark %s does not name the exec", state.Dirty)
+						}
 					}
 					if (tc.detach || tc.tty) && starts.Load() != 0 {
 						t.Fatal("an exec the helper can't frame reached Docker")
@@ -137,8 +147,9 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 					if strings.HasSuffix(out, "0\r\n\r\n") != tc.completesResponse {
 						t.Fatalf("response completion %v, expected %v: %q", strings.HasSuffix(out, "0\r\n\r\n"), tc.completesResponse, out)
 					}
-					// A clean journal lets the next generation take over the daemon.
-					if next := run("advance", 2); strings.Contains(next, "200 OK") != tc.clean {
+					// A clean journal lets the next generation take over the daemon,
+					// and so does one whose recorded exec has finished.
+					if next := run("advance", 2); strings.Contains(next, "200 OK") != (tc.clean || host == "ssh" && tc.finished) {
 						t.Fatal("takeover", next)
 					}
 				})

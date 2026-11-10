@@ -34,6 +34,7 @@ Create `/etc/loomplane/firecracker.json`, owned by root with mode 0600. `HostKey
 | `UIDBase` | First UID in the reserved per-VM range |
 | `Limits` | `VMs`, `VCPUs`, `MemoryMiB`, and `DiskMiB` totals; memory includes 128 MiB host overhead per VM |
 | `Peers` | Objects containing the client leaf certificate's SHA256 `Fingerprint`, `Org`, and `Connection` |
+| `Platform` | Platform mode only, in place of `Peers`: the platform client certificate's `Fingerprint`, plus `Next` and `Identity` during and after a rotation |
 | `PublishAddress` | The interface address for explicitly published application ports |
 | `HTTPListen`, `HTTPSListen`, `AdvertiseHost`, `ACMEEmail` | Optional managed HTTPS listeners, public DNS address, and ACME contact |
 | `ACMEDirectory` | Optional ACME directory URL; use a staging CA during qualification |
@@ -47,6 +48,18 @@ sudo systemctl enable --now loomplane-host-agent
 ```
 
 The check does not boot a VM. Your firewall must restrict the control listener to the control plane. Open application ports only when you intend to publish them. Managed HTTPS needs public ports 80 and 443; configuring a listener does not change your firewall or DNS.
+
+## Rotate the platform client certificate
+
+A platform host trusts the client certificate Loomplane showed you when you added it. That certificate is good for two years. The Platform Cloud page warns you from 90 days out, and you rotate it from the host's row with **Rotate certificate**. Your VMs keep running and the host stays connected the whole way through.
+
+1. Click **Rotate certificate** and copy the new certificate and fingerprint. They're shown once.
+2. Append the certificate to the host's `ClientCA` file, below the old one. Set `Platform.Next` to the new fingerprint and leave `Fingerprint` alone.
+3. Run `sudo systemctl reload loomplane-host-agent`. The agent re-reads its platform fingerprints and client CA file without a restart.
+4. At the host's next check, Loomplane sees that the host answers the new certificate and switches to it. You can click **Check** to do that now.
+5. Make the new fingerprint `Platform.Fingerprint`, remove `Next`, and set `Platform.Identity` to the fingerprint the host started with if it isn't set yet. Take the old certificate out of the `ClientCA` file and reload again. Once the host reports it no longer trusts the old certificate, Loomplane deletes its key.
+
+`Identity` keeps the host's runtime identity the same after the first certificate is gone, so the VMs, routes and tunnels bound to it aren't cut off. It grants no access. A reload refuses any change that would alter the runtime identity, and anything outside the platform fingerprints and the client CA file still needs a restart. Read `journalctl -u loomplane-host-agent` if a reload doesn't take.
 
 ## Build the guest image
 

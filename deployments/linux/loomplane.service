@@ -1,0 +1,60 @@
+# Loomplane's API and dashboard, as a systemd service.
+#
+# The .deb and .rpm packages install this as
+# /usr/lib/systemd/system/loomplane.service. For a release archive, copy it to
+# /etc/systemd/system/. Settings live in /etc/loomplane/loomplane.env, which
+# loomplane-worker.service reads too.
+#
+# ExecStart names the binary without a path, so systemd finds it in
+# /usr/local/bin (an archive install) before /usr/bin (a package). That needs
+# systemd 239 or newer.
+#
+# Upgrade by stopping loomplane-worker and this service, replacing the
+# binaries, then starting this one before the worker. It applies migrations
+# before it serves.
+
+[Unit]
+Description=Loomplane API and dashboard
+Documentation=https://www.loomplane.com/docs/operations/linux
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=loomplane
+Group=loomplane
+EnvironmentFile=/etc/loomplane/loomplane.env
+ExecStart=loomplane
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+# /var/lib/loomplane, owned by the loomplane user. Deployment sources go here.
+StateDirectory=loomplane
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/loomplane
+UMask=0027
+LimitNOFILE=65536
+
+# Loomplane writes only to its state directory and /tmp, so the rest of the
+# filesystem is read-only to it. The Docker image runs the same way.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

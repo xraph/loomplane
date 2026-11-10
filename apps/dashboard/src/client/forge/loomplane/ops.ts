@@ -1279,6 +1279,21 @@ export const ops = {
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connectionFenceRepair.apply': {
+    method: 'POST',
+    path: '/api/v1/connections/{id}/fence-repair',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['FenceRepairInputBody'],
+    responseCodec: CODECS['FenceRepair'],
+  },
+  'connectionFenceRepair.review': {
+    method: 'POST',
+    path: '/api/v1/connections/{id}/fence-repair/review',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['FenceRepair'],
+  },
   'connectionGpus.get': {
     method: 'GET',
     path: '/api/v1/connections/{id}/gpus',
@@ -2172,6 +2187,14 @@ export const ops = {
     provides: [],
     invalidates: [],
   },
+  'platformCloudHosts.rotateCertificate': {
+    method: 'POST',
+    path: '/api/v1/platform/cloud/hosts/{host}/rotate-certificate',
+    rootType: 'NewCertificate',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['NewCertificate'],
+  },
   'platformCloudRegions.list': {
     method: 'GET',
     path: '/api/v1/platform/cloud/regions',
@@ -2585,6 +2608,13 @@ export const ops = {
     provides: ['RouteSummary:{id}'],
     invalidates: ['RouteSummary[]'],
     responseCodec: CODECS['RouteSummary'],
+  },
+  'projects.deletion': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/deletion',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DeletionPreview'],
   },
   'deployments.list': {
     method: 'GET',
@@ -3915,6 +3945,7 @@ export const entities = {
   'NativeRetirement': { idField: 'id' },
   'NativeRetirementPage': { fields: { 'retirements': 'NativeRetirement' } },
   'NativeSource': { idField: 'id' },
+  'NewCertificate': { fields: { 'host': 'Host' } },
   'NewHost': { fields: { 'host': 'Host' } },
   'Node': { idField: 'id' },
   'NodeList': { fields: { 'nodes': 'Node' } },

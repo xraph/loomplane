@@ -6,7 +6,7 @@ description: Install Loomplane on a Linux host with Docker, install loomctl, and
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-This page gets a production Loomplane running and a first project deployed. If you only want to try it on your laptop, jump to [Develop Loomplane locally](#develop-loomplane-locally).
+This page gets a production Loomplane running and a first project deployed. If you only want to try it on your laptop, jump to [Develop Loomplane locally](#develop-loomplane-locally). To run it under systemd from a `.deb` or `.rpm` without Docker, follow [Install on Linux](/docs/operations/linux).
 
 ## Install with Docker
 
@@ -60,12 +60,25 @@ Open `https://YOUR_HOSTNAME`, create an account and name your organization. Cadd
 
 `loomctl` is the command-line client. It also serves the MCP server for AI agents.
 
-<Tabs items={['Homebrew', 'Scoop', 'Release archive']}>
+<Tabs items={['Homebrew', 'Linux', 'Scoop', 'Release archive']}>
   <Tab value="Homebrew">
 
 ```bash
 brew install xraph/tap/loomctl
 ```
+
+  </Tab>
+  <Tab value="Linux">
+
+Each release has a `.deb` and an `.rpm` for amd64 and arm64. On Debian or Ubuntu, with `VERSION` set to the release you want (`1.2.3`, no `v`):
+
+```bash
+ARCH=$(dpkg --print-architecture)
+curl -fsSLO "https://github.com/xraph/loomplane/releases/download/v$VERSION/loomctl_${VERSION}_${ARCH}.deb"
+sudo apt install "./loomctl_${VERSION}_${ARCH}.deb"
+```
+
+[Install on Linux](/docs/operations/linux#install-loomctl) has the rpm, the plain archive and how to verify the download.
 
   </Tab>
   <Tab value="Scoop">

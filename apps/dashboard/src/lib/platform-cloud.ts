@@ -1,4 +1,6 @@
 import type {
+  CertificateView,
+  HostView,
   PlatformLimits,
   PlatformcloudEvidence,
   PlatformcloudUse,
@@ -144,4 +146,59 @@ export function statusLabel(kind: StatusKind, status: string): string {
   if (!status) return "Unknown"
   const words = status.replace(/[_-]+/g, " ")
   return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+export type CertificateNote = { text: string; urgent: boolean }
+
+const days = (n: number) => `${n} ${n === 1 ? "day" : "days"}`
+
+/**
+ * hostCertificateNotes says how a host's client certificate stands: how
+ * soon it runs out, and what a rotation under way is waiting for.
+ */
+export function hostCertificateNotes(
+  c: CertificateView | undefined
+): CertificateNote[] {
+  if (!c) return []
+  const notes: CertificateNote[] = []
+  const left = c.daysLeft ?? 0
+  switch (c.warning) {
+    case "expired":
+      notes.push({
+        text: "The client certificate has expired. Rotate it now.",
+        urgent: true,
+      })
+      break
+    case "urgent":
+      notes.push({
+        text: `The client certificate expires in ${days(left)}. Rotate it now.`,
+        urgent: true,
+      })
+      break
+    case "expiring":
+      notes.push({
+        text: `The client certificate expires in ${days(left)}`,
+        urgent: false,
+      })
+      break
+  }
+  if (c.rotation === "waiting") {
+    notes.push({
+      text: "Rotation: add the new certificate to the host and reload its agent",
+      urgent: false,
+    })
+  } else if (c.rotation === "retiring") {
+    notes.push({
+      text: "Rotation: remove the old certificate from the host and reload its agent",
+      urgent: false,
+    })
+  }
+  return notes
+}
+
+/** expiringHosts counts the hosts in service whose certificate needs rotating. */
+export function expiringHosts(hosts: readonly HostView[] | undefined): number {
+  return (hosts ?? []).filter(
+    (h) => h.status !== "retired" && (h.certificate?.warning ?? "") !== ""
+  ).length
 }

@@ -11,9 +11,11 @@ import (
 
 type Peer struct{ Fingerprint, Org, Connection string }
 type Handler struct {
-	Host     *Host
-	Peers    []Peer
-	Platform string
+	Host  *Host
+	Peers []Peer
+	// Platform is the platform client certificates the host trusts, or nil
+	// on a per-org host.
+	Platform *PlatformTrust
 }
 
 func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +24,7 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.VerifiedChains[0]) > 0 {
 		sum := sha256.Sum256(r.TLS.VerifiedChains[0][0].Raw)
 		fp := hex.EncodeToString(sum[:])
-		platform = a.Platform != "" && fp == a.Platform
+		platform = a.Platform.Trusts(fp)
 		for i := range a.Peers {
 			if a.Peers[i].Fingerprint == fp {
 				peer = &a.Peers[i]
@@ -46,6 +48,9 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		c.Version = ProtocolVersion
 		c.Limits = a.Host.Limits
+		if platform && r.URL.Query().Get("trust") == "1" {
+			c.PlatformFingerprints = a.Platform.Fingerprints()
+		}
 		WriteJSON(w, http.StatusOK, c)
 		return
 	}

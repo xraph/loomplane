@@ -182,17 +182,9 @@ func (s *Service) AddPreparer(p Preparer) { s.preparers = append(s.preparers, p)
 // as putting it there did; forbidden is returned in place of
 // security.ErrForbidden.
 func (s *Service) prepare(ctx context.Context, p security.Principal, projectID, environmentID string, opts DeleteEnvironmentOptions, forbidden error) error {
-	var runs []func(context.Context) error
-	removes := false
-	for _, pr := range s.preparers {
-		got, err := pr.PrepareDelete(ctx, p.OrgID, projectID, environmentID, opts)
-		if err != nil {
-			return err
-		}
-		removes = removes || len(got.Removes) > 0
-		if got.Run != nil {
-			runs = append(runs, got.Run)
-		}
+	removes, runs, err := s.collect(ctx, p.OrgID, projectID, environmentID, opts)
+	if err != nil {
+		return err
 	}
 	// What a preparer removes can't come back, so a deletion the store
 	// would refuse anyway is refused before any of it runs.
@@ -201,7 +193,7 @@ func (s *Service) prepare(ctx context.Context, p security.Principal, projectID, 
 			return err
 		}
 	}
-	if removes {
+	if len(removes) > 0 {
 		if err := s.authz.Require(ctx, p, security.DeploymentApprove, projectID); err != nil {
 			if errors.Is(err, security.ErrForbidden) {
 				return forbidden
@@ -215,6 +207,77 @@ func (s *Service) prepare(ctx context.Context, p security.Principal, projectID, 
 		}
 	}
 	return nil
+}
+
+// collect asks every Preparer what a deletion needs first, without
+// running any of it: what that removes in provider accounts, and the
+// runs that do it.
+func (s *Service) collect(ctx context.Context, orgID, projectID, environmentID string, opts DeleteEnvironmentOptions) (removes []string, runs []func(context.Context) error, err error) {
+	removes = []string{}
+	for _, pr := range s.preparers {
+		got, perr := pr.PrepareDelete(ctx, orgID, projectID, environmentID, opts)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		removes = append(removes, got.Removes...)
+		if got.Run != nil {
+			runs = append(runs, got.Run)
+		}
+	}
+	return removes, runs, nil
+}
+
+// DeletionPreview is what deleting a project would do before its rows go,
+// worked out without doing any of it, so the dialog can say so first.
+type DeletionPreview struct {
+	// Removes names what the deletion removes from a provider account,
+	// such as a Vercel project Loomplane made for one of its frontends.
+	Removes []string `json:"removes"`
+	// Blocked says why deleting it now would be refused, for a person to
+	// read. Empty when nothing found refuses it.
+	Blocked string `json:"blocked,omitempty"`
+}
+
+// PreviewDelete says what Delete would remove in provider accounts and
+// whether it would be refused, for someone who may delete the project.
+// It reads what it needs, from providers too, and changes nothing.
+func (s *Service) PreviewDelete(ctx context.Context, p security.Principal, id string) (DeletionPreview, error) {
+	if err := s.authz.Require(ctx, p, security.ProjectDelete, id); err != nil {
+		return DeletionPreview{}, err
+	}
+	removes, _, err := s.collect(ctx, p.OrgID, id, "", DeleteEnvironmentOptions{})
+	if err != nil {
+		if refusesDeletion(err) {
+			return DeletionPreview{Removes: []string{}, Blocked: err.Error()}, nil
+		}
+		return DeletionPreview{}, err
+	}
+	out := DeletionPreview{Removes: removes}
+	if checker, ok := s.store.(deletionChecker); ok {
+		if err := checker.DeletionRefusal(ctx, p.OrgID, id, ""); err != nil {
+			if !refusesDeletion(err) {
+				return DeletionPreview{}, err
+			}
+			out.Blocked = err.Error()
+			return out, nil
+		}
+	}
+	if len(removes) > 0 {
+		if err := s.authz.Require(ctx, p, security.DeploymentApprove, id); err != nil {
+			if !errors.Is(err, security.ErrForbidden) {
+				return DeletionPreview{}, err
+			}
+			out.Blocked = ErrFrontendRemoval.Error()
+		}
+	}
+	return out, nil
+}
+
+// refusesDeletion reports whether err is a deletion refused for a reason
+// the person can act on, rather than a failure to find out.
+func refusesDeletion(err error) bool {
+	return errors.Is(err, ErrFrontendsHeld) || errors.Is(err, ErrFleetManaged) ||
+		errors.Is(err, ErrHistoryRetained) || errors.Is(err, ErrLastEnvironment)
 }
 
 // reap asks each Reaper what the deletion would leave behind and returns
@@ -270,6 +333,10 @@ type CreateProjectInput struct {
 	// one at random, so a new project's tile is never blank.
 	Icon  string `json:"icon,omitempty"`
 	Color string `json:"color,omitempty"`
+	// Kind is what the project is, "app" or "service", and it can't change
+	// later. Leaving it out makes an app project. A service project is a
+	// catalog service's own and starts with no repository.
+	Kind string `json:"kind,omitempty" enum:"app,service"`
 }
 
 // RepositoryInput is a repository a new project starts with, as one of its
@@ -414,6 +481,17 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	if n := len(in.repositories()); n > maxRepositories {
 		return nil, fmt.Errorf("%w: a project can start with at most %d repositories; add the rest once it's created", ErrInvalid, maxRepositories)
 	}
+	kind := strings.TrimSpace(in.Kind)
+	switch kind {
+	case "", ProjectKindApp:
+		kind = ProjectKindApp
+	case ProjectKindService:
+		if len(in.repositories()) > 0 {
+			return nil, fmt.Errorf("%w: a service project starts without a repository", ErrInvalid)
+		}
+	default:
+		return nil, fmt.Errorf("%w: kind must be %q or %q", ErrInvalid, ProjectKindApp, ProjectKindService)
+	}
 	icon := pickStyle(strings.TrimSpace(in.Icon), icons)
 	if err := validateIcon(icon); err != nil {
 		return nil, err
@@ -429,7 +507,7 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	now := s.now().UTC()
 	return &Project{
 		ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: desc,
-		Icon: icon, Color: color, DeploymentMode: "application",
+		Icon: icon, Color: color, Kind: kind, DeploymentMode: "application",
 		Repositories: []string{}, Exclusions: []Exclusion{}, Status: StatusInitializing, CreatedBy: p.UserID,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil

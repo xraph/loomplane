@@ -2662,6 +2662,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionFenceRepair = {
+    /**
+     * Clear a reviewed dirty mark on a server's fence journal, keeping its epochs
+     */
+    apply: async (id: string, body: types.FenceRepairInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FenceRepair> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/fence-repair`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FenceRepairInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FenceRepair"],
+      };
+
+      return this.request<types.FenceRepair>(config);
+    },
+
+    /**
+     * Read a server's fence journal and the execs still running in Loomplane's containers, without changing anything
+     */
+    review: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FenceRepair> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/fence-repair/review`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FenceRepair"],
+      };
+
+      return this.request<types.FenceRepair>(config);
+    },
+
+  };
+
   public readonly connectionGpus = {
     /**
      * GPUs a server or cluster connection can see, read live
@@ -6460,6 +6497,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it
+     */
+    rotateCertificate: async (host: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NewCertificate> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/rotate-certificate`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NewCertificate"],
+      };
+
+      return this.request<types.NewCertificate>(config);
+    },
+
+    /**
      * Change how much of a host the platform may use. The host is checked again before it takes placements
      */
     setAllotment: async (host: string, body: types.AllotmentBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Host> => {
@@ -6820,6 +6873,22 @@ export class RESTClient extends Client {
       };
 
       await this.request(config);
+    },
+
+    /**
+     * What deleting a project would remove from provider accounts first, and whether it would be refused. Changes nothing.
+     */
+    deletion: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeletionPreview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/deletion`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeletionPreview"],
+      };
+
+      return this.request<types.DeletionPreview>(config);
     },
 
     /**

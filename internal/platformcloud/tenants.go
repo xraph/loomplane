@@ -52,6 +52,8 @@ type Service struct {
 	orgExists OrgExists
 	secrets   Secrets
 	dns       DNSWriter
+	// ownerNotifier hears about expiring host certificates; nil only logs.
+	ownerNotifier OwnerNotifier
 	// gate and meter are set once the edition's billing has started, while
 	// deploy workers may already read them.
 	gate      atomic.Pointer[metering.Gate]

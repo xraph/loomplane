@@ -27,13 +27,14 @@ afterEach(() => {
   denied = false
 })
 
-function fixture() {
+function fixture(
+  projects: Record<string, unknown>[] = [{ id: "p", name: "shop" }]
+) {
   const calls: string[] = []
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const path = new URL(String(input), "http://localhost").pathname
     calls.push(path)
-    if (path.endsWith("/projects"))
-      return Response.json({ projects: [{ id: "p", name: "shop" }] })
+    if (path.endsWith("/projects")) return Response.json({ projects })
     if (path.endsWith("/catalog/kinds")) return Response.json({ kinds: [] })
     if (path.endsWith("/providers"))
       return Response.json({
@@ -126,6 +127,26 @@ test("Services lists what runs and sends adding to the catalog page", async () =
   )
   expect(screen.queryByRole("radio")).not.toBeInTheDocument()
   expect(screen.queryByText("Deploy PostgreSQL")).not.toBeInTheDocument()
+})
+
+test("Run by Loomplane lists service projects by kind, not by icon", async () => {
+  fixture([
+    { id: "app", name: "Shop", icon: "database", kind: "app" },
+    {
+      id: "svc",
+      name: "Orders DB",
+      icon: "rocket",
+      kind: "service",
+      description: "Standalone PostgreSQL service",
+    },
+  ])
+  show()
+  expect(await screen.findByText("1 deployed")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: /Orders DB/ })).toHaveAttribute(
+    "href",
+    "/projects/$id"
+  )
+  expect(screen.queryByRole("link", { name: /Shop/ })).not.toBeInTheDocument()
 })
 
 test("the catalog lists provider one-click offerings after what Loomplane runs", async () => {
