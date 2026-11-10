@@ -179,6 +179,38 @@ func (s *PgStore) RecordFrontendAbsence(ctx context.Context, e cloudinfra.Fronte
 	return nil
 }
 
+// RecordFrontendResource names the provider resource a plan's frontend
+// made, before anything else can fail. See cloudinfra.RecordFrontendResource.
+func (s *PgStore) RecordFrontendResource(ctx context.Context, org, plan, service, connection, external, replacing string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // rollback is harmless after commit
+	if recErr := cloudinfra.RecordFrontendResource(ctx, tx, org, plan, service, connection, external, replacing); recErr != nil {
+		return recErr
+	}
+	return tx.Commit()
+}
+
+// CancelUnstartedFrontends marks a plan's pending frontend uses unused
+// when none of their effects started, which releases slots nothing holds.
+func (s *PgStore) CancelUnstartedFrontends(ctx context.Context, org, plan string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // rollback is harmless after commit
+	if cancelErr := cloudinfra.CancelUnstartedFrontends(ctx, tx, org, plan); cancelErr != nil {
+		return cancelErr
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return commitErr
+	}
+	s.wakeFrontendPlan(ctx, org, plan, "frontend-cancelled/"+plan)
+	return nil
+}
+
 func (s *PgStore) wakeFrontendPlan(ctx context.Context, org, plan, change string) {
 	if s.frontendWake == nil {
 		return

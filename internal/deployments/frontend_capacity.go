@@ -4,12 +4,50 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
+
+// frontendResourceRecorder names, in the frontend capacity ledger, the
+// provider resource a deploy made. planning.PgStore implements it.
+type frontendResourceRecorder interface {
+	RecordFrontendResource(ctx context.Context, org, plan, service, connection, external, replacing string) error
+}
+
+// trackFrontendResource has job record the provider resource its managed
+// frontend deploy makes. Nothing else names it when the deploy fails
+// before a binding does, and then the frontend's slot could never be
+// released, nor its project deleted.
+func (r *Runner) trackFrontendResource(job *Job) {
+	rec, ok := r.plans.(frontendResourceRecorder)
+	a := job.Action
+	if !ok || job.Plan == nil || job.Connection == nil || a.Service == nil || a.Op == planning.Delete ||
+		!cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
+		return
+	}
+	org, plan, service, connection := job.Deployment.OrgID, job.Plan.ID, a.Name, job.Connection.ID
+	job.frontendResource = func(ctx context.Context, external, replacing string) error {
+		return rec.RecordFrontendResource(ctx, org, plan, service, connection, external, replacing)
+	}
+}
+
+// recordFrontend records external as what the job's frontend made, in
+// place of replacing, what the job named and has since removed itself, if
+// that isn't empty. It does nothing for a job that isn't a managed
+// frontend's deploy.
+func (j *Job) recordFrontend(ctx context.Context, external, replacing string) error {
+	if j.frontendResource == nil {
+		return nil
+	}
+	if err := j.frontendResource(ctx, external, replacing); err != nil {
+		return fmt.Errorf("record %s in the frontend capacity ledger: %w", external, err)
+	}
+	return nil
+}
 
 // frontendAbsenceVerifier performs its provider read outside the cleanup transaction.
 type frontendAbsenceVerifier interface {

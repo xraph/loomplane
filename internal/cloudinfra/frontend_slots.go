@@ -289,6 +289,90 @@ func cancelFrontendSlots(ctx context.Context, tx driver.Tx, org, plan string) er
 	return refreshFrontendSlots(ctx, tx, org)
 }
 
+// RecordFrontendResource names the provider resource a frontend use made,
+// as soon as the provider has it. A deploy that fails after that point
+// leaves no binding, and this is then the only record of what to remove.
+//
+// It fills an empty identity, or replaces exactly replacing: what a deploy
+// named and has since removed itself, as a native deploy that falls back
+// does. Any other identity stays. A plan with no use for the service, as a
+// legacy plan has, records nothing. A use that names something else, or
+// was settled while the deploy ran, is an ErrConflict: the deploy then
+// stops, rather than run a frontend the ledger doesn't count.
+func RecordFrontendResource(ctx context.Context, tx driver.Tx, org, plan, service, connection, external, replacing string) error {
+	if org == "" || plan == "" || service == "" || connection == "" || external == "" {
+		return ErrInvalid
+	}
+	res, err := tx.Exec(ctx, `UPDATE loomplane_frontend_uses SET external_id=$5,updated_at=now() WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND connection_id=$4 AND status IN ('pending','accepted') AND external_id IN ('',$6)`, org, plan, service, connection, external, replacing)
+	if err != nil {
+		return err
+	}
+	if n, nerr := res.RowsAffected(); nerr != nil || n > 0 {
+		return nerr
+	}
+	var uses, same int
+	if qerr := tx.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE external_id=$5 AND status IN ('pending','accepted','active')) FROM loomplane_frontend_uses WHERE org_id=$1 AND plan_id=$2 AND service=$3 AND connection_id=$4`, org, plan, service, connection, external).Scan(&uses, &same); qerr != nil {
+		return qerr
+	}
+	if uses == same {
+		return nil // no use, or a retry naming what it already named
+	}
+	return fmt.Errorf("%w: the frontend capacity record of %s names another resource, or was settled while it deployed", ErrConflict, service)
+}
+
+// HeldFrontend is one frontend use that may still run in a provider: one
+// that isn't removed or unused. Its slot stays reserved until it is.
+type HeldFrontend struct {
+	CloudID       string `json:"cloud_id"`
+	SlotID        string `json:"slot_id"`
+	EnvironmentID string `json:"environment_id"`
+	Service       string `json:"service"`
+	PlanID        string `json:"plan_id"`
+	Provider      string `json:"provider"`
+	ConnectionID  string `json:"connection_id"`
+	AccountID     string `json:"account_id"`
+	// ExternalID is what the provider calls it, or empty when the deploy
+	// never recorded it.
+	ExternalID string `json:"external_id"`
+	// Status is pending, accepted or active.
+	Status string `json:"status"`
+	// Deploying is set while a deployment of its plan runs or is paused,
+	// and may still make or name what it deploys.
+	Deploying bool `json:"deploying"`
+}
+
+// HeldFrontends lists a project's held frontend uses, or one environment's
+// when environmentID isn't empty.
+func (s *PgStore) HeldFrontends(ctx context.Context, org, project, environmentID string) ([]HeldFrontend, error) {
+	rows, err := s.db.Query(ctx, `SELECT s.cloud_id,s.id,s.environment_id,u.service,u.plan_id,u.provider,u.connection_id,u.account_id,u.external_id,u.status,
+ EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.org_id=u.org_id AND d.plan_id=u.plan_id AND d.status IN ('running','paused'))
+ FROM loomplane_frontend_uses u JOIN loomplane_frontend_slots s ON s.org_id=u.org_id AND s.cloud_id=u.cloud_id AND s.id=u.slot_id
+ WHERE s.org_id=$1 AND s.project_id=$2 AND ($3='' OR s.environment_id=$3) AND u.status NOT IN ('removed','unused')
+ ORDER BY s.environment_id,u.service,u.updated_at`, org, project, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HeldFrontend
+	for rows.Next() {
+		var h HeldFrontend
+		if scanErr := rows.Scan(&h.CloudID, &h.SlotID, &h.EnvironmentID, &h.Service, &h.PlanID, &h.Provider, &h.ConnectionID, &h.AccountID, &h.ExternalID, &h.Status, &h.Deploying); scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// CancelUnstartedFrontends marks a plan's pending uses unused when no
+// effect of theirs ever started, as cancelling the plan's deployment does.
+func CancelUnstartedFrontends(ctx context.Context, tx driver.Tx, org, plan string) error {
+	if err := cloudprofiles.LockOrganization(ctx, tx, org); err != nil {
+		return err
+	}
+	return cancelFrontendSlots(ctx, tx, org, plan)
+}
+
 // FrontendAbsence records the exact provider resource checked after removal.
 type FrontendAbsence struct{ OrgID, ProjectID, EnvironmentID, Service, Provider, ConnectionID, AccountID, ExternalID, PlanID string }
 

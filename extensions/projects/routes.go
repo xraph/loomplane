@@ -161,7 +161,7 @@ func (e *Extension) list(c forge.Context) error {
 	}
 	list, err := e.svc.List(c.Request().Context(), p)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, ProjectList{Projects: values(list)})
 }
@@ -177,7 +177,7 @@ func (e *Extension) create(c forge.Context) error {
 	}
 	proj, err := e.svc.Create(c.Request().Context(), p, in)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusCreated, proj)
 }
@@ -189,7 +189,7 @@ func (e *Extension) get(c forge.Context) error {
 	}
 	proj, err := e.svc.Get(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, proj)
 }
@@ -205,7 +205,7 @@ func (e *Extension) update(c forge.Context) error {
 	}
 	proj, err := e.svc.Update(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, proj)
 }
@@ -221,7 +221,7 @@ func (e *Extension) setTeam(c forge.Context) error {
 	}
 	proj, err := e.svc.SetTeam(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, proj)
 }
@@ -236,13 +236,13 @@ func (e *Extension) permissions(c forge.Context) error {
 	ctx := c.Request().Context()
 	proj, err := e.svc.Get(ctx, p, c.Param("id"))
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	out := ProjectPermissions{Permissions: []string{}}
 	for _, perm := range security.ProjectPermissions() {
 		ok, err := e.authz.AllowedOn(ctx, p, perm, proj.ID)
 		if err != nil {
-			return fail(err)
+			return e.failed(c, err)
 		}
 		if ok {
 			out.Permissions = append(out.Permissions, perm.Name())
@@ -262,7 +262,7 @@ func (e *Extension) exclude(c forge.Context) error {
 	}
 	proj, err := e.svc.Exclude(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, proj)
 }
@@ -278,7 +278,7 @@ func (e *Extension) include(c forge.Context) error {
 	}
 	proj, err := e.svc.Include(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, proj)
 }
@@ -289,7 +289,7 @@ func (e *Extension) remove(c forge.Context) error {
 		return err
 	}
 	if err := e.svc.Delete(c.Request().Context(), p, c.Param("id")); err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -301,7 +301,7 @@ func (e *Extension) environments(c forge.Context) error {
 	}
 	envs, err := e.svc.Environments(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusOK, EnvironmentList{Environments: values(envs)})
 }
@@ -317,7 +317,7 @@ func (e *Extension) createEnvironment(c forge.Context) error {
 	}
 	env, err := e.svc.CreateEnvironment(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.JSON(http.StatusCreated, env)
 }
@@ -338,7 +338,7 @@ func (e *Extension) deleteEnvironment(c forge.Context) error {
 		}
 	}
 	if err := e.svc.DeleteEnvironment(c.Request().Context(), p, c.Param("id"), c.Param("envId"), opts); err != nil {
-		return fail(err)
+		return e.failed(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
 }

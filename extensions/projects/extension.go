@@ -121,6 +121,18 @@ func (e *Extension) Start(ctx context.Context) error {
 	return nil
 }
 
+// failed is fail for a request, and logs an error fail has no mapping
+// for: that reaches the client as a bare 500, and the log is then the only
+// place its cause shows.
+func (e *Extension) failed(c forge.Context, err error) error {
+	out := fail(err)
+	if out == err { //nolint:errorlint // identity: fail passed it on unmapped
+		e.Logger().Error("project request failed", forge.F("method", c.Request().Method),
+			forge.F("path", c.Request().URL.Path), forge.F("error", err.Error()))
+	}
+	return out
+}
+
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
@@ -130,7 +142,7 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, projects.ErrSlugTaken), errors.Is(err, projects.ErrEnvironmentExists),
 		errors.Is(err, projects.ErrLastEnvironment), errors.Is(err, projects.ErrFleetManaged),
-		errors.Is(err, projects.ErrHistoryRetained):
+		errors.Is(err, projects.ErrHistoryRetained), errors.Is(err, projects.ErrFrontendsHeld):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, projects.ErrRepository), errors.Is(err, projects.ErrTeamNotFound):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())

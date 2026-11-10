@@ -1154,3 +1154,129 @@ func TestService_createRollbackRunsTheReapers(t *testing.T) {
 		t.Fatalf("a rolled-back initialization: reaped %v, finished %v", reaper.reaped, reaper.finished)
 	}
 }
+
+// fakePreparer is a Preparer whose Run records each call and returns err.
+type fakePreparer struct {
+	removes []string
+	err     error
+	ran     []string
+	order   *[]string
+}
+
+func (p *fakePreparer) PrepareDelete(_ context.Context, _, projectID, environmentID string, _ DeleteEnvironmentOptions) (Prepared, error) {
+	key := projectID + "/" + environmentID
+	return Prepared{Removes: p.removes, Run: func(context.Context) error {
+		p.ran = append(p.ran, key)
+		if p.order != nil {
+			*p.order = append(*p.order, "prepare")
+		}
+		return p.err
+	}}, nil
+}
+
+// orderReaper notes when it's asked to read, after any Preparer ran.
+type orderReaper struct{ order *[]string }
+
+func (r orderReaper) Reap(context.Context, string, string, string) func(context.Context) {
+	*r.order = append(*r.order, "reap")
+	return nil
+}
+
+func TestService_preparersRunBeforeTheDeletion(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	var order []string
+	prep := &fakePreparer{removes: []string{"web on Vercel"}, order: &order}
+	f.svc.AddPreparer(prep)
+	f.svc.AddReaper(orderReaper{order: &order})
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, admin, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A failed preparation refuses the deletion before anything is read.
+	prep.err = ErrFrontendsHeld
+	if err = f.svc.Delete(ctx, admin, p.ID); !errors.Is(err, ErrFrontendsHeld) {
+		t.Fatalf("a failed preparation: %v", err)
+	}
+	if _, gerr := f.store.GetProject(ctx, org, p.ID); gerr != nil || slices.Contains(order, "reap") {
+		t.Fatalf("a refused deletion went ahead: %v, %v", gerr, order)
+	}
+
+	prep.err, order = nil, nil
+	if err = f.svc.Delete(ctx, admin, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(order, []string{"prepare", "reap"}) || !slices.Equal(prep.ran, []string{p.ID + "/", p.ID + "/"}) {
+		t.Fatalf("order %v, ran %v", order, prep.ran)
+	}
+	if _, gerr := f.store.GetProject(ctx, org, p.ID); !errors.Is(gerr, ErrNotFound) {
+		t.Fatalf("after the deletion: %v", gerr)
+	}
+}
+
+func TestService_preparerRemovingFromAProviderNeedsAnAdmin(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	prep := &fakePreparer{removes: []string{"web on Vercel"}}
+	f.svc.AddPreparer(prep)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.svc.CreateEnvironment(ctx, dev, p.ID, CreateEnvironmentInput{Name: "qa"}); err != nil {
+		t.Fatal(err)
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID)
+	if !errors.Is(err, security.ErrForbidden) || len(prep.ran) != 0 {
+		t.Fatalf("a developer removing frontends: %v, ran %v", err, prep.ran)
+	}
+	// Settling records alone removes nothing, so a developer may.
+	prep.removes = nil
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID); err != nil || len(prep.ran) != 1 {
+		t.Fatalf("a developer settling records: %v, ran %v", err, prep.ran)
+	}
+}
+
+// refusingStore is a store that would refuse every deletion up front.
+type refusingStore struct {
+	*memStore
+	err error
+}
+
+func (s refusingStore) DeletionRefusal(context.Context, string, string, string) error { return s.err }
+
+// A deletion the store would refuse anyway removes nothing first: what a
+// preparer removes from a provider can't come back.
+func TestService_aRefusedDeletionRunsNoPreparer(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	store := refusingStore{memStore: f.store, err: ErrLastEnvironment}
+	svc := NewService(store, f.authz, f.init, f.audit)
+	prep := &fakePreparer{removes: []string{"web on Vercel"}}
+	svc.AddPreparer(prep)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, admin, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs, err := f.svc.Environments(ctx, admin, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.DeleteEnvironment(ctx, admin, p.ID, envs[0].ID); !errors.Is(err, ErrLastEnvironment) || len(prep.ran) != 0 {
+		t.Fatalf("a refused deletion: %v, ran %v", err, prep.ran)
+	}
+	store.err = ErrFleetManaged
+	svc = NewService(store, f.authz, f.init, f.audit)
+	svc.AddPreparer(prep)
+	if err = svc.Delete(ctx, admin, p.ID); !errors.Is(err, ErrFleetManaged) || len(prep.ran) != 0 {
+		t.Fatalf("a refused project deletion: %v, ran %v", err, prep.ran)
+	}
+}

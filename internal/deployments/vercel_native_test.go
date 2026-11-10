@@ -59,6 +59,8 @@ type fakeVercelAPI struct {
 	created   int
 	// onCustomEnvironment runs when a custom environment is asked for.
 	onCustomEnvironment func()
+	// failBuild, when set, ends the deployment in ERROR.
+	failBuild bool
 }
 
 func newFakeVercelAPI() *fakeVercelAPI {
@@ -110,6 +112,14 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, _ = io.WriteString(w, `{}`)
+	case r.Method == http.MethodGet && len(parts) == 4 && parts[0] == "v9" && parts[3] == "custom-environments":
+		var list []string
+		for key, id := range f.envs {
+			if strings.HasPrefix(key, parts[2]+"/") {
+				list = append(list, fmt.Sprintf(`{"id":%q}`, id))
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"environments":[%s]}`, strings.Join(list, ","))
 	case len(parts) >= 4 && parts[0] == "v9" && parts[3] == "custom-environments":
 		project := parts[2]
 		if f.onCustomEnvironment != nil {
@@ -169,6 +179,10 @@ func (f *fakeVercelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.deploys = append(f.deploys, body)
 		_, _ = io.WriteString(w, `{"id":"dpl_1"}`)
 	case r.Method == http.MethodGet && r.URL.Path == "/v13/deployments/dpl_1":
+		if f.failBuild {
+			_, _ = io.WriteString(w, `{"id":"dpl_1","readyState":"ERROR","errorMessage":"Command \"npm install\" exited with 1"}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"id":"dpl_1","readyState":"READY","alias":["web.vercel.app"]}`)
 	default:
 		_, _ = io.WriteString(w, `{}`)

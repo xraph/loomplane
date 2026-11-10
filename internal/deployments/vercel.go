@@ -72,6 +72,9 @@ type vercelState struct {
 	// those and nothing else.
 	CreatedProject     bool   `json:"created_project,omitempty"`
 	CreatedEnvironment string `json:"created_environment,omitempty"`
+	// ReplacesFrontend is the native ref a fallback's project replaces in
+	// the frontend capacity ledger: the native run named it, then undid it.
+	ReplacesFrontend string `json:"replaces_frontend,omitempty"`
 }
 
 func token(job *Job) vercel.Token {
@@ -199,13 +202,19 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (_ *Outcome, err error) {
 			return nil, fmt.Errorf("%s already deploys into its %s Vercel environment, so it doesn't fall back to a separate project: %w",
 				job.Action.Name, job.Deployment.Environment, refusal.err)
 		}
+		// What the native run named in the frontend ledger, if it got
+		// that far; undoNative removes it, and the fallback replaces it.
+		named := ""
+		if state.ProjectID != "" && state.Target != "" {
+			named = planning.VercelRef(state.ProjectID, state.Target)
+		}
 		if err := d.undoNative(ctx); err != nil {
 			return nil, err
 		}
 		if err := v.Environments.FallBack(ctx, job, "vercel", job.Action.Name, refusal.reason, refusal.permanent); err != nil {
 			return nil, err
 		}
-		state = vercelState{Mode: ModeFallback}
+		state = vercelState{Mode: ModeFallback, ReplacesFrontend: named}
 		save()
 	}
 	return d.run(ctx, false)
@@ -313,6 +322,12 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 		state.CreatedProject = true
 		d.save()
 	}
+	if !native {
+		// The project is the frontend: name it before anything can fail.
+		if recErr := job.recordFrontend(ctx, project.ID, state.ReplacesFrontend); recErr != nil {
+			return nil, recErr
+		}
+	}
 	if native && (d.record == nil || d.record.ProjectRef != project.ID) {
 		// Claim the project before writing to it, so another
 		// environment's fallback never removes it while this deploys.
@@ -335,6 +350,11 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 		// A retry deploys to the same environment.
 		d.save()
 		refuse = refusedNative
+		// The frontend is the environment, not the shared project, which
+		// other environments may deploy to: name it once it's known.
+		if recErr := job.recordFrontend(ctx, planning.VercelRef(project.ID, state.Target), ""); recErr != nil {
+			return nil, recErr
+		}
 	}
 	var resourceKeys []string
 	for _, link := range job.Action.Service.Env {

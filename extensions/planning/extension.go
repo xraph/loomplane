@@ -642,6 +642,12 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn: reapWarn,
 	}
 	projectSvc.AddReaper(providerReaper)
+	// Before a project or environment goes, the Vercel frontends it
+	// deployed go first, and the capacity they held is released, since
+	// their slots refuse the deletion until then.
+	projectSvc.AddPreparer(&deployments.FrontendReaper{
+		Ledger: cloudinfra.NewPgStore(pg), Plans: planStore, Environments: prj, Records: deployStore, Credentials: clouds, Executors: executors,
+	})
 	// It takes every other service and resource's binding too, and this
 	// deletes everything the environment kept in Vault and warns about each
 	// one still running in a cloud, but the ones providerReaper removes.

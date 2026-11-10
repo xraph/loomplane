@@ -88,15 +88,41 @@ type Reaped struct {
 // ErrProviderRemoval is an environment deletion that would delete
 // resources in a provider account by someone who may not approve a
 // deployment. It's a security.ErrForbidden.
-var ErrProviderRemoval error = providerRemovalError{}
+var ErrProviderRemoval error = providerRemovalError{"An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself."}
 
-type providerRemovalError struct{}
+// ErrFrontendRemoval is a project deletion that would remove the
+// frontends it deployed by someone who may not approve a deployment. It's
+// a security.ErrForbidden.
+var ErrFrontendRemoval error = providerRemovalError{"An admin must delete this project, because it removes the frontends it deployed to Vercel."}
 
-func (providerRemovalError) Error() string {
-	return "An admin must delete this environment, because it removes Vercel or Render resources. Keep them to delete it yourself."
-}
+type providerRemovalError struct{ msg string }
+
+func (e providerRemovalError) Error() string { return e.msg }
 
 func (providerRemovalError) Is(target error) bool { return target == security.ErrForbidden }
+
+// Preparer does what must happen in a provider before a project, or one of
+// its environments when environmentID isn't empty, can be deleted at all:
+// the deletion's database rows refuse to go while it hasn't. Unlike a
+// Reaper it runs first, and its failure refuses the deletion.
+type Preparer interface {
+	PrepareDelete(ctx context.Context, orgID, projectID, environmentID string, opts DeleteEnvironmentOptions) (Prepared, error)
+}
+
+// deletionChecker is a Store that can say up front whether it would refuse
+// a deletion for a reason no Preparer changes.
+type deletionChecker interface {
+	DeletionRefusal(ctx context.Context, orgID, projectID, environmentID string) error
+}
+
+// Prepared is what a Preparer found it has to do before a deletion.
+type Prepared struct {
+	// Removes describes what Run deletes in a provider account, which is
+	// an admin's call. Empty when Run only settles records.
+	Removes []string
+	// Run does it. It may be nil. An error refuses the deletion.
+	Run func(context.Context) error
+}
 
 // Auditor records changes worth an audit trail. Recording must not fail the
 // change, so it returns nothing; the implementation logs its own failures.
@@ -116,14 +142,15 @@ type AuditEvent struct {
 
 // Service is the project API: every method checks the caller's role first.
 type Service struct {
-	store    Store
-	authz    Authorizer
-	init     Initializer
-	audit    Auditor
-	cleaners []Cleaner
-	reapers  []Reaper
-	attacher Attacher
-	now      func() time.Time
+	store     Store
+	authz     Authorizer
+	init      Initializer
+	audit     Auditor
+	cleaners  []Cleaner
+	reapers   []Reaper
+	preparers []Preparer
+	attacher  Attacher
+	now       func() time.Time
 }
 
 // Attacher attaches a repository a new project was created with as one of
@@ -145,6 +172,50 @@ func (s *Service) AddCleaner(c Cleaner) { s.cleaners = append(s.cleaners, c) }
 // AddReaper registers a Reaper, run around every project or environment
 // deletion. Call it while the app registers, before any request arrives.
 func (s *Service) AddReaper(r Reaper) { s.reapers = append(s.reapers, r) }
+
+// AddPreparer registers a Preparer, run before every project or
+// environment deletion. Call it while the app registers.
+func (s *Service) AddPreparer(p Preparer) { s.preparers = append(s.preparers, p) }
+
+// prepare runs every Preparer before a deletion. One that removes
+// something from a provider needs someone who may approve a deployment,
+// as putting it there did; forbidden is returned in place of
+// security.ErrForbidden.
+func (s *Service) prepare(ctx context.Context, p security.Principal, projectID, environmentID string, opts DeleteEnvironmentOptions, forbidden error) error {
+	var runs []func(context.Context) error
+	removes := false
+	for _, pr := range s.preparers {
+		got, err := pr.PrepareDelete(ctx, p.OrgID, projectID, environmentID, opts)
+		if err != nil {
+			return err
+		}
+		removes = removes || len(got.Removes) > 0
+		if got.Run != nil {
+			runs = append(runs, got.Run)
+		}
+	}
+	// What a preparer removes can't come back, so a deletion the store
+	// would refuse anyway is refused before any of it runs.
+	if checker, ok := s.store.(deletionChecker); ok && len(runs) > 0 {
+		if err := checker.DeletionRefusal(ctx, p.OrgID, projectID, environmentID); err != nil {
+			return err
+		}
+	}
+	if removes {
+		if err := s.authz.Require(ctx, p, security.DeploymentApprove, projectID); err != nil {
+			if errors.Is(err, security.ErrForbidden) {
+				return forbidden
+			}
+			return err
+		}
+	}
+	for _, run := range runs {
+		if err := run(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // reap asks each Reaper what the deletion would leave behind and returns
 // what cleans it up, to run once the deletion has happened, and the
@@ -470,6 +541,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err := s.authz.Require(ctx, p, security.ProjectDelete, id); err != nil {
 		return err
 	}
+	if err := s.prepare(ctx, p, id, "", DeleteEnvironmentOptions{}, ErrFrontendRemoval); err != nil {
+		return err
+	}
 	reaped := s.reap(ctx, p.OrgID, id, "", DeleteEnvironmentOptions{}).Cleanup
 	if err := s.store.DeleteProject(ctx, p.OrgID, id); err != nil {
 		return err
@@ -562,6 +636,9 @@ func (s *Service) DeleteEnvironment(ctx context.Context, p security.Principal, p
 	var options DeleteEnvironmentOptions
 	if len(opts) > 0 {
 		options = opts[0]
+	}
+	if err := s.prepare(ctx, p, projectID, envID, options, ErrProviderRemoval); err != nil {
+		return err
 	}
 	reaped := s.reap(ctx, p.OrgID, projectID, envID, options)
 	// Deleting what runs in a provider account is an admin's call, as
