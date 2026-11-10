@@ -203,3 +203,104 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+// Turn implements Store.
+func (s *PgStore) Turn(ctx context.Context, orgID, id, taskID string) (*TurnRow, error) {
+	if orgID == "" || id == "" || taskID == "" {
+		return nil, ErrNotFound
+	}
+	var r TurnRow
+	err := s.db.QueryRow(ctx, `SELECT id, input, status, error, event_seq, created_at, finished_at, page_context
+		FROM loomplane_agent_tasks
+		WHERE org_id = $1 AND session_id = $2 AND kind = 'chat' AND id = $3
+			AND NOT EXISTS (SELECT 1 FROM loomplane_agent_conversations
+				WHERE org_id = $1 AND session_id = $2 AND deleted_at IS NOT NULL)`,
+		orgID, id, taskID).Scan(&r.TaskID, &r.Input, &r.Status, &r.Error, &r.EventSeq, &r.CreatedAt, &r.FinishedAt, &r.Context)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read agent conversation turn: %w", err)
+	}
+	r.CreatedAt = r.CreatedAt.UTC()
+	if r.FinishedAt != nil {
+		f := r.FinishedAt.UTC()
+		r.FinishedAt = &f
+	}
+	return &r, nil
+}
+
+// flagColumns are the columns scanFlag reads.
+const flagColumns = `id, org_id, project_id, session_id, task_id, reported_by, reason, note, question, answer,
+	created_at, updated_at, dismissed_by, dismissed_at`
+
+func scanFlag(row driver.Row) (*Flag, error) {
+	var f Flag
+	if err := row.Scan(&f.ID, &f.OrgID, &f.ProjectID, &f.ConversationID, &f.TaskID, &f.ReportedBy, &f.Reason, &f.Note,
+		&f.Question, &f.Answer, &f.CreatedAt, &f.UpdatedAt, &f.DismissedBy, &f.DismissedAt); err != nil {
+		return nil, err
+	}
+	f.CreatedAt, f.UpdatedAt = f.CreatedAt.UTC(), f.UpdatedAt.UTC()
+	if f.DismissedAt != nil {
+		at := f.DismissedAt.UTC()
+		f.DismissedAt = &at
+	}
+	return &f, nil
+}
+
+// SaveFlag implements Store. A flag of the same task by the same person
+// keeps its ID, snapshot and created_at.
+func (s *PgStore) SaveFlag(ctx context.Context, f Flag) (*Flag, error) {
+	kept, err := scanFlag(s.db.QueryRow(ctx, `INSERT INTO loomplane_agent_answer_flags AS f (id, org_id, project_id,
+			session_id, task_id, reported_by, reason, note, question, answer, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+		ON CONFLICT (task_id, reported_by) DO UPDATE SET
+			reason = excluded.reason, note = excluded.note, updated_at = excluded.updated_at,
+			dismissed_by = '', dismissed_at = NULL
+		RETURNING `+flagColumns,
+		f.ID, f.OrgID, f.ProjectID, f.ConversationID, f.TaskID, f.ReportedBy, f.Reason, f.Note, f.Question, f.Answer,
+		f.CreatedAt))
+	if err != nil {
+		return nil, fmt.Errorf("save agent answer flag: %w", err)
+	}
+	return kept, nil
+}
+
+// Flags implements Store.
+func (s *PgStore) Flags(ctx context.Context, status string, limit int) ([]Flag, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+flagColumns+`
+		FROM loomplane_agent_answer_flags
+		WHERE $1 = 'all' OR ($1 = 'open' AND dismissed_at IS NULL) OR ($1 = 'dismissed' AND dismissed_at IS NOT NULL)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2`, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list agent answer flags: %w", err)
+	}
+	defer rows.Close()
+	out := []Flag{}
+	for rows.Next() {
+		f, err := scanFlag(rows)
+		if err != nil {
+			return nil, fmt.Errorf("read agent answer flag: %w", err)
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// DismissFlag implements Store.
+func (s *PgStore) DismissFlag(ctx context.Context, id, by string, at time.Time) (*Flag, error) {
+	f, err := scanFlag(s.db.QueryRow(ctx, `UPDATE loomplane_agent_answer_flags AS f SET
+			dismissed_by = CASE WHEN f.dismissed_at IS NULL THEN $2 ELSE f.dismissed_by END,
+			updated_at = CASE WHEN f.dismissed_at IS NULL THEN $3 ELSE f.updated_at END,
+			dismissed_at = coalesce(f.dismissed_at, $3)
+		WHERE id = $1
+		RETURNING `+flagColumns, id, by, at))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrFlagNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("dismiss agent answer flag: %w", err)
+	}
+	return f, nil
+}

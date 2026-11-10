@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Flag: Codec = {"kind": "object", "fields": {"answer": {"ts": "answer"}, "conversation_id": {"ts": "conversationId"}, "created_at": {"ts": "createdAt"}, "dismissed_at": {"ts": "dismissedAt"}, "dismissed_by": {"ts": "dismissedBy"}, "id": {"ts": "id"}, "note": {"ts": "note"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "question": {"ts": "question"}, "reason": {"ts": "reason"}, "reported_by": {"ts": "reportedBy"}, "task_id": {"ts": "taskId"}, "updated_at": {"ts": "updatedAt"}}, "required": ["answer", "conversation_id", "created_at", "dismissed_by", "id", "note", "org_id", "project_id", "question", "reason", "reported_by", "task_id", "updated_at"]};

@@ -87,6 +87,7 @@ type memStore struct {
 	mu      sync.Mutex
 	rows    []row
 	changes map[string]*changed // by org/session
+	flags   []Flag              // in the order they were first saved
 }
 
 func (m *memStore) add(t agentruns.Task, input string, context []byte) {
@@ -410,6 +411,7 @@ type world struct {
 	runs  *fakeRuns
 	lock  *memLock
 	clock *clock
+	audit *auditLog
 }
 
 func newWorld(t *testing.T) *world {
@@ -418,9 +420,10 @@ func newWorld(t *testing.T) *world {
 	c := &clock{now: time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)}
 	runs := &fakeRuns{store: st, clock: c, events: map[string][]agentruns.Event{}}
 	lock := &memLock{}
+	audit := &auditLog{}
 	svc := NewService(Deps{Store: st, Runs: runs, Authz: newAuthz(t), TryLock: lock.Try, Safety: quoter{},
-		Now: func() time.Time { return c.tick() }})
-	return &world{svc: svc, store: st, runs: runs, lock: lock, clock: c}
+		Audit: audit, Now: func() time.Time { return c.tick() }})
+	return &world{svc: svc, store: st, runs: runs, lock: lock, clock: c, audit: audit}
 }
 
 // open starts a conversation as user in orgA and marks its first turn

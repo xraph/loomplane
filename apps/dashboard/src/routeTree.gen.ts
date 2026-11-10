@@ -51,6 +51,7 @@ import { Route as NotificationsSettingsRouteImport } from "./routes/notification
 import { Route as PlatformPageRouteImport } from "./routes/platform.$page"
 import { Route as PlatformCloudRouteImport } from "./routes/platform.cloud"
 import { Route as PlatformCloudSignInRouteImport } from "./routes/platform.cloud-sign-in"
+import { Route as PlatformFlagsRouteImport } from "./routes/platform.flags"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ReleaseReportsIdRouteImport } from "./routes/release-reports.$id"
@@ -289,6 +290,11 @@ const PlatformCloudSignInRoute = PlatformCloudSignInRouteImport.update({
   path: "/platform/cloud-sign-in",
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlatformFlagsRoute = PlatformFlagsRouteImport.update({
+  id: "/platform/flags",
+  path: "/platform/flags",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: "/projects/",
   path: "/projects/",
@@ -469,6 +475,7 @@ export interface FileRoutesByFullPath {
   "/platform/$page": typeof PlatformPageRoute
   "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
+  "/platform/flags": typeof PlatformFlagsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
@@ -540,6 +547,7 @@ export interface FileRoutesByTo {
   "/platform/$page": typeof PlatformPageRoute
   "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
+  "/platform/flags": typeof PlatformFlagsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
@@ -612,6 +620,7 @@ export interface FileRoutesById {
   "/platform/$page": typeof PlatformPageRoute
   "/platform/cloud": typeof PlatformCloudRoute
   "/platform/cloud-sign-in": typeof PlatformCloudSignInRoute
+  "/platform/flags": typeof PlatformFlagsRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/release-reports/$id": typeof ReleaseReportsIdRoute
   "/services/$kind": typeof ServicesKindRoute
@@ -685,6 +694,7 @@ export interface FileRouteTypes {
     | "/platform/$page"
     | "/platform/cloud"
     | "/platform/cloud-sign-in"
+    | "/platform/flags"
     | "/projects/$id"
     | "/release-reports/$id"
     | "/services/$kind"
@@ -756,6 +766,7 @@ export interface FileRouteTypes {
     | "/platform/$page"
     | "/platform/cloud"
     | "/platform/cloud-sign-in"
+    | "/platform/flags"
     | "/projects/$id"
     | "/release-reports/$id"
     | "/services/$kind"
@@ -827,6 +838,7 @@ export interface FileRouteTypes {
     | "/platform/$page"
     | "/platform/cloud"
     | "/platform/cloud-sign-in"
+    | "/platform/flags"
     | "/projects/$id"
     | "/release-reports/$id"
     | "/services/$kind"
@@ -899,6 +911,7 @@ export interface RootRouteChildren {
   PlatformPageRoute: typeof PlatformPageRoute
   PlatformCloudRoute: typeof PlatformCloudRoute
   PlatformCloudSignInRoute: typeof PlatformCloudSignInRoute
+  PlatformFlagsRoute: typeof PlatformFlagsRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ReleaseReportsIdRoute: typeof ReleaseReportsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
@@ -1231,6 +1244,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof PlatformCloudSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/platform/flags": {
+      id: "/platform/flags"
+      path: "/platform/flags"
+      fullPath: "/platform/flags"
+      preLoaderRoute: typeof PlatformFlagsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/projects/": {
       id: "/projects/"
       path: "/projects"
@@ -1459,6 +1479,7 @@ const rootRouteChildren: RootRouteChildren = {
   PlatformPageRoute: PlatformPageRoute,
   PlatformCloudRoute: PlatformCloudRoute,
   PlatformCloudSignInRoute: PlatformCloudSignInRoute,
+  PlatformFlagsRoute: PlatformFlagsRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ReleaseReportsIdRoute: ReleaseReportsIdRoute,
   ServicesKindRoute: ServicesKindRoute,

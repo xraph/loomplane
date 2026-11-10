@@ -31,6 +31,9 @@ type fakeChat struct {
 	query  agentchat.HistoryQuery
 	update agentchat.ConversationUpdate
 	start  agentchat.StartInput
+	flag   agentchat.FlagInput
+	status string // the status Flags was asked for
+	by     string // who DismissFlag was told dismissed it
 }
 
 func (f *fakeChat) record(call string) error {
@@ -415,6 +418,7 @@ func TestChatRoutesNeedTheAgentOn(t *testing.T) {
 		{http.MethodPost, "/api/v1/agent/conversations", `{"message":"hi"}`},
 		{http.MethodPatch, "/api/v1/agent/conversations/ses_1", `{"pinned":true}`},
 		{http.MethodDelete, "/api/v1/agent/conversations/ses_1", ""},
+		{http.MethodPost, "/api/v1/agent/conversations/ses_1/turns/atask_1/flag", `{"reason":"offensive"}`},
 		{http.MethodGet, "/api/v1/agent/tasks/atask_1/stream", ""},
 		{http.MethodPost, "/api/v1/agent/tasks/atask_1/cancel", ""},
 	} {

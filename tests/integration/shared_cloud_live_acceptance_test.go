@@ -1167,6 +1167,8 @@ func liveSetup(t *testing.T, database, callback, runID string, progress *livePro
 	cfg.SecretKey = base64.StdEncoding.EncodeToString(secretKey)
 	clear(secretKey)
 	cfg.Database.URL = database
+	// Load fills this in from public_url; Defaults leaves it to Load.
+	cfg.Identity.PasskeyRPID = "localhost"
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
 	progress.step(t, "repository_fixture")
 	cfg.GitHub.APIURL = fakeGitHubServing(t).URL

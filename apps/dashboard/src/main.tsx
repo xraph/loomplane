@@ -45,6 +45,7 @@ try {
     requireEmailVerification: config.requireEmailVerification,
     consolePath: config.consolePath,
     platformAdmin: config.platformAdmin,
+    platformOwner: config.platformOwner,
     cloudSignInOffer: config.cloudSignInOffer,
   })
   // Only a platform admin is told the console's path, and the console is its

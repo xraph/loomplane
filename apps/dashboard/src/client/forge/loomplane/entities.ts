@@ -61,6 +61,8 @@ export const entities = {
   'ExpansionList': { fields: { 'expansions': 'Expansion' } },
   'FabriqKeyList': { fields: { 'keys': 'ConsumerKey' } },
   'FabriqloomTenant': { idField: 'id' },
+  'Flag': { idField: 'id' },
+  'FlagList': { fields: { 'flags': 'Flag' } },
   'Fleet': { idField: 'id' },
   'FleetOperation': { idField: 'id' },
   'GatewayList': { fields: { 'gateways': 'GatewayStatus' } },

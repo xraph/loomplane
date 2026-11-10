@@ -40,6 +40,7 @@ import { Message, MessageContent } from "@/components/ai-elements/message"
 import { AgentOrb, type OrbState } from "@/components/assistant/agent-orb"
 import { Composer } from "@/components/assistant/composer"
 import { AgentMarkdown } from "@/components/assistant/markdown"
+import { ReportAnswer } from "@/components/assistant/report-answer"
 import { ToolStep, toolLabel } from "@/components/assistant/tool-step"
 import { QueryError } from "@/components/query-error"
 import { CopyButton } from "@/components/runs"
@@ -457,6 +458,7 @@ function ChatBody({
                 key={m.id}
                 message={m}
                 live={busy && m === lastAgent}
+                conversationId={transport.conversationId ?? conversationId}
               />
             )
           )}
@@ -630,9 +632,11 @@ function segments(parts: AgentPart[]): Segment[] {
 function AgentTurn({
   message,
   live,
+  conversationId,
 }: {
   message: AgentMessage
   live: boolean
+  conversationId?: string
 }) {
   const parts = message.parts.filter((p) => p.type !== "step-start")
   const status = message.metadata?.status
@@ -642,6 +646,14 @@ function AgentTurn({
   )
   const segs = segments(parts)
   const answer = textOf(message)
+  const taskId = message.metadata?.taskId
+  const reportable =
+    !live &&
+    !!answer &&
+    !!conversationId &&
+    !!taskId &&
+    !!status &&
+    terminal.has(status)
   return (
     <Message from="assistant">
       <MessageContent>
@@ -716,6 +728,9 @@ function AgentTurn({
       {!live && answer && (
         <MessageActions className="text-muted-foreground">
           <CopyButton value={answer} label="Copy answer" />
+          {reportable && (
+            <ReportAnswer conversationId={conversationId} taskId={taskId} />
+          )}
         </MessageActions>
       )}
     </Message>

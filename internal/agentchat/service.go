@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/xraph/loomplane/internal/agentruns"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -53,6 +54,9 @@ type Deps struct {
 	// Safety quotes a page context's label for the model: the agent's
 	// agentsafety.Scanner. Without it the label is withheld.
 	Safety Quoter
+	// Audit records each flag of an answer and each dismissal. Without it
+	// nothing is recorded.
+	Audit projects.Auditor
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
@@ -64,6 +68,7 @@ type Service struct {
 	authz *security.Authorizer
 	lock  TryLockFunc
 	quote Quoter
+	audit projects.Auditor
 	now   func() time.Time
 	// slots bounds the sends holding the lock (maxLockedSends).
 	slots chan struct{}
@@ -71,7 +76,7 @@ type Service struct {
 
 // NewService returns a Service over d.
 func NewService(d Deps) *Service {
-	s := &Service{store: d.Store, runs: d.Runs, authz: d.Authz, lock: d.TryLock, now: d.Now,
+	s := &Service{store: d.Store, runs: d.Runs, authz: d.Authz, lock: d.TryLock, audit: d.Audit, now: d.Now,
 		slots: make(chan struct{}, maxLockedSends)}
 	if d.Safety != nil {
 		s.quote = d.Safety
@@ -265,14 +270,8 @@ func (s *Service) History(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
-	if c.StartedBy != p.UserID {
-		admin, aerr := s.manages(ctx, p)
-		if aerr != nil {
-			return nil, aerr
-		}
-		if !admin {
-			return nil, ErrNotFound
-		}
+	if rerr := s.readable(ctx, p, c); rerr != nil {
+		return nil, rerr
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -334,6 +333,22 @@ func (s *Service) locked(ctx context.Context, id string, fn func(context.Context
 		return false, ctx.Err()
 	}
 	return s.lock(ctx, lockPrefix+id, fn)
+}
+
+// readable checks p may read c: they started it, or they manage the
+// workspace's AI. Anyone else gets ErrNotFound, so IDs don't leak.
+func (s *Service) readable(ctx context.Context, p security.Principal, c *Conversation) error {
+	if c.StartedBy == p.UserID {
+		return nil
+	}
+	admin, err := s.manages(ctx, p)
+	if err != nil {
+		return err
+	}
+	if !admin {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // mine checks p started c. Someone who manages the workspace's AI may read
