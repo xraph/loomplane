@@ -14,6 +14,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -86,6 +87,10 @@ type Service struct {
 
 	// GPUReader reads a server or cluster's GPUs. Nil uses the real server and Kubernetes readers.
 	GPUReader func(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error)
+
+	// FenceRepairer reviews a server's fence journal, or repairs it when
+	// review names a review. Nil uses the real server.
+	FenceRepairer func(ctx context.Context, c *Connection, credential []byte, review string) (*server.FenceRepair, error)
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;

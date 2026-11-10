@@ -291,7 +291,7 @@ func fail(err error) error {
 	case errors.Is(err, connections.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse), errors.Is(err, connections.ErrChanged),
-		errors.Is(err, connections.ErrAppLocked):
+		errors.Is(err, connections.ErrAppLocked), errors.Is(err, connections.ErrFenceRepairRefused):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, connections.ErrInvalid), errors.Is(err, connections.ErrNoApp):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())

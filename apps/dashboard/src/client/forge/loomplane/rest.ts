@@ -2662,6 +2662,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionFenceRepair = {
+    /**
+     * Clear a reviewed dirty mark on a server's fence journal, keeping its epochs
+     */
+    apply: async (id: string, body: types.FenceRepairInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FenceRepair> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/fence-repair`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FenceRepairInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FenceRepair"],
+      };
+
+      return this.request<types.FenceRepair>(config);
+    },
+
+    /**
+     * Read a server's fence journal and the execs still running in Loomplane's containers, without changing anything
+     */
+    review: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FenceRepair> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/fence-repair/review`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FenceRepair"],
+      };
+
+      return this.request<types.FenceRepair>(config);
+    },
+
+  };
+
   public readonly connectionGpus = {
     /**
      * GPUs a server or cluster connection can see, read live

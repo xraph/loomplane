@@ -2545,6 +2545,18 @@ export interface Federation {
   serviceExports?: Record<string, any>;
 }
 
+export interface FenceRepair {
+  daemon: string;
+  dirty: any;
+  repaired: boolean;
+  review: string;
+  running: RunningExec[];
+}
+
+export interface FenceRepairInputBody {
+  review: string;
+}
+
 export interface File {
   certificateSecret?: string;
   mode?: number;
@@ -5647,6 +5659,12 @@ export interface RouteVerification {
   dnsError?: string;
   tls: boolean;
   tlsError?: string;
+}
+
+export interface RunningExec {
+  container: string;
+  exec: string;
+  name: string;
 }
 
 export interface Runs {

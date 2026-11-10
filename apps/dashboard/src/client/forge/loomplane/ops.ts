@@ -1279,6 +1279,21 @@ export const ops = {
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connectionFenceRepair.apply': {
+    method: 'POST',
+    path: '/api/v1/connections/{id}/fence-repair',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['FenceRepairInputBody'],
+    responseCodec: CODECS['FenceRepair'],
+  },
+  'connectionFenceRepair.review': {
+    method: 'POST',
+    path: '/api/v1/connections/{id}/fence-repair/review',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['FenceRepair'],
+  },
   'connectionGpus.get': {
     method: 'GET',
     path: '/api/v1/connections/{id}/gpus',
