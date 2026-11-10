@@ -412,6 +412,38 @@ func TestService_createRollsBackWhenEnqueueFails(t *testing.T) {
 	}
 }
 
+// A project is an app unless it's created as a service project, and an
+// update, even one that picks another icon, leaves its kind alone.
+func TestService_kind(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	app, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Shop", Icon: "database"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Kind != ProjectKindApp {
+		t.Fatalf("default kind %q, want app", app.Kind)
+	}
+	svc, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Orders DB", Kind: " service ", Icon: "rocket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	icon := "database"
+	if _, err = f.svc.Update(ctx, dev, svc.ID, UpdateProjectInput{Icon: &icon}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{app.ID: ProjectKindApp, svc.ID: ProjectKindService} {
+		got, err := f.svc.Get(ctx, dev, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Kind != want {
+			t.Fatalf("%s kind %q, want %q", got.Name, got.Kind, want)
+		}
+	}
+}
+
 func TestService_validation(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -433,6 +465,8 @@ func TestService_validation(t *testing.T) {
 		{"icon in the wrong case", CreateProjectInput{Name: "ok", Icon: "Store"}},
 		{"unknown color", CreateProjectInput{Name: "ok", Color: "chartreuse"}},
 		{"color as hex", CreateProjectInput{Name: "ok", Color: "#ffcc00"}},
+		{"unknown kind", CreateProjectInput{Name: "ok", Kind: "database"}},
+		{"service project with a repository", CreateProjectInput{Name: "ok", Kind: ProjectKindService, RepositoryURL: "https://github.com/a/b"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

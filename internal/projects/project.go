@@ -31,6 +31,16 @@ const (
 // Kinds lists the environment kinds, most important first.
 func Kinds() []string { return []string{KindProduction, KindStaging, KindPreview, KindDevelopment} }
 
+// Project kinds. An app project builds and deploys from its repositories.
+// A service project is the one a catalog service, such as a database,
+// gets of its own: it has no repository, only the service. The kind is set
+// when the project is created and never changes, so a project's icon,
+// which anyone can pick, doesn't decide what a project is.
+const (
+	ProjectKindApp     = "app"
+	ProjectKindService = "service"
+)
+
 // Errors the service and stores return.
 var (
 	ErrFleetManaged        = errors.New("manage this project or environment through its instance fleet")
@@ -65,6 +75,9 @@ type Project struct {
 	Description    string `json:"description"`
 	Icon           string `json:"icon"`
 	Color          string `json:"color"`
+	// Kind is ProjectKindApp or ProjectKindService. It's read-only: the
+	// project is created as one or the other, and stays it.
+	Kind string `json:"kind" enum:"app,service"`
 	// Repositories are the "owner/name" of each repository the project
 	// builds from, each once, by its first alias. Its sources belong to discovery; the store
 	// reads them so a list of projects can show them.

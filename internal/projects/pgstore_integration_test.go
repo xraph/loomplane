@@ -63,6 +63,43 @@ func scratchStore(t *testing.T) *projects.PgStore {
 	return projects.NewPgStore(pg)
 }
 
+// A project's kind is stored as created, a project made without one is an
+// app, and an update doesn't touch it.
+func TestPgStoreKind(t *testing.T) {
+	ctx := context.Background()
+	s := scratchStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, p := range []*projects.Project{
+		{ID: "proj_app", Slug: "app", Icon: "database"},
+		{ID: "proj_svc", Slug: "svc", Icon: "rocket", Kind: projects.ProjectKindService},
+	} {
+		p.OrgID, p.Name, p.Color, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt = "org_a", p.Slug, "blue", projects.StatusReady, "usr_ada", now, now
+		env := &projects.Environment{ID: "env_" + p.Slug, OrgID: "org_a", ProjectID: p.ID, Name: "production", Kind: projects.KindProduction, CreatedAt: now, UpdatedAt: now}
+		if err := s.CreateProject(ctx, p, []*projects.Environment{env}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc, err := s.GetProject(ctx, "org_a", "proj_svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Icon = "database"
+	if err = s.UpdateProject(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListProjects(ctx, "org_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range list {
+		got[p.ID] = p.Kind
+	}
+	if got["proj_app"] != projects.ProjectKindApp || got["proj_svc"] != projects.ProjectKindService {
+		t.Fatalf("kinds: %v", got)
+	}
+}
+
 func TestPgStoreAutonomy(t *testing.T) {
 	ctx := context.Background()
 	s := scratchStore(t)

@@ -270,6 +270,10 @@ type CreateProjectInput struct {
 	// one at random, so a new project's tile is never blank.
 	Icon  string `json:"icon,omitempty"`
 	Color string `json:"color,omitempty"`
+	// Kind is what the project is, "app" or "service", and it can't change
+	// later. Leaving it out makes an app project. A service project is a
+	// catalog service's own and starts with no repository.
+	Kind string `json:"kind,omitempty" enum:"app,service"`
 }
 
 // RepositoryInput is a repository a new project starts with, as one of its
@@ -414,6 +418,17 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	if n := len(in.repositories()); n > maxRepositories {
 		return nil, fmt.Errorf("%w: a project can start with at most %d repositories; add the rest once it's created", ErrInvalid, maxRepositories)
 	}
+	kind := strings.TrimSpace(in.Kind)
+	switch kind {
+	case "", ProjectKindApp:
+		kind = ProjectKindApp
+	case ProjectKindService:
+		if len(in.repositories()) > 0 {
+			return nil, fmt.Errorf("%w: a service project starts without a repository", ErrInvalid)
+		}
+	default:
+		return nil, fmt.Errorf("%w: kind must be %q or %q", ErrInvalid, ProjectKindApp, ProjectKindService)
+	}
 	icon := pickStyle(strings.TrimSpace(in.Icon), icons)
 	if err := validateIcon(icon); err != nil {
 		return nil, err
@@ -429,7 +444,7 @@ func (s *Service) build(p security.Principal, in CreateProjectInput) (*Project, 
 	now := s.now().UTC()
 	return &Project{
 		ID: id.String(), OrgID: p.OrgID, Name: name, Slug: slug, Description: desc,
-		Icon: icon, Color: color, DeploymentMode: "application",
+		Icon: icon, Color: color, Kind: kind, DeploymentMode: "application",
 		Repositories: []string{}, Exclusions: []Exclusion{}, Status: StatusInitializing, CreatedBy: p.UserID,
 		CreatedAt: now, UpdatedAt: now,
 	}, nil

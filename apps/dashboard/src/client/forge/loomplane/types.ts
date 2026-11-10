@@ -1735,6 +1735,7 @@ export interface CreateProjectInputBody {
   color?: string;
   description?: string;
   icon?: string;
+  kind?: "app" | "service";
   name: string;
   repositories?: {
   alias?: string;
@@ -4452,6 +4453,7 @@ export interface Project {
   exclusions: Exclusion[];
   icon: string;
   id: string;
+  kind: "app" | "service";
   minStagingSoakSeconds: number;
   name: string;
   orgId: string;

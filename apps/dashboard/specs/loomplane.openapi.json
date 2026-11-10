@@ -24036,6 +24036,13 @@
           "icon": {
             "type": "string"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "service"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -33619,6 +33626,7 @@
           "description",
           "icon",
           "color",
+          "kind",
           "repositories",
           "exclusions",
           "autonomous_promotion",
@@ -33661,6 +33669,13 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "service"
+            ]
           },
           "min_staging_soak_seconds": {
             "type": "integer"
