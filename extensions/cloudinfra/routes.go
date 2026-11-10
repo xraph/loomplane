@@ -215,6 +215,11 @@ func (e *Extension) enroll(c forge.Context) error {
 	}
 	token := strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer ")
 	if err := e.svc.Enroll(c.Request().Context(), c.Param("orgId"), c.Param("operationId"), token, in); err != nil {
+		// The server only learns it wasn't accepted, and retries. Why is
+		// only ever in the log. A busy lock is a normal retry.
+		if !errors.Is(err, infra.ErrBusy) {
+			e.Logger().Warn("server enrollment refused", forge.F("operation", c.Param("operationId")), forge.F("error", err.Error()))
+		}
 		return forge.NewHTTPError(http.StatusConflict, "Enrollment not accepted")
 	}
 	return c.NoContent(http.StatusNoContent)

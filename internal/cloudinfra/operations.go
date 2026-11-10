@@ -432,6 +432,11 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 		case err != nil:
 			o.Status = "failed"
 			o.Message = safeFailure(err)
+			// The message is safe to show and says little; the cause is
+			// only ever in the log.
+			if s.Warn != nil {
+				s.Warn(fmt.Sprintf("infrastructure operation %s (%s %s) failed", o.ID, o.Input.Kind, o.ServerID), err)
+			}
 		default:
 			o.Status = "succeeded"
 			o.Message = ""
