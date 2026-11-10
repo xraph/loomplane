@@ -56,7 +56,7 @@ func newJournalDaemon(t *testing.T, handler http.HandlerFunc) *journalDaemon {
 // seed writes the daemon's journal as a crashed helper would have left it.
 func (d *journalDaemon) seed(t *testing.T, state string) {
 	t.Helper()
-	if err := os.Mkdir(d.root, 0o700); err != nil {
+	if err := os.MkdirAll(d.root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(d.root, "state"), []byte(state), 0o600); err != nil {
@@ -97,11 +97,18 @@ func runHelper(t *testing.T, d *journalDaemon, mode string, f EffectFence, path 
 	return string(out)
 }
 
-// A helper that died while an exec ran leaves the journal dirty with that
+// A fence that died while an exec ran leaves the journal dirty with that
 // exec recorded. Once Docker shows the exec finished, or no longer knows
 // it, the next takeover clears the mark itself. Anything else, a legacy
-// bare dirty mark included, stays blocked for an operator.
+// bare dirty mark included, stays blocked for an operator. The SSH helper
+// and the node's native fence both do this.
 func TestEffectHelperTakeoverClearsAFinishedRecordedExec(t *testing.T) {
+	for _, host := range fenceHosts {
+		t.Run(host, func(t *testing.T) { testTakeoverClearsAFinishedRecordedExec(t, host) })
+	}
+}
+
+func testTakeoverClearsAFinishedRecordedExec(t *testing.T, host string) {
 	container, execution := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	operation := "org/plan/app--postgres"
 	record := fmt.Sprintf(`{"mode":"exec","exec":%q,"container":%q}`, execution, container)
@@ -134,11 +141,22 @@ func TestEffectHelperTakeoverClearsAFinishedRecordedExec(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.inspect))
 			})
+			takeover := func() string {
+				var diagnostics bytes.Buffer
+				out := runHelper(t, d, "advance", EffectFence{Operation: operation, Generation: 2}, "/", nil, &diagnostics)
+				return out + diagnostics.String()
+			}
+			if host == "node" {
+				native := newNodeFence(t, d.id, d.socket)
+				d.root = native.root
+				takeover = func() string {
+					return native.run(t, "advance", EffectFence{Operation: operation, Generation: 2}, "/", nil)
+				}
+			}
 			d.seed(t, fmt.Sprintf(`{"epochs":{%q:1},"dirty":%s}`, fencerules.JournalKey(operation), tc.dirty))
-			var diagnostics bytes.Buffer
-			out := runHelper(t, d, "advance", EffectFence{Operation: operation, Generation: 2}, "/", nil, &diagnostics)
+			out := takeover()
 			if strings.Contains(out, "200 OK") != tc.clears {
-				t.Fatalf("takeover %q, want clears %v: %s", out, tc.clears, diagnostics.String())
+				t.Fatalf("takeover %q, want clears %v", out, tc.clears)
 			}
 			state := d.journal(t)
 			epochs := string(state["epochs"])

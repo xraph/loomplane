@@ -38,7 +38,7 @@ func TestAdvanceRefusesOlder(t *testing.T) {
 		{"newer", Journal{Epochs: map[string]int64{JournalKey("o"): 2}}, 3, false, 3},
 		{"same", Journal{Epochs: map[string]int64{JournalKey("o"): 2}}, 2, false, 2},
 		{"older", Journal{Epochs: map[string]int64{JournalKey("o"): 2}}, 1, true, 2},
-		{"dirty", Journal{Epochs: map[string]int64{}, Dirty: true}, 1, true, 0},
+		{"dirty", Journal{Epochs: map[string]int64{}, Dirty: Dirty{Set: true}}, 1, true, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestAdmitRequiresCurrent(t *testing.T) {
 		{"newer", j, "o", 3, true},
 		{"never advanced", j, "other", 1, true},
 		{"zero current", Journal{}, "o", 0, true},
-		{"dirty", Journal{Epochs: j.Epochs, Dirty: true}, "o", 2, true},
+		{"dirty", Journal{Epochs: j.Epochs, Dirty: Dirty{Set: true}}, "o", 2, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

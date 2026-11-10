@@ -21,7 +21,7 @@ import (
 // the operation, exactly as the Python helper writes them.
 type Journal struct {
 	Epochs map[string]int64 `json:"epochs"`
-	Dirty  bool             `json:"dirty"`
+	Dirty  Dirty            `json:"dirty"`
 }
 
 // ErrDirty means a request died mid-flight, so nothing more may run until an
@@ -37,7 +37,7 @@ func JournalKey(operation string) string {
 // Advance raises the operation's epoch to generation. It refuses a
 // generation below the current one.
 func Advance(j *Journal, operation string, generation int64) error {
-	if j.Dirty {
+	if j.Dirty.Set {
 		return ErrDirty
 	}
 	key := JournalKey(operation)
@@ -53,7 +53,7 @@ func Advance(j *Journal, operation string, generation int64) error {
 
 // Admit requires generation to be the operation's current, non-zero epoch.
 func Admit(j Journal, operation string, generation int64) error {
-	if j.Dirty {
+	if j.Dirty.Set {
 		return ErrDirty
 	}
 	current := j.Epochs[JournalKey(operation)]

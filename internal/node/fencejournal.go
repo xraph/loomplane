@@ -141,9 +141,9 @@ func (j *FenceJournal) Unlock() {
 	j.mu.Unlock()
 }
 
-// Load reads the journal. A missing or empty one is fresh. It refuses a
-// dirty journal with fencerules.ErrDirty: a request died mid-flight, and
-// nothing more may run until an operator clears it.
+// Load reads the journal. A missing or empty one is fresh. A dirty journal
+// comes back with its mark: a request died mid-flight, and fencerules
+// refuses to advance or admit anything until the mark clears.
 func (j *FenceJournal) Load() (fencerules.Journal, error) {
 	fresh := fencerules.Journal{Epochs: map[string]int64{}}
 	path := filepath.Join(j.dir, fenceStateFile)
@@ -168,9 +168,6 @@ func (j *FenceJournal) Load() (fencerules.Journal, error) {
 	var state fencerules.Journal
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return fencerules.Journal{}, fmt.Errorf("reading %s: %w", path, err)
-	}
-	if state.Dirty {
-		return fencerules.Journal{}, fmt.Errorf("%s: %w", path, fencerules.ErrDirty)
 	}
 	if state.Epochs == nil {
 		state.Epochs = map[string]int64{}

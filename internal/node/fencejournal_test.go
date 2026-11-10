@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestJournalFilesArePrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := j.Load()
-	if err != nil || got.Dirty || len(got.Epochs) != 0 {
+	if err != nil || got.Dirty.Set || len(got.Epochs) != 0 {
 		t.Fatalf("fresh journal %+v %v", got, err)
 	}
 	got.Epochs[fencerules.JournalKey("op")] = 2
@@ -69,20 +70,27 @@ func TestJournalFilesArePrivate(t *testing.T) {
 	}
 }
 
-func TestJournalLoadRefusesDirty(t *testing.T) {
+// Load hands back a dirty mark, the exec it names included, so the fence
+// can settle it. Advance and Admit still refuse a dirty journal.
+func TestJournalLoadKeepsTheDirtyMark(t *testing.T) {
 	j, err := OpenFenceJournal(t.TempDir(), "daemon-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.Lock(); err != nil {
+	if err = j.Lock(); err != nil {
 		t.Fatal(err)
 	}
 	defer j.Unlock()
-	if err := j.Save(fencerules.Journal{Epochs: map[string]int64{}, Dirty: true}); err != nil {
+	mark := fencerules.ExecMark(strings.Repeat("b", 64), strings.Repeat("a", 64))
+	if err = j.Save(fencerules.Journal{Epochs: map[string]int64{}, Dirty: mark}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := j.Load(); !errors.Is(err, fencerules.ErrDirty) {
-		t.Fatalf("got %v, want ErrDirty", err)
+	got, err := j.Load()
+	if err != nil || got.Dirty != mark {
+		t.Fatalf("loaded %+v %v, want the exec mark", got, err)
+	}
+	if err := fencerules.Advance(&got, "op", 1); !errors.Is(err, fencerules.ErrDirty) {
+		t.Fatalf("advance %v, want ErrDirty", err)
 	}
 }
 

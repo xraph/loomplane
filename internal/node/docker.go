@@ -257,6 +257,17 @@ func (d *dockerFence) run(ctx context.Context, f nodeproto.Fence, req *http.Requ
 	if err != nil {
 		return err
 	}
+	if state.Dirty.Set {
+		err = d.settle(ctx, state.Dirty)
+		if err != nil {
+			return err
+		}
+		state.Dirty = fencerules.Dirty{}
+		err = j.Save(state)
+		if err != nil {
+			return err
+		}
+	}
 	if f.Mode == nodeproto.FenceAdvance {
 		err = fencerules.Advance(&state, f.Resource, f.Generation)
 		if err != nil {
@@ -294,7 +305,13 @@ func (d *dockerFence) run(ctx context.Context, f nodeproto.Fence, req *http.Requ
 	if err != nil {
 		return err
 	}
-	state.Dirty = true
+	// An exec start records which exec it ran, so a later takeover can tell
+	// once it has finished.
+	state.Dirty = fencerules.Dirty{Set: true}
+	if streamed {
+		id, _ := execStartID(req.RequestURI)
+		state.Dirty = fencerules.ExecMark(id, container)
+	}
 	err = j.Save(state)
 	if err != nil {
 		return err
@@ -317,8 +334,33 @@ func (d *dockerFence) run(ctx context.Context, f nodeproto.Fence, req *http.Requ
 	if out.failed {
 		return errCallerGone
 	}
-	state.Dirty = false
+	state.Dirty = fencerules.Dirty{}
 	return j.Save(state)
+}
+
+// settle clears the way for a takeover of a dirty journal, as the SSH
+// helper does: a mark that names an exec settles once Docker shows that
+// exec finished, or no longer knows it, since a finished exec is a full
+// quiescence receipt. Anything else, a bare mark included, stays dirty for
+// an operator's reviewed repair.
+func (d *dockerFence) settle(ctx context.Context, mark fencerules.Dirty) error {
+	if mark.Exec == "" {
+		return fmt.Errorf("%w: it holds an unknown Docker change; review it with loomctl fence-repair", fencerules.ErrDirty)
+	}
+	var e execJSON
+	err := d.getJSON(ctx, "/exec/"+mark.Exec+"/json", &e)
+	if errors.Is(err, errDockerNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: checking exec %s: %w", fencerules.ErrDirty, mark.Exec, err)
+	}
+	// Running comes first: Docker leaves ExitCode null until it has
+	// processed the exit event, so only a stopped exec's code counts.
+	if e.ContainerID != mark.Container || e.Running == nil || *e.Running || e.ExitCode == nil {
+		return fmt.Errorf("%w: exec %s has not finished", fencerules.ErrDirty, mark.Exec)
+	}
+	return nil
 }
 
 // checkExec applies the exec modes' checks to an exec start and returns the
@@ -581,8 +623,11 @@ func dockerAPI(socket string) *http.Client {
 	}}
 }
 
+// errDockerNotFound is the daemon answering 404.
+var errDockerNotFound = errors.New("not found")
+
 // dockerGetJSON decodes the daemon's answer to GET path into v. Anything but
-// a 200 is an error.
+// a 200 is an error, errDockerNotFound for a 404.
 func dockerGetJSON(ctx context.Context, api *http.Client, path string, v any) error {
 	// The host is a placeholder: api dials only the daemon socket.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, http.NoBody) //nolint:gosec // G704: see above
@@ -594,7 +639,11 @@ func dockerGetJSON(ctx context.Context, api *http.Client, path string, v any) er
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return fmt.Errorf("GET %s: %w", path, errDockerNotFound)
+	default:
 		return fmt.Errorf("GET %s: HTTP %d", path, resp.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, maxDockerJSON)).Decode(v)
