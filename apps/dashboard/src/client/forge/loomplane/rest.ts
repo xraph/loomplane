@@ -6860,6 +6860,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * What deleting a project would remove from provider accounts first, and whether it would be refused. Changes nothing.
+     */
+    deletion: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeletionPreview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/deletion`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeletionPreview"],
+      };
+
+      return this.request<types.DeletionPreview>(config);
+    },
+
+    /**
      * Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.
      */
     exclude: async (id: string, body: types.ExcludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {

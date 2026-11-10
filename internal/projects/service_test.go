@@ -1158,6 +1158,7 @@ func TestService_createRollbackRunsTheReapers(t *testing.T) {
 // fakePreparer is a Preparer whose Run records each call and returns err.
 type fakePreparer struct {
 	removes []string
+	refuse  error // returned by PrepareDelete itself
 	err     error
 	ran     []string
 	order   *[]string
@@ -1165,6 +1166,9 @@ type fakePreparer struct {
 
 func (p *fakePreparer) PrepareDelete(_ context.Context, _, projectID, environmentID string, _ DeleteEnvironmentOptions) (Prepared, error) {
 	key := projectID + "/" + environmentID
+	if p.refuse != nil {
+		return Prepared{}, p.refuse
+	}
 	return Prepared{Removes: p.removes, Run: func(context.Context) error {
 		p.ran = append(p.ran, key)
 		if p.order != nil {
@@ -1278,5 +1282,96 @@ func TestService_aRefusedDeletionRunsNoPreparer(t *testing.T) {
 	svc.AddPreparer(prep)
 	if err = svc.Delete(ctx, admin, p.ID); !errors.Is(err, ErrFleetManaged) || len(prep.ran) != 0 {
 		t.Fatalf("a refused project deletion: %v, ran %v", err, prep.ran)
+	}
+}
+
+// A preview says what Delete would remove and why it would be refused,
+// and runs nothing.
+func TestService_previewDeleteRunsNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	prep := &fakePreparer{removes: []string{"web in production (web-abc)"}}
+	f.svc.AddPreparer(prep)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, admin, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.svc.PreviewDelete(ctx, admin, p.ID)
+	if err != nil || !slices.Equal(got.Removes, prep.removes) || got.Blocked != "" || len(prep.ran) != 0 {
+		t.Fatalf("an admin's preview: %+v, %v, ran %v", got, err, prep.ran)
+	}
+	if _, gerr := f.store.GetProject(ctx, org, p.ID); gerr != nil {
+		t.Fatalf("the preview deleted it: %v", gerr)
+	}
+
+	// Only someone who may delete the project gets a preview.
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	if _, err = f.svc.PreviewDelete(ctx, dev, p.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("a developer's preview: %v", err)
+	}
+
+	// A refusal the person can act on is the answer, not a failure.
+	held := fmt.Errorf("%w: web in production: its deploy never named what it made", ErrFrontendsHeld)
+	prep.refuse = held
+	got, err = f.svc.PreviewDelete(ctx, admin, p.ID)
+	if err != nil || got.Blocked != held.Error() || got.Removes == nil || len(got.Removes) != 0 {
+		t.Fatalf("a refused preview: %+v, %v", got, err)
+	}
+
+	// Failing to find out is an error.
+	prep.refuse = errors.New("vercel is down")
+	if _, err = f.svc.PreviewDelete(ctx, admin, p.ID); err == nil {
+		t.Fatal("a failed preview had no error")
+	}
+}
+
+func TestService_previewDeleteReportsTheStoresRefusal(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	store := refusingStore{memStore: f.store, err: ErrFleetManaged}
+	svc := NewService(store, f.authz, f.init, f.audit)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, admin, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.PreviewDelete(ctx, admin, p.ID)
+	if err != nil || got.Blocked != ErrFleetManaged.Error() || len(got.Removes) != 0 {
+		t.Fatalf("a fleet-managed project: %+v, %v", got, err)
+	}
+}
+
+// noApproval may do anything but approve a deployment, as a team grant
+// with project delete but not deployment approve can.
+type noApproval struct{ Authorizer }
+
+func (a noApproval) Require(ctx context.Context, p security.Principal, perm security.Permission, id string) error {
+	if perm == security.DeploymentApprove {
+		return security.ErrForbidden
+	}
+	return a.Authorizer.Require(ctx, p, perm, id)
+}
+
+func TestService_previewDeleteSaysRemovingNeedsAnApprover(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	svc := NewService(f.store, noApproval{f.authz}, f.init, f.audit)
+	prep := &fakePreparer{removes: []string{"web in production (web-abc)"}}
+	svc.AddPreparer(prep)
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	p, err := f.svc.Create(ctx, admin, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.PreviewDelete(ctx, admin, p.ID)
+	if err != nil || got.Blocked != ErrFrontendRemoval.Error() || !slices.Equal(got.Removes, prep.removes) {
+		t.Fatalf("a deleter who can't approve: %+v, %v", got, err)
+	}
+	// With nothing to remove, deleting needs no approval.
+	prep.removes = nil
+	if got, err = svc.PreviewDelete(ctx, admin, p.ID); err != nil || got.Blocked != "" {
+		t.Fatalf("nothing to remove: %+v, %v", got, err)
 	}
 }

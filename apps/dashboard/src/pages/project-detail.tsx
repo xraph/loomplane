@@ -14,6 +14,7 @@ import {
   useBindingsList,
   useEnvironmentsList,
   useProjectsDelete,
+  useProjectsDeletion,
   useProjectsGet,
   useProjectsGraph,
   useProjectsUpdate,
@@ -1224,13 +1225,24 @@ function useDeployed(project: Project, environments?: Environment[]) {
   }
 }
 
-/** deployedSummary says what runs from a project, for its delete copy. */
-function deployedSummary(d: ReturnType<typeof useDeployed>): string {
+/**
+ * deployedSummary says what runs from a project, for its delete copy.
+ * removes is how many frontends the deletion removes from their provider
+ * first, when that's known: until then, "nothing runs" can't promise that
+ * no cloud resource is touched.
+ */
+function deployedSummary(
+  d: ReturnType<typeof useDeployed>,
+  removes?: number
+): string {
   if (d.failed)
     return "What runs from it couldn't all be read. Anything deployed keeps running until you remove it in its account."
   if (!d.loaded) return "Checking what runs from it."
-  if (d.services + d.resources === 0)
-    return "Nothing runs from it yet, so no cloud resources are touched."
+  if (d.services + d.resources === 0) {
+    if (removes === 0)
+      return "Nothing runs from it yet, so no cloud resources are touched."
+    return "Nothing runs from it yet."
+  }
   const what = [
     d.services > 0 && plural(d.services, "service"),
     d.resources > 0 && plural(d.resources, "resource"),
@@ -1316,10 +1328,65 @@ function DeleteProject({
       typeToConfirm={project.name}
       pending={remove.isPending}
       onConfirm={() => void confirm()}
+      details={<DeletionRemoves projectId={project.id} />}
       error={error && <CloudCallout tone="error" title={error} />}
     >
       Its environments and their variables go with it, and this can&apos;t be
-      undone. {deployedSummary(deployed)}
+      undone. <DeletedSummary projectId={project.id} deployed={deployed} />
     </CloudConfirm>
+  )
+}
+
+/**
+ * useDeletionPreview asks the server what deleting the project would
+ * remove from provider accounts first, and whether it would be refused.
+ * It reads those accounts, so only the open delete dialog asks, and asks
+ * again each time it opens.
+ */
+function useDeletionPreview(projectId: string) {
+  return useQuery(
+    useProjectsDeletion,
+    { path: { id: projectId } },
+    { staleTime: 0 }
+  )
+}
+
+function DeletedSummary({
+  projectId,
+  deployed,
+}: {
+  projectId: string
+  deployed: ReturnType<typeof useDeployed>
+}) {
+  const preview = useDeletionPreview(projectId)
+  return deployedSummary(deployed, preview.data?.removes.length)
+}
+
+/**
+ * DeletionRemoves names the frontends Loomplane deletes from their
+ * provider before the project goes, and says up front when the deletion
+ * would be refused, so nobody types the name only to be told no.
+ */
+function DeletionRemoves({ projectId }: { projectId: string }) {
+  const { data } = useDeletionPreview(projectId)
+  if (!data) return null
+  if (data.blocked)
+    return (
+      <CloudCallout title="Deleting it now would be refused">
+        {data.blocked}
+      </CloudCallout>
+    )
+  if (data.removes.length === 0) return null
+  return (
+    <CloudCallout
+      tone="info"
+      title={`Loomplane deletes ${data.removes.length === 1 ? "this frontend" : "these frontends"} from Vercel first`}
+    >
+      <ul className="list-disc pl-4">
+        {data.removes.map((r) => (
+          <li key={r}>{r}</li>
+        ))}
+      </ul>
+    </CloudCallout>
   )
 }

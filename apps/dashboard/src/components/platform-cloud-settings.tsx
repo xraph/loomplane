@@ -118,7 +118,9 @@ function SettingsForm({ view }: { view: SettingsView }) {
           },
           ...(typed(dnsToken) ? { dnsToken: typed(dnsToken) } : {}),
           ...(typed(dnsAccountId) ? { dnsAccountId: typed(dnsAccountId) } : {}),
-          ...(typed(dnsTeamId) ? { dnsTeamId: typed(dnsTeamId) } : {}),
+          ...(provider === "vercel" && typed(dnsTeamId)
+            ? { dnsTeamId: typed(dnsTeamId) }
+            : {}),
           ...(typed(username) ? { registryUsername: typed(username) } : {}),
           ...(password ? { registryPassword: password } : {}),
         },
@@ -205,34 +207,41 @@ function SettingsForm({ view }: { view: SettingsView }) {
             onChange={(e) => setZone(e.target.value)}
           />
         </Field>
-        <Field>
-          <FieldLabel>DNS token</FieldLabel>
-          <Input
-            aria-label="DNS token"
-            type="password"
-            autoComplete="off"
-            value={dnsToken}
-            onChange={(e) => setDnsToken(e.target.value)}
-          />
-        </Field>
-        <Field>
-          <FieldLabel>DNS account ID</FieldLabel>
-          <Input
-            aria-label="DNS account ID"
-            autoComplete="off"
-            value={dnsAccountId}
-            onChange={(e) => setDnsAccountId(e.target.value)}
-          />
-        </Field>
-        <Field>
-          <FieldLabel>DNS team ID</FieldLabel>
-          <Input
-            aria-label="DNS team ID"
-            autoComplete="off"
-            value={dnsTeamId}
-            onChange={(e) => setDnsTeamId(e.target.value)}
-          />
-        </Field>
+        {provider && (
+          <>
+            <Field>
+              <FieldLabel>DNS token</FieldLabel>
+              <Input
+                aria-label="DNS token"
+                type="password"
+                autoComplete="off"
+                value={dnsToken}
+                onChange={(e) => setDnsToken(e.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>DNS account ID</FieldLabel>
+              <Input
+                aria-label="DNS account ID"
+                autoComplete="off"
+                value={dnsAccountId}
+                onChange={(e) => setDnsAccountId(e.target.value)}
+              />
+            </Field>
+          </>
+        )}
+        {/* Only Vercel scopes its DNS to a team. */}
+        {provider === "vercel" && (
+          <Field>
+            <FieldLabel>DNS team ID</FieldLabel>
+            <Input
+              aria-label="DNS team ID"
+              autoComplete="off"
+              value={dnsTeamId}
+              onChange={(e) => setDnsTeamId(e.target.value)}
+            />
+          </Field>
+        )}
       </div>
       <FieldDescription>
         {view.dnsCredentialSaved

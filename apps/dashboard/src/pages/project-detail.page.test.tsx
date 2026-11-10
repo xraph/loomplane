@@ -51,8 +51,12 @@ const project = {
 }
 
 // open renders the page with a project that has no environments, the
-// case where the Variables tab used to wait forever.
-function open(tab?: ProjectTab) {
+// case where the Variables tab used to wait forever. deletion is what the
+// server says deleting it would remove first.
+function open(
+  tab?: ProjectTab,
+  deletion: { removes: string[]; blocked?: string } = { removes: [] }
+) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const path = new URL(String(input), "http://localhost").pathname
     const json = (body: unknown) =>
@@ -60,6 +64,7 @@ function open(tab?: ProjectTab) {
         headers: { "Content-Type": "application/json" },
       })
     if (path === "/api/v1/projects/p") return json(project)
+    if (path === "/api/v1/projects/p/deletion") return json(deletion)
     if (path === "/api/v1/projects") return json({ projects: [project] })
     if (path.endsWith("/environments")) return json({ environments: [] })
     if (path.endsWith("/plans")) return json({ plans: [] })
@@ -126,8 +131,52 @@ test("deleting the project asks for its name and says what runs", async () => {
   const dialog = await screen.findByRole("alertdialog")
   const confirm = within(dialog).getByRole("button", { name: "Delete project" })
   expect(confirm).toBeDisabled()
+  expect(
+    await within(dialog).findByText(/so no cloud resources are touched/)
+  ).toBeInTheDocument()
   await user.type(within(dialog).getByRole("textbox"), "Shop")
   expect(confirm).toBeEnabled()
+})
+
+// openDeleteDialog opens the delete dialog from the danger zone.
+async function openDeleteDialog() {
+  const zone = await screen.findByRole("region", { name: "Danger zone" })
+  await user().click(
+    within(zone).getByRole("button", { name: "Delete project" })
+  )
+  return screen.findByRole("alertdialog")
+}
+
+function user() {
+  return userEvent.setup()
+}
+
+test("the delete dialog names the frontends it removes from Vercel", async () => {
+  open("settings", { removes: ["app in production (app-production-x)"] })
+  const dialog = await openDeleteDialog()
+  expect(
+    await within(dialog).findByText(
+      "Loomplane deletes this frontend from Vercel first"
+    )
+  ).toBeInTheDocument()
+  expect(
+    within(dialog).getByText("app in production (app-production-x)")
+  ).toBeInTheDocument()
+  // Nothing has a binding, but a frontend still goes, so the dialog
+  // doesn't promise that no cloud resource is touched.
+  expect(dialog).toHaveTextContent("Nothing runs from it yet.")
+  expect(dialog).not.toHaveTextContent("no cloud resources are touched")
+})
+
+test("the delete dialog says up front when the deletion would be refused", async () => {
+  const blocked =
+    "a frontend this deployed may still run on its provider: app in production: Vercel has app-production-x"
+  open("settings", { removes: [], blocked })
+  const dialog = await openDeleteDialog()
+  expect(
+    await within(dialog).findByText("Deleting it now would be refused")
+  ).toBeInTheDocument()
+  expect(within(dialog).getByText(blocked)).toBeInTheDocument()
 })
 
 test("the More menu holds copy and delete", async () => {
