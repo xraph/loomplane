@@ -169,7 +169,7 @@ or set `LOOMPLANE_PAUSED_PROVIDERS=render,cloud-run`. Plans that use a paused ta
 
 ## A server that refuses every deployment
 
-If every deployment to one SSH/Docker server fails with `runtime effect fence could not establish quiescence`, that server's fence journal is stuck. Loomplane keeps a small journal on each Docker host, under `/var/tmp/loomplane-fence-<hash>/`, so a deployment can tell whether the last write to that daemon finished. While a write is in flight the journal is marked dirty, and Loomplane won't touch the daemon again until the mark clears.
+If every deployment to one SSH/Docker server fails with `runtime effect fence could not establish quiescence`, that server's fence journal is stuck. Loomplane keeps a small journal on each Docker host, under `/var/tmp/loomplane-fence-<hash>/`, so a deployment can tell whether the last write to that daemon finished. A joined node keeps the same journal in its state directory, under `fence/<hash>/state`, and everything below works on a node connection too, except the hand repair at the end. While a write is in flight the journal is marked dirty, and Loomplane won't touch the daemon again until the mark clears.
 
 When the mark names the exec that was running, the next deployment asks Docker about that exec and clears the mark itself once it has finished. A bare mark doesn't say what was in flight, so it waits for you. Builds of main from late October 2026 left one behind after a database readiness check. Review it with the server's connection ID:
 
