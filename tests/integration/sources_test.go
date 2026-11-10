@@ -98,10 +98,16 @@ func TestSources_aProjectBuildsFromSeveralRepositories(t *testing.T) {
 	}
 	c.must(http.StatusNoContent, http.MethodDelete, base+"/site", nil, nil)
 	c.must(http.StatusNotFound, http.MethodDelete, base+"/site", nil, nil)
-	c.must(http.StatusConflict, http.MethodPost, base, map[string]string{"repository": "acme/site", "alias": "site"}, nil)
 	c.must(http.StatusOK, http.MethodGet, "/api/v1/projects/"+proj.ID, nil, &proj)
 	if !slices.Equal(proj.Repositories, []string{"acme/mono"}) {
 		t.Fatalf("repositories after removing site %v", proj.Repositories)
+	}
+	// The alias stays with acme/site: another repository can't take it,
+	// but acme/site can come back under it.
+	c.must(http.StatusConflict, http.MethodPost, base, map[string]string{"repository": "acme/other", "alias": "site"}, nil)
+	c.must(http.StatusCreated, http.MethodPost, base, map[string]string{"repository": "acme/site", "alias": "site"}, &site)
+	if site.Alias != "site" || site.Repository != "acme/site" {
+		t.Fatalf("site added again %+v", site)
 	}
 }
 
