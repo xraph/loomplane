@@ -265,6 +265,7 @@ func (e *Extension) register(fapp forge.App) error {
 		forge.ProvideValue(c, Guard{e.guard()}),
 		forge.ProvideValue(c, PlatformUser(e.platformUser)),
 		forge.ProvideValue(c, PlatformOwner(e.platformOwner)),
+		forge.ProvideValue(c, PlatformOwnerEmails(e.platformOwnerEmails)),
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 		// Keysmith and the Vault store, for readers such as Hallproof's
 		// witness. When the container starts, it calls Start on every
