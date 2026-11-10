@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// FenceRepair is a review of an SSH server's fence journal, or what
+// FenceRepair is a review of a server's fence journal, or what
 // repairing it did.
 type FenceRepair struct {
 	// Daemon is the Docker daemon the journal belongs to.

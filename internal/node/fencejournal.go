@@ -132,7 +132,32 @@ func (j *FenceJournal) Lock() error {
 	return nil
 }
 
-// Unlock releases the lock Lock took.
+// TryLock takes the daemon's lock without waiting. It reports false, and
+// holds nothing, when another request already holds it.
+func (j *FenceJournal) TryLock() (bool, error) {
+	if !j.mu.TryLock() {
+		return false, nil
+	}
+	f, err := j.openLock()
+	locked := false
+	if err == nil {
+		locked, err = tryFlock(f)
+		if !locked {
+			_ = f.Close()
+		}
+	}
+	if err != nil || !locked {
+		j.mu.Unlock()
+		if err != nil {
+			return false, fmt.Errorf("locking the fence journal: %w", err)
+		}
+		return false, nil
+	}
+	j.lock = f
+	return true, nil
+}
+
+// Unlock releases the lock Lock or TryLock took.
 func (j *FenceJournal) Unlock() {
 	// Closing the file releases the flock too, so a failed funlock is moot.
 	_ = funlock(j.lock) //nolint:errcheck // see above
@@ -145,34 +170,41 @@ func (j *FenceJournal) Unlock() {
 // comes back with its mark: a request died mid-flight, and fencerules
 // refuses to advance or admit anything until the mark clears.
 func (j *FenceJournal) Load() (fencerules.Journal, error) {
+	state, _, err := j.read()
+	return state, err
+}
+
+// read is Load, also returning the journal's bytes as they were read, which
+// are empty for a fresh journal.
+func (j *FenceJournal) read() (fencerules.Journal, []byte, error) {
 	fresh := fencerules.Journal{Epochs: map[string]int64{}}
 	path := filepath.Join(j.dir, fenceStateFile)
 	f, err := State{Dir: j.dir}.openChecked(path, true)
 	if errors.Is(err, fs.ErrNotExist) {
-		return fresh, nil
+		return fresh, nil, nil
 	}
 	if err != nil {
-		return fencerules.Journal{}, err
+		return fencerules.Journal{}, nil, err
 	}
 	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, maxJournalSize+1))
 	if err != nil {
-		return fencerules.Journal{}, err
+		return fencerules.Journal{}, nil, err
 	}
 	if len(raw) > maxJournalSize {
-		return fencerules.Journal{}, fmt.Errorf("%s is over %d bytes", path, maxJournalSize)
+		return fencerules.Journal{}, nil, fmt.Errorf("%s is over %d bytes", path, maxJournalSize)
 	}
 	if len(raw) == 0 {
-		return fresh, nil
+		return fresh, raw, nil
 	}
 	var state fencerules.Journal
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return fencerules.Journal{}, fmt.Errorf("reading %s: %w", path, err)
+		return fencerules.Journal{}, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	if state.Epochs == nil {
 		state.Epochs = map[string]int64{}
 	}
-	return state, nil
+	return state, raw, nil
 }
 
 // Save replaces the journal with state: a 0600 temp file, fsync, rename and

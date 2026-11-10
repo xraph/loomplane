@@ -248,6 +248,9 @@ func (d *dockerFence) run(ctx context.Context, f nodeproto.Fence, req *http.Requ
 	if err != nil {
 		return err
 	}
+	if f.Mode == nodeproto.FenceRepairCheck || f.Mode == nodeproto.FenceRepair {
+		return d.repair(ctx, f, j, body, out)
+	}
 	err = j.Lock()
 	if err != nil {
 		return err
@@ -416,13 +419,8 @@ func execStartID(path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if id, ok = strings.CutSuffix(id, "/start"); !ok || len(id) != 64 {
+	if id, ok = strings.CutSuffix(id, "/start"); !ok || !isDockerID(id) {
 		return "", false
-	}
-	for _, c := range id {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", false
-		}
 	}
 	return id, true
 }
@@ -710,6 +708,18 @@ func (r *relay) chunk(b []byte) {
 	buf = fmt.Appendf(buf, "%x\r\n", len(b))
 	buf = append(buf, b...)
 	r.write(append(buf, "\r\n"...))
+}
+
+// reply answers status with v as a JSON body of known length, as the SSH
+// helper answers its repair modes.
+func (r *relay) reply(status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	r.responding = true
+	head := fmt.Appendf(nil, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, http.StatusText(status), len(data))
+	r.write(append(head, data...))
 }
 
 // refuse answers 409 unless the response has begun.

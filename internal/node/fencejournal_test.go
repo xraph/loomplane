@@ -167,3 +167,31 @@ func TestJournalLockExcludesAnotherHolder(t *testing.T) {
 		t.Fatal("second holder never got the lock")
 	}
 }
+
+// TryLock never waits: it reports false while this process or another one
+// holds the daemon's lock.
+func TestJournalTryLockDoesNotWait(t *testing.T) {
+	state := t.TempDir()
+	a, err := OpenFenceJournal(state, "daemon-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := OpenFenceJournal(state, "daemon-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	for name, j := range map[string]*FenceJournal{"same journal": a, "other holder": b} {
+		if ok, lockErr := j.TryLock(); ok || lockErr != nil {
+			t.Fatalf("%s: TryLock %v %v while the lock is held", name, ok, lockErr)
+		}
+	}
+	a.Unlock()
+	ok, err := b.TryLock()
+	if !ok || err != nil {
+		t.Fatalf("TryLock %v %v on a free lock", ok, err)
+	}
+	b.Unlock()
+}

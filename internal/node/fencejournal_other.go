@@ -15,4 +15,6 @@ func openLockFile(string) (*os.File, error) { return nil, errNoFlock }
 
 func flock(*os.File) error { return errNoFlock }
 
+func tryFlock(*os.File) (bool, error) { return false, errNoFlock }
+
 func funlock(*os.File) error { return errNoFlock }

@@ -213,8 +213,15 @@ func (a pythonAccess) FencedRequest(ctx context.Context, mode string, f EffectFe
 // The repair path clears a dirty mark nothing else may clear, a legacy bare
 // one included, but only for the daemon it names, only when no helper holds
 // the lock, only while no exec runs in a Loomplane container, and only for
-// the journal the operator reviewed.
+// the journal the operator reviewed. SSH servers and nodes repair the same
+// way.
 func TestFenceRepair(t *testing.T) {
+	for _, host := range fenceHosts {
+		t.Run(host, func(t *testing.T) { testFenceRepair(t, host) })
+	}
+}
+
+func testFenceRepair(t *testing.T, host string) {
 	owned := strings.Repeat("a", 64)
 	running, done := strings.Repeat("b", 64), strings.Repeat("d", 64)
 	operation := "org/plan/app--postgres"
@@ -227,7 +234,6 @@ func TestFenceRepair(t *testing.T) {
 		locked bool
 		// daemon is the docker_id the connection recorded, if not this one.
 		daemon string
-		node   bool
 		// staleReview repairs with a review of another journal.
 		staleReview bool
 		reviewErr   string
@@ -241,7 +247,6 @@ func TestFenceRepair(t *testing.T) {
 		{name: "stale_review", journal: `{"epochs":` + epochs + `,"dirty":true}`, staleReview: true, repairErr: "review again"},
 		{name: "helper_alive", journal: `{"epochs":` + epochs + `,"dirty":true}`, locked: true, reviewErr: "holds the fence lock", repairErr: "holds the fence lock"},
 		{name: "other_daemon", journal: `{"epochs":` + epochs + `,"dirty":true}`, daemon: "replaced-daemon", reviewErr: "could not review", repairErr: "could not"},
-		{name: "node", journal: `{"epochs":` + epochs + `,"dirty":true}`, node: true, reviewErr: "SSH", repairErr: "SSH"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newJournalDaemon(t, func(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +268,13 @@ func TestFenceRepair(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 				}
 			})
+			cfg := &Config{Socket: d.socket, Details: map[string]string{"docker_id": d.id}}
+			c := &Client{Config: cfg, access: pythonAccess{t: t}}
+			settled := func() {}
+			if host == "node" {
+				native := newNodeFence(t, d.id, d.socket)
+				d.root, c, settled = native.root, native.client, native.streams.wait
+			}
 			d.seed(t, tc.journal)
 			if tc.locked {
 				lock, err := os.OpenFile(filepath.Join(d.root, "daemon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -274,15 +286,11 @@ func TestFenceRepair(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cfg := &Config{Socket: d.socket, Details: map[string]string{"docker_id": d.id}}
 			if tc.daemon != "" {
-				cfg.Details["docker_id"] = tc.daemon
+				c.Config.Details["docker_id"] = tc.daemon
 			}
-			if tc.node {
-				cfg.Node = &NodeTarget{OrgID: "org_1", NodeID: testNodeID, IdentityGeneration: 1}
-			}
-			c := &Client{Config: cfg, access: pythonAccess{t: t}}
 			review, err := c.ReviewFenceRepair(t.Context())
+			settled()
 			if tc.reviewErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.reviewErr) {
 					t.Fatalf("review error %v, want %q", err, tc.reviewErr)
@@ -307,6 +315,7 @@ func TestFenceRepair(t *testing.T) {
 				token = review.Review
 			}
 			result, err := c.RepairFence(t.Context(), token)
+			settled()
 			if tc.repairErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.repairErr) {
 					t.Fatalf("repair error %v, want %q", err, tc.repairErr)

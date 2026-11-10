@@ -48,7 +48,7 @@ func (s *Service) fenceRepair(ctx context.Context, p security.Principal, id, rev
 		return nil, err
 	}
 	if c.Cloud != Server {
-		return nil, fmt.Errorf("%w: only an SSH server connection has a fence journal", ErrInvalid)
+		return nil, fmt.Errorf("%w: only a server connection, over SSH or a joined node, has a fence journal", ErrInvalid)
 	}
 	c, credential, err := s.Credential(ctx, p.OrgID, id)
 	if err != nil {

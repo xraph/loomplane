@@ -130,3 +130,18 @@ func TestOldNodeHeaderStillDecodes(t *testing.T) {
 		t.Fatalf("decoded = %+v", h)
 	}
 }
+
+// The repair modes are an operator's reviewed recovery of a dirty journal.
+// They carry no ownership claim, only the daemon they repair.
+func TestValidateRepairNeedsOnlyTheDaemon(t *testing.T) {
+	for _, mode := range []string{FenceRepairCheck, FenceRepair} {
+		h := StreamHeader{Endpoint: EndpointDocker, Target: DockerTargetFenced, Fence: &Fence{Mode: mode, Daemon: "d"}}
+		if err := h.Validate(); err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		h.Fence.Daemon = ""
+		if err := h.Validate(); err == nil || !strings.Contains(err.Error(), "daemon") {
+			t.Fatalf("%s without a daemon: %v", mode, err)
+		}
+	}
+}
