@@ -755,6 +755,13 @@ export interface CatalogproxySession {
   url: string;
 }
 
+export interface CertificateView {
+  daysLeft?: number;
+  expiresAt?: string;
+  rotation: string;
+  warning: string;
+}
+
 export interface ChallengeCredentialInputBody {
   connectionId: string;
   revision: number;
@@ -2877,12 +2884,16 @@ export interface History {
 
 export interface Host {
   allotment: Allotment;
+  clientExpiresAt?: string;
   clientFingerprint: string;
   endpoint: string;
   evidence: PlatformcloudEvidence;
   generation: number;
   hostId: string;
   id: string;
+  nextExpiresAt?: string;
+  nextFingerprint?: string;
+  previousFingerprint?: string;
   regionId: string;
   revision: number;
   status: string;
@@ -2916,13 +2927,18 @@ export interface HostList {
 
 export interface HostView {
   allotment: Allotment;
+  certificate: CertificateView;
+  clientExpiresAt?: string;
   clientFingerprint: string;
   endpoint: string;
   evidence: PlatformcloudEvidence;
   generation: number;
   hostId: string;
   id: string;
+  nextExpiresAt?: string;
+  nextFingerprint?: string;
   placements: number;
+  previousFingerprint?: string;
   regionId: string;
   revision: number;
   status: string;
@@ -3738,6 +3754,13 @@ export interface Need {
   maxModelLen: number;
   perGpuGib: number;
   ramGib?: number;
+}
+
+export interface NewCertificate {
+  clientCertificate: string;
+  clientFingerprint: string;
+  expiresAt: string;
+  host: Host;
 }
 
 export interface NewHost {

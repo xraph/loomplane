@@ -260,6 +260,7 @@ export const usePlatformCloudHostsCheck = mutation<Host, Host>(ops['platformClou
 export const usePlatformCloudHostsDrain = mutation<Host, Host>(ops['platformCloudHosts.drain']);
 export const usePlatformCloudHostsMoveAll = mutation(ops['platformCloudHosts.moveAll']);
 export const usePlatformCloudHostsRetire = mutation(ops['platformCloudHosts.retire']);
+export const usePlatformCloudHostsRotateCertificate = mutation(ops['platformCloudHosts.rotateCertificate']);
 export const usePlatformCloudRegionsList = query<RegionList>(ops['platformCloudRegions.list']);
 export const usePlatformCloudRegionsCreate = mutation<Region, Region>(ops['platformCloudRegions.create']);
 export const usePlatformCloudRegionsUpdate = mutation<Region, Region>(ops['platformCloudRegions.update']);

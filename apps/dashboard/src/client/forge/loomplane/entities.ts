@@ -96,6 +96,7 @@ export const entities = {
   'NativeRetirement': { idField: 'id' },
   'NativeRetirementPage': { fields: { 'retirements': 'NativeRetirement' } },
   'NativeSource': { idField: 'id' },
+  'NewCertificate': { fields: { 'host': 'Host' } },
   'NewHost': { fields: { 'host': 'Host' } },
   'Node': { idField: 'id' },
   'NodeList': { fields: { 'nodes': 'Node' } },
