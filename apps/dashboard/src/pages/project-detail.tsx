@@ -344,7 +344,7 @@ function Body({
   // A service project from the catalog has no repository to graph, so it
   // opens on its backups.
   const fallback: ProjectTab =
-    project.icon === "database" && !hasRepositories && mayBackups
+    project.kind === "service" && !hasRepositories && mayBackups
       ? "backups"
       : "overview"
   const [chosen, setTab] = useUrlTab(wanted, fallback)

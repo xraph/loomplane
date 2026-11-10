@@ -3907,6 +3907,9 @@
                   "id": {
                     "type": "string"
                   },
+                  "kind": {
+                    "type": "string"
+                  },
                   "name": {
                     "type": "string"
                   },
@@ -7974,6 +7977,9 @@
                     "type": "string"
                   },
                   "id": {
+                    "type": "string"
+                  },
+                  "kind": {
                     "type": "string"
                   },
                   "name": {

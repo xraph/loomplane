@@ -203,6 +203,7 @@ export async function deployDatabase(
       name: input.name,
       description: `Standalone ${recipe.title} service`,
       icon: "database",
+      kind: "service",
     },
   })
   created(project.id)

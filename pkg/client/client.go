@@ -177,9 +177,11 @@ type Project struct {
 	Description string `json:"description,omitempty"`
 	// Repositories are the "owner/name" of each repository the project
 	// builds from.
-	Repositories []string  `json:"repositories,omitempty"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
+	Repositories []string `json:"repositories,omitempty"`
+	// Kind is "app", or "service" for a catalog service's own project.
+	Kind      string    `json:"kind,omitempty"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
 	// ResponsibleTeamID is the team that gets the project's requests and
 	// notices, empty for none.
 	ResponsibleTeamID string `json:"responsible_team_id"`
@@ -193,6 +195,9 @@ type NewProject struct {
 	// Repositories are attached after it, in order, up to ten in all.
 	Repositories []NewRepository `json:"repositories,omitempty"`
 	Description  string          `json:"description,omitempty"`
+	// Kind is "service" for a catalog service's own project, which has no
+	// repository. Empty is an app project. It can't change later.
+	Kind string `json:"kind,omitempty"`
 }
 
 // NewRepository is a repository a new project starts with.

@@ -106,7 +106,7 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	project, err := c.CreateProject(bounded, client.NewProject{Name: name, Description: "Standalone " + kind + " service"})
+	project, err := c.CreateProject(bounded, client.NewProject{Name: name, Description: "Standalone " + kind + " service", Kind: "service"})
 	if err != nil {
 		return err
 	}

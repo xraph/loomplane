@@ -40,12 +40,12 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
 var _ Store = (*PgStore)(nil)
 
-const projectColumns = `id, org_id, name, slug, description, icon, color, status, created_by, created_at, updated_at`
+const projectColumns = `id, org_id, name, slug, description, icon, color, kind, status, created_by, created_at, updated_at`
 
 // projectSelect reads a project with the repositories its live sources
 // name, each once even when several directories of it are attached. The sources table is discovery's; reading it here saves the
 // dashboard a request per project.
-const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
+const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.kind, p.status,
 	p.created_by, p.created_at, p.updated_at, p.exclusions, p.deployment_mode, coalesce(p.responsible_team_id, ''),
 	p.autonomous_promotion, p.min_staging_soak_seconds,
 	COALESCE((SELECT array_agg(r.repository ORDER BY r.first_alias)
@@ -56,7 +56,7 @@ const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.i
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
 	var exclusions []byte
-	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
+	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Kind, &p.Status,
 		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.DeploymentMode, &p.ResponsibleTeamID,
 		&p.AutonomousPromotion, &p.MinStagingSoakSeconds, &p.Repositories); err != nil {
 		return nil, err
@@ -78,9 +78,12 @@ func (s *PgStore) CreateProject(ctx context.Context, p *Project, envs []*Environ
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	if p.Kind == "" {
+		p.Kind = ProjectKindApp
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_projects (`+projectColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		p.ID, p.OrgID, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		p.ID, p.OrgID, p.Name, p.Slug, p.Description, p.Icon, p.Color, p.Kind, p.Status, p.CreatedBy, p.CreatedAt, p.UpdatedAt)
 	if isUniqueViolation(err) {
 		return ErrSlugTaken
 	}
@@ -472,6 +475,9 @@ func (s *PgStore) ListEnvironments(ctx context.Context, orgID, projectID string)
 func (p *Project) normalize() {
 	if p.DeploymentMode == "" {
 		p.DeploymentMode = "application"
+	}
+	if p.Kind == "" {
+		p.Kind = ProjectKindApp
 	}
 	p.CreatedAt, p.UpdatedAt = p.CreatedAt.UTC(), p.UpdatedAt.UTC()
 	if p.Repositories == nil {

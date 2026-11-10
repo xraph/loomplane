@@ -190,7 +190,12 @@ type Write = { method: string; path: string; body: unknown }
 function serve(
   options: {
     kinds?: () => Response
-    projects?: { id: string; name: string; icon?: string }[]
+    projects?: {
+      id: string
+      name: string
+      icon?: string
+      kind?: "app" | "service"
+    }[]
     edit?: () => Response
     created?: CatalogconnectEndpoint
   } = {}
@@ -738,11 +743,11 @@ test("a module's add dialog replaces the generic flow", async () => {
   expect(writes).toEqual([])
 })
 
-test("database service projects aren't offered for an app-project kind", async () => {
+test("service projects aren't offered for an app-project kind, whatever their icon", async () => {
   serve({
     projects: [
-      { id: "db", name: "PostgreSQL", icon: "database" },
-      { id: "p", name: "Shop" },
+      { id: "db", name: "PostgreSQL", icon: "rocket", kind: "service" },
+      { id: "p", name: "Shop", icon: "database", kind: "app" },
     ],
   })
   mountKind()

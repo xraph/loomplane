@@ -24,9 +24,9 @@ export function Services() {
   const projects = useQuery(useProjectsList)
   const providers = useQuery(useProvidersList)
   const connections = useQuery(useConnectionsList)
-  // Catalog deploys make their own project with the database icon.
+  // Catalog deploys make a service project of their own.
   const yours =
-    projects.data?.projects.filter((p) => p.icon === "database") ?? []
+    projects.data?.projects.filter((p) => p.kind === "service") ?? []
 
   return (
     <>
