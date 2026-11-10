@@ -1849,6 +1849,11 @@ export interface Defaults {
   region?: string;
 }
 
+export interface DeletionPreview {
+  blocked?: string;
+  removes: string[];
+}
+
 export interface Delivery {
   attempts: number;
   createdAt: string;

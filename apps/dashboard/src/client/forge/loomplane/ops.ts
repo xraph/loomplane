@@ -2586,6 +2586,13 @@ export const ops = {
     invalidates: ['RouteSummary[]'],
     responseCodec: CODECS['RouteSummary'],
   },
+  'projects.deletion': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/deletion',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DeletionPreview'],
+  },
   'deployments.list': {
     method: 'GET',
     path: '/api/v1/projects/{id}/deployments',

@@ -11053,6 +11053,38 @@
         }
       }
     },
+    "/api/v1/projects/{id}/deletion": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "What deleting a project would remove from provider accounts first, and whether it would be refused. Changes nothing.",
+        "operationId": "projects.deletion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deletion preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/deployments": {
       "get": {
         "tags": [
@@ -33799,6 +33831,23 @@
         ],
         "properties": {
           "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DeletionPreview": {
+        "type": "object",
+        "required": [
+          "removes"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "string"
+          },
+          "removes": {
             "type": "array",
             "items": {
               "type": "string"

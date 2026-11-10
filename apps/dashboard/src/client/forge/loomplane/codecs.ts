@@ -353,6 +353,8 @@ export const CODECS: Record<string, Codec> = {
   "DefaultPlacement": {"kind": "object", "fields": {"connection_id": {"ts": "connectionId"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}}, "required": ["connection_id", "provider", "region"]},
   "Defaults": {"kind": "object", "fields": {"cloud_tags": {"ts": "cloudTags", "codec": () => CODECS["Defaults.cloud_tags"]}, "provider": {"ts": "provider"}, "region": {"ts": "region"}}},
   "Defaults.cloud_tags": {"kind": "array"},
+  "DeletionPreview": {"kind": "object", "fields": {"blocked": {"ts": "blocked"}, "removes": {"ts": "removes", "codec": () => CODECS["DeletionPreview.removes"]}}, "required": ["removes"]},
+  "DeletionPreview.removes": {"kind": "array"},
   "Delivery": {"kind": "object", "fields": {"attempts": {"ts": "attempts"}, "created_at": {"ts": "createdAt"}, "delivered_at": {"ts": "deliveredAt"}, "event_type": {"ts": "eventType"}, "id": {"ts": "id"}, "next_retry_at": {"ts": "nextRetryAt"}, "status": {"ts": "status"}, "status_code": {"ts": "statusCode"}}, "required": ["attempts", "created_at", "event_type", "id", "status", "status_code"]},
   "DeliveryList": {"kind": "object", "fields": {"items": {"ts": "items", "codec": () => CODECS["DeliveryList.items"]}}, "required": ["items"]},
   "DeliveryList.items": {"kind": "array", "items": () => CODECS["Delivery"]},
