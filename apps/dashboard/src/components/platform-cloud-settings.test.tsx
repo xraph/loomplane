@@ -97,6 +97,39 @@ it("names its controls as they read and picks a DNS provider from a list", async
   expect(puts[0].dns).toMatchObject({ provider: "vercel" })
 })
 
+it("shows DNS credential fields only once a provider is chosen", async () => {
+  stub({ ...view, dns: { provider: "", zone: "" } })
+  const user = userEvent.setup()
+  renderSettings()
+  await screen.findByRole("combobox", { name: "DNS provider" })
+  expect(screen.queryByLabelText("DNS token")).toBeNull()
+  expect(screen.queryByLabelText("DNS account ID")).toBeNull()
+  expect(screen.queryByLabelText("DNS team ID")).toBeNull()
+
+  await user.click(screen.getByRole("combobox", { name: "DNS provider" }))
+  await user.click(await screen.findByRole("option", { name: "Vercel" }))
+  expect(screen.getByLabelText("DNS token")).toBeTruthy()
+  expect(screen.getByLabelText("DNS account ID")).toBeTruthy()
+  expect(screen.getByLabelText("DNS team ID")).toBeTruthy()
+})
+
+it("asks for a team ID only for Vercel and never sends a stale one", async () => {
+  const puts = stub({ ...view, dns: { provider: "vercel", zone: "" } })
+  const user = userEvent.setup()
+  renderSettings()
+  await user.type(await screen.findByLabelText("DNS team ID"), "t")
+
+  await user.click(screen.getByRole("combobox", { name: "DNS provider" }))
+  await user.click(await screen.findByRole("option", { name: "Cloudflare" }))
+  expect(screen.queryByLabelText("DNS team ID")).toBeNull()
+  await user.type(screen.getByLabelText("DNS token"), "k")
+  await user.type(screen.getByLabelText("DNS account ID"), "a")
+  await user.click(screen.getByRole("button", { name: "Save settings" }))
+  await vi.waitFor(() => expect(puts).toHaveLength(1))
+  expect(puts[0]).toMatchObject({ dns_token: "k", dns_account_id: "a" })
+  expect(puts[0]).not.toHaveProperty("dns_team_id")
+})
+
 it("keeps untouched memory exact and blocks a blank limit", async () => {
   const puts = stub({
     ...view,
