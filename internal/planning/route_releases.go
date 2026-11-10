@@ -93,13 +93,21 @@ func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.Pr
 // routedReplacements runs before dependency readdressing. A routed update must
 // keep its source instance until every consumer and route has moved. A
 // routed composed component is released the same way as a service.
+//
+// It settles each route once, the first time what it names changes, since
+// Compute calls it again until addresses settle: a later call would report
+// the same refusal again.
 func (p *planner) routedReplacements() bool {
+	if p.routesSettled == nil {
+		p.routesSettled = map[string]bool{}
+	}
 	changed := false
 	for _, route := range p.in.Routes {
 		a := p.routedTarget(route.Input.Service)
-		if a == nil || a.Op == Keep || a.Op == Delete || slices.ContainsFunc(a.Routes, func(r cloudinfra.Route) bool { return r.ID == route.ID }) {
+		if a == nil || a.Op == Keep || a.Op == Delete || p.routesSettled[route.ID] {
 			continue
 		}
+		p.routesSettled[route.ID] = true
 		// A Kubernetes route reaches its Service by name, so an update in
 		// place keeps serving it with no handoff. A new runtime would leave
 		// the route on a Service that goes away.

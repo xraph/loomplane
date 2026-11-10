@@ -1101,15 +1101,16 @@ func (p *planner) composedBindings() map[string]composedBinding {
 }
 
 // componentReaddress plans again what reads a component this plan
-// replaces in a routed release, since its replacement answers at a new
-// address: a kept sibling that reads it, and its composed resource, when
-// one of the kind's outputs reads it, so the resource publishes the new
-// address and what uses it is readdressed. A component nothing reads
-// changes nothing else. It reports whether it planned anything again.
+// replaces, in a routed release or for any other reason, since its
+// replacement answers at a new address: a kept sibling that reads it, and
+// its composed resource, when one of the kind's outputs reads it, so the
+// resource publishes the new address and what uses it is readdressed. A
+// component nothing reads changes nothing else. It reports whether it
+// planned anything again.
 func (p *planner) componentReaddress() bool {
 	changed := false
 	for _, c := range p.actions {
-		if c.Op != Replace || len(c.Routes) == 0 || c.Resource == nil || c.Resource.Component == nil {
+		if c.Op != Replace || c.Resource == nil || c.Resource.Component == nil {
 			continue
 		}
 		parent, part := c.Resource.Component.Resource, c.Resource.Component.Component.Name
@@ -1133,6 +1134,87 @@ func (p *planner) componentReaddress() bool {
 		}
 	}
 	return changed
+}
+
+// composedReaddress plans again what in a composed resource reads a
+// dependency this plan gives a new address, as readdressed decides for a
+// service: a kept component whose variables read it, and the composed
+// resource, when one of its outputs passes it on, so the resource
+// publishes the new address and what uses it is readdressed. A component
+// keeps its own address when it's updated in place, so nothing that uses
+// the resource needs anything new because of it. It reports whether it
+// planned anything again.
+func (p *planner) composedReaddress() bool {
+	changed := false
+	for _, a := range p.actions {
+		if a.Resource == nil {
+			continue
+		}
+		switch {
+		case a.Resource.Component != nil && a.Op == Keep:
+			moved, access := p.movedDependencies(a.Resource.Component.Dependencies, func(dep string) bool { return envReadsDependency(a.Resource.Component.Component.Env, dep) })
+			if len(moved) > 0 {
+				a.Op, a.Reason = Update, readdressReason(a.Name, moved, access, "gets")
+				changed = true
+			}
+		case a.Resource.Composition != nil && (a.Op == Keep || a.Op == Update) && !p.componentMoved[a.Name]:
+			moved, access := p.movedDependencies(a.Resource.Composition.Dependencies, func(dep string) bool { return outputsReadDependency(a.Resource.Composition.Outputs, dep) })
+			if len(moved) == 0 {
+				continue
+			}
+			// A resource already updating publishes the new address too.
+			if a.Op == Keep {
+				a.Op, a.Reason = Update, readdressReason(a.Name, moved, access, "publishes")
+			}
+			p.componentMoved[a.Name] = true
+			changed = true
+		}
+	}
+	return changed
+}
+
+// movedDependencies are the names of the resources choices connect, which
+// reads says are read, that this plan gives a new address, sorted, and
+// whether one of them only changes its reviewed access.
+func (p *planner) movedDependencies(choices map[string]DependencyChoice, reads func(dep string) bool) (moved []string, access bool) {
+	for _, dep := range slices.Sorted(maps.Keys(choices)) {
+		used := p.resources[choices[dep].Resource]
+		if choices[dep].Resource == "" || used == nil || slices.Contains(moved, used.Name) || !reads(dep) {
+			continue
+		}
+		if _, ok := p.readdressed(used, EnvLink{}, ""); ok {
+			moved = append(moved, used.Name)
+			access = access || (used.Op == Update && used.Resource != nil && used.Resource.ExistingResource != nil)
+		}
+	}
+	return moved, access
+}
+
+// readdressReason says why name is planned again for what moved, as
+// readdress says it for a service: name gets, or publishes, the new
+// address.
+func readdressReason(name string, moved []string, access bool, verb string) string {
+	switch {
+	case access:
+		return fmt.Sprintf("%s gets newly reviewed resource access from %s.", name, strings.Join(moved, ", "))
+	case len(moved) == 1:
+		return fmt.Sprintf("%s moves, so %s %s its new address.", moved[0], name, verb)
+	default:
+		return fmt.Sprintf("%s move, so %s %s their new addresses.", strings.Join(moved, " and "), name, verb)
+	}
+}
+
+// readsDependency reports whether a ref or a template reads dependency dep.
+func readsDependency(from *recipes.Ref, template, dep string) bool {
+	return (from != nil && from.Dependency == dep) || strings.Contains(template, "${dep:"+dep+":")
+}
+
+func envReadsDependency(env []recipes.EnvVar, dep string) bool {
+	return slices.ContainsFunc(env, func(e recipes.EnvVar) bool { return readsDependency(e.From, e.Template, dep) })
+}
+
+func outputsReadDependency(outputs []recipes.Output, dep string) bool {
+	return slices.ContainsFunc(outputs, func(o recipes.Output) bool { return readsDependency(o.From, o.Template, dep) })
 }
 
 // readsComponent reports whether a ref or a template reads component part.

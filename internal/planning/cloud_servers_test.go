@@ -712,3 +712,130 @@ func TestAVersionBumpReaddressesWhatUsesTheResource(t *testing.T) {
 		t.Fatalf("web: %+v", web)
 	}
 }
+
+// wantUpdates fails unless each action is an update with its reason, and
+// each other one named is kept.
+func wantUpdates(t *testing.T, r *Result, updates map[string]string, kept ...string) {
+	t.Helper()
+	for id, reason := range updates {
+		if a := findAction(r, id); a == nil || a.Op != Update || a.Reason != reason {
+			t.Errorf("%s: %+v, want an update: %q", id, a, reason)
+		}
+	}
+	for _, id := range kept {
+		if a := findAction(r, id); a == nil || a.Op != Keep {
+			t.Errorf("%s: %+v, want it kept", id, a)
+		}
+	}
+}
+
+// moveRegion gives the named binding another region, so a plan replaces it.
+func moveRegion(bound []*Binding, name string) {
+	for _, b := range bound {
+		if b.Name == name {
+			b.Region = "elsewhere"
+		}
+	}
+}
+
+// A composed resource's components that read a connected resource get its
+// new address when the plan replaces it, after it. One that doesn't read
+// it, and the composed resource, whose outputs don't, are kept.
+func TestReplacingAConnectedResourceReaddressesTheComponentsThatReadIt(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	doc := "version: 1\nresources:\n  app: {kind: sample, provider: server, target: " + targetA + ", uses: {postgres: {resource: db}}}\n  db: {kind: postgres, provider: server, target: " + targetA + "}\n"
+	bound := boundAll(t, composedPlan(t, kinds, doc))
+	if r := composedPlan(t, kinds, doc, bound...); slices.ContainsFunc(r.Actions, func(a Action) bool { return a.Op != Keep }) {
+		t.Fatalf("an unchanged plan changed: %+v", r.Actions)
+	}
+	moveRegion(bound, "db")
+	r := composedPlan(t, kinds, doc, bound...)
+	if !r.Executable {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	db := findAction(r, "resource:db")
+	if db == nil || db.Op != Replace {
+		t.Fatalf("db: %+v", db)
+	}
+	wantUpdates(t, r, map[string]string{
+		"resource:app--migrate": "db moves, so app--migrate gets its new address.",
+		"resource:app--api":     "db moves, so app--api gets its new address.",
+	}, "resource:app--worker", "resource:app")
+	for _, id := range []string{"resource:app--migrate", "resource:app--api"} {
+		if a := findAction(r, id); a.Step <= db.Step {
+			t.Errorf("%s runs at step %d, not after db at %d", id, a.Step, db.Step)
+		}
+	}
+}
+
+// A composed resource that connects another gets its new address when a
+// routed component of that one is replaced and it publishes the new
+// address. What uses the first one is kept: its own address is the same.
+func TestARoutedReleaseReaddressesAComposedResourceThatConnectsIt(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(front()); err != nil {
+		t.Fatal(err)
+	}
+	doc := edgeApp + "  site: {kind: front, provider: server, target: " + targetA + ", uses: {backend: {resource: edge}}}\n" +
+		"services:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [site]}\n"
+	bound := boundAll(t, routedPlan(t, doc, kinds, nil))
+	if r := routedPlan(t, doc, kinds, bound, "edge--api"); findAction(r, "resource:site--web").Op != Keep {
+		t.Fatalf("an unchanged plan readdressed: %+v", r.Actions)
+	}
+	olderAPI(bound)
+	r := routedPlan(t, doc, kinds, bound, "edge--api")
+	if !r.Executable {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	wantUpdates(t, r, map[string]string{
+		"resource:edge":      "edge--api gets a new instance, so edge publishes its new address.",
+		"resource:site--web": "edge moves, so site--web gets its new address.",
+	}, "resource:site", "service:web")
+	if edge, web := findAction(r, "resource:edge"), findAction(r, "resource:site--web"); web.Step <= edge.Step {
+		t.Errorf("site--web runs at step %d, not after edge at %d", web.Step, edge.Step)
+	}
+}
+
+// A composed resource whose output passes on what it connects publishes
+// that one's new address, so what uses it is readdressed too.
+func TestAPassedOnAddressReaddressesWhatUsesTheResource(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	k := front()
+	k.Outputs = append(k.Outputs, recipes.Output{Name: "backend", EnvKey: "FRONT_BACKEND_URL", From: &recipes.Ref{Dependency: "backend", Field: recipes.FieldURL}})
+	if err := kinds.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	doc := edgeApp + "  site: {kind: front, provider: server, target: " + targetA + ", uses: {backend: {resource: edge}}}\n" +
+		"services:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [site]}\n"
+	bound := boundAll(t, routedPlan(t, doc, kinds, nil))
+	olderAPI(bound)
+	r := routedPlan(t, doc, kinds, bound, "edge--api")
+	if !r.Executable {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	wantUpdates(t, r, map[string]string{
+		"resource:site--web": "edge moves, so site--web gets its new address.",
+		"resource:site":      "edge moves, so site publishes its new address.",
+		"service:web":        "site moves, so web gets its new address.",
+	})
+}
+
+// A component replaced for any reason, not only in a routed release,
+// gives what reads it its new address.
+func TestReplacingAComponentInAnotherRegionReaddressesItsReaders(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	bound := boundAll(t, routedPlan(t, edgeWithWeb, kinds, nil))
+	moveRegion(bound, "edge--api")
+	r := routedPlan(t, edgeWithWeb, kinds, bound)
+	if !r.Executable {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	if api := findAction(r, "resource:edge--api"); api == nil || api.Op != Replace || len(api.Routes) != 0 {
+		t.Fatalf("the api: %+v", api)
+	}
+	wantUpdates(t, r, map[string]string{
+		"resource:edge--worker": "edge--api gets a new instance, so edge--worker gets its new address.",
+		"resource:edge":         "edge--api gets a new instance, so edge publishes its new address.",
+		"service:web":           "edge moves, so web gets its new address.",
+	})
+}

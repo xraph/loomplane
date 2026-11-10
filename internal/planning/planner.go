@@ -215,11 +215,9 @@ func Compute(in Input) *Result {
 	p.checkFabriqDatabases()
 	p.checkServerGPUs()
 	p.readdress()
-	for p.routedReplacements() {
-		p.componentReaddress()
+	for p.settleAddresses() {
 		p.readdress()
 	}
-	p.readdress()
 	p.heldAddresses()
 	p.gatewayHeld()
 	p.heldDrift()
@@ -292,6 +290,8 @@ type planner struct {
 	// publish the new address of a component it replaces, by name. What
 	// uses one gets that address (see readdressed).
 	componentMoved map[string]bool
+	// routesSettled are the routes routedReplacements has settled, by ID.
+	routesSettled map[string]bool
 }
 
 func actionID(s Subject, name string) string { return string(s) + ":" + name }
@@ -899,6 +899,17 @@ func (p *planner) readdress() {
 			a.Op, a.Reason = Update, fmt.Sprintf("%s move, so %s gets their new addresses.", strings.Join(moved, " and "), name)
 		}
 	}
+}
+
+// settleAddresses plans again, once, what this plan gives a new address
+// beyond what readdress does for services: routed releases, what reads a
+// replaced component, and what in a composed resource reads a dependency
+// that moves. Each one only plans something again, and never undoes it,
+// so Compute calls it until it reports it changed nothing.
+func (p *planner) settleAddresses() bool {
+	changed := p.routedReplacements()
+	changed = p.componentReaddress() || changed
+	return p.composedReaddress() || changed
 }
 
 // readdressed reports whether this plan gives dep a new address for a
