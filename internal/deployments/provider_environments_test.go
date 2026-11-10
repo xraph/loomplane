@@ -31,6 +31,11 @@ func (f *fakePEStore) SaveProviderEnvironment(_ context.Context, pe *ProviderEnv
 	return nil
 }
 
+func (f *fakePEStore) DeleteProviderEnvironment(_ context.Context, pe *ProviderEnvironment) error {
+	delete(f.rows, peKey(pe))
+	return nil
+}
+
 func (f *fakePEStore) ProviderEnvironment(_ context.Context, org, env, provider, conn, scope string) (*ProviderEnvironment, error) {
 	return f.rows[strings.Join([]string{org, env, provider, conn, scope}, "|")], nil
 }

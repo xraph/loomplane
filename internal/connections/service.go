@@ -645,6 +645,13 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	return c, cred, nil
 }
 
+// Metadata returns one of the organization's connections without any secret.
+// It checks no role, like Credential, and answers ErrNotFound for a
+// connection the organization doesn't have.
+func (s *Service) Metadata(ctx context.Context, orgID, id string) (*Connection, error) {
+	return s.store.GetConnection(ctx, orgID, id)
+}
+
 // All returns the organization's connections, for planning to choose
 // from. It checks no role, like Credential.
 func (s *Service) All(ctx context.Context, orgID string) ([]*Connection, error) {

@@ -8232,6 +8232,27 @@
         }
       }
     },
+    "/api/v1/account/two-step": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Whether your account asks for a code from an authenticator app at sign-in",
+        "operationId": "account.twoStep.get",
+        "responses": {
+          "200": {
+            "description": "Two-step verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoStep"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{id}/workloads": {
       "get": {
         "tags": [
@@ -32324,6 +32345,17 @@
           },
           "minted_by_key_id": {
             "type": "string"
+          }
+        }
+      },
+      "TwoStep": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
           }
         }
       },

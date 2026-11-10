@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest"
 
 import {
+  hostLabel,
   repositoryHost,
   repositoryKey,
   repositoryURL,
+  sourceURL,
   startsWithHost,
 } from "@/lib/format"
 
@@ -127,5 +129,62 @@ describe("repositoryHost", () => {
     )
     expect(repositoryHost("localhost:8080/grp/api")).toBe("localhost:8080")
     expect(repositoryHost("")).toBe("github.com")
+  })
+})
+
+describe("startsWithHost", () => {
+  test("is true once the first segment has a dot or a port", () => {
+    expect(startsWithHost("gitlab.com/grp")).toBe(true)
+    expect(startsWithHost("  git.acme.dev")).toBe(true)
+    expect(startsWithHost("localhost:8080/grp/api")).toBe(true)
+    expect(startsWithHost("acme/api")).toBe(false)
+    expect(startsWithHost("acme")).toBe(false)
+    expect(startsWithHost("")).toBe(false)
+    // A dot later on is a repository name, not a host.
+    expect(startsWithHost("acme/api.js")).toBe(false)
+  })
+})
+
+describe("sourceURL", () => {
+  test("links to the repository when there's no directory", () => {
+    expect(sourceURL({ repository: "acme/api", root: "", ref: "main" })).toBe(
+      "https://github.com/acme/api"
+    )
+    expect(sourceURL({ repository: "gitlab.com/grp/sub/api" })).toBe(
+      "https://gitlab.com/grp/sub/api"
+    )
+  })
+
+  test("uses each host's own page for a directory", () => {
+    expect(
+      sourceURL({ repository: "acme/api", root: "cmd/api", ref: "main" })
+    ).toBe("https://github.com/acme/api/tree/main/cmd/api")
+    expect(
+      sourceURL({
+        repository: "bitbucket.org/acme/api",
+        root: "cmd/api",
+        ref: "dev",
+      })
+    ).toBe("https://bitbucket.org/acme/api/src/dev/cmd/api")
+    expect(
+      sourceURL({
+        repository: "gitlab.com/grp/sub/api",
+        root: "cmd/api",
+        ref: "main",
+      })
+    ).toBe("https://gitlab.com/grp/sub/api/-/tree/main/cmd/api")
+    // Any other host is taken for a self-managed GitLab.
+    expect(
+      sourceURL({ repository: "git.acme.dev/team/api", root: "svc" })
+    ).toBe("https://git.acme.dev/team/api/-/tree/HEAD/svc")
+  })
+})
+
+describe("hostLabel", () => {
+  test("names GitHub, and any other host by itself", () => {
+    expect(hostLabel("acme/api")).toBe("GitHub")
+    expect(hostLabel("gitlab.com/grp/api")).toBe("gitlab.com")
+    expect(hostLabel("bitbucket.org/acme/api")).toBe("bitbucket.org")
+    expect(hostLabel("git.acme.dev:8443/team/api")).toBe("git.acme.dev:8443")
   })
 })

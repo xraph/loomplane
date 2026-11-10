@@ -1,4 +1,10 @@
-import { SignInForm, SignUpForm, WaitlistForm } from "@authsome/ui-components"
+import {
+  MFAChallengeFormStyled,
+  SignInForm,
+  SignUpForm,
+  WaitlistForm,
+} from "@authsome/ui-components"
+import { useAuth } from "@authsome/ui-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -17,6 +23,7 @@ export function AuthPage({
   notice?: string
 }) {
   const navigate = useNavigate()
+  const { state, signOut } = useAuth()
   const { waitlist } = useInstance()
   const invite = usePendingInvite()
   // Someone approved from the waitlist can skip to the sign-up form.
@@ -31,7 +38,21 @@ export function AuthPage({
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
       )}
-      {mode === "sign-in" ? (
+      {mode === "sign-in" && state.status === "mfa_required" ? (
+        // The password was right and the account has two-step on. A code
+        // from the authenticator app, or a recovery code, finishes signing
+        // in; the app moves on once the session exists.
+        <>
+          <MFAChallengeFormStyled className="auth-card" />
+          <Button
+            variant="link"
+            className="h-8 px-0 text-foreground"
+            onClick={() => void signOut()}
+          >
+            Use a different account
+          </Button>
+        </>
+      ) : mode === "sign-in" ? (
         <SignInForm
           title="Welcome back"
           description="Sign in to your projects and environments."

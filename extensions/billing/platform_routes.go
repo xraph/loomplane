@@ -21,6 +21,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/billing"
+	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -55,7 +56,7 @@ const (
 )
 
 // chronicleAuditor records the platform owner's billing changes in
-// Chronicle, at the app level like platform Cloud's: the actor, what
+// Chronicle, in the staff stream like platform Cloud's: the actor, what
 // changed and how it went, never a key.
 type chronicleAuditor struct {
 	chronicle *chronicle.Chronicle
@@ -65,7 +66,7 @@ type chronicleAuditor struct {
 
 func (a chronicleAuditor) Record(ctx context.Context, action, userID, resource, resourceID, outcome string, meta map[string]string) {
 	b := a.chronicle.Warning(ctx, action, resource, resourceID).
-		Category("billing").AppID(a.appID).UserID(userID).Outcome(outcome)
+		Category("billing").AppID(a.appID).TenantID(platformadmin.AuditTenant).UserID(userID).Outcome(outcome)
 	for k, v := range meta {
 		b = b.Meta(k, v)
 	}

@@ -101,8 +101,8 @@ func (s *Service) AddSource(ctx context.Context, p security.Principal, projectID
 func (s *Service) AttachRepository(ctx context.Context, p security.Principal, proj *projects.Project, in projects.RepositoryInput) (repository, alias string, err error) {
 	src, err := s.addSource(ctx, p, proj.ID, AddSourceInput{Repository: in.Repository, Alias: in.Alias, Root: in.Root, Ref: in.Ref})
 	if errors.Is(err, ErrAliasTaken) {
-		// A new project has used no alias but the ones it's attaching, so
-		// two of them clashed, and "never reused" means nothing yet.
+		// A new project has no other sources, so two of the ones it's
+		// attaching clashed.
 		return "", "", aliasClashError{alias: s.aliasOf(ctx, p.OrgID, in)}
 	}
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *Service) addSource(ctx context.Context, p security.Principal, projectID
 		return nil, err
 	}
 	for _, e := range existing {
-		if e.Alias == alias {
+		if e.Alias == alias && (e.RemovedAt == nil || !strings.EqualFold(e.Repository, repo.Key())) {
 			return nil, ErrAliasTaken
 		}
 		if e.RemovedAt == nil && strings.EqualFold(e.Repository, repo.Key()) && RootsOverlap(e.Root, root) {
@@ -292,8 +292,9 @@ func (s *Service) UpdateSource(ctx context.Context, p security.Principal, projec
 	return src, nil
 }
 
-// RemoveSource detaches a source. Its analyses stay, since plans name
-// them, and so does its alias.
+// RemoveSource detaches a source. Its analyses stay, since plans name them.
+// Its alias stays with its repository: that repository can be added again
+// under it, but no other can take it.
 func (s *Service) RemoveSource(ctx context.Context, p security.Principal, projectID, alias string) error {
 	if err := s.authz.Require(ctx, p, security.ProjectUpdate, projectID); err != nil {
 		return err

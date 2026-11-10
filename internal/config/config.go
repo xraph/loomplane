@@ -80,6 +80,8 @@ type Config struct {
 	DBGateway     DBGatewayConfig
 	Push          PushConfig
 	Nodes         NodesConfig
+	Chronicle     ChronicleConfig
+	Hallproof     HallproofConfig
 	Mobile        MobileConfig
 }
 
@@ -308,6 +310,15 @@ type IdentityConfig struct {
 	// Waitlist turns the sign-up waitlist on or off. Nil leaves it to the
 	// instance's stored setting.
 	Waitlist *bool
+	// PasskeyRPID is the WebAuthn relying party ID passkeys are bound to:
+	// a bare domain, which every origin below must be or sit under.
+	// Changing it strands every passkey already registered. Empty means
+	// public_url's host.
+	PasskeyRPID string
+	// PasskeyOrigins are the origins a browser may register or use a
+	// passkey from. Empty means public_url's origin. On localhost, authsome
+	// also accepts the page's own origin, so the Vite dev server works.
+	PasskeyOrigins []string
 }
 
 // ConsoleConfig configures the hidden Forge console.
@@ -480,6 +491,11 @@ func Defaults() Config {
 		},
 		Push:  PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 		Nodes: NodesConfig{JoinRateLimit: DefaultNodeJoinRateLimit, ChallengeRateLimit: DefaultNodeChallengeRateLimit},
+		Chronicle: ChronicleConfig{Checkpoints: CheckpointsConfig{
+			Enabled:       true,
+			EveryEvents:   DefaultCheckpointEveryEvents,
+			EveryInterval: DefaultCheckpointEveryInterval,
+		}},
 		Mobile: MobileConfig{
 			AndroidPackage:          DefaultAndroidPackage,
 			AndroidCertFingerprints: slices.Clone(DefaultAndroidCertFingerprints),
@@ -547,6 +563,8 @@ func FromSource(src Getter) (Config, error) {
 	r.optionalBool(&c.Identity.EmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
+	r.str(&c.Identity.PasskeyRPID, "identity.passkey_rp_id")
+	r.names(&c.Identity.PasskeyOrigins, "identity.passkey_origins")
 	r.str(&c.Console.Path, "console.path")
 	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
 	r.str(&c.Notifications.MailDir, "notifications.mail_dir")
@@ -658,6 +676,13 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Nodes.HopCAFile, "nodes.hop_ca_file")
 	r.integer(&c.Nodes.JoinRateLimit, "nodes.join_rate_limit")
 	r.integer(&c.Nodes.ChallengeRateLimit, "nodes.challenge_rate_limit")
+	r.boolean(&c.Chronicle.Checkpoints.Enabled, "chronicle.checkpoints.enabled")
+	r.integer(&c.Chronicle.Checkpoints.EveryEvents, "chronicle.checkpoints.every_events")
+	r.duration(&c.Chronicle.Checkpoints.EveryInterval, "chronicle.checkpoints.every_interval")
+	r.str(&c.Hallproof.Endpoint, "hallproof.endpoint")
+	r.str(&c.Hallproof.IngestKey, "hallproof.ingest_key")
+	r.str(&c.Hallproof.IngestKeyFile, "hallproof.ingest_key_file")
+	r.names(&c.Hallproof.StaffOrgs, "hallproof.staff_orgs")
 	r.str(&c.Mobile.AndroidPackage, "mobile.android_package")
 	// A list read appends, so a set value replaces the store app's keys
 	// rather than joining them.
@@ -676,6 +701,7 @@ func FromSource(src Getter) (Config, error) {
 	if c.Identity.EmailVerification != nil {
 		c.Identity.RequireEmailVerification = *c.Identity.EmailVerification
 	}
+	c.Identity.resolvePasskeys(c.PublicURL)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -685,7 +711,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Mobile.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.GitLab.Validate(), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment), c.Nodes.Validate(), c.Chronicle.Checkpoints.Validate(), c.Hallproof.Validate(), c.Mobile.Validate())
 	if c.AI.Enabled {
 		errs = append(errs, c.AI.Validate(c.Environment))
 	}
@@ -712,6 +738,7 @@ func (c *Config) Validate() error {
 	if !cookieName.MatchString(c.Identity.SessionCookie) {
 		errs = append(errs, fmt.Errorf("identity.session_cookie must be a cookie name (letters, digits and !#$%%&'*+-.^_`|~), got %q", c.Identity.SessionCookie))
 	}
+	errs = append(errs, c.Identity.validatePasskeys()...)
 	if !consolePath.MatchString(c.Console.Path) {
 		errs = append(errs, fmt.Errorf("console.path must be one segment starting with __ (like /__console), got %q", c.Console.Path))
 	}
@@ -781,6 +808,43 @@ func (c *Config) productionChecks() []error {
 	}
 	if strings.HasPrefix(c.PublicURL, "http://") {
 		errs = append(errs, errors.New("production needs an https public_url"))
+	}
+	return errs
+}
+
+// resolvePasskeys fills the passkey settings left empty from public_url.
+// A public_url that doesn't parse is left to Validate to report.
+func (i *IdentityConfig) resolvePasskeys(publicURL string) {
+	u, err := url.Parse(publicURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return
+	}
+	if i.PasskeyRPID == "" {
+		i.PasskeyRPID = u.Hostname()
+	}
+	if len(i.PasskeyOrigins) == 0 {
+		i.PasskeyOrigins = []string{u.Scheme + "://" + u.Host}
+	}
+}
+
+// validatePasskeys checks the relying party ID is a bare host and that
+// every origin is one a browser would accept for it: the host itself or a
+// subdomain of it.
+func (i *IdentityConfig) validatePasskeys() []error {
+	rpID := i.PasskeyRPID
+	if rpID == "" || strings.ContainsAny(rpID, ":/") {
+		return []error{fmt.Errorf("identity.passkey_rp_id must be a bare host such as example.com, got %q", rpID)}
+	}
+	var errs []error
+	for _, o := range i.PasskeyOrigins {
+		u, err := url.Parse(o)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" {
+			errs = append(errs, fmt.Errorf("identity.passkey_origins must be origins such as https://lp.example.com, got %q", o))
+			continue
+		}
+		if h := u.Hostname(); h != rpID && !strings.HasSuffix(h, "."+rpID) {
+			errs = append(errs, fmt.Errorf("identity.passkey_origins: %q isn't %s or a subdomain of it (identity.passkey_rp_id)", o, rpID))
+		}
 	}
 	return errs
 }

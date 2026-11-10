@@ -255,6 +255,34 @@ func TestOverlappingSyncIsFenced(t *testing.T) {
 		t.Fatalf("older run overwrote observations: %+v", list.Resources)
 	}
 }
+
+// A sync nobody asked for in person doesn't fence one that's running, which
+// would fail the request of someone who pressed Sync as the account connected.
+func TestSyncIfIdleLeavesARunningSyncAlone(t *testing.T) {
+	s, _, r, _ := fixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.fn = func(*connections.Connection) (provider.ResourceInventory, error) {
+		close(entered)
+		<-release
+		return provider.ResourceInventory{Scope: "account", Complete: true}, nil
+	}
+	done := make(chan error, 1)
+	go func() { _, err := s.Sync(context.Background(), principal, "one"); done <- err }()
+	<-entered
+	if _, err := s.SyncIfIdle(t.Context(), principal, "one"); !errors.Is(err, ErrSyncRunning) {
+		t.Fatalf("background sync over a running one: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("the running sync was fenced: %v", err)
+	}
+	r.fn = func(*connections.Connection) (provider.ResourceInventory, error) {
+		return provider.ResourceInventory{Scope: "account", Complete: true}, nil
+	}
+	if _, err := s.SyncIfIdle(t.Context(), principal, "one"); err != nil {
+		t.Fatalf("background sync of an idle account: %v", err)
+	}
+}
 func TestConnectionGenerationAndUnknownIncarnationBlockUse(t *testing.T) {
 	s, c, r, _ := fixture(t)
 	r.fn = func(*connections.Connection) (provider.ResourceInventory, error) {

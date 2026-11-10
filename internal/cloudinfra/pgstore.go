@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -131,6 +132,42 @@ func (s *PgStore) Accept(ctx context.Context, o *Operation) error {
 	return tx.Commit()
 }
 
+// ErrServerOperationOpen is an operation refused because another one on the
+// same server is still pending, running or waiting.
+var ErrServerOperationOpen = fmt.Errorf("%w: another operation on this server is still in progress; let it finish or cancel it, then try again", ErrConflict)
+
+// isActiveServerConflict reports whether err is the one-open-operation-
+// per-server index refusing a write.
+func isActiveServerConflict(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "loomplane_infrastructure_active_server"
+}
+
+// supersedeFailedOperations cancels the failed operations a delete o takes
+// over. A failed operation still counts as open on its server, so without
+// this a server whose create failed after its droplet existed could never
+// be deleted. Only operations on the same recorded resource go: the delete
+// removes exactly that resource, and an attempt whose resource is unknown
+// stays, since what it may have made is unresolved.
+func supersedeFailedOperations(ctx context.Context, tx driver.Tx, o *Operation) error {
+	if o.ResourceID == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations
+	SET status='cancelled', updated_at=now(),
+		body = body || jsonb_build_object('status','cancelled',
+			'message','Cancelled when this server''s deletion was accepted.',
+			'state_revision', coalesce((body->>'state_revision')::bigint,0)+1,
+			'updated_at', to_jsonb(now()))
+	WHERE org_id=$1 AND cloud_id=$2 AND server_id=$3 AND id<>$4 AND status='failed'
+		AND body->'input'->>'kind' IN ('create','resize','delete')
+		AND body->>'resource_id'=$5`, o.OrgID, o.CloudID, o.ServerID, o.ID, o.ResourceID)
+	if err != nil {
+		return storeError(err)
+	}
+	return nil
+}
+
 func (s *PgStore) acceptOperationTx(ctx context.Context, tx driver.Tx, o *Operation) error {
 	if checkErr := lockInfrastructureScope(ctx, tx, o); checkErr != nil {
 		return checkErr
@@ -152,12 +189,20 @@ func (s *PgStore) acceptOperationTx(ctx context.Context, tx driver.Tx, o *Operat
 			return claimErr
 		}
 	}
+	if o.Input.Kind == "delete" {
+		if checkErr := supersedeFailedOperations(ctx, tx, o); checkErr != nil {
+			return checkErr
+		}
+	}
 
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='preview' AND body->'money_estimate' IS NOT DISTINCT FROM $5::jsonb->'money_estimate' AND body->'budget_review' IS NOT DISTINCT FROM $5::jsonb->'budget_review'`, o.OrgID, o.CloudID, o.ID, o.Status, raw)
+	if isActiveServerConflict(err) {
+		return ErrServerOperationOpen
+	}
 	if err != nil {
 		return storeError(err)
 	}

@@ -23,6 +23,8 @@ The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Do
 | `LOOMPLANE_BACKUP_BUCKET` | `loomplane-backups` | The bucket for recovery objects |
 | `LOOMPLANE_REQUIRE_EMAIL_VERIFICATION` | On when email is set up | Whether an account must verify its email before it can sign in or use the API. Unset, it's on wherever Loomplane can send mail (SMTP, Resend or a mail directory) and off where it can't, since nobody could get a code. `true` or `false` forces it; production refuses `true` with no mail. The account that runs first-time setup is verified by setup itself |
 | `LOOMPLANE_SESSION_COOKIE` | `loomplane_session` | The HttpOnly session cookie's name. Cookies are shared by every port on a host, so another authsome app on the same host needs a different name |
+| `LOOMPLANE_PASSKEY_RP_ID` | `public_url`'s host | The domain passkeys are bound to, such as `example.com`. A browser only offers a passkey on that domain or its subdomains. Changing it strands every passkey already registered, so set it before people add any |
+| `LOOMPLANE_PASSKEY_ORIGINS` | `public_url`'s origin | Comma-separated origins people sign in from with a passkey, each on the RP ID or a subdomain of it. On `localhost` the page's own origin also works, so the Vite dev server needs nothing set |
 | `LOOMPLANE_AUTHSOME_APP_ID` | Built in | The authsome app (`aapp_...`) that holds Loomplane's users |
 | `LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY` | Built in | That app's public key |
 

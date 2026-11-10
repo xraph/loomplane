@@ -89,6 +89,12 @@ type GitLabWebhooks struct {
 	Start func(ctx context.Context, src *Source) (*Analysis, error)
 	// Now is the time deliveries are judged against. Nil is time.Now.
 	Now func() time.Time
+	// Unreadable, when set, hears of a push its secret vouched for that
+	// couldn't be read: not JSON, or with no project path or default
+	// branch. It gets the connection the delivery came for and nothing
+	// from the delivery itself, so a log line can say where to look
+	// without repeating what GitLab sent.
+	Unreadable func(ctx context.Context, id string)
 }
 
 // gitlabPush is the part of GitLab's Push Hook Handle reads.
@@ -127,12 +133,14 @@ func (w *GitLabWebhooks) Handle(ctx context.Context, id string, h http.Header, b
 	// is taken and ignored: an error would make GitLab retry it, and
 	// disable the hook after enough of them.
 	var push gitlabPush
-	if err = json.Unmarshal(body, &push); err != nil {
+	if err = json.Unmarshal(body, &push); err != nil || push.Project.PathWithNamespace == "" || push.Project.DefaultBranch == "" {
+		if w.Unreadable != nil {
+			w.Unreadable(ctx, id)
+		}
 		return 0, nil
 	}
 	project := push.Project
-	if orgID == "" || host == "" || project.PathWithNamespace == "" || project.DefaultBranch == "" ||
-		isNullSHA(push.After) || push.Ref != "refs/heads/"+project.DefaultBranch {
+	if orgID == "" || host == "" || isNullSHA(push.After) || push.Ref != "refs/heads/"+project.DefaultBranch {
 		return 0, nil
 	}
 	key := host + "/" + project.PathWithNamespace

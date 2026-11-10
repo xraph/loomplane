@@ -53,6 +53,10 @@ type fakeLifecycle struct {
 	onStart func(ctx context.Context)
 	// liveStarts records whether each start's context was still live.
 	liveStarts []bool
+	// resets records the cutoff of each reset the control asked for.
+	resets []time.Time
+	// hostStops records the instance state at each stop sent to the host.
+	hostStops []cpprovider.InstanceState
 }
 
 func (f *fakeLifecycle) Get(context.Context, id.ID) (*cpinstance.Instance, error) {
@@ -87,10 +91,17 @@ func (f *fakeLifecycle) Start(ctx context.Context, _ id.ID) error {
 func newTestInstances(room bool) (*instances, *fakeLifecycle) {
 	lc := &fakeLifecycle{state: cpprovider.StateRunning, updated: time.Now()}
 	ic := &instances{svc: &fakePlacements{room: room}, regions: noRegions{}, ctrl: lc}
-	ic.resetStuck = func(context.Context, id.ID, time.Time) error {
+	ic.stopHost = func(context.Context, platformcloud.Placement) error {
 		lc.mu.Lock()
 		defer lc.mu.Unlock()
-		if lc.state == cpprovider.StateStarting {
+		lc.hostStops = append(lc.hostStops, lc.state)
+		return nil
+	}
+	ic.resetStuck = func(_ context.Context, _ id.ID, state cpprovider.InstanceState, since time.Time) error {
+		lc.mu.Lock()
+		defer lc.mu.Unlock()
+		lc.resets = append(lc.resets, since)
+		if lc.state == state && lc.updated.Before(since) {
 			lc.state, lc.updated = cpprovider.StateFailed, time.Now()
 		}
 		return nil
@@ -180,7 +191,7 @@ func TestMoveSurvivesACancelledRequest(t *testing.T) {
 // failure write died leaves it, is started again by a repair.
 func TestRepairRestartsAnInstanceStuckStarting(t *testing.T) {
 	ic, lc := newTestInstances(false)
-	lc.state, lc.updated = cpprovider.StateStarting, time.Now().Add(-2*startTimeout)
+	lc.state, lc.updated = cpprovider.StateStarting, time.Now().Add(-2*(startTimeout+stuckGrace))
 	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -192,5 +203,67 @@ func TestRepairRestartsAnInstanceStuckStarting(t *testing.T) {
 	lc.state = cpprovider.StateStarting
 	if err := ic.Redeploy(t.Context(), testIID.String()); err == nil || len(lc.starts) != 0 {
 		t.Fatalf("a fresh start was restarted: %v, %v", err, lc.starts)
+	}
+}
+
+// The reset waits a grace beyond the timeout: an instance past the timeout
+// but inside the grace is left alone, one past both is reset.
+func TestStuckResetWaitsForTheGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   cpprovider.InstanceState
+		timeout time.Duration
+	}{
+		{"starting", cpprovider.StateStarting, startTimeout},
+		{"stopping", cpprovider.StateStopping, stopTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ic, lc := newTestInstances(false)
+			lc.state, lc.updated = tc.state, time.Now().Add(-tc.timeout-stuckGrace/2)
+			inst, err := ic.current(t.Context(), nil, testIID)
+			if err != nil || inst.State != tc.state || len(lc.resets) != 0 {
+				t.Fatalf("inside the grace: %v, state %s, resets %v", err, inst.State, lc.resets)
+			}
+			lc.updated = time.Now().Add(-tc.timeout - stuckGrace - time.Second)
+			inst, err = ic.current(t.Context(), nil, testIID)
+			if err != nil || inst.State != cpprovider.StateFailed || len(lc.resets) != 1 {
+				t.Fatalf("past the grace: %v, state %s, resets %v", err, inst.State, lc.resets)
+			}
+			if age := time.Since(lc.resets[0]); age < tc.timeout+stuckGrace-time.Second || age > tc.timeout+stuckGrace+time.Minute {
+				t.Fatalf("cutoff is %s old", age)
+			}
+		})
+	}
+}
+
+// A stop that died on its deadline can leave the instance stopping; a repair
+// resets it and starts the service again.
+func TestRepairRestartsAnInstanceStuckStopping(t *testing.T) {
+	ic, lc := newTestInstances(false)
+	lc.state, lc.updated = cpprovider.StateStopping, time.Now().Add(-stopTimeout-2*stuckGrace)
+	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
+		t.Fatalf("starts %v, state %s", lc.starts, lc.state)
+	}
+	// The host was told to stop while the instance still said stopping, that
+	// is before the reset.
+	if len(lc.hostStops) != 1 || lc.hostStops[0] != cpprovider.StateStopping {
+		t.Fatalf("host stops %v, want one before the reset", lc.hostStops)
+	}
+}
+
+// The host refuses to stop ordinary running work, so a refused host stop must
+// not keep a stuck-stopping instance from being reset and redeployed.
+func TestRepairResetsAStuckStopTheHostRefuses(t *testing.T) {
+	ic, lc := newTestInstances(false)
+	ic.stopHost = func(context.Context, platformcloud.Placement) error { return errors.New("refused") }
+	lc.state, lc.updated = cpprovider.StateStopping, time.Now().Add(-stopTimeout-2*stuckGrace)
+	if err := ic.Redeploy(t.Context(), testIID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if len(lc.resets) != 1 || len(lc.starts) != 1 || lc.state != cpprovider.StateRunning {
+		t.Fatalf("resets %v, starts %v, state %s", lc.resets, lc.starts, lc.state)
 	}
 }

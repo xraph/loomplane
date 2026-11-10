@@ -138,6 +138,31 @@ export function repositoryURL(input: string): string {
   return v
 }
 
+/**
+ * sourceURL links to a source on its host, at its directory when it has
+ * one. Each host has its own page for a directory: GitHub's tree, GitLab's
+ * -/tree (on any GitLab host) and Bitbucket's src. With no ref, HEAD.
+ */
+export function sourceURL(s: {
+  repository: string
+  root?: string
+  ref?: string
+}): string {
+  const base = repositoryURL(s.repository)
+  if (!s.root) return base
+  const ref = s.ref || "HEAD"
+  const host = repositoryHost(s.repository)
+  if (host === "github.com") return `${base}/tree/${ref}/${s.root}`
+  if (host === "bitbucket.org") return `${base}/src/${ref}/${s.root}`
+  return `${base}/-/tree/${ref}/${s.root}`
+}
+
+/** hostLabel is what "Open on" names: GitHub, or the key's own host. */
+export function hostLabel(repository: string): string {
+  const host = repositoryHost(repository)
+  return host === "github.com" ? "GitHub" : host
+}
+
 // Durations, relative times and amounts, shared with the mock (src/mock).
 
 const second = 1000

@@ -1231,6 +1231,7 @@ export const CODECS: Record<string, Codec> = {
   "TrafficReport.sources": {"kind": "array", "items": () => CODECS["UsageSource"]},
   "Turn": {"kind": "object", "fields": {"context": {"ts": "context", "codec": () => CODECS["PageContext"]}, "created_at": {"ts": "createdAt"}, "error": {"ts": "error"}, "event_seq": {"ts": "eventSeq"}, "events": {"ts": "events", "codec": () => CODECS["Turn.events"]}, "finished_at": {"ts": "finishedAt"}, "message": {"ts": "message"}, "status": {"ts": "status"}, "task_id": {"ts": "taskId"}}, "required": ["created_at", "error", "event_seq", "events", "message", "status", "task_id"]},
   "Turn.events": {"kind": "array", "items": () => CODECS["Event"]},
+  "TwoStep": {"kind": "object", "fields": {"enabled": {"ts": "enabled"}}, "required": ["enabled"]},
   "UnreachableAccount": {"kind": "object", "fields": {"connection_id": {"ts": "connectionId"}, "message": {"ts": "message"}, "name": {"ts": "name"}}, "required": ["connection_id", "message", "name"]},
   "UnroutableService": {"kind": "object", "fields": {"reason": {"ts": "reason"}, "service": {"ts": "service"}}, "required": ["reason", "service"]},
   "UnwatchedService": {"kind": "object", "fields": {"name": {"ts": "name"}, "provider": {"ts": "provider"}, "reason": {"ts": "reason"}}, "required": ["name", "provider", "reason"]},

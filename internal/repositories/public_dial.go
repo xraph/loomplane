@@ -31,6 +31,32 @@ var (
 	sixToFour          = netip.MustParsePrefix("2002::/16")
 )
 
+// reserved are ranges no public host lives in: IETF protocol assignments
+// (192.0.0.0/24), the three documentation networks, the old class E space
+// with the broadcast address (240.0.0.0/4), IPv6 documentation, the
+// deprecated site-local block (fec0::/10) and the deprecated
+// IPv4-compatible form, ::a.b.c.d (::/96, which also holds :: and ::1).
+var reserved = []netip.Prefix{
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("::/96"),
+}
+
+// inReserved reports whether a is in one of the reserved ranges.
+func inReserved(a netip.Addr) bool {
+	for _, p := range reserved {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // PublicDialer returns a dial function for an http.Transport that connects
 // only to public addresses. The check runs on the address the connection is
 // about to use, after the name is resolved, so a name that resolves to a
@@ -54,8 +80,8 @@ func refusePrivate(_, address string, _ syscall.RawConn) error {
 }
 
 // privateAddr reports whether a is loopback, private, link-local,
-// unspecified, multicast, in the shared address space, for benchmarking, or
-// in a local-use NAT64 prefix. An IPv4 address carried inside an IPv6 one
+// unspecified, multicast, in the shared address space, for benchmarking, in
+// a local-use NAT64 prefix, or in a reserved range. An IPv4 address carried inside an IPv6 one
 // is judged as the IPv4 address it is.
 func privateAddr(a netip.Addr) bool {
 	a = a.WithZone("").Unmap()
@@ -71,7 +97,8 @@ func privateAddr(a netip.Addr) bool {
 	}
 	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
 		a.IsInterfaceLocalMulticast() || a.IsMulticast() || a.IsUnspecified() ||
-		sharedAddressSpace.Contains(a) || thisNetwork.Contains(a) || benchmarking.Contains(a)
+		sharedAddressSpace.Contains(a) || thisNetwork.Contains(a) || benchmarking.Contains(a) ||
+		inReserved(a)
 }
 
 // embeddedIPv4 reads the four bytes of a at offset.

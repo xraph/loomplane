@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/grove/drivers/sqlitedriver"
 	shieldengine "github.com/xraph/shield/engine"
 	"github.com/xraph/shield/presets"
+	"github.com/xraph/shield/scan"
 	shieldsqlite "github.com/xraph/shield/store/sqlite"
 
 	"github.com/xraph/loomplane/internal/agentsafety"
@@ -125,5 +126,37 @@ func TestOutboundSendsTextLongerThanShieldScans(t *testing.T) {
 	}
 	if len(got) > agentsafety.DefaultMaxOutboundBytes || !strings.HasSuffix(got, agentsafety.OutboundCut) {
 		t.Fatalf("sent %d bytes ending %q", len(got), got[max(0, len(got)-60):])
+	}
+}
+
+// A task's ID is 32 characters, and shield's entropy check blocked the ones
+// whose characters were spread widely enough, as secrets. IDs aren't scanned.
+func TestLongIDsAreNotTakenForSecrets(t *testing.T) {
+	eng := seeded(t, "org_a")
+	s := &agentsafety.Scanner{Engine: eng}
+	ctx := bound(t, "org_a")
+	const id = "atask_0123456789abcdefghjkmnpqrs"
+	text := "The review " + id + " finished."
+
+	raw, err := eng.ScanInput(ctx, &scan.Input{Text: text, Profile: presets.InfraAgentInput, Source: agentsafety.SourceToolResult, Untrusted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.Decision == scan.DecisionAllow || raw.Decision == scan.DecisionFlag {
+		t.Fatalf("the test needs an ID shield takes for a secret, and it decided %s", raw.Decision)
+	}
+
+	got := s.Untrusted(ctx, agentsafety.SourceToolResult, text)
+	if got == agentsafety.Withheld || !strings.Contains(got, id) {
+		t.Fatalf("untrusted: %q", got)
+	}
+	out, err := s.Outbound(ctx, text)
+	if err != nil || !strings.Contains(out, id) {
+		t.Fatalf("outbound: %q, %v", out, err)
+	}
+	// A secret beside the ID is still found.
+	token := "ghp_" + strings.Repeat("a1B2c3", 6)
+	if _, err = s.Outbound(ctx, id+" "+token); !errors.Is(err, agentsafety.ErrOutboundBlocked) {
+		t.Fatalf("a token beside an ID: %v", err)
 	}
 }

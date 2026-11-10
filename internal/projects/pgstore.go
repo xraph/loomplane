@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,6 +19,14 @@ const pgUniqueViolation = "23505"
 
 // pgForeignKeyViolation is Postgres's SQLSTATE for a foreign key failure.
 const pgForeignKeyViolation = "23503"
+
+// pgCheckViolation is Postgres's SQLSTATE for a check failure, which the
+// cleanup history guards raise to refuse a delete.
+const pgCheckViolation = "23514"
+
+// pgRestrictViolation is Postgres's SQLSTATE for an ON DELETE RESTRICT
+// key, which it raises at once rather than at the end of the statement.
+const pgRestrictViolation = "23001"
 
 // PgStore is the Postgres Store, over the grove pgdriver pool the grove
 // extension owns. The schema is migration group "loomplane"
@@ -259,8 +268,42 @@ func (s *PgStore) SetResponsibleTeam(ctx context.Context, orgID, id, teamID stri
 	return p, nil
 }
 
-// DeleteProject removes the project; its environments go with it.
-func (s *PgStore) DeleteProject(ctx context.Context, orgID, id string) error {
+// DeletionRefusal says, before anything else happens, whether
+// DeleteProject (environmentID empty) or DeleteEnvironment would refuse:
+// ErrNotFound, ErrEnvironmentNotFound, ErrFleetManaged or
+// ErrLastEnvironment. It's nil otherwise. The deletion checks again.
+func (s *PgStore) DeletionRefusal(ctx context.Context, orgID, projectID, environmentID string) error {
+	var exists, managed bool
+	var envs int
+	var envExists bool
+	err := s.db.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM loomplane_projects WHERE org_id=$1 AND id=$2),
+		CASE WHEN $3='' THEN EXISTS(SELECT 1 FROM loomplane_fleets WHERE org_id=$1 AND (project_id=$2 OR control_project_id=$2))
+			ELSE EXISTS(SELECT 1 FROM loomplane_fleet_instances WHERE org_id=$1 AND project_id=$2 AND environment_id=$3) END,
+		(SELECT count(*) FROM loomplane_environments WHERE org_id=$1 AND project_id=$2),
+		EXISTS(SELECT 1 FROM loomplane_environments WHERE org_id=$1 AND project_id=$2 AND id=$3)`,
+		orgID, projectID, environmentID).Scan(&exists, &managed, &envs, &envExists)
+	switch {
+	case err != nil:
+		return fmt.Errorf("check the deletion: %w", err)
+	case !exists:
+		return ErrNotFound
+	case managed:
+		return ErrFleetManaged
+	case environmentID == "":
+		return nil
+	case !envExists:
+		return ErrEnvironmentNotFound
+	case envs <= 1:
+		return ErrLastEnvironment
+	}
+	return nil
+}
+
+// DeleteProject removes the project; its environments go with it, and so
+// does the frontend capacity bookkeeping nothing holds any more. A
+// frontend that may still run keeps the project: ErrFrontendsHeld.
+func (s *PgStore) DeleteProject(ctx context.Context, orgID, id string) (err error) {
 	var managed bool
 	if managedErr := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_fleets WHERE org_id=$1 AND (project_id=$2 OR control_project_id=$2))`, orgID, id).Scan(&managed); managedErr != nil {
 		return managedErr
@@ -268,11 +311,46 @@ func (s *PgStore) DeleteProject(ctx context.Context, orgID, id string) error {
 	if managed {
 		return ErrFleetManaged
 	}
-	res, err := s.db.Exec(ctx, `DELETE FROM loomplane_projects WHERE org_id = $1 AND id = $2`, orgID, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	if cerr := clearReleasedFrontends(ctx, tx, orgID, id, ""); cerr != nil {
+		return cerr
+	}
+	res, err := tx.Exec(ctx, `DELETE FROM loomplane_projects WHERE org_id = $1 AND id = $2`, orgID, id)
+	if rerr := retainedError(err); rerr != nil {
+		return rerr
+	}
 	if err != nil {
 		return fmt.Errorf("delete project: %w", err)
 	}
-	return requireOneRow(res)
+	if nerr := requireOneRow(res); nerr != nil {
+		return nerr
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// clearReleasedFrontends deletes the frontend capacity rows of a project,
+// or of one of its environments, that no longer count: released slots,
+// whose uses all have provider absence or never started. Both restrict
+// their plans' deletion. A slot still reserved stays, and its restriction
+// refuses the delete. The plans' frontend intents go with the plans.
+func clearReleasedFrontends(ctx context.Context, tx driver.Tx, orgID, projectID, environmentID string) error {
+	released := `s.org_id=$1 AND s.project_id=$2 AND ($3='' OR s.environment_id=$3) AND s.status='released'
+		AND NOT EXISTS(SELECT 1 FROM loomplane_frontend_uses l WHERE l.org_id=s.org_id AND l.cloud_id=s.cloud_id AND l.slot_id=s.id AND l.status NOT IN ('removed','unused'))`
+	if _, err := tx.Exec(ctx, `DELETE FROM loomplane_frontend_uses u USING loomplane_frontend_slots s
+		WHERE u.org_id=s.org_id AND u.cloud_id=s.cloud_id AND u.slot_id=s.id AND `+released, orgID, projectID, environmentID); err != nil {
+		return fmt.Errorf("clear released frontend uses: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM loomplane_frontend_slots s WHERE `+released, orgID, projectID, environmentID); err != nil {
+		return fmt.Errorf("clear released frontend slots: %w", err)
+	}
+	return nil
 }
 
 const environmentColumns = `id, org_id, project_id, name, kind, created_at, updated_at`
@@ -349,7 +427,13 @@ func (s *PgStore) DeleteEnvironment(ctx context.Context, orgID, projectID, id st
 	case total <= 1:
 		return ErrLastEnvironment
 	}
+	if cerr := clearReleasedFrontends(ctx, tx, orgID, projectID, id); cerr != nil {
+		return cerr
+	}
 	if _, err = tx.Exec(ctx, `DELETE FROM loomplane_environments WHERE project_id = $1 AND id = $2`, projectID, id); err != nil {
+		if rerr := retainedError(err); rerr != nil {
+			return rerr
+		}
 		return fmt.Errorf("delete environment: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -424,6 +508,52 @@ func teamWriteError(err error) error {
 		return ErrTeamNotFound
 	}
 	return fmt.Errorf("set responsible team: %w", err)
+}
+
+// retainedError turns a delete the database refused to keep history into
+// the error its caller shows, or returns nil when err isn't one of those.
+//
+// The refusals arrive as *pgconn.PgError with one of three codes:
+//   - pgRestrictViolation (23001): an ON DELETE RESTRICT key, raised at
+//     once. Every loomplane_frontend_* key is one.
+//   - pgForeignKeyViolation (23503): a NO ACTION key, or a guard trigger
+//     that raises it.
+//   - pgCheckViolation (23514): a cleanup history guard.
+//
+// pgErr.ConstraintName names the key ("" for a trigger), and
+// pgErr.TableName the referencing table.
+//
+// A frontend's capacity row (ErrFrontendsHeld) and cleanup history
+// (ErrHistoryRetained) need different next steps from the person deleting,
+// so each wraps its own sentinel around err, as fmt.Errorf("%w: %w", ...).
+func retainedError(err error) error {
+	var pgErr *pgconn.PgError
+	if !isRetained(err) || !errors.As(err, &pgErr) {
+		return nil
+	}
+	// The same frontend key comes back as 23001 or 23503, depending on
+	// whether the delete reached it directly or through a cascade.
+	if pgErr.Code != pgCheckViolation &&
+		(strings.HasPrefix(pgErr.ConstraintName, "loomplane_frontend_") || strings.HasPrefix(pgErr.TableName, "loomplane_frontend_")) {
+		return fmt.Errorf("%w: %w", ErrFrontendsHeld, err)
+	}
+	return fmt.Errorf("%w: %w", ErrHistoryRetained, err)
+}
+
+// isRetained reports whether the database refused a delete to keep history:
+// a foreign key that restricts it, at once or at the statement's end, or a
+// guard that raises a check violation for cleanup records that must be
+// retained.
+func isRetained(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case pgRestrictViolation, pgForeignKeyViolation, pgCheckViolation:
+		return true
+	}
+	return false
 }
 
 func isUniqueViolation(err error) bool {

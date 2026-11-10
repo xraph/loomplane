@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/oauth"
@@ -37,6 +38,9 @@ const (
 	// AuditGitLabListFailed records a connection left out of a project
 	// listing because GitLab couldn't list its projects.
 	AuditGitLabListFailed = "gitlab.list.failed"
+	// AuditGitLabRevokeFailed records a replaced sign-in GitLab didn't
+	// revoke when someone signed in to the same account again.
+	AuditGitLabRevokeFailed = "gitlab.revoke.failed"
 )
 
 // GitLabVaultAppID is the Vault app GitLab sign-ins, webhook secrets and
@@ -106,6 +110,9 @@ type GitLabConnectionsConfig struct {
 type GitLabConnections struct {
 	cfg  GitLabConnectionsConfig
 	gate *oauth.Gate
+	// background counts the revokes still running after the request that
+	// started them answered.
+	background sync.WaitGroup
 }
 
 var _ TokenSource = (*GitLabConnections)(nil)
@@ -314,8 +321,13 @@ func (c *GitLabConnections) RemoveHost(ctx context.Context, p security.Principal
 		}
 	}
 	// Kept to put back should the row's delete fail after all, such as
-	// for a connection made since the check above.
+	// for a connection made since the check above. A Reveal that fails for
+	// any reason but there being no secret stops here, before the delete,
+	// so a row that then stays can never be left without its secret.
 	secret, revealErr := c.cfg.Secrets.Reveal(ctx, p.OrgID, hostSecretKey(id))
+	if revealErr != nil && !errors.Is(revealErr, ErrSecretNotFound) {
+		return fmt.Errorf("read the GitLab host's secret: %w", revealErr)
+	}
 	if err := c.cfg.Secrets.Delete(ctx, p.OrgID, hostSecretKey(id)); err != nil {
 		return fmt.Errorf("forget the GitLab host's secret: %w", err)
 	}

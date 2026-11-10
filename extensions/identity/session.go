@@ -84,6 +84,9 @@ func (e *Extension) routes(r forge.Router) error {
 	if err := e.cliRoutes(r); err != nil {
 		return err
 	}
+	if err := e.accountRoutes(r); err != nil {
+		return err
+	}
 	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
 	if err := v1.GET("/session", e.getSession,
 		forge.WithName("session.get"),
@@ -210,8 +213,12 @@ func (e *Extension) appRoles(ctx context.Context, userID string) (roles []*rbac.
 // apikeys so it can gate instance-wide node join tokens. A failure to read
 // roles says no.
 func (e *Extension) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
-	roles, ok := e.appRoles(ctx, userID)
-	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID), nil
+	staff, err := e.readStaff(ctx, userID)
+	if err != nil {
+		e.Logger().Error("read platform roles", forge.F("user_id", userID), forge.F("error", err.Error()))
+		return false, nil
+	}
+	return staff, nil
 }
 
 func (e *Extension) getSession(c forge.Context) error {

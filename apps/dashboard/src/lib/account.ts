@@ -1,8 +1,15 @@
 // Your own account: profile, password, sessions. These calls go through
 // authsome's SDK, which owns the session; the generated client only covers
 // organizations (scripts/authsome-spec.mjs says why).
+import {
+  type PasskeyRegisterFinishRequest,
+  prepareCreationOptions,
+  serializeCredential,
+} from "@authsome/ui-core"
 import { useAuth, useSessionToken } from "@authsome/ui-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+
+import { messageOf } from "@/client/errors"
 
 /**
  * useAccountClient returns authsome's client and the token its calls take.
@@ -110,4 +117,60 @@ export function describeAgent(agent: string): {
     label: system ? `${browser} on ${system}` : browser,
     phone: /iPhone|iPad|Android/.test(agent),
   }
+}
+
+/**
+ * factorProblem says what went wrong changing how you sign in, in plain
+ * words for the messages authsome sends back, and otherwise falls back to
+ * messageOf's reading.
+ */
+export function factorProblem(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : ""
+  if (/recent sign-in required/i.test(raw))
+    return "For your safety, this needs a fresh sign-in. Sign out, sign back in, then set it up within five minutes."
+  if (/already used/i.test(raw))
+    return "That code was just used. Wait for your app to show the next one."
+  if (/invalid (totp )?code|code required/i.test(raw))
+    return "That code didn't work. Check your app and try the newest one."
+  return messageOf(err, fallback)
+}
+
+/** sixDigits reports whether a code looks like an authenticator app's. */
+export function sixDigits(code: string): boolean {
+  return /^\d{6}$/.test(code)
+}
+
+/** passkeysWork reports whether this browser can make and use passkeys. */
+export function passkeysWork(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    "PublicKeyCredential" in window &&
+    typeof navigator !== "undefined" &&
+    navigator.credentials !== undefined
+  )
+}
+
+/**
+ * addPasskey runs the whole registration: authsome's challenge, the
+ * browser's prompt (Touch ID, Windows Hello, a security key), then the
+ * credential back to authsome. code is the two-step code, needed only when
+ * two-step is on.
+ */
+export async function addPasskey(
+  client: ReturnType<typeof useAuth>["client"],
+  token: string,
+  name: string,
+  code?: string
+): Promise<void> {
+  // The SDK's request type predates the code field; authsome reads it.
+  const body = code ? { display_name: name, code } : { display_name: name }
+  const { options } = await client.passkeyRegisterBegin(body, token)
+  const credential = await navigator.credentials.create({
+    publicKey: prepareCreationOptions(options),
+  })
+  if (!credential) throw new Error("No passkey was made.")
+  await client.passkeyRegisterFinish(
+    serializeCredential(credential) as unknown as PasskeyRegisterFinishRequest,
+    token
+  )
 }

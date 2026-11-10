@@ -320,3 +320,20 @@ test("someone who can't connect repositories sees the reason without Turn on", a
     screen.queryByRole("button", { name: "Turn on" })
   ).not.toBeInTheDocument()
 })
+
+test("the push notice is one row with one cell across every column", async () => {
+  serve([{ ...bitbucketSource, push: { on: false, reason: "needs https" } }])
+  const table = await screen.findByRole("table", { name: "Repositories" })
+  const columns = within(table).getAllByRole("columnheader").length
+  const notice = (
+    await within(table).findByText(/Pushes don.t re-analyze api/)
+  ).closest('[role="row"]') as HTMLElement
+  expect(notice).not.toBeNull()
+  const cells = within(notice).getAllByRole("cell")
+  expect(cells).toHaveLength(1)
+  expect(cells[0]).toHaveAttribute("aria-colspan", String(columns))
+  // The Turn on button is inside that one cell.
+  expect(
+    within(cells[0]).getByRole("button", { name: "Turn on" })
+  ).toBeInTheDocument()
+})

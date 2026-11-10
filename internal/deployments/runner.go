@@ -145,6 +145,9 @@ type Job struct {
 	record *ProviderEnvironment
 	// warn adds a warning to the step, or is nil.
 	warn func(error)
+	// frontendResource records what a managed frontend's deploy made in
+	// the frontend capacity ledger, or is nil. See recordFrontend.
+	frontendResource func(ctx context.Context, external, replacing string) error
 }
 
 // Warn adds a warning to the step an executor runs in, for something that
@@ -1396,6 +1399,7 @@ func (r *Runner) newJob(ctx context.Context, d *Deployment, plan *planning.Plan,
 		},
 		CommitSHA: commitFor(d, a), SourceID: commitFor(d, a),
 	}
+	r.trackFrontendResource(job)
 	if outputErr := r.trackNativeOutputs(ctx, job); outputErr != nil {
 		return nil, outputErr
 	}
