@@ -184,7 +184,7 @@ func newPlatformHost(t *testing.T, name string, who platformIdentity) *platformH
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
-	agent := fc.Handler{Host: h.host, Platform: who.fingerprint}
+	agent := fc.Handler{Host: h.host, Platform: fc.NewPlatformTrust(who.fingerprint)}
 	h.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		h.paths = append(h.paths, r.URL.Path)
