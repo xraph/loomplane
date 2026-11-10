@@ -13,7 +13,10 @@ import { type ComponentProps } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
-import { useProjectsList } from "@/client/forge/loomplane/hooks"
+import {
+  usePlatformCloudHostsList,
+  useProjectsList,
+} from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import {
   ActivityIcon,
@@ -69,6 +72,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import { useInstance } from "@/lib/instance"
+import { expiringHosts } from "@/lib/platform-cloud"
 import { useOrganization } from "@/lib/organization"
 import { anchors } from "@/learn/content"
 import { projectStyle } from "@/lib/project-style"
@@ -325,6 +329,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
               icon: <PlatformCloudIcon />,
               link: <Link to="/platform/cloud" />,
               isActive: path === "/platform/cloud" || at("/platform/cloud/"),
+              badge: <ExpiringCertificatesBadge />,
             },
           ]
         : [],
@@ -529,5 +534,24 @@ function Account() {
         </DropdownMenuItem>
       </DropdownMenuGroup>
     </NavUser>
+  )
+}
+
+/**
+ * ExpiringCertificatesBadge counts the platform hosts whose client
+ * certificate needs rotating. It is mounted only for a platform user, the
+ * only one the hosts list answers.
+ */
+function ExpiringCertificatesBadge() {
+  const hosts = useQuery(usePlatformCloudHostsList)
+  const n = expiringHosts(hosts.data?.hosts)
+  if (n === 0) return null
+  return (
+    <span
+      className="text-destructive"
+      title={`${n} host ${n === 1 ? "certificate needs" : "certificates need"} rotating`}
+    >
+      {n}
+    </span>
   )
 }

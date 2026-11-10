@@ -33,6 +33,7 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/metering"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/platformadmin"
 	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/security"
@@ -104,6 +105,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("platform cloud needs the planning extension's platform target: %w", err)
 	}
+	ownerEmails, err := forge.InjectType[identity.PlatformOwnerEmails](c)
+	if err != nil {
+		return fmt.Errorf("platform cloud needs the identity extension: %w", err)
+	}
+	mail, err := forge.InjectType[*notifications.Service](c)
+	if err != nil {
+		return fmt.Errorf("platform cloud needs notification delivery: %w", err)
+	}
 	if e.engineOf() == nil {
 		return fmt.Errorf("platform cloud needs the dispatch extension to have registered")
 	}
@@ -125,6 +134,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	orgs := orgLister{pg: pg, appID: e.cfg.Identity.AppID}
 	e.instances = newInstances(svc, target, pg)
 	e.svc = svc.WithSecrets(secrets).WithOrgs(orgs.ids).WithOrgExists(orgs.exists).WithInstances(e.instances)
+	// Host certificate warnings go to the platform owners' own addresses.
+	svc.WithOwnerNotifier(ownerMailer{owners: ownerEmails, send: mail.SendHostCertificateExpiring, log: e.Logger()})
 
 	for _, j := range jobs(svc) {
 		j.register(e.engineOf())

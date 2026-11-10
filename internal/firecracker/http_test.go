@@ -101,7 +101,7 @@ func TestPlatformPeerAcceptsAnyOrgOnPlatformConnection(t *testing.T) {
 	h, d, q := testHost(t)
 	cert := &x509.Certificate{Raw: []byte("platform")}
 	sum := sha256.Sum256(cert.Raw)
-	api := Handler{Host: h, Platform: hex.EncodeToString(sum[:])}
+	api := Handler{Host: h, Platform: NewPlatformTrust(hex.EncodeToString(sum[:]))}
 	q.Scope.Connection = PlatformConnection
 	for _, org := range []string{"org-a", "org-b"} {
 		in := q
@@ -132,7 +132,7 @@ func TestPlatformPeerCannotTouchAnotherOrgsRecord(t *testing.T) {
 	h, d, q := testHost(t)
 	cert := &x509.Certificate{Raw: []byte("platform")}
 	sum := sha256.Sum256(cert.Raw)
-	api := Handler{Host: h, Platform: hex.EncodeToString(sum[:])}
+	api := Handler{Host: h, Platform: NewPlatformTrust(hex.EncodeToString(sum[:]))}
 	q.Scope.Connection = PlatformConnection
 	q.Scope.Org = "org-a"
 	if w := platformRequest(t, api, cert, "/v1/apply", q); w.Code != http.StatusOK {
@@ -155,7 +155,7 @@ func TestUsageIsScopedToPeerOrg(t *testing.T) {
 	orgSum := sha256.Sum256(orgCert.Raw)
 	platformCert := &x509.Certificate{Raw: []byte("platform")}
 	platformSum := sha256.Sum256(platformCert.Raw)
-	api := Handler{Host: h, Platform: hex.EncodeToString(platformSum[:]), Peers: []Peer{{Fingerprint: hex.EncodeToString(orgSum[:]), Org: q.Scope.Org, Connection: q.Scope.Connection}}}
+	api := Handler{Host: h, Platform: NewPlatformTrust(hex.EncodeToString(platformSum[:])), Peers: []Peer{{Fingerprint: hex.EncodeToString(orgSum[:]), Org: q.Scope.Org, Connection: q.Scope.Connection}}}
 	if w := platformRequest(t, api, orgCert, "/v1/apply", q); w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
 	}

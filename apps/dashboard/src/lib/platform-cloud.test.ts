@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 
+import type { HostView } from "@/client/forge/loomplane/types"
 import {
+  expiringHosts,
+  hostCertificateNotes,
   hostEvidenceIssues,
   statusLabel,
   suspendMessage,
@@ -173,5 +176,54 @@ describe("platform cloud helpers", () => {
       "Waiting for room"
     )
     expect(statusLabel("placement", "")).toBe("Unknown")
+  })
+})
+
+describe("host certificate notes", () => {
+  it("says how soon the certificate runs out, urgently inside 30 days", () => {
+    expect(
+      hostCertificateNotes({ warning: "expiring", daysLeft: 60, rotation: "" })
+    ).toEqual([
+      { text: "The client certificate expires in 60 days", urgent: false },
+    ])
+    expect(
+      hostCertificateNotes({ warning: "urgent", daysLeft: 1, rotation: "" })
+    ).toEqual([
+      {
+        text: "The client certificate expires in 1 day. Rotate it now.",
+        urgent: true,
+      },
+    ])
+    expect(
+      hostCertificateNotes({
+        warning: "expired",
+        daysLeft: -2,
+        rotation: "",
+      })[0].urgent
+    ).toBe(true)
+    expect(hostCertificateNotes({ warning: "", rotation: "" })).toEqual([])
+    expect(hostCertificateNotes(undefined)).toEqual([])
+  })
+
+  it("says what a rotation waits for", () => {
+    expect(
+      hostCertificateNotes({ warning: "", rotation: "waiting" })[0].text
+    ).toMatch(/add the new certificate/)
+    expect(
+      hostCertificateNotes({ warning: "", rotation: "retiring" })[0].text
+    ).toMatch(/remove the old certificate/)
+  })
+
+  it("counts hosts in service whose certificate needs rotating", () => {
+    const h = (status: string, warning: string) =>
+      ({ status, certificate: { warning, rotation: "" } }) as HostView
+    expect(
+      expiringHosts([
+        h("ready", "urgent"),
+        h("draining", "expired"),
+        h("retired", "expired"),
+        h("ready", ""),
+      ])
+    ).toBe(2)
   })
 })

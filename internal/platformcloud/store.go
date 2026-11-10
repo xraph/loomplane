@@ -162,9 +162,9 @@ func (s *PgStore) CreateHost(ctx context.Context, h *Host) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_platform_hosts(id,region_id,endpoint,host_id,status,evidence,allotment,client_fingerprint,generation,revision,created_at,updated_at)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,now(),now())`,
-		h.ID, h.RegionID, h.Endpoint, h.HostID, h.Status, ev, al, h.ClientFingerprint, h.Generation)
+	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_platform_hosts(id,region_id,endpoint,host_id,status,evidence,allotment,client_fingerprint,generation,client_expires_at,revision,created_at,updated_at)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,now(),now())`,
+		h.ID, h.RegionID, h.Endpoint, h.HostID, h.Status, ev, al, h.ClientFingerprint, h.Generation, h.ClientExpiresAt)
 	if err != nil {
 		return storeError(err)
 	}
@@ -189,20 +189,23 @@ func (s *PgStore) UpdateHost(ctx context.Context, h *Host) error {
 	if err != nil {
 		return err
 	}
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_platform_hosts SET endpoint=$2,status=$3,evidence=$4,allotment=$5,client_fingerprint=$6,generation=$7,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$8`,
-		h.ID, h.Endpoint, h.Status, ev, al, h.ClientFingerprint, h.Generation, h.Revision)
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_platform_hosts SET endpoint=$2,status=$3,evidence=$4,allotment=$5,client_fingerprint=$6,generation=$7,
+client_expires_at=$9,next_fingerprint=$10,next_expires_at=$11,previous_fingerprint=$12,cert_notice_stage=$13,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$8`,
+		h.ID, h.Endpoint, h.Status, ev, al, h.ClientFingerprint, h.Generation, h.Revision,
+		h.ClientExpiresAt, h.NextFingerprint, h.NextExpiresAt, h.PreviousFingerprint, h.CertNoticeStage)
 	if err != nil {
 		return storeError(err)
 	}
 	return s.afterRevisionUpdate(ctx, res, "loomplane_platform_hosts", "id", h.ID, &h.Revision)
 }
 
-const hostColumns = `id,region_id,endpoint,host_id,status,client_fingerprint,evidence,allotment,generation,revision`
+const hostColumns = `id,region_id,endpoint,host_id,status,client_fingerprint,evidence,allotment,generation,revision,client_expires_at,next_fingerprint,next_expires_at,previous_fingerprint,cert_notice_stage`
 
 func scanHost(row interface{ Scan(...any) error }) (*Host, error) {
 	var h Host
 	var ev, al []byte
-	if err := row.Scan(&h.ID, &h.RegionID, &h.Endpoint, &h.HostID, &h.Status, &h.ClientFingerprint, &ev, &al, &h.Generation, &h.Revision); err != nil {
+	if err := row.Scan(&h.ID, &h.RegionID, &h.Endpoint, &h.HostID, &h.Status, &h.ClientFingerprint, &ev, &al, &h.Generation, &h.Revision,
+		&h.ClientExpiresAt, &h.NextFingerprint, &h.NextExpiresAt, &h.PreviousFingerprint, &h.CertNoticeStage); err != nil {
 		return nil, storeError(err)
 	}
 	if err := json.Unmarshal(ev, &h.Evidence); err != nil {

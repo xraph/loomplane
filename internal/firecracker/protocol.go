@@ -114,6 +114,11 @@ type Capabilities struct {
 	Limits                                Limits
 	Platform, SMTActive                   bool  `json:",omitempty"`
 	DeniedPorts                           []int `json:",omitempty"`
+	// PlatformFingerprints is the platform client certificates the host
+	// trusts now, sent only to the platform and only when it asks with
+	// trust=1. A control plane from before rotation decodes capabilities
+	// strictly and never asks.
+	PlatformFingerprints []string `json:",omitempty"`
 }
 type OrgLimits struct{ VMs, VCPUs, MemoryMiB int }
 type Limits struct {

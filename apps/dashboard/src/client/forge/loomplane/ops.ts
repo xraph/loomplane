@@ -2187,6 +2187,14 @@ export const ops = {
     provides: [],
     invalidates: [],
   },
+  'platformCloudHosts.rotateCertificate': {
+    method: 'POST',
+    path: '/api/v1/platform/cloud/hosts/{host}/rotate-certificate',
+    rootType: 'NewCertificate',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['NewCertificate'],
+  },
   'platformCloudRegions.list': {
     method: 'GET',
     path: '/api/v1/platform/cloud/regions',
@@ -3937,6 +3945,7 @@ export const entities = {
   'NativeRetirement': { idField: 'id' },
   'NativeRetirementPage': { fields: { 'retirements': 'NativeRetirement' } },
   'NativeSource': { idField: 'id' },
+  'NewCertificate': { fields: { 'host': 'Host' } },
   'NewHost': { fields: { 'host': 'Host' } },
   'Node': { idField: 'id' },
   'NodeList': { fields: { 'nodes': 'Node' } },

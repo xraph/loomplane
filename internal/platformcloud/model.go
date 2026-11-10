@@ -76,6 +76,20 @@ type Host struct {
 	Allotment         Allotment `json:"allotment"`
 	Generation        int64     `json:"generation"`
 	Revision          int64     `json:"revision"`
+	// ClientExpiresAt is when the client certificate the platform presents
+	// expires. It is nil until it is known: a host registered before
+	// rotation existed gets it at its next sweep.
+	ClientExpiresAt *time.Time `json:"client_expires_at,omitempty"`
+	// NextFingerprint is the certificate a rotation is moving the host to,
+	// until the host trusts it and the platform switches.
+	NextFingerprint string     `json:"next_fingerprint,omitempty"`
+	NextExpiresAt   *time.Time `json:"next_expires_at,omitempty"`
+	// PreviousFingerprint is the certificate the platform switched away
+	// from, until the host stops trusting it.
+	PreviousFingerprint string `json:"previous_fingerprint,omitempty"`
+	// CertNoticeStage is how far the expiry warnings for the current
+	// certificate have gone; see certStage.
+	CertNoticeStage int `json:"-"`
 }
 
 // SuspendReason says why an organization's platform workloads are suspended.

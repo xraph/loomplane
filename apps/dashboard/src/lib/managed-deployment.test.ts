@@ -100,6 +100,12 @@ it("saves and approves only the requested PSC source endpoint", async () => {
     vi.fn(),
     vi.fn()
   )
+  // The project it makes is a service project, whatever its icon.
+  expect(
+    calls.find(
+      (call) => call.method === "POST" && call.path.endsWith("/projects")
+    )?.body.kind
+  ).toBe("service")
   const yaml = String(
     calls.find((call) => call.path.endsWith("/manifest"))?.body.yaml
   )

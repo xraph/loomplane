@@ -23,7 +23,7 @@ func TestCatalogCommandPreparesRepositoryFreePostgresPlan(t *testing.T) {
 		case r.URL.Path == "/api/v1/projects" && r.Method == http.MethodPost:
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["name"] != "Orders" || body["repository_url"] != nil {
+			if body["name"] != "Orders" || body["repository_url"] != nil || body["kind"] != "service" {
 				t.Errorf("standalone project: %+v", body)
 			}
 			w.WriteHeader(http.StatusCreated)

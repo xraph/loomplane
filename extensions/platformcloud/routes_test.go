@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xraph/forge"
 
@@ -72,6 +73,14 @@ func (f *fakeControl) host(id string) (*platformcloud.Host, error) {
 }
 func (f *fakeControl) CheckHost(_ context.Context, _, id string) (*platformcloud.Host, error) {
 	return f.host(id)
+}
+func (f *fakeControl) RotateHostCertificate(_ context.Context, _, id string) (*platformcloud.NewCertificate, error) {
+	h, err := f.host(id)
+	if err != nil {
+		return nil, err
+	}
+	h.NextFingerprint = "cd34"
+	return &platformcloud.NewCertificate{Host: *h, ClientCertificate: testCert, ClientFingerprint: "cd34", ExpiresAt: time.Date(2028, 11, 10, 0, 0, 0, 0, time.UTC)}, nil
 }
 func (f *fakeControl) DrainHost(_ context.Context, _, id string) (*platformcloud.Host, error) {
 	h, err := f.host(id)
@@ -142,17 +151,20 @@ func (m *memSettings) SetPlatformCloud(_ context.Context, v instance.PlatformClo
 	return nil
 }
 
-type auditEvent struct{ action, user, resource, id, outcome string }
+type auditEvent struct {
+	action, user, resource, id, outcome string
+	meta                                map[string]string
+}
 
 type memAudit struct {
 	mu     sync.Mutex
 	events []auditEvent
 }
 
-func (a *memAudit) Record(_ context.Context, action, userID, resource, id, outcome string, _ map[string]string) {
+func (a *memAudit) Record(_ context.Context, action, userID, resource, id, outcome string, meta map[string]string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.events = append(a.events, auditEvent{action, userID, resource, id, outcome})
+	a.events = append(a.events, auditEvent{action, userID, resource, id, outcome, meta})
 }
 
 func (a *memAudit) take() []auditEvent {
@@ -278,6 +290,7 @@ var platformWrites = []call{
 	{http.MethodPatch, platformBase + "/regions/reg_1", `{"status":"closed"}`},
 	{http.MethodPost, platformBase + "/hosts", `{"region_id":"reg_1","endpoint":"https://10.0.0.6:9443","host_id":"hw-2","server_ca":"ca","allotment":{"vcpus":8,"memory_mib":16384,"disk_mib":100000,"vms":10}}`},
 	{http.MethodPost, platformBase + "/hosts/host_1/check", ""},
+	{http.MethodPost, platformBase + "/hosts/host_1/rotate-certificate", ""},
 	{http.MethodPost, platformBase + "/hosts/host_1/drain", ""},
 	{http.MethodPost, platformBase + "/hosts/host_1/move-all", ""},
 	{http.MethodPost, platformBase + "/hosts/host_1/retire", ""},
@@ -290,23 +303,24 @@ var platformWrites = []call{
 func TestRoutesAreRegisteredWithTheirNames(t *testing.T) {
 	rg := newRig(t)
 	want := map[string]string{
-		"platformCloudSettings.get":       "GET /api/v1/platform/cloud/settings",
-		"platformCloudSettings.set":       "PUT /api/v1/platform/cloud/settings",
-		"platformCloudRegions.list":       "GET /api/v1/platform/cloud/regions",
-		"platformCloudRegions.create":     "POST /api/v1/platform/cloud/regions",
-		"platformCloudRegions.update":     "PATCH /api/v1/platform/cloud/regions/:region",
-		"platformCloudHosts.list":         "GET /api/v1/platform/cloud/hosts",
-		"platformCloudHosts.create":       "POST /api/v1/platform/cloud/hosts",
-		"platformCloudHosts.check":        "POST /api/v1/platform/cloud/hosts/:host/check",
-		"platformCloudHosts.drain":        "POST /api/v1/platform/cloud/hosts/:host/drain",
-		"platformCloudHosts.moveAll":      "POST /api/v1/platform/cloud/hosts/:host/move-all",
-		"platformCloudHosts.retire":       "POST /api/v1/platform/cloud/hosts/:host/retire",
-		"platformCloudHosts.setAllotment": "PUT /api/v1/platform/cloud/hosts/:host/allotment",
-		"platformCloudTenants.list":       "GET /api/v1/platform/cloud/tenants",
-		"platformCloudTenants.set":        "PUT /api/v1/platform/cloud/tenants/:org",
-		"platformCloudTenants.suspend":    "POST /api/v1/platform/cloud/tenants/:org/suspend",
-		"platformCloudTenants.restore":    "POST /api/v1/platform/cloud/tenants/:org/restore",
-		"workspacePlatformCloud.get":      "GET /api/v1/platform-cloud",
+		"platformCloudSettings.get":            "GET /api/v1/platform/cloud/settings",
+		"platformCloudSettings.set":            "PUT /api/v1/platform/cloud/settings",
+		"platformCloudRegions.list":            "GET /api/v1/platform/cloud/regions",
+		"platformCloudRegions.create":          "POST /api/v1/platform/cloud/regions",
+		"platformCloudRegions.update":          "PATCH /api/v1/platform/cloud/regions/:region",
+		"platformCloudHosts.list":              "GET /api/v1/platform/cloud/hosts",
+		"platformCloudHosts.create":            "POST /api/v1/platform/cloud/hosts",
+		"platformCloudHosts.check":             "POST /api/v1/platform/cloud/hosts/:host/check",
+		"platformCloudHosts.rotateCertificate": "POST /api/v1/platform/cloud/hosts/:host/rotate-certificate",
+		"platformCloudHosts.drain":             "POST /api/v1/platform/cloud/hosts/:host/drain",
+		"platformCloudHosts.moveAll":           "POST /api/v1/platform/cloud/hosts/:host/move-all",
+		"platformCloudHosts.retire":            "POST /api/v1/platform/cloud/hosts/:host/retire",
+		"platformCloudHosts.setAllotment":      "PUT /api/v1/platform/cloud/hosts/:host/allotment",
+		"platformCloudTenants.list":            "GET /api/v1/platform/cloud/tenants",
+		"platformCloudTenants.set":             "PUT /api/v1/platform/cloud/tenants/:org",
+		"platformCloudTenants.suspend":         "POST /api/v1/platform/cloud/tenants/:org/suspend",
+		"platformCloudTenants.restore":         "POST /api/v1/platform/cloud/tenants/:org/restore",
+		"workspacePlatformCloud.get":           "GET /api/v1/platform-cloud",
 	}
 	got := map[string]string{}
 	for _, info := range rg.r.Routes() {
@@ -460,18 +474,19 @@ func TestPlatformWritesAreAudited(t *testing.T) {
 		t.Fatalf("reads audited: %+v", events)
 	}
 	want := map[string]string{
-		platformBase + "/settings":               "platform_cloud.settings.update",
-		platformBase + "/regions":                "platform_cloud.region.create",
-		platformBase + "/regions/reg_1":          "platform_cloud.region.update",
-		platformBase + "/hosts":                  "platform_cloud.host.create",
-		platformBase + "/hosts/host_1/check":     "platform_cloud.host.check",
-		platformBase + "/hosts/host_1/drain":     "platform_cloud.host.drain",
-		platformBase + "/hosts/host_1/move-all":  "platform_cloud.host.move_all",
-		platformBase + "/hosts/host_1/retire":    "platform_cloud.host.retire",
-		platformBase + "/hosts/host_1/allotment": "platform_cloud.host.allotment_update",
-		platformBase + "/tenants/org_2":          "platform_cloud.tenant.update",
-		platformBase + "/tenants/org_2/suspend":  "platform_cloud.tenant.suspend",
-		platformBase + "/tenants/org_2/restore":  "platform_cloud.tenant.restore",
+		platformBase + "/settings":                        "platform_cloud.settings.update",
+		platformBase + "/regions":                         "platform_cloud.region.create",
+		platformBase + "/regions/reg_1":                   "platform_cloud.region.update",
+		platformBase + "/hosts":                           "platform_cloud.host.create",
+		platformBase + "/hosts/host_1/check":              "platform_cloud.host.check",
+		platformBase + "/hosts/host_1/rotate-certificate": "platform_cloud.host.rotate_certificate",
+		platformBase + "/hosts/host_1/drain":              "platform_cloud.host.drain",
+		platformBase + "/hosts/host_1/move-all":           "platform_cloud.host.move_all",
+		platformBase + "/hosts/host_1/retire":             "platform_cloud.host.retire",
+		platformBase + "/hosts/host_1/allotment":          "platform_cloud.host.allotment_update",
+		platformBase + "/tenants/org_2":                   "platform_cloud.tenant.update",
+		platformBase + "/tenants/org_2/suspend":           "platform_cloud.tenant.suspend",
+		platformBase + "/tenants/org_2/restore":           "platform_cloud.tenant.restore",
 	}
 	for _, c := range platformWrites {
 		out := rg.do(t, c.method, c.path, c.body, platformOwner)
@@ -588,5 +603,42 @@ func TestMoveAllSkipsWhatHasNowhereToGo(t *testing.T) {
 	}
 	if events := rg.audit.take(); len(events) != 1 || events[0].outcome != "failure" {
 		t.Fatalf("audited %+v", events)
+	}
+}
+
+// Rotating shows the next certificate once, in the answer, and the audit
+// event names fingerprints only.
+func TestRotateCertificateShowsItOnce(t *testing.T) {
+	rg := newRig(t)
+	out := rg.do(t, http.MethodPost, platformBase+"/hosts/host_1/rotate-certificate", "", platformOwner)
+	if out.Code != http.StatusCreated {
+		t.Fatalf("rotate: %d %s", out.Code, out.Body.String())
+	}
+	var nc NewCertificate
+	if err := json.Unmarshal(out.Body.Bytes(), &nc); err != nil {
+		t.Fatal(err)
+	}
+	if nc.ClientCertificate != testCert || nc.ClientFingerprint != "cd34" || nc.Host.NextFingerprint != "cd34" || nc.ExpiresAt.IsZero() {
+		t.Fatalf("rotated = %+v", nc)
+	}
+	events := rg.audit.take()
+	if len(events) != 1 || events[0].action != "platform_cloud.host.rotate_certificate" {
+		t.Fatalf("audited %+v", events)
+	}
+	for k, v := range events[0].meta {
+		if strings.Contains(v, "BEGIN") || strings.Contains(v, "PRIVATE") {
+			t.Fatalf("audit %s carries key material: %q", k, v)
+		}
+	}
+	if events[0].meta["next_fingerprint"] != "cd34" {
+		t.Fatalf("audit meta = %v", events[0].meta)
+	}
+	list := rg.do(t, http.MethodGet, platformBase+"/hosts", "", platformOwner)
+	if strings.Contains(list.Body.String(), "BEGIN CERTIFICATE") {
+		t.Fatalf("the host list carries the certificate: %s", list.Body.String())
+	}
+	// A workspace user is told the route doesn't exist.
+	if w := rg.do(t, http.MethodPost, platformBase+"/hosts/host_1/rotate-certificate", "", workspaceUser); w.Code != http.StatusNotFound {
+		t.Fatalf("a workspace user got %d", w.Code)
 	}
 }

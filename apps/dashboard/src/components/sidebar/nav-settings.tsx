@@ -28,6 +28,9 @@ export type SettingsLink = {
   icon: ReactNode
   link: ReactElement
   isActive?: boolean
+  // badge flags something waiting on the page. It shows on the Settings
+  // button too, so it is seen with the menu closed. It may render nothing.
+  badge?: ReactNode
 }
 
 export type SettingsGroup = { label: string; items: SettingsLink[] }
@@ -60,6 +63,7 @@ export function NavSettings({
   const { isMobile } = useSidebar()
   const shown = groups.filter((g) => g.items.length > 0)
   const active = shown.some((g) => g.items.some((i) => i.isActive))
+  const badged = shown.flatMap((g) => g.items).filter((i) => i.badge)
   return (
     <SidebarGroup className={className}>
       <SidebarMenu>
@@ -76,7 +80,20 @@ export function NavSettings({
             >
               <SettingsIcon />
               <span>Settings</span>
-              <ChevronRightIcon className="ml-auto text-muted-foreground" />
+              {badged.length > 0 && (
+                <span className="ml-auto flex gap-1 font-mono text-[11.5px] tabular-nums">
+                  {badged.map((i) => (
+                    <Fragment key={i.title}>{i.badge}</Fragment>
+                  ))}
+                </span>
+              )}
+              <ChevronRightIcon
+                className={
+                  badged.length > 0
+                    ? "text-muted-foreground"
+                    : "ml-auto text-muted-foreground"
+                }
+              />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               className="w-60"
@@ -98,8 +115,19 @@ export function NavSettings({
                       >
                         {item.icon}
                         <span>{item.title}</span>
+                        {item.badge && (
+                          <span className="ml-auto font-mono text-[11.5px] tabular-nums">
+                            {item.badge}
+                          </span>
+                        )}
                         {item.isActive && (
-                          <CheckIcon className="ml-auto text-muted-foreground" />
+                          <CheckIcon
+                            className={
+                              item.badge
+                                ? "text-muted-foreground"
+                                : "ml-auto text-muted-foreground"
+                            }
+                          />
                         )}
                       </DropdownMenuItem>
                     ))}

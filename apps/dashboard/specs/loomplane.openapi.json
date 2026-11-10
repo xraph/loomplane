@@ -9113,6 +9113,44 @@
         }
       }
     },
+    "/api/v1/platform/cloud/hosts/{host}/rotate-certificate": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it",
+        "operationId": "platformCloudHosts.rotateCertificate",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The host and its next client certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewCertificate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The host is retired or still trusts the certificate the last rotation replaced"
+          }
+        }
+      }
+    },
     "/api/v1/platform/cloud/hosts/{host}/drain": {
       "post": {
         "tags": [
@@ -24143,6 +24181,13 @@
           "icon": {
             "type": "string"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "service"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -28113,6 +28158,9 @@
           "allotment": {
             "$ref": "#/components/schemas/Allotment"
           },
+          "client_expires_at": {
+            "type": "string"
+          },
           "client_fingerprint": {
             "type": "string"
           },
@@ -28129,6 +28177,15 @@
             "type": "string"
           },
           "id": {
+            "type": "string"
+          },
+          "next_expires_at": {
+            "type": "string"
+          },
+          "next_fingerprint": {
+            "type": "string"
+          },
+          "previous_fingerprint": {
             "type": "string"
           },
           "region_id": {
@@ -28249,11 +28306,18 @@
           "generation",
           "revision",
           "use",
-          "placements"
+          "placements",
+          "certificate"
         ],
         "properties": {
           "allotment": {
             "$ref": "#/components/schemas/Allotment"
+          },
+          "certificate": {
+            "$ref": "#/components/schemas/CertificateView"
+          },
+          "client_expires_at": {
+            "type": "string"
           },
           "client_fingerprint": {
             "type": "string"
@@ -28273,8 +28337,17 @@
           "id": {
             "type": "string"
           },
+          "next_expires_at": {
+            "type": "string"
+          },
+          "next_fingerprint": {
+            "type": "string"
+          },
           "placements": {
             "type": "integer"
+          },
+          "previous_fingerprint": {
+            "type": "string"
           },
           "region_id": {
             "type": "string"
@@ -33765,6 +33838,7 @@
           "description",
           "icon",
           "color",
+          "kind",
           "repositories",
           "exclusions",
           "autonomous_promotion",
@@ -33807,6 +33881,13 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "service"
+            ]
           },
           "min_staging_soak_seconds": {
             "type": "integer"
@@ -41921,6 +42002,51 @@
         "properties": {
           "alias": {
             "type": "string"
+          }
+        }
+      },
+      "CertificateView": {
+        "type": "object",
+        "required": [
+          "warning",
+          "rotation"
+        ],
+        "properties": {
+          "days_left": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "rotation": {
+            "type": "string"
+          },
+          "warning": {
+            "type": "string"
+          }
+        }
+      },
+      "NewCertificate": {
+        "type": "object",
+        "required": [
+          "host",
+          "client_certificate",
+          "client_fingerprint",
+          "expires_at"
+        ],
+        "properties": {
+          "client_certificate": {
+            "type": "string"
+          },
+          "client_fingerprint": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Host"
           }
         }
       }

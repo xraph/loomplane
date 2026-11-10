@@ -14,6 +14,7 @@ import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import {
   AllotmentDialog,
   AddHostDialog,
+  RotateCertificateDialog,
 } from "@/components/platform-cloud-host-dialogs"
 import {
   Confirm,
@@ -34,11 +35,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { hostEvidenceIssues } from "@/lib/platform-cloud"
+import {
+  expiringHosts,
+  hostCertificateNotes,
+  hostEvidenceIssues,
+} from "@/lib/platform-cloud"
 
 type Dialogue =
   | { kind: "add" }
-  | { kind: "allotment" | "retire" | "move" | "drain"; host: HostView }
+  | {
+      kind: "allotment" | "retire" | "move" | "drain" | "rotate"
+      host: HostView
+    }
 
 const workloads = (n: number) => `${n} ${n === 1 ? "workload" : "workloads"}`
 
@@ -140,6 +148,17 @@ export function PlatformCloudHosts() {
           </AlertDescription>
         </Alert>
       )}
+      {hosts.data && expiringHosts(hosts.data.hosts) > 0 && (
+        <Alert>
+          <AlertDescription>
+            {expiringHosts(hosts.data.hosts) === 1
+              ? "A host's client certificate is running out."
+              : `${expiringHosts(hosts.data.hosts)} hosts' client certificates are running out.`}{" "}
+            Rotate them before they expire: a host whose certificate has expired
+            stops answering the platform.
+          </AlertDescription>
+        </Alert>
+      )}
       {!hosts.data && hosts.status !== "error" && (
         <Skeleton className="h-24 w-full rounded-xl" />
       )}
@@ -174,6 +193,9 @@ export function PlatformCloudHosts() {
               const issues = retired
                 ? []
                 : hostEvidenceIssues(h.evidence, new Date(), evidenceMaxAgeMs)
+              const certNotes = retired
+                ? []
+                : hostCertificateNotes(h.certificate)
               return (
                 <TableRow key={h.id}>
                   <TableCell>
@@ -189,6 +211,22 @@ export function PlatformCloudHosts() {
                       <ul className="mt-1 text-xs text-destructive">
                         {issues.map((i) => (
                           <li key={i}>{i}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {certNotes.length > 0 && (
+                      <ul className="mt-1 text-xs">
+                        {certNotes.map((n) => (
+                          <li
+                            key={n.text}
+                            className={
+                              n.urgent
+                                ? "text-destructive"
+                                : "text-muted-foreground"
+                            }
+                          >
+                            {n.text}
+                          </li>
                         ))}
                       </ul>
                     )}
@@ -250,6 +288,20 @@ export function PlatformCloudHosts() {
                         <Button
                           size="sm"
                           variant="outline"
+                          aria-label={`Rotate certificate for ${h.hostId}`}
+                          disabled={h.certificate?.rotation === "retiring"}
+                          title={
+                            h.certificate?.rotation === "retiring"
+                              ? "Remove the old certificate from the host first"
+                              : undefined
+                          }
+                          onClick={() => setOpen({ kind: "rotate", host: h })}
+                        >
+                          Rotate certificate
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
                           aria-label={`Edit allotment for ${h.hostId}`}
                           onClick={() =>
                             setOpen({ kind: "allotment", host: h })
@@ -295,6 +347,12 @@ export function PlatformCloudHosts() {
         </Table>
       )}
       {open?.kind === "add" && <AddHostDialog onClose={() => setOpen(null)} />}
+      {open?.kind === "rotate" && (
+        <RotateCertificateDialog
+          host={open.host}
+          onClose={() => setOpen(null)}
+        />
+      )}
       {open?.kind === "allotment" && (
         <AllotmentDialog host={open.host} onClose={() => setOpen(null)} />
       )}

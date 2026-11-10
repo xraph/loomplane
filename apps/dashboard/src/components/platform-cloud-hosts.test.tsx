@@ -526,3 +526,109 @@ it("blocks saving an allotment with a blank field and keeps untouched memory", a
   await waitFor(() => expect(sent).toHaveLength(1))
   expect(sent[0]).toMatchObject({ vcpus: 6, memory_mib: 1536 })
 })
+
+it("shows a rotated certificate once, with the configuration to trust it", async () => {
+  const cert = "-----BEGIN CERTIFICATE-----ROTATEDCERT"
+  const fp = "b".repeat(64)
+  const posts = stub([host({ client_fingerprint: "a".repeat(64) })], (path) =>
+    path.endsWith("/hosts/h1/rotate-certificate")
+      ? Response.json(
+          {
+            client_certificate: cert,
+            client_fingerprint: fp,
+            expires_at: "2028-11-10T00:00:00Z",
+            host: host({ next_fingerprint: fp }),
+          },
+          { status: 201 }
+        )
+      : undefined
+  )
+  const user = userEvent.setup()
+  renderHosts()
+  await user.click(
+    await screen.findByRole("button", {
+      name: "Rotate certificate for host-one",
+    })
+  )
+  const dialog = await screen.findByRole("dialog")
+  await user.click(
+    within(dialog).getByRole("button", { name: "Make new certificate" })
+  )
+  expect(await within(dialog).findByDisplayValue(cert)).toBeTruthy()
+  expect(posts.some((p) => p.endsWith("/hosts/h1/rotate-certificate"))).toBe(
+    true
+  )
+  // The overlap trusts both; the final configuration keeps the old
+  // fingerprint as the runtime identity.
+  expect(dialog.textContent).toContain(`"Next": "${fp}"`)
+  expect(dialog.textContent).toContain(`"Identity": "${"a".repeat(64)}"`)
+  expect(dialog.textContent).toContain("systemctl reload")
+
+  const cached = JSON.stringify(
+    dehydrate(forgeClient, { principal: undefined })
+  )
+  expect(cached).not.toContain("ROTATEDCERT")
+
+  await user.keyboard("{Escape}")
+  expect(screen.getByRole("dialog")).toBeTruthy()
+  await user.click(within(dialog).getByRole("button", { name: "Done" }))
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  expect(document.body.innerHTML).not.toContain("ROTATEDCERT")
+})
+
+it("warns about a client certificate running out, in the row and above the table", async () => {
+  stub([
+    host({
+      certificate: {
+        warning: "urgent",
+        days_left: 12,
+        rotation: "",
+        expires_at: "2026-11-22T00:00:00Z",
+      },
+    }),
+  ])
+  renderHosts()
+  expect(
+    await screen.findByText(
+      "The client certificate expires in 12 days. Rotate it now."
+    )
+  ).toBeTruthy()
+  expect(screen.getByText(/client certificate is running out/)).toBeTruthy()
+})
+
+it("says what a rotation is waiting for and holds a new one until the old certificate goes", async () => {
+  stub([
+    host({ certificate: { warning: "", rotation: "retiring" } }),
+    host({
+      id: "h2",
+      host_id: "host-two",
+      certificate: { warning: "", rotation: "waiting" },
+    }),
+  ])
+  renderHosts()
+  expect(
+    await screen.findByText(
+      "Rotation: remove the old certificate from the host and reload its agent"
+    )
+  ).toBeTruthy()
+  expect(
+    screen.getByText(
+      "Rotation: add the new certificate to the host and reload its agent"
+    )
+  ).toBeTruthy()
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Rotate certificate for host-one",
+      }) as HTMLButtonElement
+    ).disabled
+  ).toBe(true)
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Rotate certificate for host-two",
+      }) as HTMLButtonElement
+    ).disabled
+  ).toBe(false)
+  expect(screen.queryByText(/running out/)).toBeNull()
+})

@@ -755,6 +755,13 @@ export interface CatalogproxySession {
   url: string;
 }
 
+export interface CertificateView {
+  daysLeft?: number;
+  expiresAt?: string;
+  rotation: string;
+  warning: string;
+}
+
 export interface ChallengeCredentialInputBody {
   connectionId: string;
   revision: number;
@@ -1735,6 +1742,7 @@ export interface CreateProjectInputBody {
   color?: string;
   description?: string;
   icon?: string;
+  kind?: "app" | "service";
   name: string;
   repositories?: {
   alias?: string;
@@ -2894,12 +2902,16 @@ export interface History {
 
 export interface Host {
   allotment: Allotment;
+  clientExpiresAt?: string;
   clientFingerprint: string;
   endpoint: string;
   evidence: PlatformcloudEvidence;
   generation: number;
   hostId: string;
   id: string;
+  nextExpiresAt?: string;
+  nextFingerprint?: string;
+  previousFingerprint?: string;
   regionId: string;
   revision: number;
   status: string;
@@ -2933,13 +2945,18 @@ export interface HostList {
 
 export interface HostView {
   allotment: Allotment;
+  certificate: CertificateView;
+  clientExpiresAt?: string;
   clientFingerprint: string;
   endpoint: string;
   evidence: PlatformcloudEvidence;
   generation: number;
   hostId: string;
   id: string;
+  nextExpiresAt?: string;
+  nextFingerprint?: string;
   placements: number;
+  previousFingerprint?: string;
   regionId: string;
   revision: number;
   status: string;
@@ -3757,6 +3774,13 @@ export interface Need {
   ramGib?: number;
 }
 
+export interface NewCertificate {
+  clientCertificate: string;
+  clientFingerprint: string;
+  expiresAt: string;
+  host: Host;
+}
+
 export interface NewHost {
   clientCertificate: string;
   clientFingerprint: string;
@@ -4469,6 +4493,7 @@ export interface Project {
   exclusions: Exclusion[];
   icon: string;
   id: string;
+  kind: "app" | "service";
   minStagingSoakSeconds: number;
   name: string;
   orgId: string;

@@ -6497,6 +6497,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it
+     */
+    rotateCertificate: async (host: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NewCertificate> => {
+      let __path = `/api/v1/platform/cloud/hosts/${encodeURIComponent(String(host))}/rotate-certificate`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NewCertificate"],
+      };
+
+      return this.request<types.NewCertificate>(config);
+    },
+
+    /**
      * Change how much of a host the platform may use. The host is checked again before it takes placements
      */
     setAllotment: async (host: string, body: types.AllotmentBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Host> => {

@@ -4,10 +4,15 @@ import { toast } from "sonner"
 import {
   usePlatformCloudHostsCreate,
   usePlatformCloudHostsList,
+  usePlatformCloudHostsRotateCertificate,
   usePlatformCloudHostsSetAllotment,
   usePlatformCloudRegionsList,
 } from "@/client/forge/loomplane/hooks"
-import type { HostView, NewHost } from "@/client/forge/loomplane/types"
+import type {
+  HostView,
+  NewCertificate,
+  NewHost,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CopyButton } from "@/components/keyless-setup"
 import {
@@ -361,6 +366,168 @@ export function AllotmentDialog({
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** CodeBlock is a short piece of configuration with a copy button. */
+function CodeBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs">
+        {value}
+      </pre>
+      <div>
+        <CopyButton value={value} label={label} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * RotateCertificateDialog makes the next client certificate for a host. Like
+ * a new host's, it comes back once, so it lives only in this dialog's state,
+ * and the caller mounts the dialog only while it is open.
+ */
+export function RotateCertificateDialog({
+  host,
+  onClose,
+}: {
+  host: HostView
+  onClose: () => void
+}) {
+  const rotate = useMutation(usePlatformCloudHostsRotateCertificate)
+  const invalidate = useInvalidate()
+  const [error, setError] = useState("")
+  const [made, setMade] = useState<NewCertificate | null>(null)
+  const replacing = (host.nextFingerprint ?? "") !== ""
+
+  const submit = async () => {
+    setError("")
+    try {
+      const res = (await rotate.mutateAsync({
+        path: { host: host.id },
+      })) as NewCertificate
+      setMade(res)
+      invalidate(usePlatformCloudHostsList)
+      toast.success("New certificate made")
+    } catch (err) {
+      setError(errorOf(err, "The certificate wasn't rotated."))
+    }
+  }
+
+  const old = host.clientFingerprint
+  const overlap = made
+    ? `"Platform": {\n  "Fingerprint": "${old}",\n  "Next": "${made.clientFingerprint}"\n}`
+    : ""
+  const after = made
+    ? `"Platform": {\n  "Fingerprint": "${made.clientFingerprint}",\n  "Identity": "${old}"\n}`
+    : ""
+
+  // Once made, the certificate is on screen for the only time, so Escape
+  // and outside clicks don't close it: only Done does.
+  return (
+    <Dialog
+      open
+      disablePointerDismissal={!!made}
+      onOpenChange={(o) => {
+        if (!o && !made) onClose()
+      }}
+    >
+      <DialogContent showCloseButton={!made} className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Rotate the certificate for {host.hostId}</DialogTitle>
+          <DialogDescription>
+            {made
+              ? "Install this certificate on the host now. It is shown once and can't be shown again."
+              : "Loomplane makes a new client certificate and keeps using the current one until the host trusts the new one, so the host stays connected throughout."}
+          </DialogDescription>
+        </DialogHeader>
+        {made ? (
+          <div className="flex flex-col gap-3 text-sm">
+            <Field>
+              <FieldLabel>New client fingerprint</FieldLabel>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 text-sm break-all">
+                  {made.clientFingerprint}
+                </code>
+                <CopyButton
+                  value={made.clientFingerprint}
+                  label="Copy fingerprint"
+                />
+              </div>
+            </Field>
+            <Field>
+              <FieldLabel>New client certificate</FieldLabel>
+              <Textarea
+                readOnly
+                aria-label="New client certificate"
+                value={made.clientCertificate}
+                className="font-mono text-xs"
+                rows={6}
+              />
+              <div>
+                <CopyButton
+                  value={made.clientCertificate}
+                  label="Copy certificate"
+                />
+              </div>
+            </Field>
+            <ol className="flex list-decimal flex-col gap-2 pl-5">
+              <li>
+                Add the certificate to the host&apos;s client CA file, after the
+                one already there.
+              </li>
+              <li>
+                Set the agent&apos;s platform fingerprints so it trusts both for
+                now. Keep <code>Identity</code> if it&apos;s already there.
+                <CodeBlock label="Copy configuration" value={overlap} />
+              </li>
+              <li>
+                Reload the agent with{" "}
+                <code>sudo systemctl reload loomplane-host-agent</code>. Its VMs
+                keep running.
+              </li>
+            </ol>
+            <p className="text-muted-foreground">
+              Loomplane switches to the new certificate at the host&apos;s next
+              check. After that, change the configuration to the one below, take
+              the old certificate out of the client CA file and reload again.
+              Keep an <code>Identity</code> that&apos;s already set rather than
+              this one.
+            </p>
+            <CodeBlock label="Copy final configuration" value={after} />
+            <DialogFooter>
+              <Button onClick={onClose}>Done</Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {replacing && (
+              <Alert>
+                <AlertDescription>
+                  A new certificate is already waiting for this host. Making
+                  another replaces it, so the host must trust the new one
+                  instead.
+                </AlertDescription>
+              </Alert>
+            )}
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={submit} disabled={rotate.isPending}>
+                {rotate.isPending ? "Making it" : "Make new certificate"}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )

@@ -89,7 +89,10 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any, sou
 }
 func (c *Client) Check(ctx context.Context) (Capabilities, error) {
 	var out Capabilities
-	err := c.call(ctx, http.MethodGet, "/v1/capabilities", nil, &out, nil)
+	// trust asks a platform host for the platform fingerprints it trusts.
+	// An agent that predates rotation ignores it, and an older control
+	// plane never sends it, so neither meets a field it can't decode.
+	err := c.call(ctx, http.MethodGet, "/v1/capabilities?trust=1", nil, &out, nil)
 	if err != nil {
 		return out, err
 	}

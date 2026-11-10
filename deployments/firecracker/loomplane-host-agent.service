@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/loomplane-host-agent /etc/loomplane/firecracker.json
+# A reload re-reads a platform host's platform fingerprints and client CA
+# file without stopping its VMs or its API.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 User=root

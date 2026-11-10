@@ -24,7 +24,7 @@ func TestCatalogManagedPostgresSelectsAccountBeforePlanning(t *testing.T) {
 					calls = append(calls, "project")
 					var body map[string]any
 					_ = json.NewDecoder(r.Body).Decode(&body)
-					if body["name"] != "Orders" || body["repository_url"] != nil {
+					if body["name"] != "Orders" || body["repository_url"] != nil || body["kind"] != "service" {
 						t.Errorf("not a standalone service project: %+v", body)
 					}
 					w.WriteHeader(http.StatusCreated)
