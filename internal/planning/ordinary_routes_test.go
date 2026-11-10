@@ -14,6 +14,9 @@ import (
 func TestOrdinaryComputeRetainsRoutedRuntimeBeforeConsumerPropagation(t *testing.T) {
 	doc := fmt.Sprintf("version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: %s, public: false}\n", targetA)
 	in := Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t), Connections: infrastructureConnections(t)}
+	// A direct target that runs one Cloud server: its routes follow a
+	// new instance there with no pool reservation.
+	in.CloudPlacements = map[string]CloudPlacement{"api": {CloudID: "cloud", TargetID: "t1", Provider: "server", ConnectionID: targetA, ServerID: "server_1"}}
 	first := Compute(in)
 	a := action(t, first, "service:api")
 	raw, err := json.Marshal(a.Service)
@@ -56,7 +59,7 @@ func TestOrdinaryComputeRetainsRoutedRuntimeBeforeConsumerPropagation(t *testing
 }
 
 func TestRoutedReplacementAllowsDistinctPortsOnSameDaemon(t *testing.T) {
-	old := ServiceConfig{Public: true, Endpoint: &manifest.Endpoint{HostPort: 8080}, TargetSettings: map[string]string{"docker_id": "daemon"}}
+	old := ServiceConfig{Public: true, Endpoint: &manifest.Endpoint{HostPort: 8080}, TargetSettings: map[string]string{"docker_id": "daemon"}, CloudPlacement: &CloudPlacement{CloudID: "cloud", TargetID: "t1", ServerID: "server_1"}}
 	raw, err := json.Marshal(old)
 	if err != nil {
 		t.Fatal(err)
@@ -101,5 +104,32 @@ func TestPlatformRouteRefusesANewApp(t *testing.T) {
 	want := "web would get a new App Platform app, which web.example.com doesn't follow. Remove that route, then plan again."
 	if p.routedReplacements() || len(replace.Routes) != 0 || replace.Op != Replace || len(p.problems) != 1 || p.problems[0].Code != "route-release" || p.problems[0].Message != want {
 		t.Fatalf("a replaced App Platform app: %+v %+v", replace, p.problems)
+	}
+}
+
+func TestRoutedReleasePlacementRule(t *testing.T) {
+	direct := func() *CloudPlacement { return &CloudPlacement{CloudID: "cloud", TargetID: "t1", ServerID: "server_1"} }
+	pool := func() *CloudPlacement {
+		return &CloudPlacement{CloudID: "cloud", TargetID: "t1", PoolID: "pool", ServerID: "h"}
+	}
+	noServer := direct()
+	noServer.ServerID = ""
+	for name, tt := range map[string]struct {
+		old, next *CloudPlacement
+		want      string
+	}{
+		"direct to direct":      {direct(), direct(), ""},
+		"pool to pool":          {pool(), pool(), ""},
+		"direct to pool":        {direct(), pool(), ""},
+		"pool to direct":        {pool(), direct(), "api moves from a server pool to a direct target. Remove its routes, release it, then add them again."},
+		"a target with no host": {direct(), noServer, "api's target runs no single Cloud server, so its routes can't follow a new instance."},
+		"no destination":        {direct(), nil, "api needs a reviewed server destination for its route"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := routedPlacementAllowed("api", tt.old, tt.next)
+			if got := fmt.Sprint(err); (tt.want == "" && err != nil) || (tt.want != "" && got != tt.want) {
+				t.Fatalf("got %v, want %q", err, tt.want)
+			}
+		})
 	}
 }

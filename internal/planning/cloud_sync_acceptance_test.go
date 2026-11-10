@@ -53,7 +53,7 @@ func TestRoutedReplacementPhysicalHostIdentity(t *testing.T) {
 		name, oldDaemon, newDaemon, oldServer, newServer string
 		blocked                                          bool
 	}{
-		{name: "distinct direct daemons", oldDaemon: "daemon-a", newDaemon: "daemon-b"},
+		{name: "distinct direct daemons", oldDaemon: "daemon-a", newDaemon: "daemon-b", oldServer: "server-a", newServer: "server-b"},
 		{name: "shared daemon with server aliases", oldDaemon: "daemon-a", newDaemon: "daemon-a", oldServer: "server-a", newServer: "server-b", blocked: true},
 		{name: "same server", oldServer: "server-a", newServer: "server-a", blocked: true},
 	} {

@@ -194,6 +194,9 @@ func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) err
 	if err := json.Unmarshal(b.Config, &old); err != nil {
 		return err
 	}
+	if err := routedPlacementAllowed(a.Name, old.CloudPlacement, a.Service.CloudPlacement); err != nil {
+		return err
+	}
 	if old.Catalog != nil || a.Service.Catalog != nil {
 		return fmt.Errorf("%s has local data; review data migration before retaining a separate candidate", a.Name)
 	}
@@ -203,6 +206,26 @@ func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) err
 	}
 	if sameHost && old.Public && a.Service.Public && old.Endpoint != nil && a.Service.Endpoint != nil && old.Endpoint.HostPort == a.Service.Endpoint.HostPort {
 		return fmt.Errorf("%s cannot retain two instances on host port %d; review a move to another server, a distinct port, or an ingress-only private manifest", a.Name, old.Endpoint.HostPort)
+	}
+	return nil
+}
+
+// routedPlacementAllowed refuses a routed release whose new instance has
+// nowhere its routes can follow: no reviewed server destination, a direct
+// target that runs no single Cloud server, or a move from a pool onto a
+// direct target, which holds no reservation for the overlap. A pool
+// candidate gets its reservation when the plan is created
+// (reserveRoutedPlacements); a direct target needs none.
+func routedPlacementAllowed(name string, old, next *CloudPlacement) error {
+	switch {
+	case next == nil:
+		return fmt.Errorf("%s needs a reviewed server destination for its route", name)
+	case next.PoolID != "":
+		return nil
+	case next.ServerID == "":
+		return fmt.Errorf("%s's target runs no single Cloud server, so its routes can't follow a new instance.", name)
+	case old != nil && old.PoolID != "":
+		return fmt.Errorf("%s moves from a server pool to a direct target. Remove its routes, release it, then add them again.", name)
 	}
 	return nil
 }
