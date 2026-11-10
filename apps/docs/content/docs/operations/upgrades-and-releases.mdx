@@ -9,7 +9,7 @@ The order matters: back up, stop both writers, swap the image, start the API, th
 
 1. Back up ([Backing up Loomplane](/docs/operations/backing-up-loomplane)).
 2. Stop `loomplane` and `loomplane-worker`.
-3. Replace the binaries or the image.
+3. Replace the binaries, the package or the image. [Install on Linux](/docs/operations/linux#upgrade) has the commands for a `.deb`, an `.rpm` or an archive.
 4. Start `loomplane`. It applies new migrations before it starts serving.
 5. Start `loomplane-worker`.
 
@@ -99,7 +99,15 @@ bash scripts/release-image-tags.sh v1.2.3
 
 Pin the exact version or the digest from `image.txt` in production. The moving tags are for trying things out. Wait for the workflow to finish before you announce an image. Your repository needs Actions enabled, Linux ARM64 runner access and permission to write GHCR packages. With the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets, every tag is mirrored to Docker Hub as well.
 
-GoReleaser attaches binaries to the same release. `loomctl` ships for macOS, Linux and Windows and installs with `brew install xraph/tap/loomctl` or from the `xraph` Scoop bucket. The `loomplane_*` archives carry the API, the worker, `config.yaml` and the built dashboard for Linux and macOS. Unpack one, set `LOOMPLANE_DASHBOARD_DIR=./dashboard` and run `./loomplane` from that directory. Homebrew and Scoop update only when the repository has a `HOMEBREW_TAP_GITHUB_TOKEN` secret that can push to `xraph/homebrew-tap` and `xraph/scoop-bucket`. Without it, the archives still publish.
+GoReleaser attaches binaries to the same release. `loomctl` ships for macOS, Linux and Windows and installs with `brew install xraph/tap/loomctl` or from the `xraph` Scoop bucket. The `loomplane_*` archives carry the API, the worker, `config.yaml` and the built dashboard for Linux and macOS, and the Linux ones add the systemd units. Unpack one, set `LOOMPLANE_DASHBOARD_DIR=./dashboard` and run `./loomplane` from that directory. For Linux on amd64 and arm64 it also builds a `.deb` and an `.rpm` of each, `loomctl` and `loomplane`, which [Install on Linux](/docs/operations/linux) uses. `binaries-checksums.txt` lists every one of these files, and the release workflow signs it.
+
+The units and the package scripts live in `deployments/linux`. To build the archives and packages without publishing anything:
+
+```bash
+goreleaser release --snapshot --clean --skip=docker,homebrew,scoop,publish
+```
+
+They land in `dist/`. Homebrew and Scoop update only when the repository has a `HOMEBREW_TAP_GITHUB_TOKEN` secret that can push to `xraph/homebrew-tap` and `xraph/scoop-bucket`. Without it, the archives still publish.
 
 When one part of a release fails you don't need a new version. Run the workflow again with the same version and set `target` to `cli` or `docker`. Only that part publishes, from the existing tag, into the existing release. Tick `skip-tests` if the tag already passed them:
 

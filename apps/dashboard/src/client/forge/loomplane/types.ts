@@ -1850,6 +1850,11 @@ export interface Defaults {
   region?: string;
 }
 
+export interface DeletionPreview {
+  blocked?: string;
+  removes: string[];
+}
+
 export interface Delivery {
   attempts: number;
   createdAt: string;
@@ -2544,6 +2549,18 @@ export interface Federation {
   placementGroups?: Record<string, any>;
   placements?: Record<string, any>;
   serviceExports?: Record<string, any>;
+}
+
+export interface FenceRepair {
+  daemon: string;
+  dirty: any;
+  repaired: boolean;
+  review: string;
+  running: RunningExec[];
+}
+
+export interface FenceRepairInputBody {
+  review: string;
 }
 
 export interface File {
@@ -5649,6 +5666,12 @@ export interface RouteVerification {
   dnsError?: string;
   tls: boolean;
   tlsError?: string;
+}
+
+export interface RunningExec {
+  container: string;
+  exec: string;
+  name: string;
 }
 
 export interface Runs {

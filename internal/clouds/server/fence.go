@@ -74,7 +74,7 @@ func fenceScript() (string, error) {
 	return strings.Replace(effectFenceScript, "INGRESS_IMAGES", string(images), 1), nil
 }
 
-const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,signal,tempfile,stat,re,time,struct
+const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,signal,tempfile,stat,re,time,struct,urllib.parse
 # Once the complete request has arrived, caller loss must not interrupt the
 # daemon request. An uncatchable termination leaves the durable dirty marker.
 for sig in (signal.SIGHUP,signal.SIGTERM,signal.SIGINT): signal.signal(sig,signal.SIG_IGN)
@@ -89,10 +89,17 @@ def emit(data):
 def fail():
  if responding: return
  emit(b'HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+def reply(status,value):
+ global responding
+ data=json.dumps(value).encode();responding=True
+ emit(('HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n'%(status,'OK' if status==200 else 'Conflict',len(data))).encode()+data)
 def main():
  global responding
  q=json.loads(sys.stdin.buffer.readline(65536))
- assert q['Fence']['generation']>0 and q['Fence']['operation'] and q['Daemon']
+ # The repair modes are an operator's reviewed recovery of a dirty journal.
+ # They carry no fence, and never wait for the lock.
+ repair=q['Mode'] in ('repair-check','repair')
+ assert q['Daemon'] and (repair or (q['Fence']['generation']>0 and q['Fence']['operation']))
  payload=tempfile.TemporaryFile()
  while True:
   chunk=sys.stdin.buffer.read(65536)
@@ -106,13 +113,15 @@ def main():
  assert stat.S_ISDIR(info.st_mode) and info.st_uid==os.geteuid() and stat.S_IMODE(info.st_mode)==0o700
  directory=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
  lock=os.open('daemon.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600,dir_fd=directory)
- fcntl.flock(lock,fcntl.LOCK_EX)
+ try: fcntl.flock(lock,fcntl.LOCK_EX|(fcntl.LOCK_NB if repair else 0))
+ except BlockingIOError:
+  # A live helper holds the lock until its Docker call returns.
+  reply(409,{'reason':'a Loomplane helper holds the fence lock, so a Docker change may still be in flight; try again once it finishes'});return
  # One daemon-wide journal prevents a killed helper for any operation from
  # silently leaving an in-flight Docker mutation behind during another claim.
  journal=os.open('state',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600,dir_fd=directory)
  raw=os.read(journal,16*1024*1024)
  state=json.loads(raw) if raw else {'epochs':{},'dirty':False}
- assert not state['dirty']
  def save():
   data=json.dumps(state).encode();os.lseek(journal,0,os.SEEK_SET);os.write(journal,data);os.ftruncate(journal,len(data));os.fsync(journal);os.fsync(directory)
  class UnixHTTP(http.client.HTTPConnection):
@@ -121,6 +130,47 @@ def main():
  c=UnixHTTP('docker')
  c.request('GET','/info');r=c.getresponse();identity=json.loads(r.read())
  assert r.status==200 and identity['ID']==q['Daemon']
+ if repair:
+  # Holding the lock without waiting shows no helper is alive. An exec still
+  # running in a Loomplane container may be the change that left the mark.
+  running=[]
+  c.request('GET','/containers/json?filters='+urllib.parse.quote(json.dumps({'label':['loomplane.org']})));r=c.getresponse();listed=json.loads(r.read());assert r.status==200
+  for summary in listed:
+   assert re.fullmatch(r'[a-f0-9]{64}',summary['Id'])
+   c.request('GET','/containers/'+summary['Id']+'/json');r=c.getresponse();detail=r.read()
+   if r.status==404: continue
+   assert r.status==200;detail=json.loads(detail)
+   for execution in detail.get('ExecIDs') or []:
+    assert re.fullmatch(r'[a-f0-9]{64}',execution)
+    c.request('GET','/exec/'+execution+'/json');r=c.getresponse();receipt=r.read()
+    if r.status==404: continue
+    assert r.status==200
+    if json.loads(receipt)['Running'] is not False: running.append({'container':summary['Id'],'name':detail['Name'].lstrip('/'),'exec':execution})
+  report={'daemon':q['Daemon'],'dirty':state['dirty'],'review':hashlib.sha256(raw).hexdigest(),'running':running,'repaired':False}
+  if q['Mode']=='repair':
+   # The operator reviewed this exact journal. The epochs stay, so an older
+   # attempt still can't write.
+   if json.loads(payload.read())['review']!=report['review']:
+    reply(409,{'reason':'the fence journal changed since it was reviewed; review again'});return
+   if running:
+    reply(409,{'reason':'an exec is still running in a Loomplane container; wait for it to finish, then review again'});return
+   if state['dirty']:
+    state['dirty']=False;save();report['repaired']=True
+  reply(200,report);return
+ if state['dirty']:
+  # A dirty mark that names an exec clears once Docker shows that exec
+  # finished, or no longer knows it: a finished exec is a full quiescence
+  # receipt. Docker leaves ExitCode null until it has processed the exit
+  # event, so Running alone isn't enough. A bare True is an unknown mutation
+  # and waits for an operator.
+  mark=state['dirty']
+  assert isinstance(mark,dict) and mark.get('mode')=='exec'
+  assert re.fullmatch(r'[a-f0-9]{64}',mark['exec']) and re.fullmatch(r'[a-f0-9]{64}',mark['container'])
+  c.request('GET','/exec/'+mark['exec']+'/json');r=c.getresponse();receipt=r.read()
+  if r.status!=404:
+   receipt=json.loads(receipt)
+   assert r.status==200 and receipt['ContainerID']==mark['container'] and receipt['Running'] is False and type(receipt['ExitCode']) is int
+  state['dirty']=False;save()
  op=hashlib.sha256(q['Fence']['operation'].encode()).hexdigest();generation=q['Fence']['generation'];old=state['epochs'].get(op,0)
  if q['Mode']=='advance':
   assert generation>=old
@@ -152,7 +202,9 @@ def main():
   assert owned['Config']['Labels'].get('loomplane.org') and owned['Config']['Labels'].get('loomplane.ingress')
   assert q['Fence']['operation']==owned['Config']['Labels']['loomplane.org']+'/ingress/'+owned['Config']['Labels']['loomplane.ingress']
  headers={k:','.join(v) for k,v in (q['Headers'] or {}).items()};headers['Content-Length']=str(size)
- state['dirty']=True;save()
+ # An exec start records which exec it ran, so a later takeover can tell
+ # once it has finished.
+ state['dirty']={'mode':'exec','exec':q['Path'].split('/')[2],'container':container} if streamed else True;save()
  c.request(q['Method'],q['Path'],body=payload,headers=headers);r=c.getresponse()
  assert r.chunked or r.length is not None or (streamed and r.status==200)
  responding=True

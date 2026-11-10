@@ -169,18 +169,32 @@ or set `LOOMPLANE_PAUSED_PROVIDERS=render,cloud-run`. Plans that use a paused ta
 
 ## A server that refuses every deployment
 
-If every deployment to one SSH/Docker server fails with `runtime effect fence could not establish quiescence`, that server's fence journal is stuck. Loomplane keeps a small journal on each Docker host, under `/var/tmp/loomplane-fence-<hash>/`, so a deployment can tell whether the last write to that daemon finished. While a write is in flight the journal is marked dirty, and Loomplane won't touch the daemon again until the mark clears. Builds of main from late October 2026 left it dirty after a database readiness check, and nothing clears it on its own.
+If every deployment to one SSH/Docker server fails with `runtime effect fence could not establish quiescence`, that server's fence journal is stuck. Loomplane keeps a small journal on each Docker host, under `/var/tmp/loomplane-fence-<hash>/`, so a deployment can tell whether the last write to that daemon finished. While a write is in flight the journal is marked dirty, and Loomplane won't touch the daemon again until the mark clears.
 
-Check that nothing Loomplane started is still working on that server (no deployment, route change or pool recovery in flight). Then run this on the server, as the SSH user Loomplane connects with:
+When the mark names the exec that was running, the next deployment asks Docker about that exec and clears the mark itself once it has finished. A bare mark doesn't say what was in flight, so it waits for you. Builds of main from late October 2026 left one behind after a database readiness check. Review it with the server's connection ID:
+
+```bash
+loomctl fence-repair conn_...
+```
+
+You get the dirty mark, a `review` digest and every exec still running in a Loomplane container. Nothing changes yet. To clear the mark, pass the digest back:
+
+```bash
+loomctl fence-repair conn_... --yes --review <digest>
+```
+
+The repair keeps the recorded generations, so an older attempt still can't write. It's refused while a Loomplane helper holds the journal's lock, while an exec in a Loomplane container is still running, or when the journal has changed since you reviewed it. Wait for whatever is running, then review again. Plan again once the mark is clear.
+
+A journal can also go dirty for a reason that still matters: the host rebooting or the helper being killed in the middle of a Docker change. If that's what happened, look at the containers on that server before you repair, because the change may be half done.
+
+If you can't use loomctl, you can clear the mark by hand. Check that nothing Loomplane started is still working on that server (no deployment, route change or pool recovery in flight). Then run this on the server, as the SSH user Loomplane connects with:
 
 ```bash
 D=/var/tmp/loomplane-fence-$(printf %s "$(docker info -f '{{.ID}}')" | sha256sum | cut -d' ' -f1)
 flock "$D/daemon.lock" python3 -c 'import json,sys;p=sys.argv[1]+"/state";s=json.load(open(p));s["dirty"]=False;open(p,"w").write(json.dumps(s))' "$D"
 ```
 
-It takes the same lock the deployment helper takes, clears the mark and keeps the recorded generations, so an older attempt still can't write. Plan again afterwards.
-
-A journal can also go dirty for a reason that still matters: the host rebooting or the helper being killed in the middle of a Docker change. If that's what happened, look at the containers on that server first, because the change may be half done.
+It takes the same lock the deployment helper takes, clears the mark and keeps the recorded generations. It doesn't check for running execs, so that part is on you.
 
 ## Email and deployment notifications
 

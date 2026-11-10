@@ -71,6 +71,7 @@ var workspaceChecks = map[string]int{
 	"internal/connections/service.go:Replace":                                 1,
 	"internal/connections/service.go:Delete":                                  1,
 	"internal/connections/gpus.go:GPUInventory":                               1,
+	"internal/connections/fence_repair.go:fenceRepair":                        1,
 	"internal/connections/signin.go:StartSignIn":                              1,
 	"internal/connections/signin.go:CompleteSignIn":                           1,
 	"internal/connections/keyless.go:PrepareKeyless":                          1,
@@ -225,8 +226,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 103 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection and billing's, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 104 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

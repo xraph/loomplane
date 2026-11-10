@@ -5504,6 +5504,81 @@
         }
       }
     },
+    "/api/v1/connections/{id}/fence-repair": {
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Clear a reviewed dirty mark on a server's fence journal, keeping its epochs",
+        "operationId": "connectionFenceRepair.apply",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FenceRepairInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The fence journal after the repair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FenceRepair"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/fence-repair/review": {
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Read a server's fence journal and the execs still running in Loomplane's containers, without changing anything",
+        "operationId": "connectionFenceRepair.review",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The fence journal review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FenceRepair"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}/gpus": {
       "get": {
         "tags": [
@@ -11046,6 +11121,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RouteSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/deletion": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "What deleting a project would remove from provider accounts first, and whether it would be refused. Changes nothing.",
+        "operationId": "projects.deletion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deletion preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionPreview"
                 }
               }
             }
@@ -26794,6 +26901,45 @@
           }
         }
       },
+      "FenceRepair": {
+        "type": "object",
+        "required": [
+          "daemon",
+          "dirty",
+          "review",
+          "running",
+          "repaired"
+        ],
+        "properties": {
+          "daemon": {
+            "type": "string"
+          },
+          "dirty": {},
+          "repaired": {
+            "type": "boolean"
+          },
+          "review": {
+            "type": "string"
+          },
+          "running": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningExec"
+            }
+          }
+        }
+      },
+      "FenceRepairInputBody": {
+        "type": "object",
+        "required": [
+          "review"
+        ],
+        "properties": {
+          "review": {
+            "type": "string"
+          }
+        }
+      },
       "File": {
         "type": "object",
         "required": [
@@ -33821,6 +33967,23 @@
           }
         }
       },
+      "DeletionPreview": {
+        "type": "object",
+        "required": [
+          "removes"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "string"
+          },
+          "removes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ProjectView": {
         "type": "object",
         "required": [
@@ -37707,6 +37870,25 @@
             "type": "boolean"
           },
           "tls_error": {
+            "type": "string"
+          }
+        }
+      },
+      "RunningExec": {
+        "type": "object",
+        "required": [
+          "container",
+          "name",
+          "exec"
+        ],
+        "properties": {
+          "container": {
+            "type": "string"
+          },
+          "exec": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
