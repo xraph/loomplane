@@ -47,24 +47,67 @@ func (r *Runner) validateReleaseRoutes(ctx context.Context, job *Job, current *p
 				return checkErr
 			}
 		}
-		if current == nil || job.Action.Op != planning.Replace || job.Action.Service == nil || job.Action.Service.CloudPlacement == nil || job.Action.Service.CloudPlacement.Allocation == "" {
-			return errors.New("routed release requires reviewed retained-instance capacity; plan again")
-		}
-		var source planning.ServiceConfig
-		if decodeErr := json.Unmarshal(current.Config, &source); decodeErr != nil {
-			return decodeErr
-		}
-		candidate := job.Action.Service.CloudPlacement
-		// Shared acceptance retains the preview's immutable allocation key. Its
-		// stored participant plan and reservation prove ownership during admission.
-		if (job.Plan.CloudSyncID == "" && candidate.Allocation != job.Plan.ID) || (source.CloudPlacement != nil && source.CloudPlacement.Allocation == candidate.Allocation) {
-			return errors.New("routed candidate allocation differs from its accepted plan")
+		if placementErr := routedPlacementErr(job.Plan, job.Action, current); placementErr != nil {
+			return placementErr
 		}
 		if r.routes == nil {
 			return errors.New("release route coordinator is unavailable")
 		}
 	}
 	return nil
+}
+
+// errRoutedCapacity refuses a routed release whose candidate placement
+// can't retain the serving instance as reviewed.
+var errRoutedCapacity = errors.New("routed release requires reviewed retained-instance capacity; plan again")
+
+// routedPlacementErr checks where a routed release's candidate runs
+// against its source. A pool candidate holds the overlap this plan
+// reserved. A direct one names its server and holds none, since a direct
+// target has no capacity Loomplane reserves; a release never moves a
+// routed instance from a pool onto one. The placement is a service's or a
+// component's, through reviewedPlacement.
+func routedPlacementErr(plan *planning.Plan, a planning.Action, source *planning.Binding) error {
+	candidate, _ := reviewedPlacement(a)
+	if source == nil || a.Op != planning.Replace || candidate == nil {
+		return errRoutedCapacity
+	}
+	old, err := boundPlacement(source)
+	if err != nil {
+		return err
+	}
+	if candidate.PoolID == "" {
+		if candidate.ServerID == "" || candidate.Allocation != "" || (old != nil && old.PoolID != "") {
+			return errRoutedCapacity
+		}
+		return nil
+	}
+	if candidate.Allocation == "" {
+		return errRoutedCapacity
+	}
+	// Shared acceptance retains the preview's immutable allocation key. Its
+	// stored participant plan and reservation prove ownership during admission.
+	if (plan.CloudSyncID == "" && candidate.Allocation != plan.ID) || (old != nil && old.Allocation == candidate.Allocation) {
+		return errors.New("routed candidate allocation differs from its accepted plan")
+	}
+	return nil
+}
+
+// boundPlacement is the Cloud placement a binding records: a service's,
+// or a composed resource's or component's.
+func boundPlacement(b *planning.Binding) (*planning.CloudPlacement, error) {
+	if b.Subject == planning.ResourceSubject {
+		var cfg planning.ResourceConfig
+		if err := json.Unmarshal(b.Config, &cfg); err != nil {
+			return nil, err
+		}
+		return cfg.CloudPlacement, nil
+	}
+	var cfg planning.ServiceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		return nil, err
+	}
+	return cfg.CloudPlacement, nil
 }
 
 func (r *Runner) finishRoutedRelease(ctx context.Context, d *Deployment) error {
@@ -171,7 +214,11 @@ func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan 
 			if r.routes == nil {
 				return errors.New("release route coordinator is unavailable")
 			}
-			in := cloudinfra.ReleaseRouteRequest{Key: plan.ID + "/" + a.ID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Service: a.Name, CloudID: a.Service.CloudPlacement.CloudID, InstanceID: bound.ExternalID, Routes: a.Routes, DrainSeconds: 60, Checkpoint: progress}
+			pin, _ := reviewedPlacement(a)
+			if pin == nil {
+				return errRoutedCapacity
+			}
+			in := cloudinfra.ReleaseRouteRequest{Key: plan.ID + "/" + a.ID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Service: a.Name, CloudID: pin.CloudID, InstanceID: bound.ExternalID, Routes: a.Routes, DrainSeconds: 60, Checkpoint: progress}
 			in.CleanupOnly = cleanup && plan.CloudSyncID != ""
 			if effectErr := r.markWorkloadEffects(ctx); effectErr != nil {
 				return effectErr
