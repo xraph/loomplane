@@ -121,8 +121,8 @@ func TestRoutedReleasePlacementRule(t *testing.T) {
 		"direct to direct":      {direct(), direct(), ""},
 		"pool to pool":          {pool(), pool(), ""},
 		"direct to pool":        {direct(), pool(), ""},
-		"pool to direct":        {pool(), direct(), "api moves from a server pool to a direct target. Remove its routes, release it, then add them again."},
-		"a target with no host": {direct(), noServer, "api's target runs no single Cloud server, so its routes can't follow a new instance."},
+		"pool to direct":        {pool(), direct(), "api moves from a server pool to a direct target. Remove its routes, release it, then add them again"},
+		"a target with no host": {direct(), noServer, "api's target runs no single Cloud server, so its routes can't follow a new instance"},
 		"no destination":        {direct(), nil, "api needs a reviewed server destination for its route"},
 	} {
 		t.Run(name, func(t *testing.T) {

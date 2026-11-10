@@ -482,16 +482,16 @@ func TestComponentReplacementRefusals(t *testing.T) {
 	}{
 		"local data": {func(a *Action, _ *Binding) {
 			a.Resource.Component.Component.Volume = &recipes.Volume{MountPath: "/data"}
-		}, "edge--api keeps local data, so a separate instance would start empty. Remove its routes, then plan again."},
+		}, "edge--api keeps local data, so a separate instance would start empty. Remove its routes, then plan again"},
 		"GPUs": {func(a *Action, _ *Binding) {
 			a.Resource.Component.GPU = &provider.GPUPlacement{}
-		}, "edge--api uses GPUs, and two instances would need two sets on one host. Remove its routes, then plan again."},
+		}, "edge--api uses GPUs, and two instances would need two sets on one host. Remove its routes, then plan again"},
 		"an unfinished release": {func(_ *Action, b *Binding) {
 			b.Replaced = []Binding{{ExternalID: "older"}}
 		}, "finish the current route or retained instance cleanup for edge--api before another release"},
 		"no single server": {func(a *Action, _ *Binding) {
 			a.Resource.CloudPlacement = &CloudPlacement{CloudID: "cloud_1", TargetID: "t1", ConnectionID: targetA}
-		}, "edge--api's target runs no single Cloud server, so its routes can't follow a new instance."},
+		}, "edge--api's target runs no single Cloud server, so its routes can't follow a new instance"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := component()

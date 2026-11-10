@@ -175,10 +175,10 @@ func componentReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) 
 	}
 	c := a.Resource.Component
 	if c.Component.Volume != nil || c.Component.WeightCache != nil {
-		return fmt.Errorf("%s keeps local data, so a separate instance would start empty. Remove its routes, then plan again.", a.Name)
+		return fmt.Errorf("%s keeps local data, so a separate instance would start empty. Remove its routes, then plan again", a.Name)
 	}
 	if c.GPU != nil {
-		return fmt.Errorf("%s uses GPUs, and two instances would need two sets on one host. Remove its routes, then plan again.", a.Name)
+		return fmt.Errorf("%s uses GPUs, and two instances would need two sets on one host. Remove its routes, then plan again", a.Name)
 	}
 	var old ResourceConfig
 	if err := json.Unmarshal(b.Config, &old); err != nil {
@@ -275,9 +275,9 @@ func routedPlacementAllowed(name string, old, next *CloudPlacement) error {
 	case next.PoolID != "":
 		return nil
 	case next.ServerID == "":
-		return fmt.Errorf("%s's target runs no single Cloud server, so its routes can't follow a new instance.", name)
+		return fmt.Errorf("%s's target runs no single Cloud server, so its routes can't follow a new instance", name)
 	case old != nil && old.PoolID != "":
-		return fmt.Errorf("%s moves from a server pool to a direct target. Remove its routes, release it, then add them again.", name)
+		return fmt.Errorf("%s moves from a server pool to a direct target. Remove its routes, release it, then add them again", name)
 	}
 	return nil
 }
