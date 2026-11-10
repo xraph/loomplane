@@ -450,6 +450,13 @@ func (s *Service) RetryRoute(ctx context.Context, p security.Principal, project,
 }
 
 func (s *Service) RemoveRoute(ctx context.Context, p security.Principal, project, id string, revision int64) (*RouteOperation, error) {
+	return s.removeRoute(ctx, p, project, id, revision, "")
+}
+
+// removeRoute accepts a removal of route id at revision. opID names the
+// operation, as a reviewed delete does so its retry finds it again; empty
+// makes a new one.
+func (s *Service) removeRoute(ctx context.Context, p security.Principal, project, id string, revision int64, opID string) (*RouteOperation, error) {
 	if err := s.domainScope(ctx, p, project, true); err != nil {
 		return nil, err
 	}
@@ -467,9 +474,10 @@ func (s *Service) RemoveRoute(ctx context.Context, p security.Principal, project
 	if route.Revision != revision || route.Status == "removed" {
 		return nil, ErrConflict
 	}
-	opID, err := randomID("routeop")
-	if err != nil {
-		return nil, err
+	if opID == "" {
+		if opID, err = randomID("routeop"); err != nil {
+			return nil, err
+		}
 	}
 	op := &RouteOperation{ID: opID, Route: *route, Kind: "remove", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Receipts: route.Receipts, Principal: p}
 	if checkErr := s.Store.WithOperationLock(ctx, routeLockKey(*route), func() error { return st.AcceptRoute(ctx, op) }); checkErr != nil {
