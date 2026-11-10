@@ -27,3 +27,24 @@ func TestCurrentReleaseRoutesLeavesPlatformRoutesOut(t *testing.T) {
 		t.Fatalf("release routes: %+v", got)
 	}
 }
+
+// A composed component's server route is a release's to carry, under the
+// component's action name, as a service's is.
+func TestCurrentReleaseRoutesCarriesAComponentsServerRoute(t *testing.T) {
+	store, conn := releaseDatabase(t)
+	ctx := t.Context()
+	body := `{"id":"route_gw","status":"ready","input":{"service":"gw--gateway","environment_id":"prod","hostname":"api.example.com"},"binding":{"server_id":"srv_1","binding_id":"b_gw--gateway","instance_id":"inst_gw"}}`
+	if _, err := conn.Exec(ctx, `INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body,backend) VALUES('route_gw','org','shop','prod','','srv_1','','zone','api.example.com','ready',1,$1::jsonb,'server')`, body); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.CurrentReleaseRoutes(ctx, "org", "shop", "prod", "gw--gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "route_gw" || got[0].Binding.InstanceID != "inst_gw" {
+		t.Fatalf("release routes: %+v", got)
+	}
+	if others, err := store.CurrentReleaseRoutes(ctx, "org", "shop", "prod", "gw"); err != nil || len(others) != 0 {
+		t.Fatalf("the composed resource's own routes: %+v %v", others, err)
+	}
+}

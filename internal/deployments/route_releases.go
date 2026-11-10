@@ -96,6 +96,9 @@ func routedPlacementErr(plan *planning.Plan, a planning.Action, source *planning
 // boundPlacement is the Cloud placement a binding records: a service's,
 // or a composed resource's or component's.
 func boundPlacement(b *planning.Binding) (*planning.CloudPlacement, error) {
+	if len(b.Config) == 0 {
+		return nil, nil
+	}
 	if b.Subject == planning.ResourceSubject {
 		var cfg planning.ResourceConfig
 		if err := json.Unmarshal(b.Config, &cfg); err != nil {
