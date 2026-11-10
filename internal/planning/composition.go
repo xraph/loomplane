@@ -1102,9 +1102,9 @@ func (p *planner) composedBindings() map[string]composedBinding {
 
 // componentReaddress plans again what reads a component this plan
 // replaces in a routed release, since its replacement answers at a new
-// address: a kept sibling that reads it, and its kept composed resource,
-// when one of the kind's outputs reads it, so the resource publishes the
-// new address and what uses it is readdressed. A component nothing reads
+// address: a kept sibling that reads it, and its composed resource, when
+// one of the kind's outputs reads it, so the resource publishes the new
+// address and what uses it is readdressed. A component nothing reads
 // changes nothing else. It reports whether it planned anything again.
 func (p *planner) componentReaddress() bool {
 	changed := false
@@ -1114,15 +1114,19 @@ func (p *planner) componentReaddress() bool {
 		}
 		parent, part := c.Resource.Component.Resource, c.Resource.Component.Component.Name
 		for _, other := range p.actions {
-			if other == c || other.Op != Keep || other.Resource == nil {
+			if other == c || other.Resource == nil {
 				continue
 			}
 			switch {
-			case other.Resource.Composition != nil && other.Name == parent && outputsRead(other.Resource.Composition.Outputs, part):
-				other.Op, other.Reason = Update, fmt.Sprintf("%s gets a new instance, so %s publishes its new address.", c.Name, parent)
+			// A resource already updating, as for a version bump,
+			// publishes the new address too; what uses it still needs it.
+			case other.Resource.Composition != nil && other.Name == parent && (other.Op == Keep || other.Op == Update) && !p.componentMoved[parent] && outputsRead(other.Resource.Composition.Outputs, part):
+				if other.Op == Keep {
+					other.Op, other.Reason = Update, fmt.Sprintf("%s gets a new instance, so %s publishes its new address.", c.Name, parent)
+				}
 				p.componentMoved[parent] = true
 				changed = true
-			case other.Resource.Component != nil && other.Resource.Component.Resource == parent && envReads(other.Resource.Component.Component.Env, part):
+			case other.Op == Keep && other.Resource.Component != nil && other.Resource.Component.Resource == parent && envReads(other.Resource.Component.Component.Env, part):
 				other.Op, other.Reason = Update, fmt.Sprintf("%s gets a new instance, so %s gets its new address.", c.Name, other.Name)
 				changed = true
 			}

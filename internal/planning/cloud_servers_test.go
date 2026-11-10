@@ -690,3 +690,25 @@ func TestReplacingAComponentNothingReadsKeepsItsParent(t *testing.T) {
 		}
 	}
 }
+
+// A version bump updates the composed resource anyway, and a routed
+// component it replaces still gives the services that use it a new
+// address.
+func TestAVersionBumpReaddressesWhatUsesTheResource(t *testing.T) {
+	kinds := twoReleases(t)
+	bound := boundAll(t, routedPlan(t, edgeWithWeb, kinds, nil))
+	bump := "version: 1\nresources:\n  edge: {kind: sample, version: \"2\", provider: server, target: " + targetA + "}\nservices:\n  web: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [edge]}\n"
+	r := routedPlan(t, bump, kinds, bound, "edge--api")
+	if !r.Executable {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	if api := findAction(r, "resource:edge--api"); api == nil || api.Op != Replace {
+		t.Fatalf("the api: %+v", api)
+	}
+	if edge := findAction(r, "resource:edge"); edge == nil || edge.Op != Update {
+		t.Fatalf("the resource: %+v", edge)
+	}
+	if web := findAction(r, "service:web"); web == nil || web.Op != Update || web.Reason != "edge moves, so web gets its new address." {
+		t.Fatalf("web: %+v", web)
+	}
+}

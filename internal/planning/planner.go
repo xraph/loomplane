@@ -1087,7 +1087,7 @@ func (p *planner) heldAddress(name, target, who, scope string, e EnvLink, dep *A
 	// A deployment removes what it replaces once the new one is up.
 	// What's created again was deleted outside Loomplane.
 	fate := "which this plan stops tracking"
-	if dep.Op == Replace {
+	if dep.Op == Replace || p.componentMoved[dep.Name] {
 		fate = "which the deployment removes once the new one is up"
 	}
 	p.problem(Finding{
