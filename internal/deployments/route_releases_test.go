@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -146,5 +147,70 @@ func TestFinalizeReleaseActionReadsAComponentsCloud(t *testing.T) {
 	}
 	if len(routes.releaseRoutes) != 1 || routes.releaseRoutes[0].CloudID != "cloud" || routes.releaseRoutes[0].InstanceID != "candidate" || routes.releaseRoutes[0].Service != "gw--gateway" {
 		t.Fatalf("release routes: %+v", routes.releaseRoutes)
+	}
+}
+
+// removalRoutes records the reviewed route removals a delete asks for.
+type removalRoutes struct {
+	recordedReleaseRoutes
+	log *moveLog
+	err error
+	got []cloudinfra.RouteRemovalRequest
+}
+
+func (r *removalRoutes) RemoveReviewedRoutes(_ context.Context, _ security.Principal, in cloudinfra.RouteRemovalRequest) error {
+	r.log.add("remove routes " + in.Key)
+	r.got = append(r.got, in)
+	return r.err
+}
+
+// A delete with routes removes them before its runtime, and a removal
+// that fails leaves the runtime in place.
+func TestDeleteRemovesRoutesBeforeTheRuntime(t *testing.T) {
+	for _, fail := range []error{nil, errors.New("the zone isn't verified")} {
+		log := &moveLog{}
+		exec := &placed{provider: "cloud-run", log: log}
+		del := apiMoves()
+		del.Actions[0].Op, del.Actions[0].Service, del.Actions[0].Provider = planning.Delete, nil, "cloud-run"
+		del.Actions[0].RemovesRoutes = []cloudinfra.Route{{ID: "route", Input: cloudinfra.RouteInput{Hostname: "api.example.com"}}}
+		r, store, _, _ := moveRunner(t, del, onCloudRun(), map[string]Executor{"cloud-run": exec})
+		routes := &removalRoutes{log: log, err: fail}
+		r.routes = routes
+		id, err := runAll(t, r, del)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, _ := store.GetDeployment(t.Context(), "org_1", id)
+		key := del.ID + "/service:api"
+		if fail == nil {
+			if d.Status != StatusSucceeded || !slices.Equal(log.list(), []string{"remove routes " + key, "remove cloud-run ext-old"}) {
+				t.Fatalf("deleting: %s %s, events %v", d.Status, d.Error, log.list())
+			}
+			if got := routes.got[0]; got.ProjectID != "proj_1" || got.EnvironmentID != "env_1" || got.Service != "api" || len(got.Routes) != 1 {
+				t.Fatalf("removal request %+v", got)
+			}
+			continue
+		}
+		if d.Status != StatusFailed || !strings.Contains(d.Error, "remove the routes of api: the zone isn't verified") || !slices.Equal(log.list(), []string{"remove routes " + key}) {
+			t.Fatalf("a failed removal: %s %q, events %v", d.Status, d.Error, log.list())
+		}
+	}
+}
+
+// A delete with routes doesn't run without something to remove them.
+func TestDeleteWithoutRemovalCoordinatorFails(t *testing.T) {
+	log := &moveLog{}
+	exec := &placed{provider: "cloud-run", log: log}
+	del := apiMoves()
+	del.Actions[0].Op, del.Actions[0].Service, del.Actions[0].Provider = planning.Delete, nil, "cloud-run"
+	del.Actions[0].RemovesRoutes = []cloudinfra.Route{{ID: "route"}}
+	r, store, _, _ := moveRunner(t, del, onCloudRun(), map[string]Executor{"cloud-run": exec})
+	r.routes = &recordedReleaseRoutes{}
+	id, err := runAll(t, r, del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusFailed || !strings.Contains(d.Error, "route removal coordinator is unavailable") || len(log.list()) != 0 {
+		t.Fatalf("without a coordinator: %s %q, events %v", d.Status, d.Error, log.list())
 	}
 }

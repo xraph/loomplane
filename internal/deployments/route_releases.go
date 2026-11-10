@@ -110,6 +110,31 @@ func boundPlacement(b *planning.Binding) (*planning.CloudPlacement, error) {
 	return cfg.CloudPlacement, nil
 }
 
+type routeRemovals interface {
+	RemoveReviewedRoutes(context.Context, security.Principal, cloudinfra.RouteRemovalRequest) error
+}
+
+var _ routeRemovals = (*cloudinfra.Service)(nil)
+
+// removeDeletedRoutes removes the routes a reviewed delete names before
+// its runtime goes. A removal that can't finish fails the step, so the
+// runtime stays and nothing is forgotten; a retry resumes it.
+func (r *Runner) removeDeletedRoutes(ctx context.Context, job *Job, plan *planning.Plan, a planning.Action) error {
+	if len(a.RemovesRoutes) == 0 {
+		return nil
+	}
+	coordinator, ok := r.routes.(routeRemovals)
+	if !ok {
+		return errors.New("route removal coordinator is unavailable")
+	}
+	d := job.Deployment
+	in := cloudinfra.RouteRemovalRequest{Key: plan.ID + "/" + a.ID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Service: a.Name, Routes: a.RemovesRoutes}
+	if err := coordinator.RemoveReviewedRoutes(ctx, principal(job), in); err != nil {
+		return fmt.Errorf("remove the routes of %s: %w", a.Name, err)
+	}
+	return nil
+}
+
 func (r *Runner) finishRoutedRelease(ctx context.Context, d *Deployment) error {
 	plan, err := r.plans.GetPlan(ctx, d.OrgID, d.PlanID)
 	if err != nil {

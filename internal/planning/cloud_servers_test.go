@@ -560,10 +560,10 @@ func kubernetesRoutedPlan(t *testing.T, kinds *recipes.Registry, bindings []*Bin
 	})
 }
 
-// Deleting something with domain routes is refused at plan time, before
-// any step of the teardown runs: a component, the composed resource it's
-// part of, and a service.
-func TestDeletingRoutedWorkloadsIsRefused(t *testing.T) {
+// Deleting something with domain routes plans, and the delete removes
+// its routes first, which the plan says by name: a component, the
+// composed resource it's part of, and a service.
+func TestDeletingRoutedWorkloadsRemovesTheirRoutes(t *testing.T) {
 	kinds := recipestest.Registry(t)
 	for _, tt := range []struct {
 		name, doc, routed, path string
@@ -592,17 +592,38 @@ func TestDeletingRoutedWorkloadsIsRefused(t *testing.T) {
 			}
 			r := routedPlan(t, tt.doc, kinds, bound, tt.routed)
 			deleted := findAction(r, string(tt.subject)+":"+tt.routed)
-			if deleted == nil || deleted.Op != Delete {
-				t.Fatalf("%s isn't deleted: %+v", tt.routed, deleted)
+			if deleted == nil || deleted.Op != Delete || len(deleted.Routes) != 0 || len(deleted.RemovesRoutes) != 1 || deleted.RemovesRoutes[0].ID != "route_0" {
+				t.Fatalf("%s isn't deleted with its route: %+v", tt.routed, deleted)
 			}
-			refusals := routeRefusals(r)
-			if len(refusals) != 1 || r.Executable {
+			if refusals := routeRefusals(r); len(refusals) != 0 || !r.Executable {
 				t.Fatalf("problems %+v", r.Problems)
 			}
-			if f := refusals[0]; f.Subject != tt.subject || f.Name != tt.routed || f.Path != tt.path || f.Message != tt.routed+" has domain routes. Remove them before deleting it." {
-				t.Fatalf("refusal %+v", f)
+			var removals []Finding
+			for _, w := range r.Warnings {
+				if w.Code == "route-removal" {
+					removals = append(removals, w)
+				}
+			}
+			want := "Deleting " + tt.routed + " removes " + tt.routed + ".example.com and its DNS record."
+			if len(removals) != 1 || removals[0].Subject != tt.subject || removals[0].Name != tt.routed || removals[0].Path != tt.path || removals[0].Message != want {
+				t.Fatalf("route-removal warnings %+v, want %q", removals, want)
 			}
 		})
+	}
+}
+
+func TestRouteRemovalNamesEveryHostname(t *testing.T) {
+	for n, want := range map[int]string{
+		2: "Deleting web removes a.example.com and b.example.com and their DNS records.",
+		3: "Deleting web removes a.example.com, b.example.com and c.example.com and their DNS records.",
+	} {
+		var routes []cloudinfra.Route
+		for _, host := range []string{"a", "b", "c"}[:n] {
+			routes = append(routes, cloudinfra.Route{Input: cloudinfra.RouteInput{Hostname: host + ".example.com"}})
+		}
+		if got := routeRemovalMessage("web", routes); got != want {
+			t.Errorf("%d routes: %q, want %q", n, got, want)
+		}
 	}
 }
 

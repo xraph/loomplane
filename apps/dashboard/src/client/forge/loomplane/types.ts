@@ -59,6 +59,7 @@ export interface Action {
   provider: string;
   reason: string;
   region?: string;
+  removesRoutes?: CloudinfraRoute[];
   resource?: ResourceConfig;
   routes?: CloudinfraRoute[];
   service?: ServiceConfig;

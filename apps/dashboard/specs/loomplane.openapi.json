@@ -18284,6 +18284,12 @@
           "region": {
             "type": "string"
           },
+          "removes_routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudinfraRoute"
+            }
+          },
           "resource": {
             "$ref": "#/components/schemas/ResourceConfig"
           },

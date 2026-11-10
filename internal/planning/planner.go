@@ -226,7 +226,7 @@ func Compute(in Input) *Result {
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
-	p.refuseRoutedDeletes()
+	p.planRouteRemovals()
 	p.stillReplaced()
 	r := p.finish()
 	planRelease(in, r)

@@ -114,6 +114,9 @@ type Action struct {
 	Compensation     *CloudCompensation `json:"compensation,omitempty"`
 
 	Routes []cloudinfra.Route `json:"routes,omitempty"`
+	// RemovesRoutes are the domain routes a delete removes before its
+	// runtime goes, as reviewed. Routes is a release's handoff instead.
+	RemovesRoutes []cloudinfra.Route `json:"removes_routes,omitempty"`
 
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
 	AdoptCloudPlacement bool           `json:"adopt_cloud_placement,omitempty"`

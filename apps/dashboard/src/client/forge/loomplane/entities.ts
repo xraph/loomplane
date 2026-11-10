@@ -3,7 +3,7 @@ import type { EntityMeta } from './ops';
 export const entities = {
   'APIKey': { idField: 'id' },
   'APIKeyList': { fields: { 'keys': 'APIKey' } },
-  'Action': { fields: { 'compensation': 'CloudCompensation', 'routes': 'CloudinfraRoute' } },
+  'Action': { fields: { 'compensation': 'CloudCompensation', 'removesRoutes': 'CloudinfraRoute', 'routes': 'CloudinfraRoute' } },
   'Analysis': { idField: 'id' },
   'AnalysisGraph': { idField: 'id' },
   'AnalysisList': { fields: { 'analyses': 'Analysis' } },

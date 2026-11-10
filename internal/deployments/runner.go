@@ -1131,6 +1131,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	rc := readReplaceCheckpoint(resume)
 	job.Resume = rc.Apply
 	if deleting {
+		if routeErr := r.removeDeletedRoutes(ctx, job, plan, a); routeErr != nil {
+			return routeErr
+		}
 		if derr := r.deleteBound(ctx, job, exec, current, unreachable, step, rc, heartbeat); derr != nil {
 			return derr
 		}

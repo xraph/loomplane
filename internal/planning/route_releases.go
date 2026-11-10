@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -186,17 +187,26 @@ func componentReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) 
 	return routedPlacementAllowed(a.Name, old.CloudPlacement, a.Resource.CloudPlacement)
 }
 
-// refuseRoutedDeletes refuses deleting anything a domain route points at:
-// a service, a composed resource's component, or the composed resource
-// it's part of, whose components are deleted with it. Apply would refuse
-// it only once earlier delete steps had already run.
-func (p *planner) refuseRoutedDeletes() {
+// planRouteRemovals gives each delete of something a domain route points
+// at those routes to remove first, and says so by hostname: a service, or
+// a composed resource's component, deleted alone or with the resource it's
+// part of. The runtime can't go while a route names it
+// (ValidateRuntimeRemoval), so the delete removes them before it.
+func (p *planner) planRouteRemovals() {
 	if len(p.in.Routes) == 0 {
 		return
 	}
 	composed := p.composedBindings()
 	for _, a := range p.actions {
-		if a.Op != Delete || !slices.ContainsFunc(p.in.Routes, func(r cloudinfra.Route) bool { return r.Input.Service == a.Name }) {
+		if a.Op != Delete {
+			continue
+		}
+		for _, r := range p.in.Routes {
+			if r.Input.Service == a.Name {
+				a.RemovesRoutes = append(a.RemovesRoutes, r)
+			}
+		}
+		if len(a.RemovesRoutes) == 0 {
 			continue
 		}
 		path := "services." + a.Name
@@ -206,8 +216,20 @@ func (p *planner) refuseRoutedDeletes() {
 				path = "resources." + of.parent
 			}
 		}
-		p.problem(Finding{Code: "route-release", Subject: a.Subject, Name: a.Name, Path: path, Message: a.Name + " has domain routes. Remove them before deleting it."})
+		p.warn(Finding{Code: "route-removal", Subject: a.Subject, Name: a.Name, Path: path, Message: routeRemovalMessage(a.Name, a.RemovesRoutes)})
 	}
+}
+
+// routeRemovalMessage says which hostnames deleting name removes.
+func routeRemovalMessage(name string, routes []cloudinfra.Route) string {
+	hosts := make([]string, 0, len(routes))
+	for _, r := range routes {
+		hosts = append(hosts, r.Input.Hostname)
+	}
+	if len(hosts) == 1 {
+		return fmt.Sprintf("Deleting %s removes %s and its DNS record.", name, hosts[0])
+	}
+	return fmt.Sprintf("Deleting %s removes %s and %s and their DNS records.", name, strings.Join(hosts[:len(hosts)-1], ", "), hosts[len(hosts)-1])
 }
 
 func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) error {
