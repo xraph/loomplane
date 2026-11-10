@@ -94,7 +94,7 @@ func (e *hostEnv) trust(t *testing.T, nh *NewHost) {
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
 	e.server.TLS.ClientCAs = pool
-	e.server.Config.Handler = fc.Handler{Host: &fc.Host{Driver: e.driver, Limits: e.driver.caps.Limits}, Platform: nh.ClientFingerprint}
+	e.server.Config.Handler = fc.Handler{Host: &fc.Host{Driver: e.driver, Limits: e.driver.caps.Limits}, Platform: fc.NewPlatformTrust(nh.ClientFingerprint)}
 }
 
 func agentLimits() fc.Limits {

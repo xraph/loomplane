@@ -28,6 +28,7 @@ type control interface {
 	HostPlacements(ctx context.Context, hostID string) ([]platformcloud.Placement, error)
 	AddHost(ctx context.Context, actor string, in platformcloud.HostInput) (*platformcloud.NewHost, error)
 	CheckHost(ctx context.Context, actor, hostID string) (*platformcloud.Host, error)
+	RotateHostCertificate(ctx context.Context, actor, hostID string) (*platformcloud.NewCertificate, error)
 	DrainHost(ctx context.Context, actor, hostID string) (*platformcloud.Host, error)
 	RetireHost(ctx context.Context, actor, hostID string) error
 	SetAllotment(ctx context.Context, actor, hostID string, a platformcloud.Allotment) (*platformcloud.Host, error)
@@ -199,6 +200,15 @@ type NewHost struct {
 	ClientFingerprint string             `json:"client_fingerprint"`
 }
 
+// NewCertificate is the next client certificate for a host. Like a new
+// host's, it is shown here once and never again; its key stays in Vault.
+type NewCertificate struct {
+	Host              platformcloud.Host `json:"host"`
+	ClientCertificate string             `json:"client_certificate"`
+	ClientFingerprint string             `json:"client_fingerprint"`
+	ExpiresAt         time.Time          `json:"expires_at"`
+}
+
 // MoveAll is a host that is draining and what became of its services:
 // how many moved to another host, which were skipped because no other host
 // had room (they run where they were), and which failed to start elsewhere
@@ -285,6 +295,12 @@ func (r *routes) mount(router forge.Router, guard identity.Guard) error {
 			forge.WithName("platformCloudHosts.check"),
 			forge.WithSummary("Check a host now and record its evidence"),
 			forge.WithResponseSchema(http.StatusOK, "The host", platformcloud.Host{}),
+		}},
+		{http.MethodPost, "/hosts/:host/rotate-certificate", r.rotateCertificate, []forge.RouteOption{
+			forge.WithName("platformCloudHosts.rotateCertificate"),
+			forge.WithSummary("Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it"),
+			forge.WithResponseSchema(http.StatusCreated, "The host and its next client certificate", NewCertificate{}),
+			forge.WithResponseSchema(http.StatusConflict, "The host is retired or still trusts the certificate the last rotation replaced", nil),
 		}},
 		{http.MethodPost, "/hosts/:host/drain", r.drainHost, []forge.RouteOption{
 			forge.WithName("platformCloudHosts.drain"),
@@ -532,8 +548,23 @@ func (r *routes) hostAction(c forge.Context, verb string, act func(ctx context.C
 	if err != nil {
 		return fail(ctx, err)
 	}
-	r.audit.Record(ctx, "platform_cloud.host."+verb, actor, "platform_cloud_host", h.ID, outcomeSuccess, map[string]string{"status": h.Status})
+	r.audit.Record(ctx, "platform_cloud.host."+verb, actor, "platform_cloud_host", h.ID, outcomeSuccess,
+		map[string]string{"status": h.Status, "client_fingerprint": h.ClientFingerprint})
 	return c.JSON(http.StatusOK, h)
+}
+
+// rotateCertificate makes the next client certificate for a host and shows
+// it once.
+func (r *routes) rotateCertificate(c forge.Context) error {
+	ctx := c.Request().Context()
+	actor, hostID := platformUserID(c), c.Param("host")
+	nc, err := r.svc.RotateHostCertificate(ctx, actor, hostID)
+	if err != nil {
+		return fail(ctx, err)
+	}
+	r.audit.Record(ctx, "platform_cloud.host.rotate_certificate", actor, "platform_cloud_host", nc.Host.ID, outcomeSuccess,
+		map[string]string{"host_id": nc.Host.HostID, "client_fingerprint": nc.Host.ClientFingerprint, "next_fingerprint": nc.ClientFingerprint})
+	return c.JSON(http.StatusCreated, NewCertificate{Host: nc.Host, ClientCertificate: nc.ClientCertificate, ClientFingerprint: nc.ClientFingerprint, ExpiresAt: nc.ExpiresAt})
 }
 
 func (r *routes) checkHost(c forge.Context) error { return r.hostAction(c, "check", r.svc.CheckHost) }

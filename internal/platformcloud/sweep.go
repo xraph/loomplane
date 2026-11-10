@@ -43,6 +43,7 @@ func (s *Service) Sync(ctx context.Context) error {
 	return errors.Join(
 		s.SyncProjections(ctx),
 		s.RecheckHosts(ctx),
+		s.WarnExpiringCertificates(ctx),
 		s.SweepStalledReplacements(ctx),
 		s.SweepLeftovers(ctx),
 		s.SweepHostnames(ctx),

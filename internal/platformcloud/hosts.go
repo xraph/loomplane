@@ -88,11 +88,11 @@ func (s *Service) AddHost(ctx context.Context, _ /* actor */ string, in HostInpu
 	if !slices.ContainsFunc(regions, func(r Region) bool { return r.ID == in.RegionID }) {
 		return nil, fmt.Errorf("%w: region", ErrNotFound)
 	}
-	certPEM, keyPEM, fingerprint, err := newClientIdentity(s.now())
+	id, err := newClientIdentity(s.now())
 	if err != nil {
 		return nil, err
 	}
-	raw, err := json.Marshal(fc.Credential{CA: in.ServerCA, Certificate: certPEM, Key: keyPEM})
+	raw, err := json.Marshal(fc.Credential{CA: in.ServerCA, Certificate: id.CertPEM, Key: id.KeyPEM})
 	if err != nil {
 		return nil, err
 	}
@@ -104,8 +104,9 @@ func (s *Service) AddHost(ctx context.Context, _ /* actor */ string, in HostInpu
 	}
 	probe.Close()
 
+	expires := id.NotAfter.UTC()
 	h := &Host{ID: newID("host_"), RegionID: in.RegionID, Endpoint: in.Endpoint, HostID: in.HostID, Status: hostPending,
-		ClientFingerprint: fingerprint, Allotment: in.Allotment}
+		ClientFingerprint: id.Fingerprint, ClientExpiresAt: &expires, Allotment: in.Allotment}
 	if err = vault.Put(ctx, hostSecretKey(h.ID), raw); err != nil {
 		return nil, fmt.Errorf("platformcloud: store host credential: %w", err)
 	}
@@ -113,20 +114,26 @@ func (s *Service) AddHost(ctx context.Context, _ /* actor */ string, in HostInpu
 		_ = vault.Delete(ctx, hostSecretKey(h.ID)) //nolint:errcheck // the insert error is the one to report
 		return nil, err
 	}
-	return &NewHost{Host: *h, ClientCertificate: certPEM, ClientFingerprint: fingerprint}, nil
+	return &NewHost{Host: *h, ClientCertificate: id.CertPEM, ClientFingerprint: id.Fingerprint}, nil
+}
+
+// clientIdentity is a client key and the self-signed certificate for it.
+type clientIdentity struct {
+	CertPEM, KeyPEM, Fingerprint string
+	NotAfter                     time.Time
 }
 
 // newClientIdentity makes an ECDSA P-256 key and a self-signed client
 // certificate for it. The fingerprint is the hex SHA-256 of the
 // certificate's DER, which is how the host agent recognizes the platform.
-func newClientIdentity(now time.Time) (certPEM, keyPEM, fingerprint string, err error) {
+func newClientIdentity(now time.Time) (clientIdentity, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return "", "", "", err
+		return clientIdentity{}, err
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
-		return "", "", "", err
+		return clientIdentity{}, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
@@ -138,16 +145,20 @@ func newClientIdentity(now time.Time) (certPEM, keyPEM, fingerprint string, err 
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
-		return "", "", "", err
+		return clientIdentity{}, err
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return "", "", "", err
+		return clientIdentity{}, err
 	}
 	sum := sha256.Sum256(der)
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
-		string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
-		hex.EncodeToString(sum[:]), nil
+	return clientIdentity{
+		CertPEM:     string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		KeyPEM:      string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
+		Fingerprint: hex.EncodeToString(sum[:]),
+		// The certificate keeps whole seconds.
+		NotAfter: tmpl.NotAfter.Truncate(time.Second),
+	}, nil
 }
 
 // client returns an agent client for the host, built from its stored
@@ -180,7 +191,7 @@ func (s *Service) clientFor(ctx context.Context, h *Host) (*fc.Client, error) {
 // ready only if it reports its own ID, passes the platform policy and
 // offers at least what the allotment takes. Otherwise it is pending, with the
 // reason in its evidence. A draining host keeps its status.
-func (s *Service) CheckHost(ctx context.Context, _ /* actor */, hostID string) (*Host, error) {
+func (s *Service) CheckHost(ctx context.Context, actor, hostID string) (*Host, error) {
 	h, err := s.store.GetHost(ctx, hostID)
 	if err != nil {
 		return nil, err
@@ -223,8 +234,20 @@ func (s *Service) CheckHost(ctx context.Context, _ /* actor */, hostID string) (
 	default:
 		h.Status = hostPending
 	}
-	if checkErr := s.store.UpdateHost(ctx, h); checkErr != nil {
-		return nil, checkErr
+	if updateErr := s.store.UpdateHost(ctx, h); updateErr != nil {
+		return nil, updateErr
+	}
+	var trusted []string
+	if checkErr == nil {
+		trusted = reportedTrust(caps, h.ClientFingerprint)
+	}
+	pending := h.NextFingerprint
+	h = s.advanceRotation(ctx, h, trusted)
+	// A host whose owner swapped the old certificate straight out fails the
+	// check made with it, then answers the next one. Once switched, check
+	// it again with what is now its certificate.
+	if checkErr != nil && pending != "" && h.ClientFingerprint == pending {
+		return s.CheckHost(ctx, actor, hostID)
 	}
 	return h, nil
 }
@@ -301,7 +324,7 @@ func (s *Service) RetireHost(ctx context.Context, _ /* actor */, hostID string) 
 	if err != nil {
 		return err
 	}
-	return vault.Delete(ctx, hostSecretKey(hostID))
+	return errors.Join(vault.Delete(ctx, hostSecretKey(hostID)), vault.Delete(ctx, nextSecretKey(hostID)), vault.Delete(ctx, previousSecretKey(hostID)))
 }
 
 // SetAllotment changes how much of the host the platform may use. The new
