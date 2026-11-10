@@ -1,8 +1,10 @@
+import { ClientProvider } from "@forge-go/client-react"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { forgeClient } from "@/client/runtime"
 import { describeAgent } from "@/lib/account"
 import { AccountProfile } from "./account-profile"
 import { AccountSecurity } from "./account-security"
@@ -284,5 +286,312 @@ describe("security", () => {
       .getByText("Email and password")
       .closest("li")!
     expect(within(password).queryByRole("button")).toBeNull()
+  })
+})
+
+// Two-step's status comes from Loomplane's API, through the generated
+// client; everything else on the tab goes through authsome's SDK.
+function serveTwoStep(state: { enabled: boolean }) {
+  const reads = vi.fn()
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname
+    if (path === "/api/v1/account/two-step") {
+      reads()
+      return new Response(JSON.stringify({ enabled: state.enabled }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+    return new Response("{}", { status: 404 })
+  })
+  return reads
+}
+
+const security = () =>
+  render(
+    <ClientProvider client={forgeClient}>
+      <AccountSecurity />
+    </ClientProvider>
+  )
+
+describe("two-step verification", () => {
+  beforeEach(() => {
+    auth.config = { mfa: { enabled: true, methods: ["totp"] } }
+    auth.client.enrollMFA = vi.fn(async () => ({
+      id: "mfa_1",
+      method: "totp",
+      secret: "JBSWY3DPEHPK3PXP",
+      otpauth_url:
+        "otpauth://totp/Loomplane:rex@xraph.com?secret=JBSWY3DPEHPK3PXP&issuer=Loomplane",
+    }))
+    auth.client.verifyMFA = vi.fn(async () => ({
+      verified: true,
+      method: "totp",
+      recovery_codes: ["aaaa-1111", "bbbb-2222"],
+    }))
+    auth.client.disableMFA = vi.fn(async () => ({ status: "mfa disabled" }))
+    auth.client.regenerateMFARecoveryCodes = vi.fn(async () => ({
+      codes: ["cccc-3333", "dddd-4444"],
+    }))
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    forgeClient.clear()
+  })
+
+  it("isn't offered when the instance has it off", async () => {
+    auth.config = {}
+    serveTwoStep({ enabled: false })
+    security()
+    await screen.findByRole("button", { name: "Change password" })
+    expect(
+      screen.queryByRole("region", { name: "Two-step verification" })
+    ).toBeNull()
+  })
+
+  it("sets it up with a code, then shows the recovery codes once", async () => {
+    const state = { enabled: false }
+    const reads = serveTwoStep(state)
+    security()
+    const section = await screen.findByRole("region", {
+      name: "Two-step verification",
+    })
+    expect(await within(section).findByText("Off")).toBeInTheDocument()
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Set up" })
+    )
+
+    const dialog = await screen.findByRole("dialog")
+    expect(
+      await within(dialog).findByText("JBSWY3DPEHPK3PXP")
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole("img", {
+        name: "QR code for your authenticator app",
+      })
+    ).toBeInTheDocument()
+    await userEvent.type(
+      within(dialog).getByLabelText("Code from the app"),
+      "123456"
+    )
+    state.enabled = true
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Verify" })
+    )
+    expect(auth.client.verifyMFA).toHaveBeenCalledWith({ code: "123456" })
+
+    expect(await within(dialog).findByText("aaaa-1111")).toBeInTheDocument()
+    const finish = within(dialog).getByRole("button", {
+      name: "Turn on two-step verification",
+    })
+    expect(finish).toBeDisabled()
+    await userEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "I've saved these somewhere safe",
+      })
+    )
+    await userEvent.click(finish)
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(await within(section).findByText("On")).toBeInTheDocument()
+    expect(reads.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  it("won't send a code that isn't six digits", async () => {
+    serveTwoStep({ enabled: false })
+    security()
+    const section = await screen.findByRole("region", {
+      name: "Two-step verification",
+    })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Set up" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.type(
+      await within(dialog).findByLabelText("Code from the app"),
+      "12ab"
+    )
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Verify" })
+    )
+    expect(
+      await within(dialog).findByText("Enter the 6-digit code your app shows.")
+    ).toBeInTheDocument()
+    expect(auth.client.verifyMFA).not.toHaveBeenCalled()
+  })
+
+  it("asks you to sign in again when the session is too old to set it up", async () => {
+    auth.client.enrollMFA = vi.fn(async () => {
+      throw new Error(
+        "recent sign-in required: sign in again to change your factors"
+      )
+    })
+    serveTwoStep({ enabled: false })
+    security()
+    const section = await screen.findByRole("region", {
+      name: "Two-step verification",
+    })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Set up" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(
+      await within(dialog).findByText(
+        "For your safety, this needs a fresh sign-in. Sign out, sign back in, then set it up within five minutes."
+      )
+    ).toBeInTheDocument()
+  })
+
+  it("turns it off with a code", async () => {
+    const state = { enabled: true }
+    serveTwoStep(state)
+    security()
+    const section = await screen.findByRole("region", {
+      name: "Two-step verification",
+    })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Turn off" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.type(
+      within(dialog).getByLabelText("Code from the app or a recovery code"),
+      "654321"
+    )
+    state.enabled = false
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Turn off two-step" })
+    )
+    expect(auth.client.disableMFA).toHaveBeenCalledWith({ code: "654321" }, "")
+    expect(await within(section).findByText("Off")).toBeInTheDocument()
+  })
+
+  it("makes new recovery codes and shows them once", async () => {
+    serveTwoStep({ enabled: true })
+    security()
+    const section = await screen.findByRole("region", {
+      name: "Two-step verification",
+    })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Make new ones" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Make new codes" })
+    )
+    expect(auth.client.regenerateMFARecoveryCodes).toHaveBeenCalledWith("")
+    expect(await within(dialog).findByText("cccc-3333")).toBeInTheDocument()
+  })
+})
+
+describe("passkeys", () => {
+  const create = vi.fn()
+  beforeEach(() => {
+    auth.config = { passkey: { enabled: true } }
+    auth.client.listPasskeys = vi.fn(async () => ({
+      credentials: [
+        {
+          id: "cred_1",
+          display_name: "MacBook",
+          created_at: "2026-10-01T10:00:00Z",
+          transport: ["internal"],
+        },
+      ],
+    }))
+    auth.client.deletePasskey = vi.fn(async () => ({ status: "deleted" }))
+    auth.client.passkeyRegisterBegin = vi.fn(async () => ({
+      options: {
+        publicKey: {
+          challenge: "AQID",
+          rp: { id: "localhost", name: "Loomplane" },
+          user: { id: "dXNy", name: "rex@xraph.com", displayName: "Rex" },
+          pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        },
+      },
+    }))
+    auth.client.passkeyRegisterFinish = vi.fn(async () => ({
+      id: "cred_2",
+      display_name: "Work laptop",
+      status: "registered",
+    }))
+    const buf = new Uint8Array([1, 2, 3]).buffer
+    create.mockResolvedValue({
+      id: "AQID",
+      rawId: buf,
+      type: "public-key",
+      response: { clientDataJSON: buf, attestationObject: buf },
+      getClientExtensionResults: () => ({}),
+    })
+    vi.stubGlobal("PublicKeyCredential", function PublicKeyCredential() {})
+    Object.defineProperty(navigator, "credentials", {
+      configurable: true,
+      value: { create },
+    })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    forgeClient.clear()
+  })
+
+  it("lists them and removes one", async () => {
+    serveTwoStep({ enabled: false })
+    security()
+    const section = await screen.findByRole("region", { name: "Passkeys" })
+    const row = (await within(section).findByText("MacBook")).closest("li")!
+    await userEvent.click(within(row).getByRole("button", { name: "Remove" }))
+    await waitFor(() =>
+      expect(auth.client.deletePasskey).toHaveBeenCalledWith("cred_1", "")
+    )
+  })
+
+  it("adds one through the browser", async () => {
+    serveTwoStep({ enabled: false })
+    security()
+    const section = await screen.findByRole("region", { name: "Passkeys" })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Add a passkey" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    const name = within(dialog).getByLabelText("Name")
+    await userEvent.clear(name)
+    await userEvent.type(name, "Work laptop")
+    expect(within(dialog).queryByLabelText(/Code from the app/)).toBeNull()
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Continue" })
+    )
+    await waitFor(() =>
+      expect(auth.client.passkeyRegisterFinish).toHaveBeenCalled()
+    )
+    expect(auth.client.passkeyRegisterBegin).toHaveBeenCalledWith(
+      { display_name: "Work laptop" },
+      ""
+    )
+    expect(create).toHaveBeenCalled()
+  })
+
+  // A passkey that checks your fingerprint or PIN signs in without the
+  // code, so with two-step on, adding one asks for the code first.
+  it("asks for a code when two-step is on", async () => {
+    auth.config = { passkey: { enabled: true }, mfa: { enabled: true } }
+    serveTwoStep({ enabled: true })
+    security()
+    const section = await screen.findByRole("region", { name: "Passkeys" })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Add a passkey" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.type(
+      await within(dialog).findByLabelText(
+        "Code from the app or a recovery code"
+      ),
+      "112233"
+    )
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Continue" })
+    )
+    await waitFor(() =>
+      expect(auth.client.passkeyRegisterBegin).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "112233" }),
+        ""
+      )
+    )
   })
 })

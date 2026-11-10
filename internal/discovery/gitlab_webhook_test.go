@@ -254,6 +254,38 @@ func TestGitLabHandle_ignoresOtherBranchesDeletesAndEvents(t *testing.T) {
 	}
 }
 
+func TestGitLabHandle_reportsAVerifiedPushItCantRead(t *testing.T) {
+	src := &Source{ID: "src_a", OrgID: "org-a", Alias: "api", Repository: "gitlab.com/grp/api"}
+	for name, c := range map[string]struct {
+		event string
+		body  []byte
+		want  []string
+	}{
+		"not JSON":          {"Push Hook", []byte(`not json`), []string{"glc_1"}},
+		"no project path":   {"Push Hook", glPush("", "refs/heads/main", "main", glSHA), []string{"glc_1"}},
+		"no default branch": {"Push Hook", glPush("grp/api", "refs/heads/", "", glSHA), []string{"glc_1"}},
+		"another branch":    {"Push Hook", glPush("grp/api", "refs/heads/feature", "main", glSHA), nil},
+		"another event":     {"Merge Request Hook", []byte(`not json`), nil},
+	} {
+		g := newGLHooks("org-a", src)
+		var heard []string
+		g.hooks.Unreadable = func(_ context.Context, id string) { heard = append(heard, id) }
+		if _, err := g.hooks.Handle(context.Background(), "glc_1", glHeaders(glSecret, c.body, c.event), c.body); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !slices.Equal(heard, c.want) {
+			t.Fatalf("%s: heard %v, want %v", name, heard, c.want)
+		}
+	}
+	// An unsigned delivery is refused before anything is read or reported.
+	g := newGLHooks("org-a", src)
+	g.hooks.Unreadable = func(context.Context, string) { t.Fatal("reported an unsigned delivery") }
+	bad := []byte(`not json`)
+	if _, err := g.hooks.Handle(context.Background(), "glc_1", http.Header{"X-Gitlab-Event": {"Push Hook"}}, bad); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("unsigned: %v", err)
+	}
+}
+
 func TestGitLabHandle_renamedProjectStartsNothing(t *testing.T) {
 	g := newGLHooks("org-a", &Source{ID: "src_a", OrgID: "org-a", Alias: "api", Repository: "gitlab.com/old/api"})
 	body := glPush("new/api", "refs/heads/main", "main", glSHA)

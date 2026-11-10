@@ -78,6 +78,13 @@ export const securitySchemes = {
 } as const;
 
 export const ops = {
+  'account.twoStep.get': {
+    method: 'GET',
+    path: '/api/v1/account/two-step',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['TwoStep'],
+  },
   'activity.get': {
     method: 'GET',
     path: '/api/v1/activity',

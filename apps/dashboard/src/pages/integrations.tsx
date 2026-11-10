@@ -153,7 +153,7 @@ export function Integrations({
             <TabsTrigger value="catalog">
               Catalog
               {forms.data && (
-                <TabsCount>{forms.data.clouds.length + 1}</TabsCount>
+                <TabsCount>{forms.data.clouds.length + 3}</TabsCount>
               )}
             </TabsTrigger>
             <TabsTrigger value="connected">

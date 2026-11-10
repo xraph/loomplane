@@ -6552,6 +6552,10 @@ export interface Turn {
   taskId: string;
 }
 
+export interface TwoStep {
+  enabled: boolean;
+}
+
 export interface UnreachableAccount {
   connectionId: string;
   message: string;

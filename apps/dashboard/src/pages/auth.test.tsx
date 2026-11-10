@@ -16,6 +16,14 @@ vi.mock("@/lib/router", () => ({
 
 vi.mock("@/components/brand-logo", () => ({ BrandLogo: () => null }))
 
+const auth = vi.hoisted(() => ({
+  status: "unauthenticated" as string,
+  signOut: vi.fn(),
+}))
+vi.mock("@authsome/ui-react", () => ({
+  useAuth: () => ({ state: { status: auth.status }, signOut: auth.signOut }),
+}))
+
 // Stand in for the API forms so their navigation callbacks can be checked.
 vi.mock("@authsome/ui-components", () => ({
   SignInForm: ({ onSuccess }: { onSuccess?: () => void }) => (
@@ -42,9 +50,12 @@ vi.mock("@authsome/ui-components", () => ({
     </form>
   ),
   WaitlistForm: () => <button>Join the waitlist</button>,
+  MFAChallengeFormStyled: () => <form aria-label="Two-step code" />,
 }))
 
 beforeEach(() => {
+  auth.status = "unauthenticated"
+  auth.signOut.mockReset()
   router.navigate.mockReset()
   invite.token = undefined
   setInstance({
@@ -60,6 +71,28 @@ describe("AuthPage", () => {
     render(<AuthPage mode="sign-in" />)
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }))
     expect(router.navigate).not.toHaveBeenCalled()
+  })
+
+  // With two-step on, the password alone leaves the account waiting for a
+  // code from the authenticator app or a recovery code.
+  it("asks for the code once the password is right", () => {
+    auth.status = "mfa_required"
+    render(<AuthPage mode="sign-in" />)
+    expect(
+      screen.getByRole("form", { name: "Two-step code" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Sign in" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("goes back to the password from the code", async () => {
+    auth.status = "mfa_required"
+    render(<AuthPage mode="sign-in" />)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Use a different account" })
+    )
+    expect(auth.signOut).toHaveBeenCalled()
   })
 
   it("returns to sign-in after creating an account", async () => {

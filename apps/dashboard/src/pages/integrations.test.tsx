@@ -1127,3 +1127,80 @@ it("keeps listing workspaces without a consumer, with the note and no Reconnect"
     within(card).getByRole("button", { name: "Disconnect Acme Inc" })
   ).toBeInTheDocument()
 })
+
+// The catalog card for one source, found by its name.
+async function catalogCard(name: string) {
+  const title = await screen.findByText(name, {
+    selector: "span.font-semibold",
+  })
+  return title.closest("article") as HTMLElement
+}
+
+it("lists GitLab and Bitbucket beside GitHub in the catalog", async () => {
+  const onTab = vi.fn()
+  fixture({
+    gitlab: {
+      ...noGitlab,
+      hosts: [gitlabHost],
+      connections: [
+        gitlabConnection,
+        { ...gitlabConnection, id: "c2", lapsed: true },
+      ],
+    },
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <Integrations tab="catalog" onTab={onTab} />
+    </ClientProvider>
+  )
+  const gitlab = await catalogCard("GitLab")
+  expect(
+    await within(gitlab).findByText("1 of 2 need signing in")
+  ).toBeInTheDocument()
+  expect(within(gitlab).getByText("Connected")).toBeInTheDocument()
+  await userEvent.click(within(gitlab).getByRole("button", { name: "Manage" }))
+  expect(onTab).toHaveBeenCalledWith("connected")
+
+  const bitbucket = await catalogCard("Bitbucket")
+  expect(
+    await within(bitbucket).findByText("Needs setting up")
+  ).toBeInTheDocument()
+  expect(
+    within(bitbucket).getByRole("button", { name: "Set up" })
+  ).toBeInTheDocument()
+})
+
+it("offers Connect for a source that is set up but has no account", async () => {
+  fixture({
+    gitlab: { ...noGitlab, hosts: [gitlabHost] },
+    bitbucket: { ...noBitbucket, configured: true },
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <Integrations tab="catalog" onTab={() => {}} />
+    </ClientProvider>
+  )
+  for (const [name, detail] of [
+    ["GitLab", "No accounts yet"],
+    ["Bitbucket", "No workspaces yet"],
+  ]) {
+    const card = await catalogCard(name)
+    expect(await within(card).findByText(detail)).toBeInTheDocument()
+    expect(
+      within(card).getByRole("button", { name: "Connect" })
+    ).toBeInTheDocument()
+  }
+})
+
+it("says GitLab reads public projects only when nothing is set up", async () => {
+  fixture()
+  render(
+    <ClientProvider client={forgeClient}>
+      <Integrations tab="catalog" onTab={() => {}} />
+    </ClientProvider>
+  )
+  const card = await catalogCard("GitLab")
+  expect(
+    await within(card).findByText("Public projects only")
+  ).toBeInTheDocument()
+})

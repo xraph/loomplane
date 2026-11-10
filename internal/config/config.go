@@ -310,6 +310,15 @@ type IdentityConfig struct {
 	// Waitlist turns the sign-up waitlist on or off. Nil leaves it to the
 	// instance's stored setting.
 	Waitlist *bool
+	// PasskeyRPID is the WebAuthn relying party ID passkeys are bound to:
+	// a bare domain, which every origin below must be or sit under.
+	// Changing it strands every passkey already registered. Empty means
+	// public_url's host.
+	PasskeyRPID string
+	// PasskeyOrigins are the origins a browser may register or use a
+	// passkey from. Empty means public_url's origin. On localhost, authsome
+	// also accepts the page's own origin, so the Vite dev server works.
+	PasskeyOrigins []string
 }
 
 // ConsoleConfig configures the hidden Forge console.
@@ -554,6 +563,8 @@ func FromSource(src Getter) (Config, error) {
 	r.optionalBool(&c.Identity.EmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
+	r.str(&c.Identity.PasskeyRPID, "identity.passkey_rp_id")
+	r.names(&c.Identity.PasskeyOrigins, "identity.passkey_origins")
 	r.str(&c.Console.Path, "console.path")
 	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
 	r.str(&c.Notifications.MailDir, "notifications.mail_dir")
@@ -690,6 +701,7 @@ func FromSource(src Getter) (Config, error) {
 	if c.Identity.EmailVerification != nil {
 		c.Identity.RequireEmailVerification = *c.Identity.EmailVerification
 	}
+	c.Identity.resolvePasskeys(c.PublicURL)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -726,6 +738,7 @@ func (c *Config) Validate() error {
 	if !cookieName.MatchString(c.Identity.SessionCookie) {
 		errs = append(errs, fmt.Errorf("identity.session_cookie must be a cookie name (letters, digits and !#$%%&'*+-.^_`|~), got %q", c.Identity.SessionCookie))
 	}
+	errs = append(errs, c.Identity.validatePasskeys()...)
 	if !consolePath.MatchString(c.Console.Path) {
 		errs = append(errs, fmt.Errorf("console.path must be one segment starting with __ (like /__console), got %q", c.Console.Path))
 	}
@@ -795,6 +808,43 @@ func (c *Config) productionChecks() []error {
 	}
 	if strings.HasPrefix(c.PublicURL, "http://") {
 		errs = append(errs, errors.New("production needs an https public_url"))
+	}
+	return errs
+}
+
+// resolvePasskeys fills the passkey settings left empty from public_url.
+// A public_url that doesn't parse is left to Validate to report.
+func (i *IdentityConfig) resolvePasskeys(publicURL string) {
+	u, err := url.Parse(publicURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return
+	}
+	if i.PasskeyRPID == "" {
+		i.PasskeyRPID = u.Hostname()
+	}
+	if len(i.PasskeyOrigins) == 0 {
+		i.PasskeyOrigins = []string{u.Scheme + "://" + u.Host}
+	}
+}
+
+// validatePasskeys checks the relying party ID is a bare host and that
+// every origin is one a browser would accept for it: the host itself or a
+// subdomain of it.
+func (i *IdentityConfig) validatePasskeys() []error {
+	rpID := i.PasskeyRPID
+	if rpID == "" || strings.ContainsAny(rpID, ":/") {
+		return []error{fmt.Errorf("identity.passkey_rp_id must be a bare host such as example.com, got %q", rpID)}
+	}
+	var errs []error
+	for _, o := range i.PasskeyOrigins {
+		u, err := url.Parse(o)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" {
+			errs = append(errs, fmt.Errorf("identity.passkey_origins must be origins such as https://lp.example.com, got %q", o))
+			continue
+		}
+		if h := u.Hostname(); h != rpID && !strings.HasSuffix(h, "."+rpID) {
+			errs = append(errs, fmt.Errorf("identity.passkey_origins: %q isn't %s or a subdomain of it (identity.passkey_rp_id)", o, rpID))
+		}
 	}
 	return errs
 }

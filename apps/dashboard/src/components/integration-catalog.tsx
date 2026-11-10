@@ -5,13 +5,17 @@ import { MailIcon, SearchIcon, ServerIcon, WebhookIcon } from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import {
+  useBitbucketStatus,
   useConnectionCloudsList,
   useConnectionsList,
   useGithubStatus,
+  useGitlabStatus,
   useNodesList,
 } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import { BitbucketMark } from "@/components/bitbucket-mark"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { GitLabMark } from "@/components/gitlab-mark"
 import { AddNode } from "@/components/nodes/add-node"
 import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
@@ -72,7 +76,10 @@ export function IntegrationCatalog({
 }: {
   /** Opens the connect dialog for one cloud's form. */
   onConnect: (cloud: string) => void
-  /** Shows the connected accounts, such as GitHub's installations. */
+  /**
+   * Shows the connected accounts, such as GitHub's installations, and
+   * where GitLab and Bitbucket sign-ins start.
+   */
   onManage: () => void
 }) {
   const { can } = useOrganization()
@@ -80,6 +87,8 @@ export function IntegrationCatalog({
   const forms = useQuery(useConnectionCloudsList)
   const connections = useQuery(useConnectionsList)
   const github = useQuery(useGithubStatus)
+  const gitlab = useQuery(useGitlabStatus)
+  const bitbucket = useQuery(useBitbucketStatus)
   const nodes = useQuery(useNodesList)
   const [addingNode, setAddingNode] = useState(false)
   const [group, setGroup] = useState<Group | "all">("all")
@@ -101,6 +110,17 @@ export function IntegrationCatalog({
 
   const accounts = connections.data.connections
   const installs = github.data?.installations.length ?? 0
+  const mayConnectCode = can("repository:connect")
+  const gitlabAccounts = gitlab.data?.connections ?? []
+  const gitlabLapsed = gitlabAccounts.filter((c) => c.lapsed).length
+  // With no host and no way to add one, only public projects can be read.
+  const gitlabSetUp =
+    !!gitlab.data &&
+    (gitlab.data.hosts.length > 0 || gitlab.data.organizationHosts)
+  const workspaces = bitbucket.data?.workspaces ?? []
+  const workspacesLapsed = workspaces.filter(
+    (w) => w.status === "reconnect_needed"
+  ).length
   const nodeList = (nodes.data?.nodes ?? []).filter(
     (n) => n.status !== "revoked"
   )
@@ -136,6 +156,82 @@ export function IntegrationCatalog({
             Set up
           </Button>
         ),
+    },
+    {
+      key: "gitlab",
+      group: "source",
+      name: "GitLab",
+      purpose:
+        "Reads projects on gitlab.com or a self-managed GitLab with read-only access, and analyzes them again when you push.",
+      icon: <ProductIcon fallback={GitLabMark} label="GitLab" size="md" />,
+      connected: gitlabAccounts.length > 0,
+      detail: gitlabAccounts.length
+        ? gitlabLapsed
+          ? `${gitlabLapsed} of ${gitlabAccounts.length} need signing in`
+          : `${gitlabAccounts.length} ${gitlabAccounts.length === 1 ? "account" : "accounts"}`
+        : gitlab.data && !gitlabSetUp
+          ? "Public projects only"
+          : "No accounts yet",
+      action: (
+        <Button
+          size="sm"
+          variant={
+            gitlabAccounts.length === 0 &&
+            gitlabSetUp &&
+            gitlab.data?.canConnect &&
+            mayConnectCode
+              ? "default"
+              : "outline"
+          }
+          onClick={onManage}
+        >
+          {gitlabAccounts.length
+            ? "Manage"
+            : gitlabSetUp && gitlab.data?.canConnect && mayConnectCode
+              ? "Connect"
+              : "Set up"}
+        </Button>
+      ),
+    },
+    {
+      key: "bitbucket",
+      group: "source",
+      name: "Bitbucket",
+      purpose:
+        "Reads repositories in the Bitbucket workspaces you connect, with read-only access.",
+      icon: (
+        <ProductIcon fallback={BitbucketMark} label="Bitbucket" size="md" />
+      ),
+      connected: workspaces.length > 0,
+      detail: workspaces.length
+        ? workspacesLapsed
+          ? `${workspacesLapsed} of ${workspaces.length} need reconnecting`
+          : `${workspaces.length} ${workspaces.length === 1 ? "workspace" : "workspaces"}`
+        : bitbucket.data?.configured === false
+          ? "Needs setting up"
+          : "No workspaces yet",
+      action: (
+        <Button
+          size="sm"
+          variant={
+            workspaces.length === 0 &&
+            bitbucket.data?.configured &&
+            bitbucket.data.canConnect &&
+            mayConnectCode
+              ? "default"
+              : "outline"
+          }
+          onClick={onManage}
+        >
+          {workspaces.length
+            ? "Manage"
+            : bitbucket.data?.configured &&
+                bitbucket.data.canConnect &&
+                mayConnectCode
+              ? "Connect"
+              : "Set up"}
+        </Button>
+      ),
     },
     ...forms.data.clouds.map((f): Card => {
       const mine = accounts.filter((c) => c.cloud === f.cloud)

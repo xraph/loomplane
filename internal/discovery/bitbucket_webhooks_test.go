@@ -24,6 +24,8 @@ type memHooks struct {
 	mu    sync.Mutex
 	hooks map[string]*repositories.BitbucketHook
 	saves int
+	// updateErr fails UpdateBitbucketHook with it.
+	updateErr error
 }
 
 func newMemHooks() *memHooks { return &memHooks{hooks: map[string]*repositories.BitbucketHook{}} }
@@ -56,6 +58,9 @@ func (m *memHooks) GetBitbucketHook(_ context.Context, id string) (*repositories
 func (m *memHooks) UpdateBitbucketHook(_ context.Context, h *repositories.BitbucketHook) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.updateErr != nil {
+		return m.updateErr
+	}
 	o, ok := m.hooks[h.HookID]
 	if !ok {
 		return repositories.ErrHookNotFound
@@ -128,7 +133,13 @@ func (m *memHooks) all() []*repositories.BitbucketHook {
 type fakeHookConns struct {
 	conns map[string]*repositories.BitbucketConnection // by org
 	token map[string]string                            // by org
-	asked []string
+	asked []string                                     // ConnectionFor calls, each of which may renew a token
+	// readyAsked are ReadyConnection calls, which never renew anything.
+	readyAsked []string
+	// forErr fails ConnectionFor with it, as a rejected consumer does.
+	forErr error
+	// readyErr fails ReadyConnection with it.
+	readyErr error
 	// unconfigured plays a Loomplane with no Bitbucket consumer.
 	unconfigured bool
 }
@@ -138,11 +149,29 @@ func (f *fakeHookConns) ConnectionFor(_ context.Context, orgID, workspace string
 	if f.unconfigured {
 		return nil, "", repositories.ErrBitbucketNotConfigured
 	}
+	if f.forErr != nil {
+		return nil, "", f.forErr
+	}
 	c, ok := f.conns[orgID]
 	if !ok || !strings.EqualFold(c.WorkspaceSlug, workspace) {
 		return nil, "", repositories.ErrWorkspaceNotFound
 	}
 	return c, f.token[orgID], nil
+}
+
+func (f *fakeHookConns) ReadyConnection(_ context.Context, orgID, workspace string) (*repositories.BitbucketConnection, error) {
+	f.readyAsked = append(f.readyAsked, orgID+"/"+workspace)
+	if f.unconfigured {
+		return nil, repositories.ErrBitbucketNotConfigured
+	}
+	if f.readyErr != nil {
+		return nil, f.readyErr
+	}
+	c, ok := f.conns[orgID]
+	if !ok || !strings.EqualFold(c.WorkspaceSlug, workspace) || c.Status != repositories.BitbucketReady {
+		return nil, repositories.ErrWorkspaceNotFound
+	}
+	return c, nil
 }
 
 func (f *fakeHookConns) Connection(_ context.Context, orgID, id string) (*repositories.BitbucketConnection, error) {
@@ -901,5 +930,225 @@ func (m *memStore) cascade(projectID string) {
 		if s.ProjectID == projectID {
 			delete(m.sources, id)
 		}
+	}
+}
+
+// staleHook leaves org_a's acme/api hook on and pointing at a connection
+// that's gone, as a disconnect whose ReleaseAll failed does. It returns the
+// source and the row.
+func staleHook(t *testing.T, f *hookFixture) (*Source, *repositories.BitbucketHook) {
+	t.Helper()
+	src := f.add("src_a", "org_a", "bitbucket.org/acme/api", "")
+	row, err := f.hooks.BitbucketHookFor(context.Background(), "org_a", "bitbucket.org/acme/api")
+	if err != nil || row.Status != repositories.HookOn || row.ConnectionID != "bbws_a" {
+		t.Fatalf("the hook before the disconnect: %+v, %v", row, err)
+	}
+	delete(f.conns.conns, "org_a")
+	return src, row
+}
+
+// Reconnecting a workspace gives it a new connection ID. A hook still on
+// from the old one moves to the new one, and says it's on.
+func TestBitbucketWebhooks_aStaleHookFollowsItsWorkspacesNewConnection(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, old := staleHook(t, f)
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a2", OrgID: "org_a", WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+
+	if st := f.w.State(ctx, "org_a", src); st == nil || !st.On {
+		t.Fatalf("state with a new connection to the workspace %+v", st)
+	}
+	row, err := f.hooks.GetBitbucketHook(ctx, old.HookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.ConnectionID != "bbws_a2" || row.Status != repositories.HookOn || row.BitbucketHookUUID != old.BitbucketHookUUID || row.Reason != "" {
+		t.Fatalf("the row after the rebind %+v, was %+v", row, old)
+	}
+	if len(f.api.created) != 1 || len(f.api.deleted) != 0 {
+		t.Fatalf("the rebind touched Bitbucket: created %v, deleted %v", f.api.created, f.api.deleted)
+	}
+	// Disconnecting the new connection now releases the hook.
+	f.w.ReleaseAll(ctx, "org_a", "bbws_a2")
+	if rows := f.hooks.all(); len(rows) != 0 {
+		t.Fatalf("rows after releasing the new connection %+v", rows)
+	}
+}
+
+// A connection to the workspace that needs connecting again is no place to
+// move the hook to.
+func TestBitbucketWebhooks_aStaleHookWithNoReadyConnectionStaysOff(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, old := staleHook(t, f)
+
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state with no connection to the workspace %+v", st)
+	}
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a2", OrgID: "org_a", WorkspaceSlug: "acme", Status: repositories.BitbucketReconnectNeeded}
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state with a connection that needs connecting again %+v", st)
+	}
+	// One to another workspace doesn't count either.
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a3", OrgID: "org_a", WorkspaceSlug: "other", Status: repositories.BitbucketReady}
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state with a connection to another workspace %+v", st)
+	}
+	if row, err := f.hooks.GetBitbucketHook(ctx, old.HookID); err != nil || row.ConnectionID != "bbws_a" || row.Status != repositories.HookOn {
+		t.Fatalf("the row was changed: %+v, %v", row, err)
+	}
+}
+
+// Another organization's connection to the same workspace never takes on
+// the hook.
+func TestBitbucketWebhooks_aStaleHookNeverMovesToAnotherOrganization(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, old := staleHook(t, f)
+	// org_b is connected to acme, ready, from the fixture.
+	f.conns.asked = nil
+
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state %+v", st)
+	}
+	if st := f.w.Ensure(ctx, "org_a", acmeAPI); st.On || st.Reason != reasonResume {
+		t.Fatalf("Ensure %+v", st)
+	}
+	for _, a := range append(slices.Clone(f.conns.asked), f.conns.readyAsked...) {
+		if a != "org_a/acme" {
+			t.Fatalf("asked another organization's connections: %v, %v", f.conns.asked, f.conns.readyAsked)
+		}
+	}
+	if len(f.conns.readyAsked) == 0 {
+		t.Fatal("the stale hook's workspace was never looked up")
+	}
+	if row, err := f.hooks.GetBitbucketHook(ctx, old.HookID); err != nil || row.ConnectionID != "bbws_a" || row.OrgID != "org_a" {
+		t.Fatalf("the row %+v, %v", row, err)
+	}
+}
+
+// Turn on mends a stale hook: it moves to the workspace's new connection,
+// and no second hook is added on Bitbucket.
+func TestBitbucketWebhooks_enableRebindsAStaleHook(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	admin := f.as(t, "ausr_admin", security.RoleAdmin)
+	h := newHookFixture(t)
+	h.conns.conns[org] = &repositories.BitbucketConnection{ID: "bbws_o", OrgID: org, WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+	h.conns.token[org] = "token-o"
+	h.w.Sources = f.store.byRepository
+	h.w.Authz = f.authz
+	f.svc.SetSourceHooks(h.w.SourceHooks())
+	if _, err := f.svc.AddSource(ctx, admin, "proj_bare", AddSourceInput{Repository: "bitbucket.org/acme/api"}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := h.hooks.BitbucketHookFor(ctx, org, "bitbucket.org/acme/api")
+	if err != nil || old.Status != repositories.HookOn {
+		t.Fatalf("the hook %+v, %v", old, err)
+	}
+	// The workspace is disconnected, the release fails, and it's connected
+	// again under a new ID.
+	h.conns.conns[org] = &repositories.BitbucketConnection{ID: "bbws_o2", OrgID: org, WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+
+	st, err := h.w.Enable(ctx, admin, "bitbucket.org/acme/api")
+	if err != nil || !st.On {
+		t.Fatalf("turning it on: %+v, %v", st, err)
+	}
+	row, err := h.hooks.GetBitbucketHook(ctx, old.HookID)
+	if err != nil || row.ConnectionID != "bbws_o2" || row.Status != repositories.HookOn || row.BitbucketHookUUID != old.BitbucketHookUUID {
+		t.Fatalf("the row after Turn on %+v, %v", row, err)
+	}
+	if len(h.api.created) != 1 {
+		t.Fatalf("Turn on added another hook: %+v", h.api.created)
+	}
+}
+
+// Reading whether a stale hook is on renews no token: a sources listing
+// reads it for every repository, and never uses one.
+func TestBitbucketWebhooks_aStaleHookRenewsNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, _ := staleHook(t, f)
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a2", OrgID: "org_a", WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+	f.conns.asked, f.conns.readyAsked = nil, nil
+
+	if st := f.w.State(ctx, "org_a", src); st == nil || !st.On {
+		t.Fatalf("state %+v", st)
+	}
+	if len(f.conns.asked) != 0 || !slices.Equal(f.conns.readyAsked, []string{"org_a/acme"}) {
+		t.Fatalf("renewing lookups %v, stored lookups %v", f.conns.asked, f.conns.readyAsked)
+	}
+}
+
+// A consumer Bitbucket turns down fails every renewal. Reading a stale
+// hook's state renews nothing, so it still says how to get it back, and
+// still moves to a new connection.
+func TestBitbucketWebhooks_aStaleHookWithARejectedConsumer(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, old := staleHook(t, f)
+	f.conns.forErr = fmt.Errorf("renew the Bitbucket sign-in for acme: %w", repositories.ErrBitbucketConsumerRejected)
+	f.warned = nil
+
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonResume {
+		t.Fatalf("state with no connection %+v", st)
+	}
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a2", OrgID: "org_a", WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+	if st := f.w.State(ctx, "org_a", src); st == nil || !st.On {
+		t.Fatalf("state with a new connection %+v", st)
+	}
+	if row, _ := f.hooks.GetBitbucketHook(ctx, old.HookID); row == nil || row.ConnectionID != "bbws_a2" {
+		t.Fatalf("the row %+v", row)
+	}
+	if len(f.warned) != 0 {
+		t.Fatalf("warnings %q", f.warned)
+	}
+}
+
+// A lookup that fails says the state is unknown, and changes nothing.
+func TestBitbucketWebhooks_aStaleHookWhoseLookupFails(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, old := staleHook(t, f)
+	f.conns.readyErr = errors.New("the database went away")
+	f.warned = nil
+
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonUnknown {
+		t.Fatalf("state %+v", st)
+	}
+	if len(f.warned) != 1 || !strings.Contains(f.warned[0], "the database went away") {
+		t.Fatalf("warnings %q", f.warned)
+	}
+	if row, _ := f.hooks.GetBitbucketHook(ctx, old.HookID); row == nil || row.ConnectionID != "bbws_a" {
+		t.Fatalf("the row %+v", row)
+	}
+	f.conns.readyErr, f.conns.unconfigured = nil, true
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonNoConsumer {
+		t.Fatalf("state with no consumer %+v", st)
+	}
+}
+
+// A hook released while it's being moved is no longer set up, and one the
+// store can't move is unknown.
+func TestBitbucketWebhooks_aStaleHookThatCantBeMoved(t *testing.T) {
+	ctx := context.Background()
+	f := newHookFixture(t)
+	src, _ := staleHook(t, f)
+	f.conns.conns["org_a"] = &repositories.BitbucketConnection{ID: "bbws_a2", OrgID: "org_a", WorkspaceSlug: "acme", Status: repositories.BitbucketReady}
+	f.warned = nil
+
+	f.hooks.updateErr = repositories.ErrHookNotFound
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonNotSetUp {
+		t.Fatalf("state when the row went meanwhile %+v", st)
+	}
+	if len(f.warned) != 0 {
+		t.Fatalf("warnings %q", f.warned)
+	}
+	f.hooks.updateErr = errors.New("the database went away")
+	if st := f.w.State(ctx, "org_a", src); st == nil || st.On || st.Reason != reasonUnknown {
+		t.Fatalf("state when the row can't be saved %+v", st)
+	}
+	if len(f.warned) != 1 || !strings.Contains(f.warned[0], "move Bitbucket webhook") {
+		t.Fatalf("warnings %q", f.warned)
 	}
 }

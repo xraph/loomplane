@@ -9,7 +9,7 @@ import (
 
 func TestAllRunsLibraryGroupsAfterLoomplanes(t *testing.T) {
 	want := append([]string{
-		"loomplane", "authsome", "authsome-waitlist", "authsome-oauth2", "warden", "chronicle", "dispatch",
+		"loomplane", "authsome", "authsome-waitlist", "authsome-oauth2", "authsome-mfa", "authsome-passkey", "warden", "chronicle", "dispatch",
 		"ctrlplane", "loomplane_managed_instances", "vault", "loomplane_native_credentials", "keysmith", "trove", "herald", "relay",
 		"cortex", "nexus", "shield", "weave",
 	}, editionWantGroups()...)

@@ -38,6 +38,12 @@ const (
 	bitbucketAccountLeftMessage   = "The Bitbucket account that connected this workspace is no longer a member of it. Connect the workspace again."
 )
 
+// bitbucketConsumerProblem is what Status says while Bitbucket turns down
+// Loomplane's own OAuth consumer. Reconnecting won't help, so it doesn't
+// ask anyone to.
+const bitbucketConsumerProblem = "Bitbucket turned down this Loomplane's OAuth consumer the last time it renewed a sign-in, so private repositories can't be read. " +
+	"Public ones still are. Whoever runs Loomplane needs to check bitbucket.client_id and bitbucket.client_secret. Your workspaces don't need connecting again."
+
 // bitbucketRenewAhead is how close to expiry a cached access token is
 // renewed. A 401 on a read looks like a missing repository, so a token is
 // never handed out this close to expiring.
@@ -116,7 +122,8 @@ type BitbucketStatus struct {
 	// CanConnect says whether the caller may connect a workspace.
 	CanConnect bool                     `json:"can_connect"`
 	Workspaces []BitbucketWorkspaceView `json:"workspaces"`
-	// Problems names each workspace that needs connecting again.
+	// Problems names each workspace that needs connecting again, and says
+	// when Bitbucket turned down this Loomplane's own consumer.
 	Problems []string `json:"problems"`
 }
 
@@ -170,6 +177,12 @@ type BitbucketConnections struct {
 
 	mu     sync.Mutex
 	tokens map[string]cachedToken // by orgID/connectionID
+	// consumerRejected is when Bitbucket last turned down Loomplane's own
+	// consumer on a renewal or a connect, or zero once one has worked
+	// since. It's this process's view only: the consumer is the same for
+	// every organization and every process, and each one finds out on its
+	// own next renewal or connect.
+	consumerRejected time.Time
 }
 
 // NewBitbucketConnections returns BitbucketConnections. api is nil when
@@ -212,6 +225,9 @@ func (c *BitbucketConnections) Status(ctx context.Context, p security.Principal)
 		if r.Status != BitbucketReady {
 			st.Problems = append(st.Problems, fmt.Sprintf("%s needs connecting again: %s", r.WorkspaceSlug, r.Message))
 		}
+	}
+	if c.consumerWasRejected() {
+		st.Problems = append(st.Problems, bitbucketConsumerProblem)
 	}
 	if st.CanConnect, err = c.authz.Allowed(ctx, p, security.RepositoryConnect); err != nil {
 		return nil, err
@@ -267,9 +283,13 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 		return nil, ErrBadState
 	}
 	grant, err := c.api.Exchange(ctx, in.Code)
+	if errors.Is(err, ErrBitbucketConsumerRejected) {
+		c.consumerRejectedNow()
+	}
 	if err != nil {
 		return nil, err
 	}
+	c.consumerAccepted()
 	if grant.RefreshToken == "" {
 		// Without one the workspace would stop working in two hours, with
 		// nothing to renew it from.
@@ -477,6 +497,9 @@ func (c *BitbucketConnections) Repositories(ctx context.Context, p security.Prin
 // the organization's own connections are used, only the one whose slug is
 // the repository's owner, and never one that needs connecting again.
 // Anything else is "", so a public repository is still read anonymously.
+// That includes Bitbucket rejecting Loomplane's own consumer: private
+// repositories can't be read until the operator fixes it, and public ones
+// still are.
 func (c *BitbucketConnections) Token(ctx context.Context, orgID string, repo Repository) (string, error) {
 	if c.api == nil || !strings.EqualFold(repo.Host, HostBitbucket) || repo.Owner == "" {
 		return "", nil
@@ -486,6 +509,10 @@ func (c *BitbucketConnections) Token(ctx context.Context, orgID string, repo Rep
 		return "", err
 	}
 	cur, tok, err := c.mint(ctx, row)
+	if errors.Is(err, ErrBitbucketConsumerRejected) {
+		c.warnf("read the Bitbucket repositories in "+row.WorkspaceSlug+" without a sign-in, so only public ones can be read", err)
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -536,6 +563,23 @@ func (c *BitbucketConnections) Connection(ctx context.Context, orgID, id string)
 		return nil, ErrBitbucketNotConfigured
 	}
 	return c.store.GetBitbucketWorkspace(ctx, orgID, id)
+}
+
+// ReadyConnection returns the organization's ready connection to workspace
+// (a slug) as it's stored, without renewing its sign-in. None, or only one
+// that needs connecting again, is ErrWorkspaceNotFound.
+func (c *BitbucketConnections) ReadyConnection(ctx context.Context, orgID, workspace string) (*BitbucketConnection, error) {
+	if c.api == nil {
+		return nil, ErrBitbucketNotConfigured
+	}
+	row, err := c.find(ctx, orgID, workspace, true)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, ErrWorkspaceNotFound
+	}
+	return row, nil
 }
 
 // find returns the organization's connection whose slug is slug, or nil.
@@ -657,9 +701,13 @@ func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnecti
 	if errors.Is(err, ErrBitbucketRefused) {
 		return "", c.needReconnect(ctx, cur, bitbucketRefusedMessage)
 	}
+	if errors.Is(err, ErrBitbucketConsumerRejected) {
+		c.consumerRejectedNow()
+	}
 	if err != nil {
 		return "", fmt.Errorf("renew the Bitbucket sign-in for %s: %w", cur.WorkspaceSlug, err)
 	}
+	c.consumerAccepted()
 	if g.RefreshToken == "" {
 		g.RefreshToken = held.RefreshToken
 	}
@@ -763,6 +811,28 @@ func (c *BitbucketConnections) remember(row *BitbucketConnection, g BitbucketGra
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokens[row.OrgID+"/"+row.ID] = cachedToken{token: g.AccessToken, expires: g.Expires, generation: row.GrantGeneration}
+}
+
+// consumerRejectedNow records Bitbucket turning down Loomplane's consumer.
+func (c *BitbucketConnections) consumerRejectedNow() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.consumerRejected = c.now().UTC()
+}
+
+// consumerAccepted records Bitbucket taking Loomplane's consumer again.
+func (c *BitbucketConnections) consumerAccepted() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.consumerRejected = time.Time{}
+}
+
+// consumerWasRejected reports whether the last renewal or connect found
+// Loomplane's consumer turned down.
+func (c *BitbucketConnections) consumerWasRejected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.consumerRejected.IsZero()
 }
 
 // forget drops the connection's access token from memory.

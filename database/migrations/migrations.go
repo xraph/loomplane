@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/xraph/authsome/plugins/mfa"
 	"github.com/xraph/authsome/plugins/oauth2provider"
+	"github.com/xraph/authsome/plugins/passkey"
 	"github.com/xraph/authsome/plugins/waitlist"
 	authpg "github.com/xraph/authsome/store/postgres"
 	chronpg "github.com/xraph/chronicle/store/postgres"
@@ -97,6 +99,8 @@ func All() []*migrate.Group {
 		authpg.Migrations,
 		waitlist.PostgresMigrations,
 		oauth2provider.PostgresMigrations,
+		mfa.PostgresMigrations,
+		passkey.PostgresMigrations,
 		wardenpg.Migrations,
 		chronpg.Migrations,
 		dispatchpg.Migrations,

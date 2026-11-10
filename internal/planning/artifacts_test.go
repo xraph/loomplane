@@ -411,3 +411,49 @@ func TestCheckGitBuilds_singleSourceWithNoRepo(t *testing.T) {
 		t.Fatalf("a service with no repo among two sources matched one: %+v", result.Problems)
 	}
 }
+
+// gitHostWorld is artifactWorld with api on Render and its source at key.
+func gitHostWorld(t *testing.T, key string) (*Service, *Plan) {
+	t.Helper()
+	doc := "version: 1\nservices:\n  api: {source: cmd/api, provider: render, region: oregon}\n"
+	revision := &manifests.Revision{ID: "man_1", Revision: 1, Manifest: parse(t, doc), Digest: "digest"}
+	options := targetOptions{connections: []*connections.Connection{{ID: "conn_r", Cloud: connections.Render, Status: connections.StatusReady}}}
+	s := NewService(Deps{
+		Store: artifactStore{}, Analyses: targetAnalyses{}, Manifests: artifactManifests{revision: revision},
+		Providers: providers.Registry(), Connections: options,
+	})
+	plan := promotionPlan()
+	plan.Kind, plan.From, plan.FromEnvironmentID = KindRelease, "", ""
+	plan.OrgID, plan.ProjectID, plan.EnvironmentID, plan.ManifestID = "org", "project", envProduction, "man_1"
+	plan.Sources = []PlanSource{{Alias: "app", AnalysisID: "analysis", CommitSHA: artifactCommit, InScope: true, Repository: key}}
+	return s, plan
+}
+
+func TestCompute_refusesAGitBuildFromAHostTheTargetCantRead(t *testing.T) {
+	s, plan := gitHostWorld(t, "gitlab.example.com/team/api")
+	result, _, err := s.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Finding
+	for i := range result.Problems {
+		if result.Problems[i].Code == "git-host-unsupported" {
+			found = &result.Problems[i]
+		}
+	}
+	if result.Executable || found == nil || found.Name != "api" || !strings.Contains(found.Message, "can't build gitlab.example.com/team/api") {
+		t.Fatalf("executable %v, problems %+v", result.Executable, result.Problems)
+	}
+
+	// The same service from gitlab.com plans without that problem.
+	s, plan = gitHostWorld(t, "gitlab.com/team/api")
+	result, _, err = s.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range result.Problems {
+		if p.Code == "git-host-unsupported" {
+			t.Fatalf("gitlab.com refused: %+v", p)
+		}
+	}
+}

@@ -43,6 +43,12 @@ identity:
   session_cookie: "${LOOMPLANE_SESSION_COOKIE:-loomplane_session}"
   # Unset leaves it to the instance's stored setting. true or false forces it.
   waitlist: "${LOOMPLANE_WAITLIST_ENABLED:-}"
+  # The domain passkeys are bound to. Changing it strands every passkey
+  # already registered, so pick it once. Empty means public_url's host.
+  passkey_rp_id: "${LOOMPLANE_PASSKEY_RP_ID:-}"
+  # Comma-separated origins passkeys work from, each the RP ID or a
+  # subdomain of it. Empty means public_url's origin.
+  passkey_origins: "${LOOMPLANE_PASSKEY_ORIGINS:-}"
 
 console:
   path: "${LOOMPLANE_CONSOLE_PATH:-/__console}"
