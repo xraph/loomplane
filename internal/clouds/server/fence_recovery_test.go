@@ -1,16 +1,21 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/clouds/server/fencerules"
@@ -148,6 +153,163 @@ func TestEffectHelperTakeoverClearsAFinishedRecordedExec(t *testing.T) {
 			}
 			if strings.ReplaceAll(string(state["dirty"]), " ", "") != tc.dirty {
 				t.Fatalf("dirty %s changed from %s", state["dirty"], tc.dirty)
+			}
+		})
+	}
+}
+
+// pythonAccess runs the SSH helper with local Python, speaking to it as
+// sshAccess does over an SSH session.
+type pythonAccess struct {
+	HostAccess
+	t *testing.T
+}
+
+func (a pythonAccess) FencedRequest(ctx context.Context, mode string, f EffectFence, daemon, socket, method, path string, body io.Reader, headers http.Header) (*http.Response, error) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		a.t.Skip("Python 3 is needed for the real host helper")
+	}
+	request, _ := json.Marshal(struct {
+		Mode, Daemon, Socket, Method, Path string
+		Fence                              EffectFence
+		Headers                            http.Header
+	}{mode, daemon, socket, method, path, f, headers})
+	input := append(request, '\n')
+	if body != nil {
+		rest, readErr := io.ReadAll(body)
+		if readErr != nil {
+			return nil, readErr
+		}
+		input = append(input, rest...)
+	}
+	cmd := exec.CommandContext(ctx, python, "-c", testFenceScript(a.t))
+	cmd.Stdin = bytes.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return http.ReadResponse(bufio.NewReader(bytes.NewReader(out)), nil)
+}
+
+// The repair path clears a dirty mark nothing else may clear, a legacy bare
+// one included, but only for the daemon it names, only when no helper holds
+// the lock, only while no exec runs in a Loomplane container, and only for
+// the journal the operator reviewed.
+func TestFenceRepair(t *testing.T) {
+	owned := strings.Repeat("a", 64)
+	running, done := strings.Repeat("b", 64), strings.Repeat("d", 64)
+	operation := "org/plan/app--postgres"
+	epochs := fmt.Sprintf(`{%q:3}`, fencerules.JournalKey(operation))
+	for _, tc := range []struct {
+		name, journal string
+		// runningExec leaves an exec running in the owned container.
+		runningExec bool
+		// locked holds daemon.lock, as a live helper does.
+		locked bool
+		// daemon is the docker_id the connection recorded, if not this one.
+		daemon string
+		node   bool
+		// staleReview repairs with a review of another journal.
+		staleReview bool
+		reviewErr   string
+		repairErr   string
+		repaired    bool
+	}{
+		{name: "legacy", journal: `{"epochs":` + epochs + `,"dirty":true}`, repaired: true},
+		{name: "exec_mark", journal: fmt.Sprintf(`{"epochs":%s,"dirty":{"mode":"exec","exec":%q,"container":%q}}`, epochs, done, owned), repaired: true},
+		{name: "clean", journal: `{"epochs":` + epochs + `,"dirty":false}`},
+		{name: "running_exec", journal: `{"epochs":` + epochs + `,"dirty":true}`, runningExec: true, repairErr: "still running"},
+		{name: "stale_review", journal: `{"epochs":` + epochs + `,"dirty":true}`, staleReview: true, repairErr: "review again"},
+		{name: "helper_alive", journal: `{"epochs":` + epochs + `,"dirty":true}`, locked: true, reviewErr: "holds the fence lock", repairErr: "holds the fence lock"},
+		{name: "other_daemon", journal: `{"epochs":` + epochs + `,"dirty":true}`, daemon: "replaced-daemon", reviewErr: "could not review", repairErr: "could not"},
+		{name: "node", journal: `{"epochs":` + epochs + `,"dirty":true}`, node: true, reviewErr: "SSH", repairErr: "SSH"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newJournalDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/containers/json":
+					var filters map[string][]string
+					if err := json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters); err != nil || len(filters) != 1 || len(filters["label"]) != 1 || filters["label"][0] != "loomplane.org" {
+						t.Errorf("containers listed with filters %q", r.URL.Query().Get("filters"))
+					}
+					_, _ = fmt.Fprintf(w, `[{"Id":%q,"Names":["/app--postgres"]}]`, owned)
+				case "/containers/" + owned + "/json":
+					_, _ = fmt.Fprintf(w, `{"Id":%q,"Name":"/app--postgres","ExecIDs":[%q,%q]}`, owned, running, done)
+				case "/exec/" + running + "/json":
+					_, _ = fmt.Fprintf(w, `{"ContainerID":%q,"Running":%v,"ExitCode":null}`, owned, tc.runningExec)
+				case "/exec/" + done + "/json":
+					_, _ = fmt.Fprintf(w, `{"ContainerID":%q,"Running":false,"ExitCode":0}`, owned)
+				default:
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			d.seed(t, tc.journal)
+			if tc.locked {
+				lock, err := os.OpenFile(filepath.Join(d.root, "daemon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = lock.Close() })
+				if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := &Config{Socket: d.socket, Details: map[string]string{"docker_id": d.id}}
+			if tc.daemon != "" {
+				cfg.Details["docker_id"] = tc.daemon
+			}
+			if tc.node {
+				cfg.Node = &NodeTarget{OrgID: "org_1", NodeID: testNodeID, IdentityGeneration: 1}
+			}
+			c := &Client{Config: cfg, access: pythonAccess{t: t}}
+			review, err := c.ReviewFenceRepair(t.Context())
+			if tc.reviewErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.reviewErr) {
+					t.Fatalf("review error %v, want %q", err, tc.reviewErr)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else {
+				var want struct{ Dirty any }
+				_ = json.Unmarshal([]byte(tc.journal), &want)
+				if !reflect.DeepEqual(review.Dirty, want.Dirty) {
+					t.Fatalf("review shows dirty %v, want %v", review.Dirty, want.Dirty)
+				}
+				if review.Daemon != d.id || len(review.Review) != 64 {
+					t.Fatalf("review %+v", review)
+				}
+				if tc.runningExec != (len(review.Running) == 1) || tc.runningExec && (review.Running[0].Exec != running || review.Running[0].Container != owned || review.Running[0].Name != "app--postgres") {
+					t.Fatalf("running execs %+v", review.Running)
+				}
+			}
+			token := strings.Repeat("0", 64)
+			if review != nil && !tc.staleReview {
+				token = review.Review
+			}
+			result, err := c.RepairFence(t.Context(), token)
+			if tc.repairErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.repairErr) {
+					t.Fatalf("repair error %v, want %q", err, tc.repairErr)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else if result.Repaired != tc.repaired {
+				t.Fatalf("repaired %v, want %v", result.Repaired, tc.repaired)
+			}
+			state := d.journal(t)
+			if strings.ReplaceAll(string(state["epochs"]), " ", "") != epochs {
+				t.Fatalf("epochs %s, want %s", state["epochs"], epochs)
+			}
+			var original struct{ Dirty json.RawMessage }
+			_ = json.Unmarshal([]byte(tc.journal), &original)
+			want := string(original.Dirty)
+			if tc.repaired {
+				want = "false"
+			}
+			if got := strings.ReplaceAll(string(state["dirty"]), " ", ""); got != want {
+				t.Fatalf("dirty %s, want %s", got, want)
 			}
 		})
 	}
