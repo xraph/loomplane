@@ -20,7 +20,9 @@ env:
 jobs:
   go:
     name: Go
-    uses: xraph/workflows/.github/workflows/go-ci.yml@adbc00609c913abaabd7b38d11533e0a44b92432 # v1.19.0
+    # v1.21.1 adds swap and a GOMEMLIMIT before govulncheck, which peaks
+    # around 14 GB on this module and took the 16 GB runner down on v1.19.0.
+    uses: xraph/workflows/.github/workflows/go-ci.yml@775309d390db15a5fd90918563a157eec650a20a # v1.21.1
     permissions:
       contents: read
       security-events: write
@@ -34,6 +36,9 @@ jobs:
       golangci-lint-version: v2.12.2
       golangci-lint-timeout: 10m
       govulncheck-version: v1.8.0
+      # Under GOMEMLIMIT the scan trades memory for time: a 6 GiB cap ran 21
+      # minutes locally against 7 uncapped, so the default 30 is too tight.
+      security-timeout-minutes: 45
       # Configured gosec rules gate in lint. The extra standalone scan reports
       # findings without overriding this repository's documented exclusions.
       gosec-fail-on-findings: false
