@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { formatDate, repositoriesLabel } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
+import { anchor, anchors } from "@/learn/content"
 import { Link } from "@/lib/router"
 import type { Run } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
@@ -65,7 +66,7 @@ export function Projects() {
           description="Each project is one application, however many services and repositories it spans."
           actions={
             mayCreate && (
-              <Button onClick={openNewProject}>
+              <Button onClick={openNewProject} {...anchor(anchors.newProject)}>
                 <PlusIcon />
                 New project
               </Button>

@@ -4,6 +4,7 @@
 import type { ReactNode } from "react"
 
 import { ShellProvider } from "@/components/shell"
+import { LearnProvider } from "@/learn/learn"
 import { AgentProvider } from "@/lib/features"
 
 export function WorkspaceFrame({
@@ -17,7 +18,11 @@ export function WorkspaceFrame({
     // Keyed on the organization: the agent is on or off per workspace, and
     // the panel's conversation belongs to the workspace it was started in.
     <AgentProvider key={orgId}>
-      <ShellProvider>{children}</ShellProvider>
+      <ShellProvider>
+        {/* The walkthrough: welcome, tour, lessons. Its progress is kept
+          per person per workspace. */}
+        <LearnProvider>{children}</LearnProvider>
+      </ShellProvider>
     </AgentProvider>
   )
 }

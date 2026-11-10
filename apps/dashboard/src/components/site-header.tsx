@@ -1,8 +1,6 @@
 // The bar above every page of the dashboard: the shared top bar, with the
 // organization first in the breadcrumbs, what's in flight, search opening
 // the command menu, the agent's panel, and the notification bell.
-import { KeyboardIcon } from "lucide-react"
-
 import { NotificationBell } from "@/components/notification-bell"
 import { EnvBadge, Thread } from "@/components/runs"
 import { AgentOrb } from "@/components/assistant/agent-orb"
@@ -24,6 +22,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { HelpMenu } from "@/learn/help-menu"
 import { duration } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
@@ -95,14 +94,8 @@ export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {
       after={
         <>
           <NotificationBell />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Keyboard shortcuts"
-            onClick={openShortcuts}
-          >
-            <KeyboardIcon />
-          </Button>
+          {/* Help holds the shortcuts too, with lessons and the tour. */}
+          <HelpMenu onShortcuts={openShortcuts} />
         </>
       }
     />

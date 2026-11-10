@@ -24,6 +24,7 @@ import { canaryLine, canaryFindings } from "@/lib/canary"
 import { dateTime, relative } from "@/lib/format"
 import { useProjectCan } from "@/lib/project-permissions"
 import { changeCount, planServices } from "@/lib/plans"
+import { anchor, anchors } from "@/learn/content"
 import { Link } from "@/lib/router"
 import type { Run } from "@/lib/runs"
 import { cn } from "@/lib/utils"
@@ -267,7 +268,11 @@ export function ApprovalCard({ run }: { run: Run }) {
           >
             Reject
           </Button>
-          <Button disabled={busy} onClick={() => void decide(true, note)}>
+          <Button
+            disabled={busy}
+            onClick={() => void decide(true, note)}
+            {...anchor(anchors.approve)}
+          >
             {approving ? <Spinner /> : <CheckIcon />}
             {p.executable ? "Approve and deploy" : "Approve"}
           </Button>

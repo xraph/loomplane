@@ -40,22 +40,27 @@ export type NavItem = {
   isActive?: boolean
   badge?: ReactNode
   items?: NavSubItem[]
+  /** A data-tour name, so a walkthrough can point at the entry. */
+  anchor?: string
 }
 
 export function NavMain({
   items,
   label = "Platform",
   className,
+  anchor,
 }: {
   items: NavItem[]
   /** The group's heading; leave it empty for a group that needs none. */
   label?: string
   className?: string
+  /** A data-tour name for the group, so a walkthrough can point at it. */
+  anchor?: string
 }) {
   // A section opens while you're in it, unless you've toggled it yourself.
   const [manual, setManual] = useState<Record<string, boolean>>({})
   return (
-    <SidebarGroup className={className}>
+    <SidebarGroup className={className} data-tour={anchor}>
       {label && <SidebarGroupLabel>{label}</SidebarGroupLabel>}
       <SidebarMenu>
         {items.map((item) =>
@@ -119,7 +124,7 @@ export function NavMain({
               </CollapsibleContent>
             </Collapsible>
           ) : (
-            <SidebarMenuItem key={item.title}>
+            <SidebarMenuItem key={item.title} data-tour={item.anchor}>
               <SidebarMenuButton
                 tooltip={item.title}
                 isActive={item.isActive}

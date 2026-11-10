@@ -70,6 +70,7 @@ import {
 } from "@/components/ui/sidebar"
 import { useInstance } from "@/lib/instance"
 import { useOrganization } from "@/lib/organization"
+import { anchors } from "@/learn/content"
 import { projectStyle } from "@/lib/project-style"
 import { Link, useNavigate, usePath } from "@/lib/router"
 import { isLive, type Run } from "@/lib/runs"
@@ -213,6 +214,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       icon: <CloudsIcon />,
       link: <Link to="/clouds" />,
       isActive: path.startsWith("/clouds"),
+      anchor: anchors.clouds,
     },
     {
       title: "Nodes",
@@ -335,7 +337,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
         <Organizations />
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={nav} />
+        <NavMain items={nav} anchor={anchors.nav} />
         {features.ai && can("ai:read") && (
           <NavMain items={aiNavItems({ path, can })} label="AI" />
         )}
@@ -486,6 +488,7 @@ function Projects({
         )
       }}
       onNew={onNew}
+      anchor={anchors.projects}
     />
   )
 }

@@ -44,16 +44,19 @@ export function NavProjects({
   projects,
   menu,
   onNew,
+  anchor,
 }: {
   projects: NavProject[]
   /** The items of a project's hover menu; no menu when omitted. */
   menu?: (p: NavProject) => ReactNode
   /** Shows a New project entry under the list when set. */
   onNew?: () => void
+  /** A data-tour name for the group, so a walkthrough can point at it. */
+  anchor?: string
 }) {
   const { isMobile } = useSidebar()
   return (
-    <SidebarGroup>
+    <SidebarGroup data-tour={anchor}>
       <SidebarGroupLabel>Projects</SidebarGroupLabel>
       <SidebarMenu>
         {projects.map((p) => {

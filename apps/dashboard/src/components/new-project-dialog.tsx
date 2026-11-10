@@ -60,6 +60,7 @@ import {
   randomColor,
   randomIcon,
 } from "@/lib/project-style"
+import { anchor, anchors } from "@/learn/content"
 import { useNavigate } from "@/lib/router"
 import { slugify } from "@/lib/slug"
 
@@ -107,7 +108,10 @@ export function NewProjectDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent
+        className="sm:max-w-xl"
+        {...anchor(anchors.newProjectDialog)}
+      >
         {/* Mounted only while open, so every opening starts afresh. */}
         {open && (
           <NewProjectForm

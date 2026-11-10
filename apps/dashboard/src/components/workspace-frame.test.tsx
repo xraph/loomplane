@@ -8,6 +8,7 @@ import { forgeClient } from "@/client/runtime"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AgentDock } from "@/components/assistant/agent-dock"
 import { WorkspaceFrame } from "@/components/workspace-frame"
+import { progressKey } from "@/learn/progress"
 import { FeaturesProvider } from "@/lib/features"
 
 vi.mock("@/lib/router", () => ({
@@ -35,6 +36,12 @@ afterEach(() => {
 // The frame App puts every workspace page in, with only the agent's status
 // to read: the shell's keys, menu and panel must see the agent as on.
 function show() {
+  // A workspace with nothing in it greets you first; these tests are about
+  // the agent, so the welcome counts as seen.
+  localStorage.setItem(
+    progressKey("usr_1", "org"),
+    JSON.stringify({ welcomed: true })
+  )
   const asked: string[] = []
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const path = new URL(String(input), "http://localhost").pathname

@@ -64,6 +64,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { anchor, anchors } from "@/learn/content"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { teamRolesFor } from "@/lib/teams"
@@ -98,7 +99,10 @@ export function Members() {
           description="Everyone in this workspace, and what each of them can do."
           actions={
             mayManage && (
-              <Button onClick={() => setInviting(true)}>
+              <Button
+                onClick={() => setInviting(true)}
+                {...anchor(anchors.invite)}
+              >
                 <PlusIcon />
                 Invite
               </Button>
@@ -609,6 +613,7 @@ function InviteDialog({
               <Button
                 type="submit"
                 disabled={create.isPending || !email.trim()}
+                {...anchor(anchors.inviteSend)}
               >
                 {create.isPending && <Spinner />}
                 Create invitation

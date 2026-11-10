@@ -81,6 +81,7 @@ import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { useNow } from "@/lib/use-runs"
 import { Link, useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
+import { anchor, anchors } from "@/learn/content"
 
 /** DeployPreset is what a link to the deploy screen already chose. */
 export type DeployPreset = {
@@ -185,7 +186,11 @@ function ProjectPicker({
 }) {
   const { busy } = useDeploymentWrites(project.id)
   return (
-    <section className="grid gap-2.5" aria-label="Project">
+    <section
+      className="grid gap-2.5"
+      aria-label="Project"
+      {...anchor(anchors.deployProject)}
+    >
       <CloudSectionHead title="Project" description="What this deploy ships." />
       <Select
         items={projects.map((p) => ({ label: p.name, value: p.id }))}
@@ -570,7 +575,11 @@ function DeployScreen({
         </section>
       )}
 
-      <section className="grid gap-2.5" aria-label="Environment">
+      <section
+        className="grid gap-2.5"
+        aria-label="Environment"
+        {...anchor(anchors.deployEnvironment)}
+      >
         <CloudSectionHead
           title="Environment"
           description="Where this deploy goes."
@@ -584,7 +593,11 @@ function DeployScreen({
         />
       </section>
 
-      <section className="grid gap-2.5" aria-label="Services">
+      <section
+        className="grid gap-2.5"
+        aria-label="Services"
+        {...anchor(anchors.deployServices)}
+      >
         <CloudSectionHead
           title={
             <>
@@ -792,6 +805,7 @@ function DeployScreen({
             type="button"
             disabled={blocked}
             onClick={() => void review()}
+            {...anchor(anchors.deployReview)}
           >
             {working && <Spinner />}
             Review plan

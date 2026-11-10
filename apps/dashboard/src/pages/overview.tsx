@@ -25,6 +25,9 @@ import { LatencyCard, TrafficCard, UsageSummary } from "@/components/usage"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
+import { anchor, anchors, waitingTerm } from "@/learn/content"
+import { GettingStarted } from "@/learn/getting-started"
+import { TermHint } from "@/learn/term-hint"
 import { cloudLabel } from "@/lib/clouds"
 import { duration, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
@@ -109,7 +112,10 @@ export function Overview() {
           description={loaded ? summary(runs) : "Loading your deployments…"}
           actions={
             can("deployment:create") && (
-              <Button onClick={() => openDeploy()}>
+              <Button
+                onClick={() => openDeploy()}
+                {...anchor(anchors.newDeployment)}
+              >
                 <PlusIcon />
                 New deployment
                 <Kbd className="ml-0.5 bg-primary-foreground/15 text-primary-foreground">
@@ -126,6 +132,8 @@ export function Overview() {
             retry={refetch}
           />
         )}
+
+        <GettingStarted />
 
         <div className="grid gap-3 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
           {!loaded && runs.length === 0 ? (
@@ -236,9 +244,13 @@ function Waiting({
     <Panel
       aria-label="Waiting on you"
       className="gap-2.5 ring-[color-mix(in_oklch,var(--weld)_28%,var(--border))]"
+      {...anchor(anchors.waiting)}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <Eyebrow className="text-weld-ink">Waiting on you · {count}</Eyebrow>
+        <span className="flex items-center gap-1.5">
+          <Eyebrow className="text-weld-ink">Waiting on you · {count}</Eyebrow>
+          <TermHint term={waitingTerm} />
+        </span>
         {p.expiresAt && (
           <span className="text-xs text-muted-foreground">
             Open until{" "}
@@ -288,7 +300,11 @@ function Waiting({
 
 function InFlight({ run, count }: { run: Run; count: number }) {
   return (
-    <Panel aria-label="In flight" className="gap-2.5">
+    <Panel
+      aria-label="In flight"
+      className="gap-2.5"
+      {...anchor(anchors.waiting)}
+    >
       <Eyebrow className="text-flight-ink">In flight · {count}</Eyebrow>
       <div className="grid min-w-0 gap-1">
         <span className="truncate text-[15px] font-semibold tracking-[-0.01em]">
@@ -315,8 +331,15 @@ function AllClear() {
   const { can } = useOrganization()
   const { openDeploy } = useShell()
   return (
-    <Panel aria-label="Waiting on you" className="gap-2.5">
-      <Eyebrow>Waiting on you · 0</Eyebrow>
+    <Panel
+      aria-label="Waiting on you"
+      className="gap-2.5"
+      {...anchor(anchors.waiting)}
+    >
+      <span className="flex items-center gap-1.5">
+        <Eyebrow>Waiting on you · 0</Eyebrow>
+        <TermHint term={waitingTerm} />
+      </span>
       <div className="grid gap-1">
         <span className="text-[15px] font-semibold tracking-[-0.01em]">
           Nothing needs your approval

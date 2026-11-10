@@ -91,6 +91,7 @@ export function TopBar({
           variant="outline"
           size="sm"
           onClick={onSearch}
+          data-tour="search"
           className="hidden w-[clamp(14rem,32vw,28rem)] justify-start rounded-[10px] bg-subtle pl-3 text-muted-foreground shadow-none md:inline-flex"
         >
           <SearchIcon />
