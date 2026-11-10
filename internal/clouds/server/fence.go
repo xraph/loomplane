@@ -112,7 +112,6 @@ def main():
  journal=os.open('state',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600,dir_fd=directory)
  raw=os.read(journal,16*1024*1024)
  state=json.loads(raw) if raw else {'epochs':{},'dirty':False}
- assert not state['dirty']
  def save():
   data=json.dumps(state).encode();os.lseek(journal,0,os.SEEK_SET);os.write(journal,data);os.ftruncate(journal,len(data));os.fsync(journal);os.fsync(directory)
  class UnixHTTP(http.client.HTTPConnection):
@@ -121,6 +120,20 @@ def main():
  c=UnixHTTP('docker')
  c.request('GET','/info');r=c.getresponse();identity=json.loads(r.read())
  assert r.status==200 and identity['ID']==q['Daemon']
+ if state['dirty']:
+  # A dirty mark that names an exec clears once Docker shows that exec
+  # finished, or no longer knows it: a finished exec is a full quiescence
+  # receipt. Docker leaves ExitCode null until it has processed the exit
+  # event, so Running alone isn't enough. A bare True is an unknown mutation
+  # and waits for an operator.
+  mark=state['dirty']
+  assert isinstance(mark,dict) and mark.get('mode')=='exec'
+  assert re.fullmatch(r'[a-f0-9]{64}',mark['exec']) and re.fullmatch(r'[a-f0-9]{64}',mark['container'])
+  c.request('GET','/exec/'+mark['exec']+'/json');r=c.getresponse();receipt=r.read()
+  if r.status!=404:
+   receipt=json.loads(receipt)
+   assert r.status==200 and receipt['ContainerID']==mark['container'] and receipt['Running'] is False and type(receipt['ExitCode']) is int
+  state['dirty']=False;save()
  op=hashlib.sha256(q['Fence']['operation'].encode()).hexdigest();generation=q['Fence']['generation'];old=state['epochs'].get(op,0)
  if q['Mode']=='advance':
   assert generation>=old
@@ -152,7 +165,9 @@ def main():
   assert owned['Config']['Labels'].get('loomplane.org') and owned['Config']['Labels'].get('loomplane.ingress')
   assert q['Fence']['operation']==owned['Config']['Labels']['loomplane.org']+'/ingress/'+owned['Config']['Labels']['loomplane.ingress']
  headers={k:','.join(v) for k,v in (q['Headers'] or {}).items()};headers['Content-Length']=str(size)
- state['dirty']=True;save()
+ # An exec start records which exec it ran, so a later takeover can tell
+ # once it has finished.
+ state['dirty']={'mode':'exec','exec':q['Path'].split('/')[2],'container':container} if streamed else True;save()
  c.request(q['Method'],q['Path'],body=payload,headers=headers);r=c.getresponse()
  assert r.chunked or r.length is not None or (streamed and r.status==200)
  responding=True

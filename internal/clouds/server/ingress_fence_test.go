@@ -32,13 +32,16 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 				lostCaller               bool
 				exit                     int
 				clean                    bool
-				args                     []string
+				// finished leaves the journal dirty with an exec Docker shows
+				// finished, which the SSH helper's next takeover clears.
+				finished bool
+				args     []string
 			}{
 				{name: "lost_caller", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, lostCaller: true},
 				{name: "complete", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true},
 				{name: "failed_exit_completed", frame: "\x02\x00\x00\x00\x00\x00\x00\x02no", exit: 1, clean: true},
-				{name: "truncated_header", frame: "\x01\x00"},
-				{name: "truncated_payload", frame: "\x01\x00\x00\x00\x00\x00\x00\x05no"},
+				{name: "truncated_header", frame: "\x01\x00", finished: true},
+				{name: "truncated_payload", frame: "\x01\x00\x00\x00\x00\x00\x00\x05no", finished: true},
 				{name: "still_running", running: true},
 				{name: "unrelated_owned_container", foreign: true, clean: true},
 				{name: "detached", detach: true, clean: true},
@@ -146,12 +149,12 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					var state struct{ Dirty bool }
+					var state struct{ Dirty json.RawMessage }
 					if err = json.Unmarshal(raw, &state); err != nil {
 						t.Fatal(err)
 					}
-					if state.Dirty == tc.clean {
-						t.Fatalf("dirty %v, clean expected %v: %s", state.Dirty, tc.clean, diagnostics.String())
+					if dirty := string(state.Dirty) != "false"; dirty == tc.clean {
+						t.Fatalf("dirty %s, clean expected %v: %s", state.Dirty, tc.clean, diagnostics.String())
 					}
 					if (tc.foreign || tc.detach) && starts.Load() != 0 {
 						t.Fatal("unapproved exec reached Docker")
@@ -159,11 +162,13 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 					if !tc.clean && strings.HasSuffix(out, "0\r\n\r\n") {
 						t.Fatal("unknown completion accepted")
 					}
+					// A journal whose recorded exec has finished takes over too.
+					recovers := tc.clean || host == "ssh" && tc.finished
 					next := run("advance", 2)
-					if strings.Contains(next, "200 OK") != tc.clean {
+					if strings.Contains(next, "200 OK") != recovers {
 						t.Fatal("takeover", next)
 					}
-					if tc.clean {
+					if recovers {
 						before := starts.Load()
 						_ = run("ingress-exec", 1)
 						if starts.Load() != before {
