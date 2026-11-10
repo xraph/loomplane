@@ -1,0 +1,405 @@
+---
+title: Install on Linux
+description: Install loomctl and the Loomplane server on Linux from a .deb, an .rpm or a release archive, run the server under systemd, then upgrade or remove both.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Every [GitHub release](https://github.com/xraph/loomplane/releases) carries Linux builds of both programs for amd64 and arm64. `loomctl` is the command-line client, and you can put it on any machine. The server is `loomplane` (the API and dashboard) plus `loomplane-worker` (repository analysis), and it wants a host of its own with PostgreSQL. This page runs the server straight on the host under systemd. If you'd rather keep it in containers, [Production on Docker](/docs/operations/production-on-docker) covers that setup.
+
+## What a release ships for Linux
+
+For a release tagged `v1.2.3`:
+
+| File | What it holds |
+|---|---|
+| `loomctl_1.2.3_amd64.deb`, `loomctl_1.2.3_arm64.deb` | `loomctl` in `/usr/bin`, for Debian and Ubuntu |
+| `loomctl-1.2.3-1.x86_64.rpm`, `loomctl-1.2.3-1.aarch64.rpm` | The same for Fedora, RHEL and their relatives |
+| `loomctl_1.2.3_linux_amd64.tar.gz`, `loomctl_1.2.3_linux_arm64.tar.gz` | The bare binary, for any distribution |
+| `loomplane_1.2.3_amd64.deb`, `loomplane_1.2.3_arm64.deb` | The server: both binaries, the dashboard, `config.yaml`, a settings file and two systemd units |
+| `loomplane-1.2.3-1.x86_64.rpm`, `loomplane-1.2.3-1.aarch64.rpm` | The same server package for dnf |
+| `loomplane_1.2.3_linux_amd64.tar.gz`, `loomplane_1.2.3_linux_arm64.tar.gz` | The server as an archive, with the same units under `systemd/` |
+| `binaries-checksums.txt` | SHA-256 of every file above |
+| `binaries-checksums.txt.sigstore.json` | A Sigstore signature over that checksum file, made by the Release workflow |
+
+There's also a `loomctl` container image, `ghcr.io/xraph/loomctl`, for linux/amd64 and linux/arm64.
+
+## Download and verify
+
+Pick the release and your architecture first. Every command below reuses these two variables:
+
+```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/xraph/loomplane/releases/latest \
+  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+case "$(uname -m)" in
+  x86_64) ARCH=amd64 ;;
+  aarch64 | arm64) ARCH=arm64 ;;
+  *) echo "Loomplane ships Linux builds for amd64 and arm64 only" >&2 ;;
+esac
+echo "$VERSION $ARCH"
+```
+
+That asks GitHub for the newest stable release. For a host you'll keep, set `VERSION=1.2.3` yourself so you know what you installed. Then fetch the checksums and their signature next to whatever you download:
+
+```bash
+BASE=https://github.com/xraph/loomplane/releases/download/v$VERSION
+curl -fsSLO "$BASE/binaries-checksums.txt"
+curl -fsSLO "$BASE/binaries-checksums.txt.sigstore.json"
+```
+
+Once the files you want are in the same directory, check them. `--ignore-missing` skips everything in the list you didn't download:
+
+```bash
+sha256sum --check --ignore-missing binaries-checksums.txt
+```
+
+The checksum file proves the download wasn't damaged. To prove the Release workflow in `xraph/loomplane` made it, verify its signature with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/):
+
+```bash
+cosign verify-blob \
+  --bundle binaries-checksums.txt.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/xraph/loomplane/\.github/workflows/release\.yml@refs/(tags/v.+|heads/main)$' \
+  binaries-checksums.txt
+```
+
+It should print `Verified OK`. A release cut from the Actions tab is signed from `main` and one cut from a tag push from that tag, which is why the identity allows both. Once you have `loomctl`, `loomctl node verify-release` runs the same check without cosign.
+
+## Install loomctl
+
+<Tabs items={['Debian and Ubuntu', 'Fedora and RHEL', 'Archive', 'Container']}>
+  <Tab value="Debian and Ubuntu">
+
+```bash
+curl -fsSLO "$BASE/loomctl_${VERSION}_${ARCH}.deb"
+sha256sum --check --ignore-missing binaries-checksums.txt
+sudo apt install "./loomctl_${VERSION}_${ARCH}.deb"
+```
+
+  </Tab>
+  <Tab value="Fedora and RHEL">
+
+The rpm names use the kernel's architecture names, `x86_64` and `aarch64`:
+
+```bash
+RPM_ARCH=$(uname -m)
+curl -fsSLO "$BASE/loomctl-${VERSION}-1.${RPM_ARCH}.rpm"
+sha256sum --check --ignore-missing binaries-checksums.txt
+sudo dnf install "./loomctl-${VERSION}-1.${RPM_ARCH}.rpm"
+```
+
+  </Tab>
+  <Tab value="Archive">
+
+This works on any distribution, Alpine included, since the binary is static.
+
+```bash
+curl -fsSLO "$BASE/loomctl_${VERSION}_linux_${ARCH}.tar.gz"
+sha256sum --check --ignore-missing binaries-checksums.txt
+tar -xzf "loomctl_${VERSION}_linux_${ARCH}.tar.gz" loomctl
+sudo install -m 0755 loomctl /usr/local/bin/loomctl
+```
+
+Without root, put it in `~/.local/bin` instead and make sure that's on your `PATH`.
+
+  </Tab>
+  <Tab value="Container">
+
+```bash
+docker run --rm ghcr.io/xraph/loomctl:v$VERSION --version
+```
+
+The image runs `loomctl` as its entrypoint. Its main job is joining a machine as a [node](/docs/clouds/nodes) when that machine has no service manager.
+
+  </Tab>
+</Tabs>
+
+Check it, then sign in. `--no-browser` prints the sign-in address instead of opening it, which is what you want over SSH:
+
+```bash
+loomctl --version
+loomctl login --url https://loomplane.example.com --no-browser
+```
+
+Open that address on your laptop or phone, check the code matches, and approve it. CI signs in with an API key instead, which [CI with loomctl](/docs/guides/ci-with-loomctl) covers, and [the loomctl reference](/docs/reference/loomctl) lists every command.
+
+## Install the server
+
+### What you need
+
+- A Linux host on amd64 or arm64 with systemd 239 or newer. Ubuntu 20.04, Debian 11, RHEL 8 and anything newer qualify.
+- PostgreSQL 17, on this host or reachable from it. A managed database works fine.
+- A hostname pointed at the host, with TCP ports 80 and 443 open for HTTPS.
+- 2 CPU cores and 8 GB of RAM to start, plus disk for the database, deployment sources and checkouts the worker unpacks (up to 2 GiB per analysis). Measure your own workload before you go smaller.
+
+Loomplane never runs your code, so the host needs no Docker, no Git and no build tools.
+
+<Steps>
+<Step>
+
+### Set up PostgreSQL
+
+Skip this if you already have a database. On Debian or Ubuntu, the PostgreSQL project's own repository has version 17 for every supported release:
+
+```bash
+sudo apt install -y postgresql-common
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+sudo apt install -y postgresql-17
+```
+
+On Fedora or RHEL, follow the [PostgreSQL download page](https://www.postgresql.org/download/linux/redhat/) for your release. Then make a role and a database for Loomplane. A hex password needs no escaping in a URL:
+
+```bash
+DB_PASSWORD=$(openssl rand -hex 32)
+sudo -u postgres psql -v ON_ERROR_STOP=1 \
+  -c "CREATE ROLE loomplane LOGIN PASSWORD '$DB_PASSWORD'" \
+  -c "CREATE DATABASE loomplane OWNER loomplane"
+echo "postgres://loomplane:$DB_PASSWORD@127.0.0.1:5432/loomplane?sslmode=disable"
+```
+
+Keep that last line. It's your `LOOMPLANE_DATABASE_URL`. Use `sslmode=require` or stricter for a database on another machine.
+
+</Step>
+<Step>
+
+### Install the package
+
+<Tabs items={['Debian and Ubuntu', 'Fedora and RHEL', 'Archive']}>
+  <Tab value="Debian and Ubuntu">
+
+```bash
+curl -fsSLO "$BASE/loomplane_${VERSION}_${ARCH}.deb"
+sha256sum --check --ignore-missing binaries-checksums.txt
+sudo apt install "./loomplane_${VERSION}_${ARCH}.deb"
+```
+
+  </Tab>
+  <Tab value="Fedora and RHEL">
+
+```bash
+RPM_ARCH=$(uname -m)
+curl -fsSLO "$BASE/loomplane-${VERSION}-1.${RPM_ARCH}.rpm"
+sha256sum --check --ignore-missing binaries-checksums.txt
+sudo dnf install "./loomplane-${VERSION}-1.${RPM_ARCH}.rpm"
+```
+
+  </Tab>
+  <Tab value="Archive">
+
+The archive holds what the package installs, so you put each piece in place yourself. Binaries go in `/usr/local/bin`, where the units look first.
+
+```bash
+curl -fsSLO "$BASE/loomplane_${VERSION}_linux_${ARCH}.tar.gz"
+sha256sum --check --ignore-missing binaries-checksums.txt
+mkdir loomplane && tar -xzf "loomplane_${VERSION}_linux_${ARCH}.tar.gz" -C loomplane
+cd loomplane
+
+sudo useradd --system --user-group --no-create-home --home-dir /var/lib/loomplane \
+  --shell /usr/sbin/nologin loomplane
+sudo install -m 0755 loomplane loomplane-worker /usr/local/bin/
+sudo mkdir -p /usr/local/share/loomplane /etc/loomplane
+sudo rm -rf /usr/local/share/loomplane/dashboard
+sudo cp -r dashboard /usr/local/share/loomplane/dashboard
+sudo install -m 0644 config.yaml /etc/loomplane/config.yaml
+sudo install -m 0640 -g loomplane systemd/loomplane.env /etc/loomplane/loomplane.env
+sudo sed -i 's|^LOOMPLANE_DASHBOARD_DIR=.*|LOOMPLANE_DASHBOARD_DIR=/usr/local/share/loomplane/dashboard|' \
+  /etc/loomplane/loomplane.env
+sudo install -m 0644 systemd/loomplane.service systemd/loomplane-worker.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+  </Tab>
+</Tabs>
+
+Either way, the files land here:
+
+| Path | |
+|---|---|
+| `/usr/bin/loomplane`, `/usr/bin/loomplane-worker` | The binaries (`/usr/local/bin` from the archive) |
+| `/usr/share/loomplane/dashboard` | The built dashboard the API serves |
+| `/etc/loomplane/config.yaml` | Defaults. Leave it alone, since an upgrade replaces it |
+| `/etc/loomplane/loomplane.env` | Your settings and secrets, readable by root and the `loomplane` group only |
+| `loomplane.service`, `loomplane-worker.service` | The systemd units, both running as the `loomplane` user |
+| `/var/lib/loomplane` | Deployment sources. systemd creates it on first start |
+| `/var/lib/loomplane-work` | The worker's checkouts |
+
+Installing starts nothing. You fill in the settings first.
+
+</Step>
+<Step>
+
+### Fill in the settings
+
+```bash
+openssl rand -base64 32
+sudoedit /etc/loomplane/loomplane.env
+```
+
+Four values are required:
+
+| Variable | |
+|---|---|
+| `LOOMPLANE_ENVIRONMENT` | Already `production`. Leave it |
+| `LOOMPLANE_PUBLIC_URL` | `https://` and your hostname, no path |
+| `LOOMPLANE_SECRET_KEY` | The value `openssl rand -base64 32` printed |
+| `LOOMPLANE_DATABASE_URL` | The URL from the PostgreSQL step |
+
+The rest of the file has optional settings (email, off-host backups, the AI section) with a comment on each. Any `LOOMPLANE_` variable from [Configuration](/docs/reference/configuration) can go here, and both services read the same file.
+
+<Callout type="warn">
+  `LOOMPLANE_SECRET_KEY` encrypts every cloud credential and secret Loomplane stores. Generate it once, keep a copy in your secret manager, and keep it out of your backups. If you lose it, you lose every stored credential.
+</Callout>
+
+</Step>
+<Step>
+
+### Start it
+
+Start the API first. It applies the database migrations before it serves, and the worker waits for them.
+
+```bash
+sudo systemctl enable --now loomplane
+curl -fsS http://127.0.0.1:8780/_/health/live && echo
+sudo systemctl enable --now loomplane-worker
+systemctl status loomplane loomplane-worker --no-pager
+```
+
+The first start migrates an empty database, so give it a minute. If `curl` fails, `journalctl -u loomplane -e` says why, and a missing setting is named there.
+
+</Step>
+<Step>
+
+### Put HTTPS in front
+
+Both services listen on `127.0.0.1` only. A reverse proxy serves your hostname over HTTPS and passes traffic in. With [Caddy](https://caddyserver.com/docs/install), which gets and renews the certificate for you, `/etc/caddy/Caddyfile` is:
+
+```text
+loomplane.example.com {
+	# Health and metrics stay on the host.
+	@internal path /_/health /_/health/* /_/metrics /_/metrics/* /debug/*
+	respond @internal 404
+
+	reverse_proxy 127.0.0.1:8780 {
+		# Send events as they happen. WebSocket upgrades work as is.
+		flush_interval -1
+	}
+}
+```
+
+```bash
+sudo systemctl reload caddy
+```
+
+nginx works too, as long as it passes WebSocket upgrades and turns off buffering for the API's event streams (`proxy_buffering off`).
+
+</Step>
+<Step>
+
+### Finish setup
+
+Setup needs a one-time link. The API logs it as a `setup is waiting` warning (`journalctl -u loomplane | grep setup`), and `loomplane setup-token` prints it again.
+
+Operator commands like that one need the service's settings and the service's user. They also read a `.env` from the directory you run them in, so start them from `/var/lib/loomplane`. This shell function does all three, and the rest of this page uses it:
+
+```bash
+lp() {
+  sudo -u loomplane sh -c 'cd /var/lib/loomplane && set -a && . /etc/loomplane/loomplane.env && set +a && exec loomplane "$@"' loomplane "$@"
+}
+lp setup-token
+# Finish setup at https://loomplane.example.com/setup?token=...
+```
+
+Open that link, create your account and your organization, and connect a repository. The first account owns the instance. [Quick start](/docs/quick-start#deploy-your-first-project) picks up from there.
+
+</Step>
+</Steps>
+
+## Run it as a service
+
+The two units behave like any other systemd service:
+
+```bash
+systemctl status loomplane loomplane-worker
+journalctl -u loomplane -u loomplane-worker -f
+sudo systemctl restart loomplane
+```
+
+Change a setting by editing `/etc/loomplane/loomplane.env` and restarting both. systemd restarts either service if it exits with an error, and starts both at boot once you've enabled them.
+
+The units lock things down. Each runs as `loomplane` with no capabilities, can't gain privileges, sees a read-only filesystem apart from its own directory under `/var/lib` and a private `/tmp`, and can't see `/home`. To change one, use a drop-in instead of editing the unit, so an upgrade doesn't overwrite it:
+
+```bash
+sudo systemctl edit loomplane
+```
+
+The `loomplane` binary has operator commands too: `migrations`, `migrate`, `backup`, `restore` and `setup-token`. Run them through the `lp` function from the setup step. Put it in root's shell profile if you'll use it often:
+
+```bash
+lp migrations
+# N applied, 0 pending.
+```
+
+[Backing up Loomplane](/docs/operations/backing-up-loomplane) covers backups. With this layout, the files to keep besides the database are `/var/lib/loomplane` and `/etc/loomplane/loomplane.env`, and the secret key belongs somewhere other than those backups.
+
+## Upgrade
+
+### loomctl
+
+Install the newer package over the old one (`sudo apt install ./loomctl_...deb` or `sudo dnf install ./loomctl-...rpm`), or replace the binary in `/usr/local/bin`. Your sign-in stays.
+
+### The server
+
+The order matters: back up, stop both services, install, start the API so it migrates, then start the worker. [Upgrades and releases](/docs/operations/upgrades-and-releases) explains why, and how to roll back.
+
+```bash
+VERSION=1.2.4   # the release you're moving to
+
+# Back up with the version you have now, while nothing writes.
+sudo systemctl stop loomplane-worker loomplane
+lp backup --out /var/lib/loomplane/pre-upgrade.tar.gz
+sudo cp /var/lib/loomplane/pre-upgrade.tar.gz /root/
+
+# Download and verify the new release as above, then install it.
+sudo apt install "./loomplane_${VERSION}_${ARCH}.deb"   # or dnf install ./loomplane-...rpm
+
+lp migrations   # shows what the new version will apply
+sudo systemctl start loomplane
+curl -fsS http://127.0.0.1:8780/_/health/live && echo
+sudo systemctl start loomplane-worker
+```
+
+Copy that backup off the host too. The package keeps your `loomplane.env`, and it never starts or restarts the services by itself, so nothing runs the new version until you start it.
+
+From the archive, it's the same order. Stop both, copy the new binaries into `/usr/local/bin` and the new `dashboard` into `/usr/local/share/loomplane/`, replace `/etc/loomplane/config.yaml`, then start the API and the worker. Compare the new `systemd/` files with yours too, since a release can change them.
+
+Loomplane won't start against a database a newer version migrated. Going back means restoring the backup you made before upgrading.
+
+## Uninstall
+
+### loomctl
+
+```bash
+loomctl logout
+sudo apt remove loomctl        # or: sudo dnf remove loomctl
+```
+
+From the archive, `sudo rm /usr/local/bin/loomctl`. `loomctl logout` ends your session on the server and deletes the saved login under `~/.config/loomplane`.
+
+### The server
+
+Removing the package stops and disables both services. It leaves your data, your settings and the `loomplane` user, in case you meant to reinstall:
+
+```bash
+sudo apt remove loomplane      # or: sudo dnf remove loomplane
+```
+
+`apt purge loomplane` removes `/etc/loomplane` as well. To remove everything else, once you're sure you have the backup you want:
+
+```bash
+sudo rm -rf /var/lib/loomplane /var/lib/loomplane-work /etc/loomplane
+sudo userdel loomplane
+sudo -u postgres psql -c "DROP DATABASE loomplane" -c "DROP ROLE loomplane"
+```
+
+From the archive, stop and disable both services, then delete the two unit files from `/etc/systemd/system`, the binaries from `/usr/local/bin` and `/usr/local/share/loomplane`, and run `sudo systemctl daemon-reload` before the commands above.

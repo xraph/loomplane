@@ -13,7 +13,8 @@ func TestFailMapsSignInErrors(t *testing.T) {
 	for err, want := range map[error]int{
 		connections.ErrAppLocked: http.StatusConflict,
 		connections.ErrNoApp:     http.StatusUnprocessableEntity,
-		fmt.Errorf("%w: no callback URL", connections.ErrUnavailable): http.StatusServiceUnavailable,
+		fmt.Errorf("%w: no callback URL", connections.ErrUnavailable):                 http.StatusServiceUnavailable,
+		fmt.Errorf("%w: an exec is still running", connections.ErrFenceRepairRefused): http.StatusConflict,
 	} {
 		var httpErr interface {
 			error

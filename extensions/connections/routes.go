@@ -7,6 +7,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -247,6 +248,21 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("connectionStorage.list"),
 		forge.WithSummary("Owned persistent volumes and current attachment state"),
 		forge.WithResponseSchema(http.StatusOK, "Persistent storage", StorageVolumeList{}),
+	); err != nil {
+		return err
+	}
+	if err := g.POST("/connections/:id/fence-repair/review", e.reviewFenceRepair,
+		forge.WithName("connectionFenceRepair.review"),
+		forge.WithSummary("Read a server's fence journal and the execs still running in Loomplane's containers, without changing anything"),
+		forge.WithResponseSchema(http.StatusOK, "The fence journal review", server.FenceRepair{}),
+	); err != nil {
+		return err
+	}
+	if err := g.POST("/connections/:id/fence-repair", e.repairFence,
+		forge.WithName("connectionFenceRepair.apply"),
+		forge.WithSummary("Clear a reviewed dirty mark on a server's fence journal, keeping its epochs"),
+		forge.WithRequestSchema(connections.FenceRepairInput{}),
+		forge.WithResponseSchema(http.StatusOK, "The fence journal after the repair", server.FenceRepair{}),
 	); err != nil {
 		return err
 	}

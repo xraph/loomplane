@@ -108,6 +108,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			// still open, refetch a project that no longer exists (404).
 			forge.WithEntity(forge.EntityDef{Type: "Project", IDField: "id"}),
 		}},
+		{http.MethodGet, "/projects/:id/deletion", e.previewDelete, []forge.RouteOption{
+			forge.WithName("projects.deletion"),
+			forge.WithSummary("What deleting a project would remove from provider accounts first, and whether it would be refused. Changes nothing."),
+			forge.WithResponseSchema(http.StatusOK, "The deletion preview", projects.DeletionPreview{}),
+		}},
 		{http.MethodGet, "/projects/:id/environments", e.environments, []forge.RouteOption{
 			forge.WithName("environments.list"), forge.WithSummary("A project's environments"),
 			forge.WithResponseSchema(http.StatusOK, "Environments", EnvironmentList{}),
@@ -292,6 +297,18 @@ func (e *Extension) remove(c forge.Context) error {
 		return e.failed(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (e *Extension) previewDelete(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	out, err := e.svc.PreviewDelete(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return e.failed(c, err)
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 func (e *Extension) environments(c forge.Context) error {
