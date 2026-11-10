@@ -5238,7 +5238,7 @@
             "type": "string"
           },
           "config": {
-            "type": "string"
+            "description": "The binding's configuration: the JSON object the server stores, sent as is."
           },
           "connection_id": {
             "type": "string"

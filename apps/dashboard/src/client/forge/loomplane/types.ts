@@ -347,7 +347,8 @@ export interface BackupList {
 export interface Binding {
   alias: string;
   commitSha: string;
-  config: string;
+  /** The binding's configuration: the JSON object the server stores, sent as is. */
+  config: any;
   connectionId: string;
   createdAt: string;
   drift: string;
@@ -2384,7 +2385,8 @@ export interface EnvironmentUsage {
 
 export interface Event {
   at: string;
-  data: string;
+  /** The event's payload: the JSON object the server stores, sent as is. */
+  data: any;
   kind: string;
   seq: number;
   taskId: string;

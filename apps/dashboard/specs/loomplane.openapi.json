@@ -19254,7 +19254,7 @@
             "type": "string"
           },
           "config": {
-            "type": "string"
+            "description": "The binding's configuration: the JSON object the server stores, sent as is."
           },
           "connection_id": {
             "type": "string"
@@ -26244,7 +26244,7 @@
             "format": "date-time"
           },
           "data": {
-            "type": "string"
+            "description": "The event's payload: the JSON object the server stores, sent as is."
           },
           "kind": {
             "type": "string"
