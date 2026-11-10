@@ -194,7 +194,21 @@ sudo loomctl node leave --purge-volumes
 
 Docker requests from Loomplane run under a fence, so two attempts can't act on one daemon at once. The node keeps the fence's journal in its state directory, under `fence/<hash>/state`. If the node drops in the middle of a change, the journal stays marked dirty, and the next deploy reports that the runtime effect fence couldn't establish quiescence.
 
-Check what is running on the machine first. Then open that `state` file and set `"dirty"` to `false`. Never delete the file: that resets the fence's epochs, and the fence stops protecting you.
+When the mark names an exec, a database readiness check for instance, the next deploy asks Docker about that exec and clears the mark itself once it has finished. A mark that doesn't say what was in flight waits for you. Review it with the node's connection ID:
+
+```bash
+loomctl fence-repair conn_...
+```
+
+You get the dirty mark, a `review` digest and every exec still running in a Loomplane container. Nothing changes yet. To clear the mark, pass the digest back:
+
+```bash
+loomctl fence-repair conn_... --yes --review <digest>
+```
+
+The repair keeps the fence's epochs, so an older attempt still can't write. It's refused while another Loomplane request holds the journal's lock, while an exec in a Loomplane container is still running, or when the journal has changed since you reviewed it. Wait for whatever is running, then review again. A node older than this release can't be reviewed at all, so update it first.
+
+If the node dropped in the middle of a container change, look at the containers on the machine before you repair, because the change may be half done. Never delete the `state` file: that resets the epochs, and the fence stops protecting you.
 
 ## Releases and updates
 

@@ -96,7 +96,7 @@ func TestFenceRepairNeedsAReview(t *testing.T) {
 }
 
 // The helper's refusals say what to do, so they reach the caller. Anything
-// else from the SSH session stays hidden, as other live reads do.
+// else from the SSH session or node stream stays hidden, as other live reads do.
 func TestFenceRepairErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -105,7 +105,7 @@ func TestFenceRepairErrors(t *testing.T) {
 		reason bool
 	}{
 		{name: "refused", err: fmt.Errorf("%w: an exec is still running in a Loomplane container", server.ErrFenceRepairRefused), want: ErrFenceRepairRefused, reason: true},
-		{name: "node", err: fmt.Errorf("%w: fence repair runs on SSH servers", server.ErrInvalid), want: ErrInvalid, reason: true},
+		{name: "invalid", err: fmt.Errorf("%w: give the review digest a fence repair review returned", server.ErrInvalid), want: ErrInvalid, reason: true},
 		{name: "transport", err: errors.New("ssh: secret detail"), want: ErrUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

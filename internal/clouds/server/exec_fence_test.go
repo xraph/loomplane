@@ -39,7 +39,7 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 				exitPending              bool
 				clean, completesResponse bool
 				// finished leaves the journal dirty with an exec Docker shows
-				// finished, which the SSH helper's next takeover clears.
+				// finished, which the next takeover clears.
 				finished bool
 			}{
 				{name: "complete", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, completesResponse: true},
@@ -134,8 +134,8 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 					if dirty := string(state.Dirty) != "false"; dirty == tc.clean {
 						t.Fatalf("journal dirty %s, want dirty %v: %s", state.Dirty, !tc.clean, diagnostics.String())
 					}
-					// The SSH helper records which exec it started.
-					if host == "ssh" && !tc.clean && starts.Load() != 0 {
+					// The fence records which exec it started.
+					if !tc.clean && starts.Load() != 0 {
 						var mark map[string]string
 						if err = json.Unmarshal(state.Dirty, &mark); err != nil || mark["mode"] != "exec" || mark["exec"] != execution || mark["container"] != container {
 							t.Fatalf("dirty mark %s does not name the exec", state.Dirty)
@@ -149,7 +149,7 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 					}
 					// A clean journal lets the next generation take over the daemon,
 					// and so does one whose recorded exec has finished.
-					if next := run("advance", 2); strings.Contains(next, "200 OK") != (tc.clean || host == "ssh" && tc.finished) {
+					if next := run("advance", 2); strings.Contains(next, "200 OK") != (tc.clean || tc.finished) {
 						t.Fatal("takeover", next)
 					}
 				})

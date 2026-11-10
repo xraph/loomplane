@@ -344,7 +344,7 @@ func TestFencedAdvanceThenRequest(t *testing.T) {
 		t.Fatalf("daemon saw %v %q", got, d.seenBodies())
 	}
 	got, err := loadJournal(t, j)
-	if err != nil || got.Dirty || got.Epochs[fencerules.JournalKey(deployOp)] != 2 {
+	if err != nil || got.Dirty.Set || got.Epochs[fencerules.JournalKey(deployOp)] != 2 {
 		t.Fatalf("journal %+v %v", got, err)
 	}
 }
@@ -413,8 +413,8 @@ func TestFencedStreamDropLeavesDirty(t *testing.T) {
 			if !slices.Equal(d.seen(), []string{"POST /containers/create"}) {
 				t.Fatalf("daemon saw %v; the request must still complete", d.seen())
 			}
-			if _, err := loadJournal(t, j); !errors.Is(err, fencerules.ErrDirty) {
-				t.Fatalf("journal after the drop: %v, want ErrDirty", err)
+			if got, err := loadJournal(t, j); err != nil || got.Dirty != (fencerules.Dirty{Set: true}) {
+				t.Fatalf("journal after the drop: %+v %v, want a bare dirty mark", got, err)
 			}
 			d.set(func(d *fakeDaemon) { d.hold = nil })
 			if code, _ := fencedDo(t, h, fence(nodeproto.FenceAdvance, deployOp, 3), newRequest(t, http.MethodPost, "/", "")); code != http.StatusConflict {
@@ -484,7 +484,7 @@ func TestFencedBodilessResponseIsHeadOnly(t *testing.T) {
 				t.Fatalf("daemon saw %v", got)
 			}
 			got, err := loadJournal(t, j)
-			if err != nil || got.Dirty || got.Epochs[fencerules.JournalKey(deployOp)] != 2 {
+			if err != nil || got.Dirty.Set || got.Epochs[fencerules.JournalKey(deployOp)] != 2 {
 				t.Fatalf("journal %+v %v", got, err)
 			}
 		})
@@ -528,7 +528,7 @@ func TestIngressExecRejectsForeignContainer(t *testing.T) {
 	if got := d.seen(); len(got) != 0 {
 		t.Fatalf("daemon saw %v", got)
 	}
-	if got, err := loadJournal(t, j); err != nil || got.Dirty {
+	if got, err := loadJournal(t, j); err != nil || got.Dirty.Set {
 		t.Fatalf("journal %+v %v", got, err)
 	}
 
@@ -538,7 +538,7 @@ func TestIngressExecRejectsForeignContainer(t *testing.T) {
 	if code != http.StatusOK || body != "\x01\x00\x00\x00\x00\x00\x00\x06hello\n" {
 		t.Fatalf("owned container: %d %q", code, body)
 	}
-	if got, err := loadJournal(t, j); err != nil || got.Dirty {
+	if got, err := loadJournal(t, j); err != nil || got.Dirty.Set {
 		t.Fatalf("journal after the exec %+v %v", got, err)
 	}
 }
@@ -663,7 +663,7 @@ func TestFencedTrailingBytesAreRefused(t *testing.T) {
 	if got := d.seen(); len(got) != 0 {
 		t.Fatalf("daemon saw %v", got)
 	}
-	if got, err := loadJournal(t, j); err != nil || got.Dirty {
+	if got, err := loadJournal(t, j); err != nil || got.Dirty.Set {
 		t.Fatalf("journal %+v %v", got, err)
 	}
 }
@@ -708,7 +708,7 @@ func TestFencedStreamsForOneDaemonRunOneAtATime(t *testing.T) {
 	if got := d.seen(); len(got) != 2 {
 		t.Fatalf("daemon saw %v", got)
 	}
-	if got, err := loadJournal(t, j); err != nil || got.Dirty {
+	if got, err := loadJournal(t, j); err != nil || got.Dirty.Set {
 		t.Fatalf("journal %+v %v", got, err)
 	}
 }
@@ -748,16 +748,17 @@ func TestFencedExecWaitsForTheExit(t *testing.T) {
 			if r.code != http.StatusOK || r.body != frames {
 				t.Fatalf("%d %q", r.code, r.body)
 			}
-			_, jerr := loadJournal(t, j)
+			got, jerr := loadJournal(t, j)
 			if tc.clean {
-				if r.readErr != nil || r.err != nil || jerr != nil {
-					t.Fatalf("read %v, handler %v, journal %v", r.readErr, r.err, jerr)
+				if r.readErr != nil || r.err != nil || jerr != nil || got.Dirty.Set {
+					t.Fatalf("read %v, handler %v, journal %+v %v", r.readErr, r.err, got, jerr)
 				}
 				return
 			}
-			// The outcome is unknown: no last chunk, and the journal stays dirty.
-			if r.readErr == nil || r.err == nil || !errors.Is(jerr, fencerules.ErrDirty) {
-				t.Fatalf("read %v, handler %v, journal %v", r.readErr, r.err, jerr)
+			// The outcome is unknown: no last chunk, and the journal stays
+			// dirty with the exec it started.
+			if r.readErr == nil || r.err == nil || jerr != nil || got.Dirty != fencerules.ExecMark(execID, container) {
+				t.Fatalf("read %v, handler %v, journal %+v %v", r.readErr, r.err, got, jerr)
 			}
 		})
 	}

@@ -63,9 +63,6 @@ func (c *Client) RepairFence(ctx context.Context, review string) (*FenceRepair, 
 }
 
 func (c *Client) fenceRepair(ctx context.Context, mode, review string) (*FenceRepair, error) {
-	if c.Config != nil && c.Config.Node != nil {
-		return nil, fmt.Errorf("%w: fence repair runs on SSH servers; a node keeps its fence journal in its own state directory", ErrInvalid)
-	}
 	var body io.Reader
 	if mode == "repair" {
 		raw, err := json.Marshal(map[string]string{"review": review})

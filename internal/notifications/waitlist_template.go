@@ -24,39 +24,67 @@ const waitlistApprovedHTML = `<!DOCTYPE html>
 <p style="color: #666; font-size: 14px;">If you didn't ask to join the waitlist, you can safely ignore this email.</p>
 </body></html>`
 
-// seedTemplates adds herald's default templates and the waitlist approval
-// email. Existing templates are left alone, so a restart or a second replica
+// seededTemplate is one of Loomplane's own emails, added beside herald's
+// defaults.
+type seededTemplate struct {
+	slug, name, category string
+	variables            []template.Variable
+	subject, html, text  string
+}
+
+func ownTemplates() []seededTemplate {
+	return []seededTemplate{
+		{
+			slug: waitlistApprovedSlug, name: "Waitlist Approved", category: template.CategoryAuth,
+			variables: []template.Variable{
+				{Name: "app_name", Type: "string", Required: true},
+				{Name: "sign_up_url", Type: "url", Required: true},
+			},
+			subject: "You're in: create your Loomplane account",
+			html:    waitlistApprovedHTML,
+			text:    "Your spot on the Loomplane waitlist was approved. Create your account here: {{.sign_up_url}}",
+		},
+		hostCertificateTemplate(),
+	}
+}
+
+// seedTemplates adds herald's default templates and Loomplane's own emails.
+// Existing templates are left alone, so a restart or a second replica
 // changes nothing.
 func (s *Service) seedTemplates(ctx context.Context) error {
 	appID := s.cfg.Identity.AppID
 	if err := s.herald.SeedDefaultTemplates(ctx, appID); err != nil {
 		return err
 	}
-	existing, err := s.mailStore.GetTemplateBySlug(ctx, appID, waitlistApprovedSlug, "email")
+	for _, t := range ownTemplates() {
+		if err := s.seedTemplate(ctx, appID, t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) seedTemplate(ctx context.Context, appID string, t seededTemplate) error {
+	existing, err := s.mailStore.GetTemplateBySlug(ctx, appID, t.slug, "email")
 	if err != nil && !errors.Is(err, heraldstore.ErrTemplateNotFound) {
-		return fmt.Errorf("look up the waitlist approval template: %w", err)
+		return fmt.Errorf("look up the %s template: %w", t.slug, err)
 	}
 	if existing != nil {
 		return nil
 	}
 	now := time.Now()
 	tmpl := &template.Template{
-		ID: id.NewTemplateID(), AppID: appID, Slug: waitlistApprovedSlug,
-		Name: "Waitlist Approved", Channel: "email", Category: template.CategoryAuth,
+		ID: id.NewTemplateID(), AppID: appID, Slug: t.slug,
+		Name: t.name, Channel: "email", Category: t.category,
 		IsSystem: true, Enabled: true, CreatedAt: now, UpdatedAt: now,
-		Variables: []template.Variable{
-			{Name: "app_name", Type: "string", Required: true},
-			{Name: "sign_up_url", Type: "url", Required: true},
-		},
+		Variables: t.variables,
 	}
 	if err := s.mailStore.CreateTemplate(ctx, tmpl); err != nil {
 		return err
 	}
 	return s.mailStore.CreateVersion(ctx, &template.Version{
 		ID: id.NewTemplateVersionID(), TemplateID: tmpl.ID, Locale: "en", Active: true,
-		Subject:   "You're in: create your Loomplane account",
-		HTML:      waitlistApprovedHTML,
-		Text:      "Your spot on the Loomplane waitlist was approved. Create your account here: {{.sign_up_url}}",
+		Subject: t.subject, HTML: t.html, Text: t.text,
 		CreatedAt: now, UpdatedAt: now,
 	})
 }

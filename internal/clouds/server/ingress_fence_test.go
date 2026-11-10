@@ -33,7 +33,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 				exit                     int
 				clean                    bool
 				// finished leaves the journal dirty with an exec Docker shows
-				// finished, which the SSH helper's next takeover clears.
+				// finished, which the next takeover clears.
 				finished bool
 				args     []string
 			}{
@@ -163,7 +163,7 @@ func TestIngressExecFenceCompletion(t *testing.T) {
 						t.Fatal("unknown completion accepted")
 					}
 					// A journal whose recorded exec has finished takes over too.
-					recovers := tc.clean || host == "ssh" && tc.finished
+					recovers := tc.clean || tc.finished
 					next := run("advance", 2)
 					if strings.Contains(next, "200 OK") != recovers {
 						t.Fatal("takeover", next)

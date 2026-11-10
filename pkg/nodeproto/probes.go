@@ -30,6 +30,11 @@ const (
 	FenceRequest     = "request"
 	FenceExec        = "exec"
 	FenceIngressExec = "ingress-exec"
+	// FenceRepairCheck reviews a dirty journal and FenceRepair clears it,
+	// once an operator has reviewed it. Neither carries a resource or a
+	// generation, only the daemon.
+	FenceRepairCheck = "repair-check"
+	FenceRepair      = "repair"
 )
 
 // MaxArgSize is the longest StreamHeader.Arg, in bytes.
@@ -75,12 +80,14 @@ func (h StreamHeader) Validate() error {
 	switch {
 	case f == nil:
 		return errors.New("nodeproto: a fenced docker stream needs a fence")
+	case f.Daemon == "":
+		return errors.New("nodeproto: fence daemon is empty")
+	case f.Mode == FenceRepairCheck, f.Mode == FenceRepair:
+		return nil
 	case f.Generation <= 0:
 		return errors.New("nodeproto: fence generation must be positive")
 	case f.Resource == "":
 		return errors.New("nodeproto: fence resource is empty")
-	case f.Daemon == "":
-		return errors.New("nodeproto: fence daemon is empty")
 	}
 	switch f.Mode {
 	case FenceAdvance, FenceRequest, FenceExec, FenceIngressExec:
