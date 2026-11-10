@@ -51,7 +51,7 @@ Open [localhost:8780](http://localhost:8780), create an account, and name your o
 
 No Go or Node on your machine? `make stack` builds the image and runs everything in Docker on the same port. It runs in development mode with the development secret key, which is fine on a laptop and nowhere else: set `LOOMPLANE_ENVIRONMENT=production`, `LOOMPLANE_SECRET_KEY` and an https `LOOMPLANE_PUBLIC_URL`, and production refuses to start without them.
 
-For a production host, use the [production Docker guide](docs/docker-production.md). It covers the API, dashboard, analysis worker, Postgres, HTTPS, persistent storage, backups and versioned image releases. To run it highly available on Kubernetes, use the [Helm chart](docs/kubernetes.md), to run on Miget, follow the [Miget guide](docs/miget.md), and to host it on DigitalOcean, follow the [DigitalOcean guide](docs/digitalocean-hosting.md).
+For a production host, use the [production Docker guide](docs/docker-production.md). It covers the API, dashboard, analysis worker, Postgres, HTTPS, persistent storage, backups and versioned image releases. To skip containers, [Install on Linux](https://www.loomplane.com/docs/operations/linux) puts the server on the host from a `.deb`, an `.rpm` or an archive and runs it under systemd. To run it highly available on Kubernetes, use the [Helm chart](docs/kubernetes.md), to run on Miget, follow the [Miget guide](docs/miget.md), and to host it on DigitalOcean, follow the [DigitalOcean guide](docs/digitalocean-hosting.md).
 
 [![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/xraph/loomplane/tree/main)
 
@@ -66,7 +66,7 @@ For hot reload while you work on Loomplane itself, `make dev` serves the dashboa
 5. **Plan** an environment. You see every action, step by step, with anything in the way and anything worth knowing.
 6. An admin approves it. You watch each step build, deploy and answer, and the environment shows what runs where.
 
-The same thing from a terminal. `loomctl login` opens the dashboard so you can approve its sign-in; CI uses an API key from **Settings, API keys** with `--key -` instead:
+The same thing from a terminal. Install `loomctl` with `brew install xraph/tap/loomctl`, or on Linux from the release's `.deb`, `.rpm` or archive ([Install on Linux](https://www.loomplane.com/docs/operations/linux#install-loomctl)). `loomctl login` opens the dashboard so you can approve its sign-in; CI uses an API key from **Settings, API keys** with `--key -` instead:
 
 ```bash
 loomctl login --url http://localhost:8780

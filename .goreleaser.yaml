@@ -10,6 +10,8 @@
 #                Linux on amd64 and arm64.
 #   loomplane    the API with its dashboard and config.yaml, plus
 #                loomplane-worker, as one archive for Linux and macOS.
+#   packages     .deb and .rpm for both on Linux amd64 and arm64. The
+#                loomplane one carries the systemd units in deployments/linux.
 #
 # Try it without publishing: goreleaser release --snapshot --clean
 version: 2
@@ -72,7 +74,8 @@ archives:
     files: [LICENSE, README.md]
 
   # Unpack it, set LOOMPLANE_DASHBOARD_DIR=./dashboard and run ./loomplane
-  # from that directory, where it finds config.yaml.
+  # from that directory, where it finds config.yaml. On Linux, the systemd/
+  # files install it as services (docs: operations/linux).
   - id: server
     ids: [loomplane, loomplane-worker]
     name_template: "loomplane_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -85,6 +88,81 @@ archives:
       # flattens it.
       - src: apps/dashboard/dist
         dst: dashboard
+      # A single file's dst is its full path in the archive.
+      - src: deployments/linux/loomplane.service
+        dst: systemd/loomplane.service
+      - src: deployments/linux/loomplane-worker.service
+        dst: systemd/loomplane-worker.service
+      - src: deployments/linux/loomplane.env
+        dst: systemd/loomplane.env
+
+# Linux packages, for apt and dnf hosts on amd64 and arm64. GoReleaser adds
+# them to the release and to binaries-checksums.txt with the archives.
+nfpms:
+  # /usr/bin/loomctl and nothing else.
+  - id: loomctl
+    ids: [loomctl]
+    package_name: loomctl
+    file_name_template: "{{ .ConventionalFileName }}"
+    formats: [deb, rpm]
+    vendor: XRaph
+    maintainer: XRaph
+    homepage: https://www.loomplane.com
+    description: Plan, approve and follow Loomplane deployments from your terminal.
+    license: FSL-1.1-ALv2
+    section: utils
+    bindir: /usr/bin
+    recommends: [ca-certificates]
+
+  # The API, the worker, the dashboard and their systemd units. Installing it
+  # creates the loomplane user and starts nothing: you fill in
+  # /etc/loomplane/loomplane.env first.
+  - id: server
+    ids: [loomplane, loomplane-worker]
+    package_name: loomplane
+    file_name_template: "{{ .ConventionalFileName }}"
+    formats: [deb, rpm]
+    vendor: XRaph
+    maintainer: XRaph
+    homepage: https://www.loomplane.com
+    description: Self-hosted deployment platform for monorepos. The API, dashboard and analysis worker.
+    license: FSL-1.1-ALv2
+    section: net
+    bindir: /usr/bin
+    recommends: [ca-certificates]
+    contents:
+      - src: apps/dashboard/dist
+        dst: /usr/share/loomplane/dashboard
+        type: tree
+      # config.yaml changes between versions. Left unedited, an upgrade
+      # replaces it; your settings belong in loomplane.env.
+      - src: config.yaml
+        dst: /etc/loomplane/config.yaml
+        type: config|noreplace
+        file_info:
+          mode: 0644
+      - src: deployments/linux/loomplane.env
+        dst: /etc/loomplane/loomplane.env
+        type: config|noreplace
+        file_info:
+          mode: 0640
+      - src: deployments/linux/loomplane.service
+        dst: /usr/lib/systemd/system/loomplane.service
+        file_info:
+          mode: 0644
+      - src: deployments/linux/loomplane-worker.service
+        dst: /usr/lib/systemd/system/loomplane-worker.service
+        file_info:
+          mode: 0644
+      - src: LICENSE
+        dst: /usr/share/doc/loomplane/LICENSE
+        file_info:
+          mode: 0644
+    scripts:
+      preinstall: deployments/linux/package/preinstall.sh
+      postinstall: deployments/linux/package/postinstall.sh
+      preremove: deployments/linux/package/preremove.sh
+      postremove: deployments/linux/package/postremove.sh
 
 # ghcr.io/xraph/loomctl, with loomctl as its entrypoint, so a container joins
 # as a node with `docker run ghcr.io/xraph/loomctl node run`. The release

@@ -1,0 +1,52 @@
+# Loomplane's repository analysis worker, as a systemd service.
+#
+# It reads the same /etc/loomplane/loomplane.env as loomplane.service and
+# unpacks checkouts into /var/lib/loomplane-work. Start it after the API has
+# applied its migrations; until then it exits and systemd tries again.
+#
+# ExecStart names the binary without a path, so systemd finds it in
+# /usr/local/bin (an archive install) before /usr/bin (a package). That needs
+# systemd 239 or newer.
+
+[Unit]
+Description=Loomplane analysis worker
+Documentation=https://www.loomplane.com/docs/operations/linux
+Wants=network-online.target
+After=network-online.target loomplane.service
+
+[Service]
+Type=simple
+User=loomplane
+Group=loomplane
+EnvironmentFile=/etc/loomplane/loomplane.env
+ExecStart=loomplane-worker
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=45s
+StateDirectory=loomplane-work
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/loomplane-work
+UMask=0027
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
