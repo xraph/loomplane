@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/recipes"
 )
 
 // ReleaseRoutes returns the exact route review used by a release plan. A
@@ -90,12 +90,12 @@ func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.Pr
 }
 
 // routedReplacements runs before dependency readdressing. A routed update must
-// keep its source instance until every consumer and route has moved.
+// keep its source instance until every consumer and route has moved. A
+// routed composed component is released the same way as a service.
 func (p *planner) routedReplacements() bool {
 	changed := false
 	for _, route := range p.in.Routes {
-		p.refuseRoutedComponent(route)
-		a := p.services[route.Input.Service]
+		a := p.routedTarget(route.Input.Service)
 		if a == nil || a.Op == Keep || a.Op == Delete || slices.ContainsFunc(a.Routes, func(r cloudinfra.Route) bool { return r.ID == route.ID }) {
 			continue
 		}
@@ -104,7 +104,7 @@ func (p *planner) routedReplacements() bool {
 		// the route on a Service that goes away.
 		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes || route.Binding.BackendName() == cloudinfra.RouteBackendFirecracker {
 			if a.Op != Update {
-				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on this connection. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+				p.problem(routeRelease(a, fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on this connection. Remove that route, then plan again.", a.Name, route.Input.Hostname)))
 			}
 			continue
 		}
@@ -113,47 +113,77 @@ func (p *planner) routedReplacements() bool {
 		// leave the route on one that goes away.
 		if route.Binding.BackendName() == cloudinfra.RouteBackendPlatform {
 			if a.Op != Update {
-				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new App Platform app, which %s doesn't follow. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+				p.problem(routeRelease(a, fmt.Sprintf("%s would get a new App Platform app, which %s doesn't follow. Remove that route, then plan again.", a.Name, route.Input.Hostname)))
 			}
 			continue
 		}
 		a.Routes = append(a.Routes, route)
 		b := p.bindings[a.ID]
-		if err := routedReplacementAllowed(a, b, route); err != nil {
-			p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: err.Error()})
+		allowed, reason := routedReplacementAllowed, "Retain the serving instance until the reviewed routes and consumers move."
+		if a.Subject == ResourceSubject {
+			allowed, reason = componentReplacementAllowed, "Retain the serving instance until its routes move."
+		}
+		if err := allowed(a, b, route); err != nil {
+			p.problem(routeRelease(a, err.Error()))
 			continue
 		}
-		a.Op, a.Reason = Replace, "Retain the serving instance until the reviewed routes and consumers move."
+		a.Op, a.Reason = Replace, reason
 		changed = true
 	}
 	return changed
 }
 
-// refuseRoutedComponent refuses a change to a composed component that has
-// a domain route, whatever caused it: an edit, drift or its resource's
-// version. A routed release retains the serving instance on reviewed pool
-// capacity, and components run only on direct targets, so changing one
-// would fail at apply until its routes were removed. Deletes are planned
-// later; refuseRoutedDeletes covers them.
-func (p *planner) refuseRoutedComponent(route cloudinfra.Route) {
-	a := p.resources[route.Input.Service]
-	if a == nil || a.Resource == nil || a.Resource.Component == nil || a.Op == Keep {
-		return
+// routedTarget is the action a route names: a service, or else a composed
+// resource's process component, which is the only resource that takes a
+// route (see routableComponentOn in cloudinfra).
+func (p *planner) routedTarget(name string) *Action {
+	if a := p.services[name]; a != nil {
+		return a
 	}
-	if slices.ContainsFunc(p.problems, func(f Finding) bool {
-		return f.Code == "route-release" && f.Subject == ResourceSubject && f.Name == a.Name
-	}) {
-		return
+	a := p.resources[name]
+	if a == nil || a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Component.Role != recipes.RoleProcess {
+		return nil
 	}
-	reason := strings.TrimSpace(a.Reason)
-	if reason != "" && !strings.HasSuffix(reason, ".") {
-		reason += "."
+	return a
+}
+
+// routeRelease is a route-release problem on what a routed release is
+// for: a service, or the composed resource a component is part of.
+func routeRelease(a *Action, message string) Finding {
+	f := Finding{Code: "route-release", Subject: a.Subject, Name: a.Name, Message: message}
+	if a.Subject == ResourceSubject && a.Resource != nil && a.Resource.Component != nil {
+		f.Path = "resources." + a.Resource.Component.Resource
 	}
-	p.problem(Finding{
-		Code: "route-release", Subject: ResourceSubject, Name: a.Name, Path: "resources." + a.Resource.Component.Resource,
-		Message: strings.TrimSpace(fmt.Sprintf("%s has domain routes, and this plan changes it: %s", a.Name, reason)) +
-			" Routed component releases aren't supported yet, so remove its routes or undo the change, then plan again.",
-	})
+	return f
+}
+
+// componentReplacementAllowed is routedReplacementAllowed for a composed
+// component. A component is never public and has no host port, so the
+// overlap can't collide on one. It refuses one whose new instance would
+// start without the old one's data, or would need a second set of GPUs on
+// the host.
+func componentReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) error {
+	if _, err := cloudinfra.ReviewedRouteDrain(route, 60); err != nil {
+		return err
+	}
+	if b == nil || a.Resource == nil || a.Resource.Component == nil || a.Provider != "server" || b.Provider != "server" {
+		return fmt.Errorf("%s needs a reviewed server destination for its route", a.Name)
+	}
+	if route.Status != "ready" || route.Binding.InstanceID != b.ExternalID || route.Binding.BindingID != b.ID || len(b.Replaced) > 0 {
+		return fmt.Errorf("finish the current route or retained instance cleanup for %s before another release", a.Name)
+	}
+	c := a.Resource.Component
+	if c.Component.Volume != nil || c.Component.WeightCache != nil {
+		return fmt.Errorf("%s keeps local data, so a separate instance would start empty. Remove its routes, then plan again.", a.Name)
+	}
+	if c.GPU != nil {
+		return fmt.Errorf("%s uses GPUs, and two instances would need two sets on one host. Remove its routes, then plan again.", a.Name)
+	}
+	var old ResourceConfig
+	if err := json.Unmarshal(b.Config, &old); err != nil {
+		return err
+	}
+	return routedPlacementAllowed(a.Name, old.CloudPlacement, a.Resource.CloudPlacement)
 }
 
 // refuseRoutedDeletes refuses deleting anything a domain route points at:

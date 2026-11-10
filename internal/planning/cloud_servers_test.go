@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // edgeHostTarget is a direct target on the targetA server connection.
@@ -373,7 +374,13 @@ func routedPlan(t *testing.T, doc string, kinds *recipes.Registry, bindings []*B
 	options := hostedConnections(t, CloudServer{ID: "server_1", CloudID: "cloud_1"})
 	routes := make([]cloudinfra.Route, 0, len(routed))
 	for i, name := range routed {
-		routes = append(routes, cloudinfra.Route{ID: fmt.Sprintf("route_%d", i), Status: "ready", Input: cloudinfra.RouteInput{Service: name, Hostname: name + ".example.com", Port: 8080}})
+		route := cloudinfra.Route{ID: fmt.Sprintf("route_%d", i), Status: "ready", Input: cloudinfra.RouteInput{Service: name, Hostname: name + ".example.com", Port: 8080, ExternalTTLSeconds: 60}}
+		for _, b := range bindings {
+			if b.Name == name {
+				route.Binding = cloudinfra.RouteBinding{BindingID: b.ID, InstanceID: b.ExternalID}
+			}
+		}
+		routes = append(routes, route)
 	}
 	a := edgeAssignment(edgeHostTarget())
 	m := parse(t, doc)
@@ -395,15 +402,6 @@ func routeRefusals(r *Result) []Finding {
 	return slices.DeleteFunc(slices.Clone(r.Problems), func(f Finding) bool { return f.Code != "route-release" })
 }
 
-// changeRefusal is the problem a change to a routed component gets.
-func changeRefusal(a *Action) string {
-	reason := strings.TrimSpace(a.Reason)
-	if !strings.HasSuffix(reason, ".") {
-		reason += "."
-	}
-	return a.Name + " has domain routes, and this plan changes it: " + reason + " Routed component releases aren't supported yet, so remove its routes or undo the change, then plan again."
-}
-
 // twoReleases is the sample kind with a second release of the same images.
 func twoReleases(t *testing.T) *recipes.Registry {
 	t.Helper()
@@ -418,12 +416,12 @@ func twoReleases(t *testing.T) *recipes.Registry {
 	return r
 }
 
-// A routed component can't be released with its routes yet: any change to
-// it is refused, whatever caused it, with both ways out. An unchanged one
-// plans as before.
-func TestChangingARoutedComponentIsRefused(t *testing.T) {
+// A change to a routed component, whatever caused it, plans a routed
+// release: a new instance beside the serving one, which keeps the routes
+// until they move. An unchanged one plans as before.
+func TestChangingARoutedComponentPlansARelease(t *testing.T) {
 	kinds := recipestest.Registry(t)
-	if r := routedPlan(t, edgeApp, kinds, routedBindings(t, kinds), "edge--api"); len(routeRefusals(r)) != 0 || findAction(r, "resource:edge--api").Op != Keep {
+	if r := routedPlan(t, edgeApp, kinds, routedBindings(t, kinds), "edge--api"); len(routeRefusals(r)) != 0 || findAction(r, "resource:edge--api").Op != Keep || len(findAction(r, "resource:edge--api").Routes) != 0 {
 		t.Fatalf("an unchanged routed component: %+v %+v", findAction(r, "resource:edge--api"), r.Problems)
 	}
 	bump := "version: 1\nresources:\n  edge: {kind: sample, version: \"2\", provider: server, target: " + targetA + "}\n"
@@ -432,14 +430,13 @@ func TestChangingARoutedComponentIsRefused(t *testing.T) {
 		doc   string
 		kinds *recipes.Registry
 		edit  func(*Binding)
-		op    Op
 	}{
 		{"an older image", edgeApp, kinds, func(b *Binding) {
 			b.Config = bytes.Replace(b.Config, []byte(`"image":"registry.example/sample-api@sha256:`), []byte(`"image":"registry.example/sample-api-old@sha256:`), 1)
-		}, ""},
-		{"drift: it's missing", edgeApp, kinds, func(b *Binding) { b.Drift = DriftMissing }, Create},
-		{"another region", edgeApp, kinds, func(b *Binding) { b.Region = "elsewhere" }, Replace},
-		{"its parent's version bump", bump, twoReleases(t), nil, ""},
+		}},
+		{"drift: it's missing", edgeApp, kinds, func(b *Binding) { b.Drift = DriftMissing }},
+		{"another region", edgeApp, kinds, func(b *Binding) { b.Region = "elsewhere" }},
+		{"its parent's version bump", bump, twoReleases(t), nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			bound := routedBindings(t, tt.kinds)
@@ -449,19 +446,118 @@ func TestChangingARoutedComponentIsRefused(t *testing.T) {
 				}
 			}
 			r := routedPlan(t, tt.doc, tt.kinds, bound, "edge--api")
-			api := findAction(r, "resource:edge--api")
-			if api == nil || api.Op == Keep || (tt.op != "" && api.Op != tt.op) {
-				t.Fatalf("the api: %+v", api)
-			}
-			refusals := routeRefusals(r)
-			if len(refusals) != 1 || r.Executable {
+			if refusals := routeRefusals(r); len(refusals) != 0 || !r.Executable {
 				t.Fatalf("problems %+v", r.Problems)
 			}
-			if f := refusals[0]; f.Subject != ResourceSubject || f.Name != "edge--api" || f.Path != "resources.edge" || f.Message != changeRefusal(api) {
-				t.Fatalf("refusal %+v, want message %q", f, changeRefusal(api))
+			api := findAction(r, "resource:edge--api")
+			if api == nil || api.Op != Replace || len(api.Routes) != 1 || api.Routes[0].ID != "route_0" || api.Reason != "Retain the serving instance until its routes move." {
+				t.Fatalf("the api: %+v", api)
 			}
 		})
 	}
+}
+
+// A routed component that a separate instance can't stand in for, or that
+// is still finishing an earlier release, is refused at plan time, on its
+// composed resource.
+func TestComponentReplacementRefusals(t *testing.T) {
+	pin := &CloudPlacement{CloudID: "cloud_1", TargetID: "t1", ConnectionID: targetA, ServerID: "server_1"}
+	component := func() *Action {
+		return &Action{ID: "resource:edge--api", Subject: ResourceSubject, Name: "edge--api", Provider: "server", Resource: &ResourceConfig{Provider: "server", CloudPlacement: pin, Component: &ComponentConfig{Resource: "edge", Component: recipes.ResolvedComponent{Component: recipes.Component{Name: "api", Role: recipes.RoleProcess}}}}}
+	}
+	bound := func(a *Action) *Binding {
+		raw, err := json.Marshal(a.Resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &Binding{ID: "binding-edge--api", Subject: ResourceSubject, Name: "edge--api", Provider: "server", ExternalID: "instance-edge--api", Config: raw}
+	}
+	route := cloudinfra.Route{ID: "route", Status: "ready", Input: cloudinfra.RouteInput{Service: "edge--api", ExternalTTLSeconds: 60}, Binding: cloudinfra.RouteBinding{BindingID: "binding-edge--api", InstanceID: "instance-edge--api"}}
+	if err := componentReplacementAllowed(component(), bound(component()), route); err != nil {
+		t.Fatal("a stateless component on a direct server:", err)
+	}
+	for name, tt := range map[string]struct {
+		edit func(a *Action, b *Binding)
+		want string
+	}{
+		"local data": {func(a *Action, _ *Binding) {
+			a.Resource.Component.Component.Volume = &recipes.Volume{MountPath: "/data"}
+		}, "edge--api keeps local data, so a separate instance would start empty. Remove its routes, then plan again."},
+		"GPUs": {func(a *Action, _ *Binding) {
+			a.Resource.Component.GPU = &provider.GPUPlacement{}
+		}, "edge--api uses GPUs, and two instances would need two sets on one host. Remove its routes, then plan again."},
+		"an unfinished release": {func(_ *Action, b *Binding) {
+			b.Replaced = []Binding{{ExternalID: "older"}}
+		}, "finish the current route or retained instance cleanup for edge--api before another release"},
+		"no single server": {func(a *Action, _ *Binding) {
+			a.Resource.CloudPlacement = &CloudPlacement{CloudID: "cloud_1", TargetID: "t1", ConnectionID: targetA}
+		}, "edge--api's target runs no single Cloud server, so its routes can't follow a new instance."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := component()
+			b := bound(a)
+			tt.edit(a, b)
+			if err := componentReplacementAllowed(a, b, route); fmt.Sprint(err) != tt.want {
+				t.Fatalf("got %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// A Kubernetes route reaches its component's Service by name, so a change
+// updates the component in place with nothing to hand off. A new runtime
+// would leave the route on a Service that goes away.
+func TestRoutedComponentOnKubernetesUpdatesInPlace(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	for _, tt := range []struct {
+		name string
+		edit func(*Binding)
+		op   Op
+	}{
+		{"an older image", func(b *Binding) {
+			b.Config = bytes.Replace(b.Config, []byte(`"image":"registry.example/sample-api@sha256:`), []byte(`"image":"registry.example/sample-api-old@sha256:`), 1)
+		}, Update},
+		{"another region", func(b *Binding) { b.Region = "elsewhere" }, Replace},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bound := routedBindings(t, kinds)
+			for _, b := range bound {
+				if b.Name == "edge--api" {
+					tt.edit(b)
+				}
+			}
+			r := kubernetesRoutedPlan(t, kinds, bound, "edge--api")
+			api := findAction(r, "resource:edge--api")
+			if api == nil || api.Op != tt.op || len(api.Routes) != 0 {
+				t.Fatalf("the api: %+v", api)
+			}
+			refusals := routeRefusals(r)
+			if tt.op == Update && len(refusals) != 0 {
+				t.Fatalf("an update in place refused: %+v", refusals)
+			}
+			if tt.op == Replace && (len(refusals) != 1 || refusals[0].Path != "resources.edge" || !strings.Contains(refusals[0].Message, "new runtime")) {
+				t.Fatalf("a new runtime: %+v", refusals)
+			}
+		})
+	}
+}
+
+// kubernetesRoutedPlan plans edgeApp with Kubernetes routes to the named
+// actions, against bindings.
+func kubernetesRoutedPlan(t *testing.T, kinds *recipes.Registry, bindings []*Binding, routed ...string) *Result {
+	t.Helper()
+	options := hostedConnections(t, CloudServer{ID: "server_1", CloudID: "cloud_1"})
+	routes := make([]cloudinfra.Route, 0, len(routed))
+	for i, name := range routed {
+		routes = append(routes, cloudinfra.Route{ID: fmt.Sprintf("route_%d", i), Status: "ready", Input: cloudinfra.RouteInput{Service: name, Hostname: name + ".example.com", Port: 8080, ExternalTTLSeconds: 60}, Binding: cloudinfra.RouteBinding{Backend: cloudinfra.RouteBackendKubernetes, BindingID: "binding-" + name, InstanceID: "instance-" + name}})
+	}
+	a := edgeAssignment(edgeHostTarget())
+	m := parse(t, edgeApp)
+	return Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: m, Providers: providers.Registry(),
+		Connections: options, Kinds: kinds, Bindings: bindings, Routes: routes,
+		CloudPlacements: composedPlacements(m, "production", []string{"edge"}, a, options),
+	})
 }
 
 // Deleting something with domain routes is refused at plan time, before
