@@ -96,3 +96,30 @@ func TestPlatformOwner_AdminIsNot(t *testing.T) {
 		t.Fatal("no session user passed as the owner")
 	}
 }
+
+// The public config tells the dashboard who the owner is: true for the
+// owner alone, not for an admin and not without a session.
+func TestPublicConfig_PlatformOwnerFlag(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Identity.AppID = "aapp_test"
+	e := New(cfg)
+	owner, admin := authid.NewUserID(), authid.NewUserID()
+	e.platformRoles = fakePlatformRoles{held: map[string][]*rbac.Role{
+		owner.String(): {{AppID: cfg.Identity.AppID, Slug: rbac.PlatformOwnerSlug}},
+		admin.String(): {{AppID: cfg.Identity.AppID, Slug: rbac.PlatformAdminSlug}},
+	}}
+	flag := func(ctx context.Context) bool {
+		var out PublicConfig
+		e.markOwner(ctx, &out)
+		return out.PlatformOwner
+	}
+	if !flag(authmw.WithUserID(context.Background(), owner)) {
+		t.Fatal("the owner isn't marked")
+	}
+	if flag(authmw.WithUserID(context.Background(), admin)) {
+		t.Fatal("a platform admin was marked as the owner")
+	}
+	if flag(context.Background()) {
+		t.Fatal("an anonymous request was marked as the owner")
+	}
+}

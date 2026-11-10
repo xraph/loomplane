@@ -30,6 +30,7 @@ import {
   NotificationsIcon,
   OverviewIcon,
   PlatformCloudIcon,
+  FlaggedAnswersIcon,
   ProjectsIcon,
   ServicesIcon,
   TeamsIcon,
@@ -82,7 +83,7 @@ const reportsPath = "/agent/reports"
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
   const { can } = useOrganization()
-  const { platformAdmin } = useInstance()
+  const { platformAdmin, platformOwner } = useInstance()
   const { openNewProject } = useShell()
   const features = useFeatures()
   const agent = useAgent()
@@ -326,6 +327,16 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
               link: <Link to="/platform/cloud" />,
               isActive: path === "/platform/cloud" || at("/platform/cloud/"),
             },
+            ...(platformOwner && features.ai
+              ? [
+                  {
+                    title: "Flagged answers",
+                    icon: <FlaggedAnswersIcon />,
+                    link: <Link to="/platform/flags" />,
+                    isActive: at("/platform/flags"),
+                  },
+                ]
+              : []),
           ]
         : [],
     },

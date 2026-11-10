@@ -2578,6 +2578,32 @@ export interface Fit {
   status: string;
 }
 
+export interface Flag {
+  answer: string;
+  conversationId: string;
+  createdAt: string;
+  dismissedAt?: string;
+  dismissedBy: string;
+  id: string;
+  note: string;
+  orgId: string;
+  projectId: string;
+  question: string;
+  reason: string;
+  reportedBy: string;
+  taskId: string;
+  updatedAt: string;
+}
+
+export interface FlagInputBody {
+  note?: string;
+  reason: string;
+}
+
+export interface FlagList {
+  flags: Flag[];
+}
+
 export interface Fleet {
   controlProjectId?: string;
   createdAt: string;
@@ -4711,6 +4737,7 @@ export interface PublicConfig {
   consolePath?: string;
   features: Features;
   platformAdmin?: boolean;
+  platformOwner?: boolean;
   publishableKey: string;
   requireEmailVerification: boolean;
   setupPending: boolean;
