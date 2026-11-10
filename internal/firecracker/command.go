@@ -2,15 +2,21 @@ package firecracker
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"reflect"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/xraph/loomplane/internal/secureconfig"
@@ -40,13 +46,9 @@ func RunHost(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	ca, err := os.ReadFile(cfg.ClientCA)
+	roots, err := readClientCA(cfg.ClientCA)
 	if err != nil {
 		return err
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(ca) {
-		return ErrInvalid
 	}
 	if checkErr := prepareStateDirectory(cfg.StateDir); checkErr != nil {
 		return checkErr
@@ -68,13 +70,55 @@ func RunHost(ctx context.Context, path string) error {
 		return checkErr
 	}
 	host := &Host{Store: store, Driver: driver, Limits: cfg.Limits, Key: key}
-	platform := ""
+	var platform *PlatformTrust
 	if cfg.Platform != nil {
-		platform = cfg.Platform.Fingerprint
+		platform = NewPlatformTrust(cfg.Platform.Trusted()...)
 	}
-	srv := &http.Server{Addr: cfg.Listen, Handler: Handler{Host: host, Peers: cfg.Peers, Platform: platform}, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Minute, WriteTimeout: 35 * time.Minute, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
+	var clientCAs atomic.Pointer[x509.CertPool]
+	clientCAs.Store(roots)
+	// NextProtos is set here because ListenAndServeTLS adds h2 only to its
+	// own copy, which GetConfigForClient's answers don't inherit.
+	base := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots,
+		NextProtos: []string{"h2", "http/1.1"}}
+	tlsConfig := base.Clone()
+	// Each handshake verifies against the client CAs loaded last, so a
+	// reload takes effect for new connections without a restart.
+	tlsConfig.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		c := base.Clone()
+		c.ClientCAs = clientCAs.Load()
+		return c, nil
+	}
+	srv := &http.Server{Addr: cfg.Listen, Handler: Handler{Host: host, Peers: cfg.Peers, Platform: platform}, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Minute, WriteTimeout: 35 * time.Minute, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// SIGHUP reloads the platform trust. It is caught on every host, so a
+	// reload sent to a per-org host can't stop it.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		current := cfg
+		for {
+			select {
+			case <-run.Done():
+				return
+			case <-hup:
+			}
+			if platform == nil {
+				log.Print("reload ignored: only a platform host reloads its trust; restart the agent to apply other changes")
+				continue
+			}
+			next, pool, reloadErr := ReloadPlatformTrust(path, current)
+			if reloadErr != nil {
+				log.Printf("platform trust not reloaded: %v", reloadErr)
+				continue
+			}
+			clientCAs.Store(pool)
+			platform.Store(next.Platform.Trusted())
+			current = next
+			log.Printf("platform trust reloaded: %d platform certificates trusted", len(next.Platform.Trusted()))
+		}
+	}()
 	result := make(chan error, 3)
 	publisher := &Publisher{Host: host, Address: cfg.PublishAddress, Context: run}
 	host.PreparePublish = publisher.Ensure
@@ -130,6 +174,98 @@ func RunHost(ctx context.Context, path string) error {
 	}
 	return errors.Join(err, shutdownErr)
 }
+
+// readClientCA reads the PEM certificates a client may present a chain to.
+// A platform host's file holds the platform's self-signed client
+// certificates themselves.
+func readClientCA(path string) (*x509.CertPool, error) {
+	roots, _, err := readClientCerts(path)
+	return roots, err
+}
+
+// readClientCerts is readClientCA with the SHA-256 fingerprints of the
+// certificates in the file.
+func readClientCerts(path string) (*x509.CertPool, map[string]bool, error) {
+	ca, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	roots := x509.NewCertPool()
+	fps := map[string]bool{}
+	for rest := ca; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		// A block that doesn't parse is skipped, as AppendCertsFromPEM did.
+		cert, parseErr := x509.ParseCertificate(block.Bytes)
+		if parseErr != nil {
+			continue
+		}
+		roots.AddCert(cert)
+		sum := sha256.Sum256(cert.Raw)
+		fps[hex.EncodeToString(sum[:])] = true
+	}
+	if len(fps) == 0 {
+		return nil, nil, ErrInvalid
+	}
+	return roots, fps, nil
+}
+
+// errReloadScope refuses a reload that changes more than the platform trust.
+var errReloadScope = fmt.Errorf("%w: a reload may change only the platform fingerprints and the client CA file's contents; restart the agent for anything else", ErrInvalid)
+
+// ReloadPlatformTrust reads the configuration at path again for a running
+// platform host whose configuration is current. Only the platform peer's
+// Fingerprint and Next, and the contents of the client CA file, may differ,
+// and the runtime identity must come out the same, so no VM, route or
+// tunnel bound to it is cut off. It returns the new configuration and client
+// CAs for the caller to swap in.
+func ReloadPlatformTrust(path string, current HostConfig) (HostConfig, *x509.CertPool, error) {
+	var next HostConfig
+	if err := secureconfig.ReadJSON(path, MaxControlBytes, true, &next); err != nil {
+		return HostConfig{}, nil, err
+	}
+	if current.Platform == nil || next.Platform == nil {
+		return HostConfig{}, nil, errReloadScope
+	}
+	if err := ValidatePlatform(next); err != nil {
+		return HostConfig{}, nil, err
+	}
+	a, b := current, next
+	a.Platform, b.Platform = nil, nil
+	if !reflect.DeepEqual(a, b) {
+		return HostConfig{}, nil, errReloadScope
+	}
+	was, err := identityInput(current)
+	if err != nil {
+		return HostConfig{}, nil, err
+	}
+	now, err := identityInput(next)
+	if err != nil {
+		return HostConfig{}, nil, err
+	}
+	if string(was) != string(now) {
+		return HostConfig{}, nil, fmt.Errorf("%w: the runtime identity would change; when the platform fingerprint changes, set Identity to the fingerprint the host started with", ErrInvalid)
+	}
+	pool, inFile, err := readClientCerts(next.ClientCA)
+	if err != nil {
+		return HostConfig{}, nil, err
+	}
+	// A trusted fingerprint with no certificate in the file could never
+	// connect: the platform would be locked out, or a rotation would stall.
+	for _, fp := range next.Platform.Trusted() {
+		if !inFile[fp] {
+			return HostConfig{}, nil, fmt.Errorf("%w: platform fingerprint %s has no certificate in the client CA file", ErrInvalid, fp[:12])
+		}
+	}
+	return next, pool, nil
+}
+
 func HostUsage() error {
 	return fmt.Errorf("usage: loomplane-host-agent /absolute/path/to/config.json")
 }
