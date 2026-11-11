@@ -70,6 +70,8 @@ type ClusterStep struct {
 }
 
 type ClusterOperation struct {
+	NamespaceAttemptID          string                         `json:"namespace_attempt_id,omitempty"`
+	NamespaceInputDigest        string                         `json:"namespace_input_digest,omitempty"`
 	RuntimeAccess               *kubernetes.RuntimeAccessState `json:"runtime_access,omitempty"`
 	MoneyEstimate               *MoneyEstimate                 `json:"money_estimate,omitempty"`
 	Enrollment                  *ClusterEnrollment             `json:"enrollment,omitempty"`

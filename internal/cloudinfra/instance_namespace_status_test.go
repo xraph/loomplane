@@ -74,7 +74,7 @@ func namespaceStatusFixture(t *testing.T) (*Service, *namespaceStatusReader, *na
 		operation:  ClusterOperation{ID: query.OperationID, OrgID: "org", CloudID: "cloud", ResourceID: "cluster", Kind: InstanceNamespaceKind, Status: "succeeded", Revision: 4, Input: ClusterInput{Attachment: &AttachmentInput{ProjectID: "project", Namespace: "namespace", TrustFingerprint: "ca", Instance: &pins, InstancePolicy: policy}}, Enrollment: &ClusterEnrollment{AttachmentID: "attachment", RuntimeConnectionID: "connection", State: kubernetes.EnrollmentState{NamespaceUID: "uid", ServiceAccountUID: "service-uid", Isolation: &kubernetes.InstanceIsolationState{Digest: digest, Objects: map[string]string{"ResourceQuota": "quota", "LimitRange": "limit", "NetworkPolicy": "network"}}}}},
 		attachment: RuntimeAttachment{ID: "attachment", OrgID: "org", ProjectID: "project", CloudID: "cloud", ClusterID: "cluster", Namespace: "namespace", NamespaceUID: "uid", ServiceAccountUID: "service-uid", RuntimeConnectionID: "connection", OperationID: query.OperationID, SchemaVersion: 1, TrustFingerprint: "ca", Revision: 7},
 	}
-	svc := NewService(Deps{})
+	svc := NewService(Deps{InstanceNamespaces: &InstanceNamespaceTransactions{}})
 	svc.InstanceAuthority = r
 	svc.Clusters = s
 	return svc, r, s, p, query
@@ -82,7 +82,7 @@ func namespaceStatusFixture(t *testing.T) (*Service, *namespaceStatusReader, *na
 
 func TestInstanceNamespaceStatusUsesCurrentAttachmentAndScope(t *testing.T) {
 	svc, r, _, p, q := namespaceStatusFixture(t)
-	got, err := svc.GetInstanceNamespaceReceipt(t.Context(), p, q)
+	got, err := svc.getInstanceNamespaceStatus(t.Context(), p, q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestInstanceNamespaceStatusRejectsStaleAndForeignPins(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			svc, _, store, p, q := namespaceStatusFixture(t)
 			change(store, &q)
-			if _, err := svc.GetInstanceNamespaceReceipt(t.Context(), p, q); err == nil {
+			if _, err := svc.getInstanceNamespaceStatus(t.Context(), p, q); err == nil {
 				t.Fatal("mismatched receipt accepted")
 			}
 		})
@@ -118,7 +118,7 @@ func TestInstanceNamespaceStatusRejectsStaleAndForeignPins(t *testing.T) {
 func TestInstanceNamespaceStatusRequiresCurrentReadAccess(t *testing.T) {
 	svc, r, store, p, q := namespaceStatusFixture(t)
 	r.err = security.ErrForbidden
-	if _, err := svc.GetInstanceNamespaceReceipt(t.Context(), p, q); !errors.Is(err, security.ErrForbidden) {
+	if _, err := svc.getInstanceNamespaceStatus(t.Context(), p, q); !errors.Is(err, security.ErrForbidden) {
 		t.Fatal(err)
 	}
 	if store.reads != 0 {
@@ -132,7 +132,7 @@ func TestInstanceNamespaceStatusReportsFailureWithoutProviderError(t *testing.T)
 			store.operation.Status = status
 			store.operation.Error = "credential-bearing provider error"
 			store.operation.CancelRequested = true
-			got, err := svc.GetInstanceNamespaceReceipt(t.Context(), p, q)
+			got, err := svc.getInstanceNamespaceStatus(t.Context(), p, q)
 			if err != nil {
 				t.Fatal(err)
 			}

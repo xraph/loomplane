@@ -7,19 +7,21 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
+
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // Evaluate runs the fresh checks after all domain guards have finished waiting.
 // The installed adapter supplies the canonical identity check. The interval
 // guard rejects any persisted authority expiry or activation inside the check.
 func (a *Attempt) Evaluate(ctx context.Context, check func(context.Context) error) (*Decision, error) {
-	if a.profile != nil && a.profile.ordinary != nil {
+	if a.profile == nil || a.profile.mode != mechanismProfile || !a.profile.supports(a.binding.kind) {
 		return nil, a.fail(ErrDecision)
 	}
-	return a.evaluate(ctx, check, nil)
+	return a.evaluate(ctx, check, nil, nil)
 }
 
-func (a *Attempt) evaluate(ctx context.Context, check func(context.Context) error, proof *ordinaryProof) (*Decision, error) {
+func (a *Attempt) evaluate(ctx context.Context, check func(context.Context) error, proof *ordinaryProof, fleet *fleetProof) (*Decision, error) {
 	c := a.owner
 	c.mu.Lock()
 	err := a.validLocked(ctx)
@@ -52,7 +54,12 @@ func (a *Attempt) evaluate(ctx context.Context, check func(context.Context) erro
 	if err == nil && proof != nil {
 		err = proof.facts.validate(a.binding, proof.requireEmail, at)
 	}
-	if err == nil {
+	if err == nil && fleet != nil {
+		err = fleet.facts.validate(a.binding, at)
+	}
+	// Fleet key expiry is checked against its copied facts at this exact instant.
+	// Ordinary policy and user boundaries do not govern a Fleet service key.
+	if err == nil && fleet == nil {
 		var crossed bool
 		err = a.handle.QueryRow(ctx, boundarySQL(c.schema), start, at).Scan(&crossed)
 		if err == nil && crossed {
@@ -78,6 +85,11 @@ func (a *Attempt) evaluate(ctx context.Context, check func(context.Context) erro
 		d.kind = ordinaryDecision
 		d.ordinary = &copied
 	}
+	if fleet != nil {
+		copied := *fleet
+		d.kind = fleetDecision
+		d.fleet = &copied
+	}
 	a.decision = d
 	return d, nil
 }
@@ -91,9 +103,13 @@ func (a *Attempt) Stage(ctx context.Context, d *Decision, durable Binding, write
 	if err != nil {
 		return a.fail(err)
 	}
+	return a.stage(ctx, d, bound, write)
+}
+
+func (a *Attempt) stage(ctx context.Context, d *Decision, bound binding, write func(context.Context, driver.Tx, time.Time) error) error {
 	c := a.owner
 	c.mu.Lock()
-	err = a.validLocked(ctx)
+	err := a.validLocked(ctx)
 	if err == nil && bound != a.binding {
 		err = ErrBinding
 	}
@@ -107,7 +123,7 @@ func (a *Attempt) Stage(ctx context.Context, d *Decision, durable Binding, write
 		c.mu.Unlock()
 		return err
 	}
-	if err = d.validateOrdinary(a); err != nil {
+	if err = d.validate(a); err != nil {
 		a.poison = errors.Join(a.poison, err)
 		c.mu.Unlock()
 		return err
@@ -177,4 +193,27 @@ func boundarySQL(schema string) string {
  UNION ALL SELECT expires_at AS boundary_at FROM ` + table("keysmith_keys") + `
  UNION ALL SELECT ban_expires AS boundary_at FROM ` + table("authsome_users") + ` WHERE banned
  ) boundaries WHERE boundary_at IS NOT NULL AND boundary_at >= $1 AND boundary_at <= $2)`
+}
+
+func (d *Decision) validate(a *Attempt) error {
+	if !a.profile.supports(a.binding.kind) {
+		return ErrDecision
+	}
+	if a.profile.mode == mechanismProfile {
+		if d.kind != mechanismDecision || d.ordinary != nil || d.fleet != nil {
+			return ErrDecision
+		}
+		return nil
+	}
+	switch a.binding.kind {
+	case security.KindUser:
+		if d.fleet != nil {
+			return ErrDecision
+		}
+		return d.validateOrdinary(a)
+	case security.KindFleet:
+		return d.validateFleet(a)
+	default:
+		return ErrDecision
+	}
 }

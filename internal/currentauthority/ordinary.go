@@ -16,8 +16,8 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// ordinaryProfile is captured only by the future owned installer. This checkpoint
-// has no installer; package fixtures alone bind it. Its values never mutate.
+// ordinaryProfile captures the qualified Authorizer and startup policy.
+// Its values remain fixed after publication by the owned installer.
 type ordinaryProfile struct {
 	authorizer    *security.Authorizer
 	appID         string
@@ -94,13 +94,20 @@ func (f ordinaryFacts) validate(b binding, requiredEmail bool, at time.Time) err
 }
 
 func actor(b binding) security.Principal {
-	return security.Principal{UserID: b.user, OrgID: b.org, KeyID: b.key}
+	p := security.Principal{Kind: b.kind, UserID: b.user, OrgID: b.org, KeyID: b.key}
+	if b.kind == security.KindFleet {
+		p.Fleet = &security.FleetScope{ProjectID: b.project, FleetID: b.fleet}
+	}
+	return p
 }
 
 // EvaluateOrdinary checks the bound person and exact resource after domain guards.
-// It requires a private qualified ordinary profile, unavailable at public startup.
+// It requires the private ordinary profile qualified by the owned installer.
 func (a *Attempt) EvaluateOrdinary(ctx context.Context, permission security.Permission, resourceID string) (*Decision, error) {
-	if a.profile == nil || a.profile.ordinary == nil || a.profile.ordinary.authorizer == nil {
+	if a.binding.kind != security.KindUser {
+		return nil, a.fail(ErrBinding)
+	}
+	if a.profile == nil || a.profile.mode != installedProfile || a.profile.ordinary == nil || a.profile.ordinary.authorizer == nil {
 		return nil, a.fail(ErrUnavailable)
 	}
 	if a.binding.app != a.profile.ordinary.appID {
@@ -139,7 +146,7 @@ func (a *Attempt) EvaluateOrdinary(ctx context.Context, permission security.Perm
 		}
 		_, err = a.profile.ordinary.authorizer.CheckUnrepaired(ctx, actor(a.binding), permission, resourceID, facts.memberRole)
 		return err
-	}, proof)
+	}, proof, nil)
 }
 
 func (a *Attempt) allAssignments(ctx context.Context) ([]*assignment.Assignment, error) {
@@ -181,11 +188,8 @@ func (a *Attempt) allAssignments(ctx context.Context) ([]*assignment.Assignment,
 }
 
 func (d *Decision) validateOrdinary(a *Attempt) error {
-	if a.profile.ordinary == nil {
-		if d.ordinary != nil {
-			return ErrDecision
-		}
-		return nil
+	if a.profile == nil || a.profile.mode != installedProfile || a.profile.ordinary == nil || a.binding.kind != security.KindUser || d.fleet != nil {
+		return ErrDecision
 	}
 	if a.binding.app != a.profile.ordinary.appID || d.ordinary == nil || d.kind != ordinaryDecision {
 		return ErrDecision

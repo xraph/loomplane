@@ -192,7 +192,11 @@ func (s *Service) enrollClusterOperation(ctx context.Context, o *ClusterOperatio
 	if _, _, checkErr := s.enrollmentAuthority(ctx, o); checkErr != nil {
 		return checkErr
 	}
-	if checkErr := store.ReserveClusterEnrollment(ctx, o); checkErr != nil {
+	if o.Kind == InstanceNamespaceKind {
+		if checkpointErr := s.saveInstanceNamespaceCheckpoint(ctx, o); checkpointErr != nil {
+			return checkpointErr
+		}
+	} else if checkErr := store.ReserveClusterEnrollment(ctx, o); checkErr != nil {
 		return checkErr
 	}
 	if o.Steps[1].State == "pending" {
@@ -212,6 +216,11 @@ func (s *Service) enrollClusterOperation(ctx context.Context, o *ClusterOperatio
 	}
 	checkpoint := func(call context.Context, state *kubernetes.EnrollmentState) error {
 		o.Enrollment.State = *state
+		if o.Kind == InstanceNamespaceKind {
+			if outcomeErr := s.preserveInstanceNamespaceOutcome(call, o); outcomeErr != nil {
+				return outcomeErr
+			}
+		}
 		return s.enrollmentCheckpoint(call, o)
 	}
 	if checkErr := kubernetes.EnrollRuntime(ctx, client.Kube, enrollmentRequest(o), &o.Enrollment.State, checkpoint); checkErr != nil {

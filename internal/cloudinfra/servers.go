@@ -162,6 +162,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	InstanceNamespaces      *InstanceNamespaceTransactions
 	InstanceAuthority       InstanceNamespaceAuthority
 	InstanceIsolation       InstanceNamespaceQualifier
 	ReplicaVerifier         *kubernetes.ControllerStore

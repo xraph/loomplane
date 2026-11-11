@@ -91,7 +91,7 @@ func TestReaderRevalidatesCapturedProfile(t *testing.T) {
 }
 
 func validConnectionFixture() connectionProfile {
-	p := connectionProfile{SystemID: "cluster", DatabaseID: 1, Database: "db", Role: "role", SessionRole: "role", Schema: "public", SearchPath: "public", Primary: true}
+	p := connectionProfile{ReplicationRole: "origin", SystemID: "cluster", DatabaseID: 1, Database: "db", Role: "role", SessionRole: "role", RoleID: 10, SessionRoleID: 10, Schema: "public", SearchPath: "public", Primary: true}
 	for i, name := range authorityTables {
 		p.Tables = append(p.Tables, tableProfile{Name: name, OID: uint32(i + 1), Resolved: uint32(i + 1), Kind: "r", Readable: true, Temporal: map[string]string{"expires_at": "timestamp with time zone", "not_before": "timestamp with time zone", "not_after": "timestamp with time zone", "ban_expires": "timestamp with time zone", "banned": "boolean", "is_active": "boolean"}})
 	}
@@ -104,21 +104,26 @@ func TestConnectionProfileRejectsUnknownVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]func(*connectionProfile){
-		"standby":        func(p *connectionProfile) { p.Primary = false },
-		"cluster":        func(p *connectionProfile) { p.SystemID = "" },
-		"role":           func(p *connectionProfile) { p.Role = "other" },
-		"schema":         func(p *connectionProfile) { p.Schema = "other" },
-		"missing table":  func(p *connectionProfile) { p.Tables = p.Tables[:12] },
-		"shadowed table": func(p *connectionProfile) { p.Tables[0].Resolved++ },
-		"RLS":            func(p *connectionProfile) { p.Tables[0].RLS = true },
-		"forced RLS":     func(p *connectionProfile) { p.Tables[0].ForcedRLS = true },
-		"privilege":      func(p *connectionProfile) { p.Tables[0].Readable = false },
-		"view":           func(p *connectionProfile) { p.Tables[0].Kind = "v" },
-		"trigger":        func(p *connectionProfile) { p.Tables[0].Triggers++ },
-		"rule":           func(p *connectionProfile) { p.Tables[0].Rules++ },
-		"inheritance":    func(p *connectionProfile) { p.Tables[0].Inheritance++ },
-		"generated":      func(p *connectionProfile) { p.Tables[0].Generated++ },
-		"temporal type":  func(p *connectionProfile) { p.Tables[2].Temporal["ban_expires"] = "timestamp without time zone" },
+		"replica mode":     func(p *connectionProfile) { p.ReplicationRole = "replica" },
+		"local mode":       func(p *connectionProfile) { p.ReplicationRole = "local" },
+		"missing mode":     func(p *connectionProfile) { p.ReplicationRole = "" },
+		"missing role OID": func(p *connectionProfile) { p.RoleID = 0 },
+		"session role OID": func(p *connectionProfile) { p.SessionRoleID++ },
+		"standby":          func(p *connectionProfile) { p.Primary = false },
+		"cluster":          func(p *connectionProfile) { p.SystemID = "" },
+		"role":             func(p *connectionProfile) { p.Role = "other" },
+		"schema":           func(p *connectionProfile) { p.Schema = "other" },
+		"missing table":    func(p *connectionProfile) { p.Tables = p.Tables[:12] },
+		"shadowed table":   func(p *connectionProfile) { p.Tables[0].Resolved++ },
+		"RLS":              func(p *connectionProfile) { p.Tables[0].RLS = true },
+		"forced RLS":       func(p *connectionProfile) { p.Tables[0].ForcedRLS = true },
+		"privilege":        func(p *connectionProfile) { p.Tables[0].Readable = false },
+		"view":             func(p *connectionProfile) { p.Tables[0].Kind = "v" },
+		"trigger":          func(p *connectionProfile) { p.Tables[0].Triggers++ },
+		"rule":             func(p *connectionProfile) { p.Tables[0].Rules++ },
+		"inheritance":      func(p *connectionProfile) { p.Tables[0].Inheritance++ },
+		"generated":        func(p *connectionProfile) { p.Tables[0].Generated++ },
+		"temporal type":    func(p *connectionProfile) { p.Tables[2].Temporal["ban_expires"] = "timestamp without time zone" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -136,6 +141,7 @@ func TestConnectionProfileComparisonIncludesDatabaseRoleAndSearchPath(t *testing
 		"cluster":      func(p *connectionProfile) { p.SystemID = "other" },
 		"database":     func(p *connectionProfile) { p.Database = "other" },
 		"database OID": func(p *connectionProfile) { p.DatabaseID++ },
+		"role OID":     func(p *connectionProfile) { p.RoleID++; p.SessionRoleID++ },
 		"role":         func(p *connectionProfile) { p.Role = "other"; p.SessionRole = "other" },
 		"search path":  func(p *connectionProfile) { p.SearchPath = "public,other" },
 		"table OID":    func(p *connectionProfile) { p.Tables[0].OID++; p.Tables[0].Resolved++ },

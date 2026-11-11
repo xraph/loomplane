@@ -3,6 +3,7 @@ package cloudinfra
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -17,6 +18,7 @@ import (
 	vaultpg "github.com/xraph/vault/store/postgres"
 
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
+	fleetext "github.com/xraph/loomplane/extensions/fleets"
 	"github.com/xraph/loomplane/extensions/identity"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
@@ -27,6 +29,8 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/currentauthority"
+	"github.com/xraph/loomplane/internal/fleets"
 	"github.com/xraph/loomplane/internal/nodes"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/orchestration"
@@ -51,12 +55,13 @@ const registrationSweepEvery = time.Hour
 
 type Extension struct {
 	*forge.BaseExtension
-	cfg       config.Config
-	workflows *orchestration.Deployments
-	streams   server.NodeStreams
-	svc       *cloudinfra.Service
-	cancel    context.CancelFunc
-	done      chan struct{}
+	cfg        config.Config
+	workflows  *orchestration.Deployments
+	streams    server.NodeStreams
+	svc        *cloudinfra.Service
+	cancel     context.CancelFunc
+	done       chan struct{}
+	namespaces namespaceShutdown
 }
 
 // New returns the extension. streams reaches joined nodes, so a server whose
@@ -65,7 +70,7 @@ func New(cfg config.Config, workflows *orchestration.Deployments, streams server
 	return &Extension{BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud server infrastructure"), cfg: cfg, workflows: workflows, streams: streams}
 }
 func (*Extension) Dependencies() []string {
-	return []string{troveext.ExtensionName, connectionsext.Name, identity.Name, projectsext.Name, notificationsext.DeliveryName}
+	return []string{fleetext.Name, troveext.ExtensionName, connectionsext.Name, identity.Name, projectsext.Name, notificationsext.DeliveryName}
 }
 func (e *Extension) Register(app forge.App) error {
 	if err := e.BaseExtension.Register(app); err != nil {
@@ -106,6 +111,12 @@ func (e *Extension) Register(app forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	pg := pgdriver.Unwrap(db)
+	store := cloudinfra.NewPgStore(pg)
+	instances, namespaces, namespaceErr := fleetNamespaceDependencies(c, store, e.cfg.Identity.AppID)
+	if namespaceErr != nil {
+		return namespaceErr
+	}
+	e.namespaces = namespaces
 	// Server proxies order certificates from the configured directory too.
 	issuer := server.ACMEIssuer{Directory: e.cfg.Clouds.ACMEDirectory}
 	if e.cfg.Clouds.ACMERootsFile != "" {
@@ -128,7 +139,7 @@ func (e *Extension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	e.svc = newService(e.cfg.Clouds, cloudinfra.Deps{ReplicaVerifier: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey), Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Runtime: cloudinfra.HostRuntime{Streams: e.streams}, NodeStreams: e.streams, Nodes: &nodes.Adopter{Connections: creds}, NodeConnections: creds, NodeAddresses: creds, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
+	e.svc = newService(e.cfg.Clouds, cloudinfra.Deps{InstanceAuthority: instances, InstanceNamespaces: namespaces, ReplicaVerifier: kubernetes.NewControllerStore(pg).WithReplicaProof(proofKey), Clusters: store, ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: store, Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Runtime: cloudinfra.HostRuntime{Streams: e.streams}, NodeStreams: e.streams, Nodes: &nodes.Adopter{Connections: creds}, NodeConnections: creds, NodeAddresses: creds, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) }})
 	creds.ManagedCredentials = e.svc
 	files, filesErr := forge.InjectType[*backupfiles.Store](c)
@@ -232,14 +243,48 @@ func (e *Extension) Start(context.Context) error {
 	e.MarkStarted()
 	return nil
 }
+
+type namespaceShutdown interface {
+	Shutdown(context.Context) error
+}
+
 func (e *Extension) Stop(ctx context.Context) error {
+	if e.namespaces != nil {
+		closing, cancel := context.WithCancel(context.Background())
+		cancel()
+		// Refuse new namespace work before workers begin draining. The final join
+		// below collects retained cleanup errors after all owned work has settled.
+		_ = e.namespaces.Shutdown(closing) //nolint:errcheck // The final drain below reports retained cleanup errors.
+	}
 	if e.cancel != nil {
 		e.cancel()
-		select {
-		case <-e.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
 	}
-	return nil
+	// Existing audit or provider work may outlive the caller deadline. Keep
+	// dependencies alive until the worker has actually finished.
+	if e.done != nil {
+		<-e.done
+	}
+	var drainErr error
+	if e.namespaces != nil {
+		// Forge continues dependency teardown after Stop errors. Preserve the main
+		// pool until native operation and cleanup deadlines release all ownership.
+		drainErr = e.namespaces.Shutdown(context.WithoutCancel(ctx))
+	}
+	if e.BaseExtension != nil {
+		e.MarkStopped()
+	}
+	return errors.Join(ctx.Err(), drainErr)
+}
+
+// Identity provides the stable handle before startup installs current authority.
+func fleetNamespaceDependencies(c forge.Container, store *cloudinfra.PgStore, appID string) (*fleets.Service, *cloudinfra.InstanceNamespaceTransactions, error) {
+	authority, err := forge.InjectType[*currentauthority.FleetAuthority](c)
+	if err != nil || authority == nil {
+		return nil, nil, fmt.Errorf("cloud infrastructure needs Fleet authority: %w", currentauthority.ErrUnavailable)
+	}
+	instances, err := forge.InjectType[*fleets.Service](c)
+	if err != nil || instances == nil || store == nil || appID == "" {
+		return nil, nil, fmt.Errorf("cloud infrastructure needs Fleet namespace dependencies: %w", currentauthority.ErrUnavailable)
+	}
+	return instances, cloudinfra.NewInstanceNamespaceTransactions(authority, instances, store, appID), nil
 }

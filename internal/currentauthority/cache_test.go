@@ -60,7 +60,7 @@ func TestInvalidScopedCacheCannotFallThrough(t *testing.T) {
 			case "expired":
 				a.phase = sealed
 			case "profile":
-				c.profile = &profile{}
+				c.profile = &profile{mode: mechanismProfile}
 			}
 			if _, ok := cache.Get(a.ctx, "t", "/", req); ok {
 				t.Fatal("invalid scope read cache")

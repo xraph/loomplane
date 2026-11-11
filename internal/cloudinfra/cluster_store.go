@@ -107,7 +107,7 @@ func (s *PgStore) CreateClusterPreview(ctx context.Context, o *ClusterOperation)
 	return tx.Commit()
 }
 func (s *PgStore) SaveClusterCheckpoint(ctx context.Context, o *ClusterOperation, expectedRevision int64) error {
-	if o == nil || expectedRevision < 1 || o.Revision != expectedRevision+1 {
+	if o == nil || o.Kind == InstanceNamespaceKind || expectedRevision < 1 || o.Revision != expectedRevision+1 {
 		return ErrInvalid
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

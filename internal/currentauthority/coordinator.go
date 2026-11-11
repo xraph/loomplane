@@ -43,8 +43,8 @@ var (
 // digest of the domain's canonical input. RecordID and AttemptID must also be
 // checked against durable rows by the staging adapter.
 //
-// Only ordinary writable user principals are supported here. Fleet, delegated,
-// agent and system authority need their own reviewed binding and evaluator.
+// Binding is the ordinary writable-user entry point. Fleet service credentials
+// use FleetBinding and the fixed Fleet evaluator.
 type Binding struct {
 	Actor       security.Principal
 	AppID       string
@@ -54,7 +54,11 @@ type Binding struct {
 	AttemptID   string
 }
 
-type binding struct{ user, org, key, app, operation, digest, record, attempt string }
+type binding struct {
+	kind                                                    security.Kind
+	user, org, key, app, operation, digest, record, attempt string
+	project, fleet                                          string
+}
 
 func canonical(b Binding) (binding, error) {
 	p := b.Actor
@@ -63,13 +67,18 @@ func canonical(b Binding) (binding, error) {
 		strings.HasPrefix(p.UserID, "agent:") || security.IsFleetSubject(p.UserID) {
 		return binding{}, ErrBinding
 	}
+	return canonicalOperation(b)
+}
+
+func canonicalOperation(b Binding) (binding, error) {
+	p := b.Actor
 	if b.AppID == "" || b.Operation == "" || b.RecordID == "" || b.AttemptID == "" || len(b.InputDigest) != 64 || strings.ToLower(b.InputDigest) != b.InputDigest {
 		return binding{}, ErrBinding
 	}
 	if _, err := hex.DecodeString(b.InputDigest); err != nil {
 		return binding{}, ErrBinding
 	}
-	return binding{p.UserID, p.OrgID, p.KeyID, b.AppID, b.Operation, b.InputDigest, b.RecordID, b.AttemptID}, nil
+	return binding{kind: p.Kind, user: p.UserID, org: p.OrgID, key: p.KeyID, app: b.AppID, operation: b.Operation, digest: b.InputDigest, record: b.RecordID, attempt: b.AttemptID}, nil
 }
 
 type phase uint8
@@ -84,29 +93,34 @@ const (
 type scopeKey struct{}
 
 // Coordinator owns transaction acquisition, locks, sealing and finalization.
-// A nil or zero coordinator is unavailable. There is deliberately no public
-// activation constructor until the installed identity profile is qualified.
+// A nil or zero coordinator is unavailable. Fixed startup installation qualifies
+// the database and engine before publishing an execution profile.
 type Coordinator struct {
-	mu         sync.Mutex
-	backend    backend
-	reader     store.Store
-	schema     string
-	source     func(context.Context, driver.Tx, Binding) error
-	telemetry  *observability.Telemetry
-	active     map[*Attempt]struct{}
-	changed    chan struct{}
-	stopping   bool
-	closed     bool
-	closing    bool
-	cleanupErr error // First late cleanup failure; never an unbounded history.
-	profile    *profile
-	now        func() time.Time
+	mu            sync.Mutex
+	installing    bool
+	installCancel context.CancelFunc
+	installation  *builtInInstallation
+	backend       backend
+	reader        store.Store
+	schema        string
+	source        func(context.Context, driver.Tx, Binding) error
+	telemetry     *observability.Telemetry
+	active        map[*Attempt]struct{}
+	changed       chan struct{}
+	stopping      bool
+	closed        bool
+	closing       bool
+	closeDone     chan struct{}
+	cleanupErr    error // First late cleanup failure; never an unbounded history.
+	profile       *profile
+	now           func() time.Time
 }
 
 // Attempt has no native connection or transaction lifecycle access. You must
 // finish all SQL and stage exactly one record before the callback returns.
 type Attempt struct {
 	owner      *Coordinator
+	schema     string
 	binding    binding
 	profile    *profile
 	ctx        context.Context
@@ -131,11 +145,13 @@ type decisionKind uint8
 const (
 	mechanismDecision decisionKind = iota
 	ordinaryDecision
+	fleetDecision
 )
 
 type Decision struct {
 	kind     decisionKind
 	ordinary *ordinaryProof
+	fleet    *fleetProof
 	attempt  *Attempt
 	binding  binding
 	at       time.Time
@@ -158,16 +174,27 @@ func (c *Coordinator) Run(ctx context.Context, b Binding, work func(context.Cont
 	if err != nil {
 		return err
 	}
+	return c.run(ctx, bound, work)
+}
+
+func (c *Coordinator) run(ctx context.Context, bound binding, work func(context.Context, *Attempt) error) (err error) {
+	if c == nil {
+		return ErrUnavailable
+	}
 	if work == nil {
 		return ErrIncomplete
 	}
 	c.mu.Lock()
-	if c.profile == nil || c.backend == nil || c.source == nil || c.schema == "" || c.stopping || c.closed {
+	if c.installing || !c.profile.supports(bound.kind) || c.backend == nil || c.source == nil || c.schema == "" || c.stopping || c.closed {
 		c.mu.Unlock()
 		return ErrUnavailable
 	}
+	if bound.kind == security.KindFleet && (c.profile.fleet.appID == "" || bound.app != c.profile.fleet.appID) {
+		c.mu.Unlock()
+		return ErrBinding
+	}
 	ctx, cancel := context.WithTimeout(ctx, AttemptLimit)
-	a := &Attempt{owner: c, binding: bound, profile: c.profile, cancel: cancel, rows: make(map[*scopedRows]struct{}), gate: make(chan struct{}, 1)}
+	a := &Attempt{owner: c, schema: c.schema, binding: bound, profile: c.profile, cancel: cancel, rows: make(map[*scopedRows]struct{}), gate: make(chan struct{}, 1)}
 	a.gate <- struct{}{}
 	a.ctx = context.WithValue(ctx, scopeKey{}, a)
 	a.handle = &queryTx{attempt: a}
@@ -219,7 +246,7 @@ func (c *Coordinator) Run(ctx context.Context, b Binding, work func(context.Cont
 	if setupErr := a.setup(a.ctx); setupErr != nil {
 		return setupErr
 	}
-	if sourceErr := c.source(a.ctx, a.handle, b); sourceErr != nil {
+	if sourceErr := c.source(a.ctx, a.handle, publicBinding(bound)); sourceErr != nil {
 		return sourceErr
 	}
 	if _, err = a.handle.Exec(a.ctx, fenceSQL(c.schema)); err != nil {
@@ -268,8 +295,17 @@ func (c *Coordinator) Run(ctx context.Context, b Binding, work func(context.Cont
 }
 
 func (a *Attempt) setup(ctx context.Context) error {
-	_, err := a.handle.Exec(ctx, `SELECT set_config('lock_timeout',$1,true), set_config('statement_timeout',$2,true), set_config('idle_in_transaction_session_timeout',$2,true)`, "2000ms", "5000ms")
-	return err
+	if _, err := a.handle.Exec(ctx, `SELECT set_config('lock_timeout',$1,true), set_config('statement_timeout',$2,true), set_config('idle_in_transaction_session_timeout',$2,true)`, "2000ms", "5000ms"); err != nil {
+		return err
+	}
+	var replicationRole string
+	if err := a.handle.QueryRow(ctx, `SELECT pg_catalog.current_setting('session_replication_role')`).Scan(&replicationRole); err != nil {
+		return err
+	}
+	if replicationRole != "origin" {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (a *Attempt) rollback(ctx context.Context) error {
@@ -336,6 +372,10 @@ func (c *Coordinator) Close() error {
 		return nil
 	}
 	c.mu.Lock()
+	if c.installing {
+		c.mu.Unlock()
+		return ErrBusy
+	}
 	if len(c.active) > 0 {
 		for a := range c.active {
 			if a.phase == evaluating {
@@ -355,20 +395,26 @@ func (c *Coordinator) Close() error {
 		c.mu.Unlock()
 		return closeErr
 	}
-	c.closed = true
-	c.closing = true
+	c.closed, c.closing = true, true
+	c.closeDone = make(chan struct{})
 	ownedBackend := c.backend
 	c.mu.Unlock()
+	return c.finishClose(ownedBackend)
+}
+
+// Driver teardown can outlive the caller's shutdown budget. Keep it owned and
+// let later Shutdown calls join the same cleanup operation.
+func (c *Coordinator) finishClose(ownedBackend backend) error {
 	var closeErr error
 	if ownedBackend != nil {
 		closeErr = ownedBackend.close()
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.cleanupErr = errors.Join(c.cleanupErr, closeErr)
 	c.closing = false
-	closeErr = c.cleanupErr
-	c.mu.Unlock()
-	return closeErr
+	close(c.closeDone)
+	return c.cleanupErr
 }
 
 // Shutdown stops admission and drains evaluation and finalization before closing
@@ -379,13 +425,16 @@ func (c *Coordinator) Shutdown(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.stopping = true
+	if c.installCancel != nil {
+		c.installCancel()
+	}
 	for a := range c.active {
 		if a.phase == evaluating {
 			a.poison = errors.Join(a.poison, ErrUnavailable)
 			a.cancel()
 		}
 	}
-	for len(c.active) > 0 {
+	for len(c.active) > 0 || c.installing {
 		if c.changed == nil {
 			c.changed = make(chan struct{})
 		}
@@ -398,6 +447,38 @@ func (c *Coordinator) Shutdown(ctx context.Context) error {
 		}
 		c.mu.Lock()
 	}
+	if !c.closing && c.closed {
+		err := c.cleanupErr
+		c.mu.Unlock()
+		return err
+	}
+	if !c.closing {
+		c.closed, c.closing = true, true
+		c.closeDone = make(chan struct{})
+		ownedBackend := c.backend
+		go func() { _ = c.finishClose(ownedBackend) }()
+	}
+	done := c.closeDone
 	c.mu.Unlock()
-	return c.Close()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		c.mu.Lock()
+		err := c.cleanupErr
+		c.mu.Unlock()
+		return err
+	}
+}
+
+// Drained reports that owned attempts, installation and driver cleanup have all
+// finished. A completed cleanup may still return diagnostics from Shutdown.
+// Once true, this coordinator cannot install or admit work again.
+func (c *Coordinator) Drained() bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed && !c.closing && !c.installing && len(c.active) == 0
 }

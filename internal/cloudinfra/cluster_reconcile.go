@@ -259,6 +259,14 @@ func (s *Service) clusterObservedResource(ctx context.Context, o *ClusterOperati
 	return r, nil
 }
 func (s *Service) saveCluster(ctx context.Context, o *ClusterOperation) error {
+	if o != nil && o.Kind == InstanceNamespaceKind {
+		if o.Enrollment != nil && o.NamespaceAttemptID != "" && (o.Status == "needs_attention" || o.Status == "failed" || o.Status == "waiting_provider") {
+			if err := s.preserveInstanceNamespaceOutcome(ctx, o); err != nil {
+				return err
+			}
+		}
+		return s.saveInstanceNamespaceCheckpoint(ctx, o)
+	}
 	old := o.Revision
 	o.Revision++
 	o.UpdatedAt = s.now().UTC()

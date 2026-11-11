@@ -3,15 +3,16 @@ package cloudinfra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/currentauthority"
 	"github.com/xraph/loomplane/internal/fleets"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -44,6 +45,10 @@ type InstanceNamespaceReceipt struct {
 }
 
 type InstanceNamespaceRecord struct {
+	Revision                                                     int64
+	CreationAttemptID, CurrentAttemptID                          string
+	Snapshot                                                     fleets.InstanceSnapshot
+	QualificationExpiresAt                                       time.Time
 	CurrentGeneration                                            int64
 	CurrentSnapshotDigest                                        string
 	OrgID, ProjectID, CloudID, ClusterID, OperationID, Namespace string
@@ -56,7 +61,6 @@ type InstanceNamespaceRecord struct {
 type InstanceNamespaceAuthority interface {
 	VerifyInstanceSnapshot(context.Context, fleets.OperationAuthority, fleets.InstanceSnapshot) (*fleets.InstanceSnapshot, error)
 	RevalidateAuthority(context.Context, fleets.OperationAuthority) error
-	RevalidateAuthorityTx(context.Context, driver.Tx, fleets.OperationAuthority) error
 }
 
 // NamespaceQualification is returned only by a server-side qualification reader.
@@ -76,22 +80,25 @@ type InstanceNamespaceQualifier interface {
 }
 
 type InstanceNamespaceStore interface {
-	ReserveInstanceNamespaceOperation(context.Context, InstanceNamespaceRecord, *ClusterOperation, func(context.Context, driver.Tx) error) (*ClusterOperation, error)
 	GetInstanceNamespaceRecord(context.Context, string, string) (InstanceNamespaceRecord, error)
 	CheckInstanceNamespaceRecord(context.Context, InstanceNamespaceRecord) error
-	AdvanceInstanceNamespaceAuthority(context.Context, InstanceNamespaceRecord, InstanceNamespaceRecord, func(context.Context, driver.Tx) error) error
 }
 
 // RenewInstanceNamespaceAuthority replaces current authority while retaining the
 // original namespace, policy and physical cluster receipts.
 func (s *Service) RenewInstanceNamespaceAuthority(ctx context.Context, p security.Principal, in InstanceNamespaceInput) (*InstanceNamespaceReceipt, error) {
 	store, ok := s.Clusters.(InstanceNamespaceStore)
-	if !ok || s.InstanceAuthority == nil || s.InstanceIsolation == nil || p.ReadOnly || !p.IsFleet() || !reflect.DeepEqual(p, in.Authority.Principal) {
+	if !ok || s.InstanceAuthority == nil || s.InstanceNamespaces == nil || s.InstanceIsolation == nil || p.ReadOnly || !p.IsFleet() || !reflect.DeepEqual(p, in.Authority.Principal) {
 		return nil, security.ErrForbidden
 	}
 	if err := s.clusterEnabled(); err != nil {
 		return nil, err
 	}
+	ctx, finish, err := s.InstanceNamespaces.beginNamespaceCall(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	snapshot, err := s.InstanceAuthority.VerifyInstanceSnapshot(ctx, in.Authority, in.Snapshot)
 	if err != nil {
 		return nil, err
@@ -115,53 +122,46 @@ func (s *Service) RenewInstanceNamespaceAuthority(ctx context.Context, p securit
 	next.CurrentAuthority = in.Authority
 	next.CurrentGeneration = snapshot.Generation
 	next.CurrentSnapshotDigest = snapshot.Digest
+	next.Snapshot = *snapshot
 	if checkErr := s.InstanceIsolation.RevalidateInstanceNamespaceQualification(ctx, next, operation); checkErr != nil {
 		return nil, checkErr
 	}
-	if checkErr := store.AdvanceInstanceNamespaceAuthority(ctx, prior, next, func(call context.Context, tx driver.Tx) error {
-		return s.InstanceAuthority.RevalidateAuthorityTx(call, tx, in.Authority)
-	}); checkErr != nil {
+	if checkErr := s.InstanceNamespaces.Renew(ctx, prior, next, operation); checkErr != nil {
 		return nil, checkErr
 	}
-	return instanceNamespaceReceipt(operation)
-}
 
-type instanceNamespacePublicationStore interface {
-	PublishInstanceClusterEnrollment(context.Context, *ClusterOperation, *RuntimeAttachment, *connections.Connection, InstanceNamespaceRecord, func(context.Context, driver.Tx) error) error
-	SaveInstanceNamespaceCheckpoint(context.Context, *ClusterOperation, int64, InstanceNamespaceRecord, func(context.Context, driver.Tx) error) error
+	return instanceNamespaceReceipt(operation)
 }
 
 func (s *Service) saveInstanceNamespaceCheckpoint(ctx context.Context, o *ClusterOperation) error {
 	store, ok := s.Clusters.(InstanceNamespaceStore)
-	publisher, publishes := s.Clusters.(instanceNamespacePublicationStore)
-	if !ok || !publishes || s.InstanceAuthority == nil {
+	if !ok || s.InstanceNamespaces == nil || s.InstanceAuthority == nil {
 		return security.ErrForbidden
 	}
 	record, err := store.GetInstanceNamespaceRecord(ctx, o.OrgID, o.ID)
 	if err != nil {
 		return err
 	}
-	old := o.Revision
-	o.Revision++
-	o.UpdatedAt = s.now().UTC()
-	return publisher.SaveInstanceNamespaceCheckpoint(ctx, o, old, record, func(call context.Context, tx driver.Tx) error {
-		return s.InstanceAuthority.RevalidateAuthorityTx(call, tx, record.CurrentAuthority)
-	})
+	expected := o.Revision
+	next := *o
+	next.Revision++
+	if err := s.InstanceNamespaces.Checkpoint(ctx, record, &next, expected); err != nil {
+		return err
+	}
+	*o = next
+	return nil
 }
 
 func (s *Service) publishInstanceNamespace(ctx context.Context, o *ClusterOperation, a *RuntimeAttachment, c *connections.Connection) error {
 	store, ok := s.Clusters.(InstanceNamespaceStore)
-	publisher, publishes := s.Clusters.(instanceNamespacePublicationStore)
-	if !ok || !publishes || s.InstanceAuthority == nil {
+	if !ok || s.InstanceNamespaces == nil || s.InstanceAuthority == nil {
 		return security.ErrForbidden
 	}
 	record, err := store.GetInstanceNamespaceRecord(ctx, o.OrgID, o.ID)
 	if err != nil {
 		return err
 	}
-	return publisher.PublishInstanceClusterEnrollment(ctx, o, a, c, record, func(call context.Context, tx driver.Tx) error {
-		return s.InstanceAuthority.RevalidateAuthorityTx(call, tx, record.CurrentAuthority)
-	})
+	return s.InstanceNamespaces.Publish(ctx, record, o, a, c)
 }
 
 func instanceNamespaceIdentity(org, instance string, epoch int64) (operationID, namespace string) {
@@ -171,11 +171,20 @@ func instanceNamespaceIdentity(org, instance string, epoch int64) (operationID, 
 }
 
 func (s *Service) ReserveInstanceNamespace(ctx context.Context, p security.Principal, in InstanceNamespaceInput) (*InstanceNamespaceReceipt, error) {
+	ctx, finish, err := s.InstanceNamespaces.beginNamespaceCall(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	return s.reserveInstanceNamespace(ctx, p, in, false)
+}
+
+func (s *Service) reserveInstanceNamespace(ctx context.Context, p security.Principal, in InstanceNamespaceInput, replayOnly bool) (*InstanceNamespaceReceipt, error) {
 	if err := s.clusterEnabled(); err != nil {
 		return nil, err
 	}
-	store, ok := s.Clusters.(InstanceNamespaceStore)
-	if !ok || s.InstanceAuthority == nil || s.InstanceIsolation == nil || s.Clouds == nil || s.RuntimeConnections == nil {
+	_, ok := s.Clusters.(InstanceNamespaceStore)
+	if !ok || s.InstanceAuthority == nil || s.InstanceNamespaces == nil || s.InstanceIsolation == nil || s.Clouds == nil || s.RuntimeConnections == nil {
 		return nil, ErrInvalid
 	}
 	authority := in.Authority
@@ -185,6 +194,9 @@ func (s *Service) ReserveInstanceNamespace(ctx context.Context, p security.Princ
 	snapshot, err := s.InstanceAuthority.VerifyInstanceSnapshot(ctx, authority, in.Snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if snapshotErr := supportedNamespaceSnapshot(*snapshot); snapshotErr != nil {
+		return nil, snapshotErr
 	}
 	resource, err := s.Clusters.GetManagedResource(ctx, authority.Scope.OrgID, in.ClusterID)
 	if err != nil {
@@ -224,18 +236,30 @@ func (s *Service) ReserveInstanceNamespace(ctx context.Context, p security.Princ
 	}
 	id, namespace := instanceNamespaceIdentity(authority.Scope.OrgID, snapshot.InstanceID, snapshot.OwnershipEpoch)
 	pins := InstanceNamespacePins{FleetID: snapshot.FleetID, InstanceID: snapshot.InstanceID, EnvironmentID: snapshot.EnvironmentID, Generation: snapshot.Generation, OwnershipEpoch: snapshot.OwnershipEpoch, SnapshotDigest: snapshot.Digest, QualificationID: qualification.ID}
-	now := s.now().UTC()
-	input := ClusterInput{Kind: InstanceNamespaceKind, Provider: resource.Provider, ConnectionID: resource.ConnectionID, AccountID: resource.AccountID, ResourceID: resource.ID, ResourceRevision: resource.Revision, ConnectionGeneration: account.Generation, CloudRevision: profile.Revision, Ref: resource.Observation.Ref, Attachment: &AttachmentInput{Instance: &pins, InstancePolicy: &qualification.Policy, RuntimeAccess: &provider.RuntimeAccessProfile{SchemaVersion: 1, CleanupDependents: true, LifecycleJobs: true}, TargetSlug: namespace, CloudRevision: profile.Revision, ResourceRevision: resource.Revision, GrantRevision: grant.Revision, TrustFingerprint: resource.Observation.CAHash, EndpointFingerprint: endpointFingerprint(resource.Observation.Endpoint), Prerequisites: qualification.Prerequisites, ProjectID: authority.Scope.ProjectID, Namespace: namespace, ServiceAccountName: "runtime"}}
-	operation := &ClusterOperation{ID: id, OrgID: authority.Scope.OrgID, CloudID: resource.CloudID, ResourceID: resource.ID, Kind: InstanceNamespaceKind, SchemaVersion: 1, Input: input, Digest: clusterDigest(input), Revision: 1, Status: "accepted", Principal: p, Attempt: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: authority.ExpiresAt, Steps: []ClusterStep{{Name: "resolve-cluster", State: "completed", CompletedAt: &now}, {Name: "enroll-runtime", State: "pending"}}}
-	for i := range operation.Steps {
-		operation.Steps[i].RequestDigest = operation.Digest
-	}
-	record := InstanceNamespaceRecord{CurrentGeneration: snapshot.Generation, CurrentSnapshotDigest: snapshot.Digest, OrgID: operation.OrgID, ProjectID: authority.Scope.ProjectID, CloudID: resource.CloudID, ClusterID: resource.ID, OperationID: id, Namespace: namespace, Pins: pins, CreationAuthority: authority, CurrentAuthority: authority}
-	operation, err = store.ReserveInstanceNamespaceOperation(ctx, record, operation, func(call context.Context, tx driver.Tx) error {
-		return s.InstanceAuthority.RevalidateAuthorityTx(call, tx, authority)
-	})
+	input := ClusterInput{Kind: InstanceNamespaceKind, Provider: resource.Provider, ConnectionID: resource.ConnectionID, AccountID: resource.AccountID, ResourceID: resource.ID, ResourceRevision: resource.Revision, ConnectionGeneration: account.Generation, CloudRevision: profile.Revision, Ref: resource.Observation.Ref, Attachment: &AttachmentInput{Instance: &pins, InstancePolicy: &qualification.Policy, TargetSlug: namespace, CloudRevision: profile.Revision, ResourceRevision: resource.Revision, GrantRevision: grant.Revision, TrustFingerprint: resource.Observation.CAHash, EndpointFingerprint: endpointFingerprint(resource.Observation.Endpoint), Prerequisites: qualification.Prerequisites, ProjectID: authority.Scope.ProjectID, Namespace: namespace, ServiceAccountName: "runtime"}}
+	record := InstanceNamespaceRecord{Snapshot: *snapshot, QualificationExpiresAt: qualification.ExpiresAt, CurrentGeneration: snapshot.Generation, CurrentSnapshotDigest: snapshot.Digest, OrgID: authority.Scope.OrgID, ProjectID: authority.Scope.ProjectID, CloudID: resource.CloudID, ClusterID: resource.ID, OperationID: id, Namespace: namespace, Pins: pins, CreationAuthority: authority, CurrentAuthority: authority}
+	operation, found, err := s.InstanceNamespaces.replayReservation(ctx, record, input, p)
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		if replayOnly {
+			return nil, currentauthority.ErrCommitUnknown
+		}
+		now := s.now().UTC()
+		operation = &ClusterOperation{ID: id, OrgID: authority.Scope.OrgID, CloudID: resource.CloudID, ResourceID: resource.ID, Kind: InstanceNamespaceKind, SchemaVersion: 1, Input: input, Digest: clusterDigest(input), Revision: 1, Status: "accepted", Principal: p, Attempt: 1, CreatedAt: now, UpdatedAt: now, ExpiresAt: authority.ExpiresAt, Steps: []ClusterStep{{Name: "resolve-cluster", State: "completed", CompletedAt: &now}, {Name: "enroll-runtime", State: "pending"}}}
+		for i := range operation.Steps {
+			operation.Steps[i].RequestDigest = operation.Digest
+		}
+		operation, err = s.InstanceNamespaces.Reserve(ctx, record, operation)
+		if errors.Is(err, currentauthority.ErrCommitUnknown) {
+			// A concurrent caller may have committed the same logical reservation.
+			// Repeat all current checks, then accept only its verified original action.
+			return s.reserveInstanceNamespace(ctx, p, in, true)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	receipt, err := instanceNamespaceReceipt(operation)
 	if err != nil {
@@ -299,7 +323,7 @@ func (s *Service) instanceNamespaceAuthority(ctx context.Context, o *ClusterOper
 		return nil, empty, err
 	}
 	store, ok := s.Clusters.(InstanceNamespaceStore)
-	if !ok || s.InstanceAuthority == nil || s.InstanceIsolation == nil || o.Kind != InstanceNamespaceKind || o.Input.Kind != InstanceNamespaceKind || o.Input.Attachment == nil || o.Input.Attachment.Instance == nil || o.Input.Attachment.InstancePolicy == nil || o.CancelRequested {
+	if !ok || s.InstanceAuthority == nil || s.InstanceNamespaces == nil || s.InstanceIsolation == nil || o.Kind != InstanceNamespaceKind || o.Input.Kind != InstanceNamespaceKind || o.Input.Attachment == nil || o.Input.Attachment.Instance == nil || o.Input.Attachment.InstancePolicy == nil || o.Input.Attachment.RuntimeAccess != nil || o.Input.RuntimeAccess != nil || o.RuntimeAccess != nil || o.CancelRequested {
 		return nil, empty, security.ErrForbidden
 	}
 	record, err := store.GetInstanceNamespaceRecord(ctx, o.OrgID, o.ID)

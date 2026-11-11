@@ -237,7 +237,9 @@ func (s *Service) reconcileManagedRegistry(ctx context.Context, st RegistryStore
 			if errors.Is(result, ErrPending) || errors.Is(result, kubernetes.ErrRegistryPending) {
 				state.Status = "waiting"
 			}
-			result = errors.Join(result, st.SaveRegistryState(context.WithoutCancel(ctx), state))
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			result = errors.Join(result, st.SaveRegistryState(cleanup, state))
 		}
 	}()
 	c, raw, err := credentials.RefreshRegistry(ctx, candidate.OrgID, candidate.ID)

@@ -5,12 +5,24 @@ import (
 
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/plugin"
+
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // profile is private. A fixture may qualify only the transaction mechanism;
 // installed authority additionally requires engine, connection and principal
-// qualification. No public constructor installs either profile.
+// qualification through the fixed startup installer.
+type profileMode uint8
+
+const (
+	invalidProfile profileMode = iota
+	mechanismProfile
+	installedProfile
+)
+
 type profile struct {
+	mode        profileMode
+	fleet       *fleetProfile
 	ordinary    *ordinaryProfile
 	engine      *warden.Engine
 	invalidator plugin.Plugin
@@ -31,7 +43,7 @@ func captureEngineProfile(engine *warden.Engine, router *storeRouter) (*profile,
 	if reflect.TypeOf(plugins[0]).String() != "*warden.cacheInvalidator" {
 		return nil, ErrUnavailable
 	}
-	p := &profile{engine: engine, invalidator: plugins[0]}
+	p := &profile{mode: installedProfile, engine: engine, invalidator: plugins[0]}
 	if err := p.verify(); err != nil {
 		return nil, err
 	}
@@ -39,12 +51,15 @@ func captureEngineProfile(engine *warden.Engine, router *storeRouter) (*profile,
 }
 
 func (p *profile) verify() error {
-	if p == nil {
+	if p == nil || (p.mode != mechanismProfile && p.mode != installedProfile) {
 		return ErrUnavailable
 	}
 	if p.engine == nil {
-		return nil
-	} // Private transaction-only fixtures.
+		if p.mode == mechanismProfile && p.ordinary == nil && p.fleet == nil {
+			return nil
+		}
+		return ErrUnavailable
+	}
 	if !reflect.DeepEqual(p.engine.Config(), warden.DefaultConfig()) || p.engine.Plugins() == nil {
 		return ErrUnavailable
 	}
@@ -53,4 +68,22 @@ func (p *profile) verify() error {
 		return ErrUnavailable
 	}
 	return nil
+}
+
+func (p *profile) supports(kind security.Kind) bool {
+	if p == nil {
+		return false
+	}
+	switch p.mode {
+	case mechanismProfile:
+		return kind == security.KindUser && p.ordinary == nil && p.fleet == nil
+	case installedProfile:
+		switch kind {
+		case security.KindUser:
+			return p.ordinary != nil
+		case security.KindFleet:
+			return p.fleet != nil
+		}
+	}
+	return false
 }

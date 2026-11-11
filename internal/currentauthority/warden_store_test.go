@@ -57,7 +57,7 @@ func recordedValue[T any](s *recordingStore) T {
 
 func routerAttempt(t *testing.T, reader store.Store) (*Coordinator, *Attempt) {
 	t.Helper()
-	c := &Coordinator{reader: reader, profile: &profile{}}
+	c := &Coordinator{reader: reader, profile: &profile{mode: mechanismProfile}}
 	ctx, cancel := context.WithTimeout(context.Background(), AttemptLimit)
 	t.Cleanup(cancel)
 	a := &Attempt{owner: c, profile: c.profile, fenced: true, gate: make(chan struct{}, 1), cancel: cancel}

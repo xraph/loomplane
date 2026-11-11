@@ -244,7 +244,11 @@ func (s *Service) AuthorizeOperation(ctx context.Context, p security.Principal, 
 	return store.ReserveAuthority(ctx, authority)
 }
 func acceptGrant(g *fleet.Grant, p security.Principal, r OperationRequest) error {
-	if g.Status != "active" || !g.Input.ExpiresAt.After(time.Now()) {
+	return acceptGrantAt(g, p, r, time.Now())
+}
+
+func acceptGrantAt(g *fleet.Grant, p security.Principal, r OperationRequest, at time.Time) error {
+	if g == nil || at.IsZero() || g.Status != "active" || !g.Input.ExpiresAt.After(at) {
 		return ErrAuthorityRevoked
 	}
 	if r.Kind != "create" || g.Input.CredentialID != p.KeyID || g.Input.StageID != r.StageID || !slices.Contains(g.Input.Actions, r.Kind) || !slices.Contains(g.Input.ReleaseIDs, r.ReleaseID) || !slices.Contains(g.Input.ProfileIDs, r.ProfileID) || !slices.Contains(g.Input.CloudIDs, r.CloudID) || !slices.Contains(g.Input.Regions, r.Region) || !r.Demand.PriceKnown || r.Demand.Currency != g.Input.Limits.Currency {

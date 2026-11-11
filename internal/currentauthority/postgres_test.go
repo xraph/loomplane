@@ -77,7 +77,7 @@ func newPGFixture(t *testing.T) *pgFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Coordinator{backend: native, schema: schema, profile: &profile{}, telemetry: native.telemetry, source: func(ctx context.Context, tx driver.Tx, _ Binding) error {
+	c := &Coordinator{backend: native, schema: schema, profile: &profile{mode: mechanismProfile}, telemetry: native.telemetry, source: func(ctx context.Context, tx driver.Tx, _ Binding) error {
 		_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, schema+"/source")
 		return err
 	}}
@@ -266,7 +266,7 @@ func TestPostgresFailureRollsBackAndReleases(t *testing.T) {
 				return err
 			}
 			f.coordinator.mu.Lock()
-			f.coordinator.profile = &profile{}
+			f.coordinator.profile = &profile{mode: mechanismProfile}
 			f.coordinator.mu.Unlock()
 			return nil
 		},

@@ -20,6 +20,7 @@ type InstanceNamespaceReceiptQuery struct {
 // InstanceNamespaceStatus describes persisted progress. Effect authorization and
 // live runtime qualification happen separately before a worker changes resources.
 type InstanceNamespaceStatus struct {
+	KnownOutcome      *NamespaceKnownOutcome
 	Receipt           InstanceNamespaceReceipt
 	Status            string
 	OperationRevision int64
@@ -34,6 +35,24 @@ type instanceNamespaceReader interface {
 // GetInstanceNamespaceReceipt reads recovery progress through current Fleet read
 // permissions. It preserves failure visibility after a provisioning grant expires.
 func (s *Service) GetInstanceNamespaceReceipt(ctx context.Context, p security.Principal, in InstanceNamespaceReceiptQuery) (*InstanceNamespaceStatus, error) {
+	ctx, finish, err := s.InstanceNamespaces.beginNamespaceCall(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	status, err := s.getInstanceNamespaceStatus(ctx, p, in)
+	if err != nil {
+		return nil, err
+	}
+	if _, found, err := s.InstanceNamespaces.readOriginalReservation(ctx, p.OrgID, in.OperationID); err != nil {
+		return nil, err
+	} else if !found {
+		return nil, ErrConflict
+	}
+	return status, nil
+}
+
+func (s *Service) getInstanceNamespaceStatus(ctx context.Context, p security.Principal, in InstanceNamespaceReceiptQuery) (*InstanceNamespaceStatus, error) {
 	if p.OrgID == "" {
 		return nil, security.ErrNoOrganization
 	}
@@ -75,6 +94,15 @@ func (s *Service) GetInstanceNamespaceReceipt(ctx context.Context, p security.Pr
 		return nil, err
 	}
 	result := &InstanceNamespaceStatus{Receipt: *receipt, Status: operation.Status, OperationRevision: operation.Revision, CancelRequested: operation.CancelRequested}
+	if reader, ok := s.Clusters.(interface {
+		GetInstanceNamespaceKnownOutcome(context.Context, string, string, int64, int64) (*NamespaceKnownOutcome, error)
+	}); ok {
+		result.KnownOutcome, err = reader.GetInstanceNamespaceKnownOutcome(ctx, p.OrgID, in.OperationID, in.Generation, in.OwnershipEpoch)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	switch operation.Status {
 	case "accepted", "running", "waiting_provider", "cancelled":
 	case "failed", "needs_attention":

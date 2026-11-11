@@ -117,6 +117,7 @@ func newWardenPGFixture(t *testing.T) *wardenPGFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.profile.mode = mechanismProfile
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -300,7 +301,7 @@ func TestWardenPostgresHookPoisonAndProfileRejection(t *testing.T) {
 	}
 	// Deliberate mechanism-only fixture: verify refusal even when a caller's
 	// unsupported hook swallows the write error. No installed allowlist exception.
-	f.c.profile = &profile{}
+	f.c.profile = &profile{mode: mechanismProfile}
 	err := f.c.Run(context.Background(), testBinding(), func(ctx context.Context, a *Attempt) error {
 		_, _ = f.engine.Check(ctx, req)
 		_, err := a.Evaluate(ctx, func(context.Context) error { return nil })

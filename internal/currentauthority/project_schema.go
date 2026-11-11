@@ -167,7 +167,7 @@ var ordinaryColumns = map[string]map[string]schemaColumn{
 	"keysmith_keys":          {"id": {"text", true}, "app_id": {"text", true}, "tenant_id": {"text", true}, "state": {"text", true}, "metadata": {"jsonb", true}, "created_by": {"text", false}, "policy_id": {"text", false}, "revoked_at": {"timestamp with time zone", false}, "expires_at": {"timestamp with time zone", false}},
 	"keysmith_key_scopes":    {"key_id": {"text", true}, "scope_id": {"text", true}},
 	"keysmith_scopes":        {"id": {"text", true}},
-	"loomplane_projects":     {"id": {"text", true}, "org_id": {"text", true}},
+	"loomplane_projects":     {"id": {"text", true}, "org_id": {"text", true}, "deployment_mode": {"text", true}},
 	"loomplane_teams":        {"id": {"text", true}, "org_id": {"text", true}},
 	"loomplane_team_members": {"team_id": {"text", true}, "org_id": {"text", true}, "user_id": {"text", true}, "member_id": {"text", true}},
 	"loomplane_team_grants":  {"id": {"text", true}, "org_id": {"text", true}, "team_id": {"text", true}, "role": {"text", true}, "project_id": {"text", false}},

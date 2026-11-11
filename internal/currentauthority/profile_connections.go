@@ -10,11 +10,14 @@ import (
 )
 
 type connectionProfile struct {
+	ReplicationRole  string         `json:"replication_role"`
 	SystemID         string         `json:"system_id"`
 	DatabaseID       uint32         `json:"database_id"`
 	Database         string         `json:"database"`
 	Role             string         `json:"role"`
+	RoleID           uint32         `json:"role_id"`
 	SessionRole      string         `json:"session_role"`
+	SessionRoleID    uint32         `json:"session_role_id"`
 	Schema           string         `json:"schema"`
 	SearchPath       string         `json:"search_path"`
 	Primary          bool           `json:"primary"`
@@ -147,7 +150,7 @@ func sameDatabaseProfile(baseline, current connectionProfile) bool {
 }
 
 func (p *connectionProfile) validate(schema string) error {
-	if !p.Primary || p.SystemID == "" || p.DatabaseID == 0 || p.Database == "" || p.Role == "" || p.Role != p.SessionRole || p.Schema != schema || len(p.Tables) != len(authorityTables) {
+	if p.ReplicationRole != "origin" || !p.Primary || p.SystemID == "" || p.DatabaseID == 0 || p.Database == "" || p.Role == "" || p.Role != p.SessionRole || p.RoleID == 0 || p.RoleID != p.SessionRoleID || p.Schema != schema || len(p.Tables) != len(authorityTables) {
 		return fmt.Errorf("%w: unsupported session identity or incomplete table inventory", ErrUnavailable)
 	}
 	temporal := map[string]map[string]string{
@@ -173,8 +176,11 @@ const connectionProfileSQL = `SELECT pg_catalog.jsonb_build_object(
  'system_id',(SELECT system_identifier::text FROM pg_catalog.pg_control_system()),
  'database_id',(SELECT oid::bigint FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database()),
  'database',pg_catalog.current_database(),'role',current_user,'session_role',session_user,
+ 'role_id',(SELECT oid::bigint FROM pg_catalog.pg_roles WHERE rolname OPERATOR(pg_catalog.=) current_user),
+ 'session_role_id',(SELECT oid::bigint FROM pg_catalog.pg_roles WHERE rolname OPERATOR(pg_catalog.=) session_user),
  'schema',pg_catalog.current_schema(),'search_path',pg_catalog.current_setting('search_path'),
  'primary',NOT pg_catalog.pg_is_in_recovery(),
+ 'replication_role',pg_catalog.current_setting('session_replication_role'),
  'read_only',pg_catalog.current_setting('transaction_read_only')::boolean,
  'lock_timeout',(SELECT setting::int FROM pg_catalog.pg_settings WHERE name='lock_timeout'),
  'statement_timeout',(SELECT setting::int FROM pg_catalog.pg_settings WHERE name='statement_timeout'),

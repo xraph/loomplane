@@ -133,6 +133,7 @@ func TestAllAssignmentsCompleteStablePages(t *testing.T) {
 
 func TestOrdinaryProofCannotUseGenericDecision(t *testing.T) {
 	_, a := routerAttempt(t, &recordingStore{})
+	a.profile.mode = installedProfile
 	a.profile.ordinary = &ordinaryProfile{}
 	called := false
 	if _, err := a.Evaluate(a.ctx, func(context.Context) error { called = true; return nil }); !errors.Is(err, ErrDecision) || called {

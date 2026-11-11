@@ -255,6 +255,8 @@ func (e *Extension) register(fapp forge.App) error {
 	}
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue(c, e.authority.FleetAuthority()),
+		forge.ProvideValue(c, e.authority.OrdinaryAuthority()),
 		forge.ProvideValue[approvaladmission.Admitter](c, e.approvalAdmitter),
 		forge.ProvideValue[approvaladmission.Verification](c, e.approvalVerifier),
 		forge.ProvideValue(c, e.teams),
@@ -397,6 +399,8 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.startCheckpoints(ctx); err != nil {
 		return err
 	}
+	// Publish owned authority only after every fallible startup step succeeds.
+	e.prepareCurrentAuthority(ctx)
 	e.logSetupLink(ctx)
 	e.MarkStarted()
 	return nil
@@ -459,13 +463,16 @@ func (e *Extension) mount(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops authsome, its router and Warden. The database closes with the
-// grove extension.
+// Stop closes admission and drains authority before its engine dependencies.
+// The main database closes with the grove extension.
 func (e *Extension) Stop(ctx context.Context) error {
 	var errs []error
 	e.stopCheckpoints()
 	if e.router != nil {
 		errs = append(errs, e.router.Stop(ctx))
+	}
+	if err := shutdownCurrentAuthority(ctx, e.authority); err != nil {
+		errs = append(errs, err)
 	}
 	if e.engine != nil {
 		errs = append(errs, e.engine.Stop(ctx))
@@ -473,9 +480,25 @@ func (e *Extension) Stop(ctx context.Context) error {
 	if e.warden != nil {
 		errs = append(errs, e.warden.Stop(ctx))
 	}
-	errs = append(errs, e.authority.Shutdown(ctx), e.closeLockPool())
+	errs = append(errs, e.closeLockPool())
 	e.MarkStopped()
 	return errors.Join(errs...)
+}
+
+type authorityDrainOwner interface {
+	Shutdown(context.Context) error
+	Drained() bool
+}
+
+// Forge continues dependency teardown after Stop returns an error. Keep this
+// extension on the stack until authority cleanup finishes, retaining the first
+// caller diagnostic. Native operation and cleanup deadlines still apply.
+func shutdownCurrentAuthority(ctx context.Context, owner authorityDrainOwner) error {
+	err := owner.Shutdown(ctx)
+	if !owner.Drained() {
+		err = errors.Join(err, owner.Shutdown(context.WithoutCancel(ctx)))
+	}
+	return err
 }
 
 // closeLockPool closes the sync lock's pool, once.
