@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -88,6 +89,9 @@ func outcomeOf(err error) string {
 // names nothing then.
 func dsnAddress(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
+	if access, accessErr := ParseEngineAccess(dsn); accessErr == nil {
+		return net.JoinHostPort(access.Host, strconv.Itoa(access.Port))
+	}
 	u, err := url.Parse(dsn)
 	if err != nil || u.Opaque != "" || u.Hostname() == "" {
 		return ""

@@ -1238,13 +1238,19 @@ func afterCycle(list []Component, components map[string]*Component) []string {
 // validateRequirement checks what a dependency asks of an external
 // endpoint: an engine Loomplane can check, and rules that engine has.
 func validateRequirement(f *findings, dependency string, req Requirement) {
-	if req.Engine != "postgres" && req.Engine != "redis" {
-		f.add("dependency %q accepts external %q endpoints; only postgres and redis can be checked", dependency, req.Engine)
+	if req.Engine != "postgres" && req.Engine != "redis" && req.Engine != "elasticsearch" && req.Engine != "opensearch" {
+		f.add("dependency %q accepts external %q endpoints; only postgres, redis, elasticsearch and opensearch can be checked", dependency, req.Engine)
 	}
 	if req.Engine != "postgres" && (len(req.Preload) > 0 || req.CreateRole) {
 		f.add("dependency %q checks preload libraries or role rights, which only postgres endpoints have", dependency)
 	}
+	if (req.Engine == "elasticsearch" || req.Engine == "opensearch") && len(req.Extensions) > 0 {
+		f.add("dependency %q checks extensions, which search endpoints do not expose", dependency)
+	}
 	for _, mode := range req.TLS {
+		if req.Engine == "opensearch" && mode != "verify-full" || req.Engine == "elasticsearch" && mode == "require" {
+			f.add("dependency %q allows a TLS mode unsupported by its search engine", dependency)
+		}
 		if mode != "disable" && mode != "require" && mode != "verify-full" {
 			f.add("dependency %q allows TLS mode %q; the modes are disable, require and verify-full", dependency, mode)
 		}

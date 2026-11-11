@@ -387,15 +387,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	// Plans check the external endpoints composed resources connect from
 	// the target each resource runs on, and each release checks them again.
-	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
-		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
-		catalogconnect.EngineMySQL: catalogconnect.MySQLProber{},
-		catalogconnect.EngineS3:    catalogconnect.BucketProber{}, catalogconnect.EngineGCS: catalogconnect.BucketProber{},
-	}}
-	checker.Probers[catalogconnect.EngineR2] = catalogconnect.BucketProber{}
-	for _, engine := range []string{"cloudflare-d1", "cloudflare-kv", "cloudflare-r2", "cloudflare-queue", "cloudflare-vectorize", "cloudflare-hyperdrive", "cloudflare-durable-object", "vercel-blob", "vercel-global-config", "vercel-integration"} {
-		checker.Probers[engine] = catalogconnect.APIProber{}
-	}
+	checker := newEndpointChecker(e.endpoints)
 	e.endpointChecks = checker
 	// catalogHooks are what composed catalog kinds do beyond their
 	// recipes, by kind. A kind registers its own here, or, from another

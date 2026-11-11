@@ -912,6 +912,12 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 			return "", false, recheckErr
 		}
 		address = r.external[dependency]
+		for _, declared := range r.kind.Dependencies {
+			if declared.Name == dependency && declared.External != nil && catalogconnect.IsEngineAccessEngine(declared.External.Engine) {
+				value, err = catalogconnect.EngineAccessField(address, field)
+				return value, err == nil, err
+			}
+		}
 		if field == recipes.FieldAdminURL {
 			// An external endpoint connects as what its DSN says.
 			return address, true, nil
@@ -1150,6 +1156,7 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	if e.Endpoints == nil || e.Checker == nil {
 		return "", errors.New("this Loomplane can't check external endpoints")
 	}
+	requirement := *kind.Dependencies[i].External
 	org := job.Deployment.OrgID
 	endpoint, dsn, err := e.Endpoints.Resolve(ctx, org, endpointID)
 	if errors.Is(err, catalogconnect.ErrNotFound) {
@@ -1157,6 +1164,20 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	}
 	if err != nil {
 		return "", err
+	}
+	type endpointDSNChecker interface {
+		CheckDSN(context.Context, string, recipes.Requirement, catalogconnect.DialFunc) (*catalogconnect.Report, error)
+	}
+	var exactChecker endpointDSNChecker
+	if catalogconnect.IsEngineAccessEngine(requirement.Engine) || catalogconnect.IsEngineAccessEngine(endpoint.Engine) {
+		if endpoint.Engine != requirement.Engine {
+			return "", fmt.Errorf("%s is a %s endpoint, and this needs %s", endpoint.Name, catalogconnect.EngineTitle(endpoint.Engine), catalogconnect.EngineTitle(requirement.Engine))
+		}
+		var ok bool
+		exactChecker, ok = e.Checker.(endpointDSNChecker)
+		if !ok {
+			return "", errors.New("this Loomplane can't verify resolved search credentials")
+		}
 	}
 	dialFrom := e.endpointDial
 	if dialFrom == nil {
@@ -1166,7 +1187,13 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	if err != nil {
 		return "", fmt.Errorf("endpoint %s couldn't be checked: the target connection failed: %w", endpoint.Name, err)
 	}
-	report, err := e.Checker.Check(catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dependency)), org, endpointID, *kind.Dependencies[i].External, dial)
+	ctx = catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dependency))
+	var report *catalogconnect.Report
+	if exactChecker != nil {
+		report, err = exactChecker.CheckDSN(ctx, dsn, requirement, dial)
+	} else {
+		report, err = e.Checker.Check(ctx, org, endpointID, requirement, dial)
+	}
 	if closer != nil {
 		if closeErr := closer.Close(); err == nil && closeErr != nil {
 			err = closeErr
@@ -1265,7 +1292,7 @@ func withoutDSN(message, dsn string) string {
 	if dsn == "" {
 		return message
 	}
-	return strings.ReplaceAll(message, dsn, "[redacted]")
+	return catalogconnect.RedactEngineAccess(strings.ReplaceAll(message, dsn, "[redacted]"), dsn)
 }
 
 // generatedSecret is one of the composition's generated secrets, kept once

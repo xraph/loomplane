@@ -43,7 +43,7 @@ type Checker struct {
 	Probers map[string]Prober
 }
 
-var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineS3: "S3", EngineGCS: "Google Cloud Storage"}
+var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineS3: "S3", EngineGCS: "Google Cloud Storage", EngineElasticsearch: "Elasticsearch", EngineOpenSearch: "OpenSearch"}
 
 // EngineTitle names an engine the way checks word it: "PostgreSQL",
 // "Redis".
@@ -87,8 +87,8 @@ func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirem
 	if dial == nil {
 		return nil, errors.New("check a DSN: no dialer")
 	}
-	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS && req.Engine != EngineR2 && !IsAPIEngine(req.Engine) {
-		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis and bucket endpoints, not %q", ErrInvalid, req.Engine)
+	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS && req.Engine != EngineR2 && !IsAPIEngine(req.Engine) && !IsEngineAccessEngine(req.Engine) {
+		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis, search and bucket endpoints, not %q", ErrInvalid, req.Engine)
 	}
 	dsn = strings.TrimSpace(dsn)
 	e := &Endpoint{Engine: req.Engine}
@@ -288,7 +288,7 @@ func redact(msg, dsn string) string {
 			msg = strings.ReplaceAll(msg, pw, "[redacted]")
 		}
 	}
-	return redactAPIAccess(redactBucketAccess(msg, dsn), dsn)
+	return RedactEngineAccess(redactAPIAccess(redactBucketAccess(msg, dsn), dsn), dsn)
 }
 
 var leadingVersion = regexp.MustCompile(`^\d+(\.\d+)*`)

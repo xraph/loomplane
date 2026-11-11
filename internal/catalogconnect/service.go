@@ -82,8 +82,8 @@ func (s *Service) create(ctx context.Context, p security.Principal, in CreateInp
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return nil, fmt.Errorf("%w: an endpoint needs a name of at most %d characters", ErrInvalid, maxName)
 	}
-	if in.Engine != EnginePostgres && in.Engine != EngineRedis && in.Engine != EngineMySQL && in.Engine != EngineS3 && in.Engine != EngineGCS && in.Engine != EngineR2 && !IsAPIEngine(in.Engine) {
-		return nil, fmt.Errorf("%w: Loomplane connects postgres, mysql, redis and bucket endpoints, not %q", ErrInvalid, in.Engine)
+	if in.Engine != EnginePostgres && in.Engine != EngineRedis && in.Engine != EngineMySQL && in.Engine != EngineS3 && in.Engine != EngineGCS && in.Engine != EngineR2 && !IsAPIEngine(in.Engine) && !IsEngineAccessEngine(in.Engine) {
+		return nil, fmt.Errorf("%w: Loomplane connects postgres, mysql, redis, search and bucket endpoints, not %q", ErrInvalid, in.Engine)
 	}
 	e := &Endpoint{OrgID: p.OrgID, Name: name, Engine: in.Engine, CreatedBy: p.UserID, CreatedAt: s.now().UTC(), Revision: 1}
 	if err := parseDSN(e, in.DSN); err != nil {
@@ -176,6 +176,13 @@ func (s *Service) Resolve(ctx context.Context, orgID, id string) (*Endpoint, str
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("read the DSN of endpoint %s: %w", e.Name, err)
+	}
+	if IsEngineAccessEngine(e.Engine) {
+		if !engineEndpointMatches(e, string(dsn)) {
+			return nil, "", ErrInvalid
+		}
+	} else if _, accessErr := ParseEngineAccess(string(dsn)); accessErr == nil {
+		return nil, "", ErrInvalid
 	}
 	if IsAPIEngine(e.Engine) {
 		expected := &Endpoint{Engine: e.Engine}

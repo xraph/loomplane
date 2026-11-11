@@ -1,0 +1,83 @@
+name: Qualify external Elasticsearch on native AMD64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  elasticsearch-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GOMAXPROCS: "2"
+      LOOMPLANE_TEST_DOCKER_SOCKET: /var/run/docker.sock
+      ELASTICSEARCH_AMD64_IMAGE: docker.io/library/elasticsearch@sha256:8a232d1f9fa617d2b3c9478746ef7b295e15eee963b2dd5a40e0488df6ab25b4
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build and test the qualification fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)/$(uname -m)" = Linux/x86_64
+          test "$(go env GOOS)/$(go env GOARCH)" = linux/amd64
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          binaries="$RUNNER_TEMP/external-search-binaries"
+          install -d -m 700 "$binaries"
+          timeout --signal=KILL 8m go test -c -p 1 -tags=qualification -o "$binaries/catalogconnect.test" ./internal/catalogconnect
+          timeout --signal=KILL 8m go test -c -p 1 -tags=qualification -o "$binaries/deployments.test" ./internal/deployments
+          for binary in "$binaries/catalogconnect.test" "$binaries/deployments.test"; do
+            file -b "$binary" | grep -Eq '^ELF 64-bit LSB.*x86-64'
+          done
+          timeout --signal=KILL 60s "$binaries/deployments.test" -test.run='^TestExternalSearchSetup(CleanupChecksIdentity|PreparesRuntimeFiles|ReadinessDiagnostics|RuntimeMode)$' -test.count=1 -test.timeout=60s
+
+      - name: Qualify the pinned Elasticsearch connection
+        shell: bash
+        env:
+          LOOMPLANE_SEARCH_SETUP: "1"
+          LOOMPLANE_SEARCH_NATIVE_ONLY: "1"
+          LOOMPLANE_ENGINE: elasticsearch
+          LOOMPLANE_ENGINE_ARCH: amd64
+        run: |
+          set -euo pipefail
+          umask 077
+          test -S "$LOOMPLANE_TEST_DOCKER_SOCKET"
+          work=$(mktemp -d "$RUNNER_TEMP/external-search-run.XXXXXX")
+          trap 'rm -rf -- "$work"' EXIT
+          mkdir "$work/docker"
+          docker=(env -i "PATH=$PATH" "DOCKER_CONFIG=$work/docker" docker --host "unix://$LOOMPLANE_TEST_DOCKER_SOCKET")
+          if ! timeout --signal=KILL 3m "${docker[@]}" pull --platform linux/amd64 "$ELASTICSEARCH_AMD64_IMAGE" > /dev/null 2>&1; then
+            echo 'Could not pull the pinned public Elasticsearch image' >&2
+            exit 1
+          fi
+          image_id=$("${docker[@]}" image inspect --format '{{.Id}}' "$ELASTICSEARCH_AMD64_IMAGE" 2>/dev/null)
+          [[ $image_id =~ ^sha256:[0-9a-f]{64}$ ]]
+          binaries="$RUNNER_TEMP/external-search-binaries"
+          export LOOMPLANE_SEARCH_QUALIFICATION_BIN="$binaries/catalogconnect.test"
+          status=0
+          timeout --signal=KILL 8m "$binaries/deployments.test" -test.run='^TestSetupAndQualifyExternalSearchNative$' -test.v -test.count=1 -test.timeout=8m > "$work/raw.log" 2>&1 || status=$?
+
+          digest=${ELASTICSEARCH_AMD64_IMAGE##*@}
+          proof="engine=elasticsearch product=9[.]4[.]1 architecture=amd64 mode=native daemon=(x86_64|amd64) digest=$digest image=$image_id container=[0-9a-f]{64} address=127[.]0[.]0[.]1:[0-9]{1,5} guarded_requests=3 authenticated_identity=true cluster_health_read=true bad_password_refused=true"
+          cleanup='cleanup scope=lp-task6b1-inst_[0-9a-z]+ owned_absent=(true|false) baseline_foreign_present=(true|false)'
+          readiness='search readiness probe_stage=(request-setup|product|identity|health|unknown) probe_result=(dial-failed|no-response|access-refused|product-refused|identity-refused|health-unavailable|request-refused|response-invalid|probe-error|missing-report|report-refused|version-mismatch|unexpected-dial-count) attempts=[0-9]{1,3}'
+          overflow='search readiness additional_attempts=[0-9]{1,3}'
+          state='search readiness container_state (unavailable|running=(true|false) exit_code=-?[0-9]{1,10} oom_killed=(true|false))'
+          grep -Eo "($proof|$cleanup|$readiness|$overflow|$state)$" "$work/raw.log" > "$work/proof.txt" || true
+          {
+            printf 'commit=%s\nqualification_exit=%s\n' "$GITHUB_SHA" "$status"
+            sha256sum "$binaries/catalogconnect.test" "$binaries/deployments.test"
+            cat "$work/proof.txt"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$status" -eq 0
+          grep -Eq '^--- PASS: TestSetupAndQualifyExternalSearchNative \([0-9.]+s\)$' "$work/raw.log"
+          grep -Eq "^$proof$" "$work/proof.txt"
+          grep -Eq '^cleanup scope=lp-task6b1-inst_[0-9a-z]+ owned_absent=true baseline_foreign_present=true$' "$work/proof.txt"
+          test "$("${docker[@]}" image inspect --format '{{.Id}}' "$ELASTICSEARCH_AMD64_IMAGE" 2>/dev/null)" = "$image_id"

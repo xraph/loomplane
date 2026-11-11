@@ -88,6 +88,9 @@ var postgresParams = map[string]bool{
 // parseDSN reads the parts of a DSN that aren't secret into e. Its errors
 // never repeat the DSN.
 func parseDSN(e *Endpoint, dsn string) error {
+	if IsEngineAccessEngine(e.Engine) {
+		return parseEngineEndpoint(e, dsn)
+	}
 	if IsAPIEngine(e.Engine) {
 		return parseAPIEndpoint(e, dsn)
 	}
