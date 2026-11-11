@@ -104,8 +104,8 @@ export function WelcomeDialog({
               Welcome to Loomplane
             </DialogTitle>
             <DialogDescription className="max-w-[56ch] text-sm leading-relaxed">
-              Your workspace is ready. Every screen follows the same four
-              beats, so it's worth a quick look before you start.
+              Your workspace is ready. Every screen follows the same four beats,
+              so it's worth a quick look before you start.
             </DialogDescription>
           </div>
         </div>
@@ -176,7 +176,9 @@ export function WelcomeDialog({
                         on ? "border-primary" : "border-muted-foreground/50"
                       )}
                     >
-                      {on && <span className="size-2 rounded-full bg-primary" />}
+                      {on && (
+                        <span className="size-2 rounded-full bg-primary" />
+                      )}
                     </span>
                   </span>
                   <span className="text-sm font-semibold">{c.title}</span>

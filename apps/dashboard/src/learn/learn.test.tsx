@@ -115,11 +115,7 @@ describe("place", () => {
   })
 
   it("puts the card under a wide card and keeps it on screen", () => {
-    const p = place(
-      { top: 92, left: 1224, width: 194, height: 46 },
-      card,
-      view
-    )
+    const p = place({ top: 92, left: 1224, width: 194, height: 46 }, card, view)
     expect(p.side).toBe("bottom")
     expect(p.left + card.width).toBeLessThanOrEqual(view.width - 8)
     // The arrow still aims at the target's middle.
@@ -127,11 +123,7 @@ describe("place", () => {
   })
 
   it("centers when there's no room anywhere", () => {
-    const p = place(
-      { top: 0, left: 0, width: 1440, height: 900 },
-      card,
-      view
-    )
+    const p = place({ top: 0, left: 0, width: 1440, height: 900 }, card, view)
     expect(p.side).toBe("center")
   })
 })

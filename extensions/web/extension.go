@@ -97,7 +97,7 @@ func (e *Extension) Handler() http.Handler {
 			} else {
 				w.Header().Set("Cache-Control", "no-cache")
 			}
-			http.ServeFileFS(w, r, files, name)
+			http.ServeFileFS(w, r, files, name) // #nosec G703 -- name is cleaned from an absolute path above, then made relative to the build directory.
 			return
 		}
 		if !isFile(files, "index.html") {

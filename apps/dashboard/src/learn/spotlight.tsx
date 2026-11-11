@@ -262,7 +262,12 @@ export function Spotlight({
               height: hole.height,
             },
           ].map((s, i) => (
-            <div key={i} aria-hidden className="absolute bg-black/50" style={s} />
+            <div
+              key={i}
+              aria-hidden
+              className="absolute bg-black/50"
+              style={s}
+            />
           ))}
           <div
             aria-hidden

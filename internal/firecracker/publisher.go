@@ -146,5 +146,5 @@ func relay(a, b net.Conn) {
 	_, _ = io.Copy(b, a) //nolint:errcheck // Both peers are closed below regardless of why forwarding ended.
 	_ = a.Close()
 	_ = b.Close()
-	<-done
+	<-done //nolint:errcheck // Both peers are closed; only wait for the other copy to finish.
 }

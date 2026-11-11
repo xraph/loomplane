@@ -34,7 +34,7 @@ func TestAcceptanceStorageInventory(t *testing.T) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
 	t.Cleanup(transport.CloseIdleConnections)
-	docker := httptest.NewServer(&httputil.ReverseProxy{Director: func(r *http.Request) { r.URL.Scheme = "http"; r.URL.Host = "docker" }, Transport: transport})
+	docker := httptest.NewServer(&httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) { r.Out.URL.Scheme = "http"; r.Out.URL.Host = "docker" }, Transport: transport})
 	t.Cleanup(docker.Close)
 	address, _ := url.Parse(docker.URL)
 	_, port, _ := net.SplitHostPort(address.Host)

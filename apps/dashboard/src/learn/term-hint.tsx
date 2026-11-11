@@ -23,7 +23,7 @@ export function TermHint({ term }: { term: Concept }) {
           <button
             type="button"
             aria-label={`What does ${term.word} mean?`}
-            className="inline-flex size-4 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-muted-foreground align-middle hover:bg-primary hover:text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="inline-flex size-4 items-center justify-center rounded-full bg-muted align-middle text-[10px] font-bold text-muted-foreground hover:bg-primary hover:text-primary-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           />
         }
       >

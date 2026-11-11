@@ -523,7 +523,7 @@ func relay(ctx context.Context, be *pgproto3.Backend, client io.Closer, c *Backe
 		_ = client.Close()
 	}
 	for ; pending > 0; pending-- {
-		<-errs
+		<-errs //nolint:errcheck // Both connections are closed; drain the remaining relay and keep the initiating result.
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil

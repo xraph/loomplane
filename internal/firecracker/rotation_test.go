@@ -271,8 +271,8 @@ func TestReloadPlatformTrust(t *testing.T) {
 	}
 	for name, c := range refused {
 		write(c)
-		if _, _, err := ReloadPlatformTrust(path, current); !errors.Is(err, ErrInvalid) {
-			t.Fatal(name, "reloaded:", err)
+		if _, _, reloadErr := ReloadPlatformTrust(path, current); !errors.Is(reloadErr, ErrInvalid) {
+			t.Fatal(name, "reloaded:", reloadErr)
 		}
 	}
 

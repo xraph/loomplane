@@ -5,6 +5,7 @@ package cloudinfra
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestClusterAggregateMetadataReaders(t *testing.T) {
@@ -68,7 +69,18 @@ func TestClusterAggregateMetadataReaders(t *testing.T) {
 
 func TestClusterAggregateMetadataDoesNotChangeReview(t *testing.T) {
 	e := ClusterCapacityEnvelope{SchemaVersion: 1, Review: ClusterPoolEnvelopeReview{Key: "pool", Maximum: ResourceVector{Servers: 3}}}
-	h := ClusterWorkloadHold{SchemaVersion: 1, Revision: 1, Input: ClusterWorkloadInput{ID: "hold", ReviewDigest: "signed"}}
+	h := ClusterWorkloadHold{SchemaVersion: 1, Revision: 1, UpdatedAt: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), Input: ClusterWorkloadInput{ID: "hold", ReviewDigest: "signed"}}
+	raw, err := json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ClusterWorkloadHold
+	if decodeErr := json.Unmarshal(raw, &decoded); decodeErr != nil {
+		t.Fatalf("valid hold body rejected: %v", decodeErr)
+	}
+	if decoded.SchemaVersion != h.SchemaVersion || decoded.Revision != h.Revision || !decoded.UpdatedAt.Equal(h.UpdatedAt) || decoded.Input.ID != h.Input.ID || decoded.Input.ReviewDigest != h.Input.ReviewDigest {
+		t.Fatal("hold body changed during round trip")
+	}
 	before := maintenanceHash([]any{e.Review, h.Input})
 	e.SchemaVersion = 2
 	h.SchemaVersion = 2
@@ -76,8 +88,18 @@ func TestClusterAggregateMetadataDoesNotChangeReview(t *testing.T) {
 	if after := maintenanceHash([]any{e.Review, h.Input}); after != before {
 		t.Fatal("metadata changed approved review")
 	}
-	raw, _ := json.Marshal(e)
+	raw, err = json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if json.Unmarshal(raw, &e) == nil {
 		t.Fatal("future body accepted")
+	}
+	raw, err = json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(raw, &h) == nil {
+		t.Fatal("future hold body accepted")
 	}
 }

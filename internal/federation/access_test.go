@@ -277,8 +277,8 @@ func TestAccessApprovalRequiresEveryDestinationCapability(t *testing.T) {
 				source := store.rows[input.DestinationIDs[0]]
 				source.ID = "source"
 				source.Capabilities.Results = make(map[domain.Capability]domain.CapabilityResult)
-				for cap, result := range store.rows[input.DestinationIDs[0]].Capabilities.Results {
-					source.Capabilities.Results[cap] = result
+				for capabilityID, result := range store.rows[input.DestinationIDs[0]].Capabilities.Results {
+					source.Capabilities.Results[capabilityID] = result
 				}
 				store.rows[source.ID] = source
 				grant.Source.DestinationID = source.ID

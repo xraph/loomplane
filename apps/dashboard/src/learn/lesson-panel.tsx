@@ -202,8 +202,8 @@ export function LessonPanel({
         {done ? (
           <div className="grid gap-3">
             <p className="text-[13px] leading-relaxed text-muted-foreground">
-              That's the lesson. Everything you did here was real, so it's
-              all still in your workspace.
+              That's the lesson. Everything you did here was real, so it's all
+              still in your workspace.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={onExit}>
@@ -237,7 +237,8 @@ export function LessonPanel({
                       className={cn(
                         "flex size-[22px] shrink-0 items-center justify-center rounded-full font-mono text-[11px]",
                         past && "bg-primary text-primary-foreground",
-                        now && "bg-primary/10 text-primary ring-[1.5px] ring-primary",
+                        now &&
+                          "bg-primary/10 text-primary ring-[1.5px] ring-primary",
                         !past &&
                           !now &&
                           "text-muted-foreground ring-[1.5px] ring-border"
@@ -263,7 +264,10 @@ export function LessonPanel({
                       {!rect && (
                         <p className="text-[12.5px] text-muted-foreground">
                           {s.route && path !== s.route ? (
-                            <Link to={s.route} className="font-medium text-primary hover:underline">
+                            <Link
+                              to={s.route}
+                              className="font-medium text-primary hover:underline"
+                            >
                               Take me there
                             </Link>
                           ) : (

@@ -97,9 +97,8 @@ export function Tour({ onEnd }: { onEnd: (finished: boolean) => void }) {
           You know your way around
         </h2>
         <p className="text-[13px] leading-relaxed text-muted-foreground">
-          The getting-started list on the Overview shows what's left to set
-          up. Help in the top bar can replay this tour or walk you through a
-          lesson.
+          The getting-started list on the Overview shows what's left to set up.
+          Help in the top bar can replay this tour or walk you through a lesson.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button autoFocus onClick={() => end(true)}>

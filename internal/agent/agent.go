@@ -96,7 +96,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		first = errors.New("agent component stopped")
 	}
 	cancel(first)
-	<-results
+	<-results //nolint:errcheck // Drain the stopped component; preserve the cancellation cause from the first result.
 	return context.Cause(run)
 }
 func terminal(err error) bool {

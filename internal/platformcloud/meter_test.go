@@ -156,8 +156,8 @@ func TestComputeCountsAMissedMinuteOnce(t *testing.T) {
 	ctx := t.Context()
 	e.readyHost(t, "a", bigAllotment)
 	p := e.running(t, "web")
-	for _, min := range []int{1, 2, 5} { // minutes 3 and 4 missed while the sampler was down
-		if err := e.svc.SampleCompute(ctx, meterHour.Add(time.Duration(min)*time.Minute)); err != nil {
+	for _, minute := range []int{1, 2, 5} { // minutes 3 and 4 missed while the sampler was down
+		if err := e.svc.SampleCompute(ctx, meterHour.Add(time.Duration(minute)*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}

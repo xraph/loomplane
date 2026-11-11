@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useState } from "react"
 import { Link } from "@/lib/router"
 import { statusOf } from "@/client/errors"
 import {
@@ -60,7 +60,7 @@ function Instances({ projectID }: { projectID: string }) {
     path: { project_id: projectID },
     query: { ...query, limit: 50 },
   })
-  const reload = useCallback(() => instances.refetch(), [instances.refetch])
+  const reload = instances.refetch
   useFleetRefresh(![401, 403, 404].includes(statusOf(instances.error)), reload)
   if (instances.status === "error") {
     const failure = (

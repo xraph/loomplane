@@ -124,8 +124,8 @@ func serveProcess(ctx context.Context, child *exec.Cmd, startup string, grace ti
 		return errors.Join(errors.New("startup failed"), writeErr, killErr, waitErr)
 	}
 	select {
-	case <-done:
-		return errors.New("server exited unexpectedly")
+	case waitErr := <-done:
+		return errors.Join(errors.New("server exited unexpectedly"), waitErr)
 	case <-ctx.Done():
 	}
 	_, quitErr := io.WriteString(stdin, ".quit\n")

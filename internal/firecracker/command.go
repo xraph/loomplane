@@ -1,6 +1,7 @@
 package firecracker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -249,7 +250,7 @@ func ReloadPlatformTrust(path string, current HostConfig) (HostConfig, *x509.Cer
 	if err != nil {
 		return HostConfig{}, nil, err
 	}
-	if string(was) != string(now) {
+	if !bytes.Equal(was, now) {
 		return HostConfig{}, nil, fmt.Errorf("%w: the runtime identity would change; when the platform fingerprint changes, set Identity to the fingerprint the host started with", ErrInvalid)
 	}
 	pool, inFile, err := readClientCerts(next.ClientCA)

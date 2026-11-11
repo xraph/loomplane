@@ -36,7 +36,7 @@ func TestAcceptanceCatalogPostgres(t *testing.T) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}
 	defer transport.CloseIdleConnections()
-	proxy := &httputil.ReverseProxy{Director: func(r *http.Request) { r.URL.Scheme = "http"; r.URL.Host = "docker" }, Transport: transport, FlushInterval: -1}
+	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) { r.Out.URL.Scheme = "http"; r.Out.URL.Host = "docker" }, Transport: transport, FlushInterval: -1}
 	docker := httptest.NewServer(proxy)
 	defer docker.Close()
 	address, _ := url.Parse(docker.URL)

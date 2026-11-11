@@ -96,7 +96,11 @@ export function LearnProvider({ children }: { children: ReactNode }) {
         <Tour
           onEnd={(finished) => {
             setTouring(false)
-            update((p) => ({ ...p, welcomed: true, toured: p.toured || finished }))
+            update((p) => ({
+              ...p,
+              welcomed: true,
+              toured: p.toured || finished,
+            }))
           }}
         />
       )}

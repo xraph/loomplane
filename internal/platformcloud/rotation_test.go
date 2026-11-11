@@ -25,7 +25,7 @@ import (
 func (e *hostEnv) trustCerts(t *testing.T, pems ...string) {
 	t.Helper()
 	pool := x509.NewCertPool()
-	var fps []string
+	fps := make([]string, 0, len(pems))
 	for _, p := range pems {
 		block, _ := pem.Decode([]byte(p))
 		cert, err := x509.ParseCertificate(block.Bytes)
@@ -380,7 +380,7 @@ func TestSwitchResetsExpiryWarnings(t *testing.T) {
 	e.svc.WithOwnerNotifier(notifier)
 	h, _ := e.store.GetHost(t.Context(), nh.Host.ID)
 	expires := *h.ClientExpiresAt
-	real := e.svc.now
+	realClock := e.svc.now
 	late := func() time.Time { return expires.Add(-20 * 24 * time.Hour) }
 	// The certificates are made, and the agent checks them, on the real
 	// clock; only the warnings run late.
@@ -395,7 +395,7 @@ func TestSwitchResetsExpiryWarnings(t *testing.T) {
 	if got := notifier.take(); len(got) != 1 || !got[0].Rotating {
 		t.Fatalf("notices %+v", got)
 	}
-	e.svc.now = real
+	e.svc.now = realClock
 	e.trustCerts(t, nh.ClientCertificate, nc.ClientCertificate)
 	if h, err = e.svc.CheckHost(t.Context(), "owner", nh.Host.ID); err != nil || h.CertNoticeStage != 0 || h.ClientFingerprint != nc.ClientFingerprint {
 		t.Fatalf("%v %+v", err, h)
