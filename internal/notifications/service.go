@@ -41,25 +41,29 @@ type Authorizer interface {
 }
 
 type Service struct {
-	cfg        config.Config
-	pg         *pgdriver.PgDB
-	herald     *herald.Herald
-	mailStore  heraldstore.Store
-	relay      *relay.Relay
-	relayStore *encryptedRelayStore
-	authz      Authorizer
-	pushCover  PushCover
-	audit      func(context.Context, security.Principal, string, string)
-	statusMu   sync.RWMutex
-	workerErr  error
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	closeMu    sync.Mutex // guards closed, stopCtx and stopCancel
-	closed     bool       // set once Shutdown starts, so nothing new joins wg
-	stopCtx    context.Context
-	stopCancel context.CancelFunc
-	testMu     sync.Mutex
-	testPushed map[string]time.Time // last test push by device ID
+	fleetMetricSampler FleetMetricSampler
+	fleetMetricErr     error
+	fleetEvents        FleetEventDrainer
+	fleetPrunedAt      time.Time
+	cfg                config.Config
+	pg                 *pgdriver.PgDB
+	herald             *herald.Herald
+	mailStore          heraldstore.Store
+	relay              *relay.Relay
+	relayStore         *encryptedRelayStore
+	authz              Authorizer
+	pushCover          PushCover
+	audit              func(context.Context, security.Principal, string, string)
+	statusMu           sync.RWMutex
+	workerErr          error
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	closeMu            sync.Mutex // guards closed, stopCtx and stopCancel
+	closed             bool       // set once Shutdown starts, so nothing new joins wg
+	stopCtx            context.Context
+	stopCancel         context.CancelFunc
+	testMu             sync.Mutex
+	testPushed         map[string]time.Time // last test push by device ID
 }
 
 func New(cfg config.Config, db *grove.DB) (*Service, error) {
@@ -80,11 +84,16 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	rs.fleetPG = pgdriver.Unwrap(db)
 	r, err := relay.New(relay.WithStore(rs), relay.WithHTTPClient(webhookClient()), relay.WithConcurrency(2), relay.WithBatchSize(10), relay.WithPollInterval(time.Second))
 	if err != nil {
 		return nil, err
 	}
-	return &Service{cfg: cfg, pg: pgdriver.Unwrap(db), herald: h, mailStore: ms, relay: r, relayStore: rs}, nil
+	svc := &Service{cfg: cfg, pg: pgdriver.Unwrap(db), herald: h, mailStore: ms, relay: r, relayStore: rs}
+	if checkErr := svc.loadFleetDestinations(cfg.Notifications.FleetDestinationsFile); checkErr != nil {
+		return nil, checkErr
+	}
+	return svc, nil
 }
 func (s *Service) SetAuthorizer(a Authorizer) { s.authz = a }
 func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailEnabled() }
@@ -216,10 +225,14 @@ func mailProvider(n config.NotificationsConfig) provider.Provider {
 		Settings:    map[string]string{"host": n.SMTPHost, "port": strconv.Itoa(n.SMTPPort), "use_tls": strconv.FormatBool(n.SMTPTLS), "from": n.From}}
 }
 func (s *Service) Run(ctx context.Context) error {
+	if err := s.registerFleetEventTypes(ctx); err != nil {
+		return err
+	}
 	if err := s.registerEventTypes(ctx); err != nil {
 		return err
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
+	s.startFleetMetrics(ctx)
 	s.relay.Start(ctx)
 	s.wg.Add(1)
 	go func() {
@@ -231,6 +244,12 @@ func (s *Service) Run(ctx context.Context) error {
 				return
 			}
 			err := s.drain(ctx)
+			if fleetErr := s.drainFleetEvents(ctx); err == nil {
+				err = fleetErr
+			}
+			if retentionErr := s.pruneFleetHistory(ctx); err == nil {
+				err = retentionErr
+			}
 			s.statusMu.Lock()
 			s.workerErr = err
 			s.statusMu.Unlock()
@@ -287,7 +306,7 @@ func (s *Service) Health(ctx context.Context) error {
 		return fmt.Errorf("notification storage unavailable")
 	}
 	s.statusMu.RLock()
-	err := s.workerErr
+	err := errors.Join(s.workerErr, s.fleetMetricErr)
 	s.statusMu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("notification outbox processing failed")

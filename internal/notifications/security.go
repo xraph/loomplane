@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/herald/id"
 	"github.com/xraph/herald/message"
 	heraldstore "github.com/xraph/herald/store"
@@ -52,7 +53,9 @@ func (s privateHeraldStore) RecordDelivery(ctx context.Context, messageID id.Mes
 
 type encryptedRelayStore struct {
 	relaystore.Store
-	cipher cipher.AEAD
+	cipher            cipher.AEAD
+	fleetDestinations fleetDestinationRegistry
+	fleetPG           *pgdriver.PgDB
 }
 
 func newRelayStore(s relaystore.Store, key []byte) (*encryptedRelayStore, error) {
@@ -111,6 +114,9 @@ func (s *encryptedRelayStore) GetEndpoint(ctx context.Context, endpointID relayi
 	ep, err := s.Store.GetEndpoint(ctx, endpointID)
 	if err != nil {
 		return nil, err
+	}
+	if checkErr := s.checkFleetEndpoint(ep); checkErr != nil {
+		return nil, checkErr
 	}
 	return s.decrypt(ep)
 }

@@ -10,7 +10,10 @@ import (
 // set, a directory of .eml files when MailDir is, otherwise SMTP. With none
 // of an API key, a mail directory or an SMTP host, mail is off.
 type NotificationsConfig struct {
-	ResendAPIKey string
+	FleetMetricRetentionDays int
+	FleetDestinationsFile    string
+	FleetEventRetentionDays  int
+	ResendAPIKey             string
 	// MailDir is where mail is written instead of sent, one .eml file per
 	// message, for local development. Not allowed in production.
 	MailDir      string
@@ -28,6 +31,9 @@ func (n NotificationsConfig) MailEnabled() bool {
 
 // Validate refuses partial or unsafe production mail settings.
 func (n NotificationsConfig) Validate(environment string) error {
+	if n.FleetMetricRetentionDays < 0 || n.FleetMetricRetentionDays > 3650 || n.FleetEventRetentionDays < 0 || n.FleetEventRetentionDays > 3650 {
+		return errors.New("notifications: fleet retention must be 1 to 3650 days, or zero for the default")
+	}
 	if !n.MailEnabled() {
 		if n.SMTPUsername != "" || n.SMTPPassword != "" || n.From != "" {
 			return errors.New("notifications: SMTP host, Resend API key or mail directory is required when email settings are provided")

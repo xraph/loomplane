@@ -20,6 +20,8 @@ type Projects interface {
 
 // Deps supplies the existing authorization and audit boundaries.
 type Deps struct {
+	Metrics           MetricSource
+	Delivery          FleetEventDelivery
 	AdoptionInventory AdoptionInventory
 	Resources         InstanceResourceAccess
 	Secrets           PinnedSecrets
@@ -32,6 +34,8 @@ type Deps struct {
 
 // Service manages fleet metadata. Provider effects belong to durable workflows.
 type Service struct {
+	metrics           MetricSource
+	delivery          FleetEventDelivery
 	adoptionInventory AdoptionInventory
 	resources         InstanceResourceAccess
 	secrets           PinnedSecrets
@@ -44,7 +48,7 @@ type Service struct {
 
 // NewService binds scoped persistence and authorization.
 func NewService(d Deps) *Service {
-	return &Service{adoptionInventory: d.AdoptionInventory, resources: d.Resources, secrets: d.Secrets, keys: d.Keys, store: d.Store, projects: d.Projects, authz: d.Authz, audit: d.Audit}
+	return &Service{metrics: d.Metrics, delivery: d.Delivery, adoptionInventory: d.AdoptionInventory, resources: d.Resources, secrets: d.Secrets, keys: d.Keys, store: d.Store, projects: d.Projects, authz: d.Authz, audit: d.Audit}
 }
 
 // CreateFleet converts a project into a fleet without changing its environments.
