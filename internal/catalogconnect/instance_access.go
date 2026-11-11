@@ -36,13 +36,23 @@ type InstanceAccessVerifier struct {
 
 func (v *InstanceAccessVerifier) VerifyInstanceResourceAccess(ctx context.Context, b fleets.ResourceBinding) (fleets.ResourceAccessObservation, error) {
 	empty := fleets.ResourceAccessObservation{}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
 	if v == nil || v.Endpoints == nil || v.Pins == nil || v.Dial == nil {
 		return empty, ErrInstanceAccess
 	}
-	if err := v.Pins.VerifyInstanceResourcePins(ctx, b); err != nil {
+	err := v.Pins.VerifyInstanceResourcePins(ctx, b)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return empty, cancelled
+	}
+	if err != nil {
 		return empty, ErrInstanceAccess
 	}
 	endpoint, dsn, err := v.Endpoints.Resolve(ctx, b.Scope.OrgID, b.Credential.EndpointID)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return empty, cancelled
+	}
 	if err != nil || endpoint == nil || int64(endpoint.Revision) != b.Credential.Version {
 		return empty, ErrInstanceAccess
 	}
@@ -59,10 +69,16 @@ func (v *InstanceAccessVerifier) VerifyInstanceResourceAccess(ctx context.Contex
 			return empty, ErrInstanceAccess
 		}
 		dial, dialErr := v.Dial(ctx, b)
+		if cancelled := ctx.Err(); cancelled != nil {
+			return empty, cancelled
+		}
 		if dialErr != nil || dial == nil {
 			return empty, ErrInstanceAccess
 		}
 		scope, probeErr := probeInstancePostgres(ctx, dial, dsn, database, schema, b.PrincipalID)
+		if cancelled := ctx.Err(); cancelled != nil {
+			return empty, cancelled
+		}
 		if probeErr != nil {
 			return empty, ErrInstanceAccess
 		}
@@ -77,6 +93,9 @@ func (v *InstanceAccessVerifier) VerifyInstanceResourceAccess(ctx context.Contex
 			return empty, ErrInstanceAccess
 		}
 		policy, policyErr := v.Buckets.VerifyInstanceBucketPolicy(ctx, b, access)
+		if cancelled := ctx.Err(); cancelled != nil {
+			return empty, cancelled
+		}
 		if policyErr != nil {
 			return empty, ErrInstanceAccess
 		}
@@ -85,11 +104,21 @@ func (v *InstanceAccessVerifier) VerifyInstanceResourceAccess(ctx context.Contex
 	default:
 		return empty, ErrInstanceAccess
 	}
+	if cancelled := ctx.Err(); cancelled != nil {
+		return empty, cancelled
+	}
 	current, err := v.Endpoints.Get(ctx, b.Scope.OrgID, b.Credential.EndpointID)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return empty, cancelled
+	}
 	if err != nil || current == nil || *current != *endpoint {
 		return empty, ErrInstanceAccess
 	}
-	if err = v.Pins.VerifyInstanceResourcePins(ctx, b); err != nil {
+	err = v.Pins.VerifyInstanceResourcePins(ctx, b)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return empty, cancelled
+	}
+	if err != nil {
 		return empty, ErrInstanceAccess
 	}
 	return out, nil
@@ -108,6 +137,9 @@ func probeInstancePostgres(ctx context.Context, dial DialFunc, dsn, database, sc
 	cfg.RuntimeParams = map[string]string{"search_path": "pg_catalog", "default_transaction_read_only": "on"}
 	cfg.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
 	cfg.DialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if cancelled := ctx.Err(); cancelled != nil {
+			return nil, cancelled
+		}
 		return dial(ctx, network, address)
 	}
 	cfg.ConnectTimeout = probeTimeout

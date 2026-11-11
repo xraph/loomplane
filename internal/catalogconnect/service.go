@@ -160,11 +160,20 @@ func (s *Service) Get(ctx context.Context, orgID, id string) (*Endpoint, error) 
 // a deployment connecting a service to it. It checks no principal: callers
 // have already authorized the work the DSN is for.
 func (s *Service) Resolve(ctx context.Context, orgID, id string) (*Endpoint, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	e, err := s.store.Get(ctx, orgID, id)
+	if cancelled := ctx.Err(); cancelled != nil {
+		return nil, "", cancelled
+	}
 	if err != nil {
 		return nil, "", err
 	}
 	dsn, err := s.secrets.Get(ctx, DSNKey(orgID, id))
+	if cancelled := ctx.Err(); cancelled != nil {
+		return nil, "", cancelled
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("read the DSN of endpoint %s: %w", e.Name, err)
 	}
