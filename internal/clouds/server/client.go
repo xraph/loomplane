@@ -26,13 +26,16 @@ type Client struct {
 
 // Close ends the authenticated transport and all its forwarded connections.
 func (c *Client) Close() error {
+	// An idle Docker connection can still need the SSH transport to close
+	// its channel. Shut down the owned access before closing those channels.
+	var err error
+	if c.access != nil {
+		err = c.access.Close()
+	}
 	if c.transport != nil {
 		c.transport.CloseIdleConnections()
 	}
-	if c.access != nil {
-		return c.access.Close()
-	}
-	return nil
+	return err
 }
 
 // DialContext opens a TCP connection from the server, through the host
