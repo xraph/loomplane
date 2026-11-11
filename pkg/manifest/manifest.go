@@ -173,6 +173,8 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	Commands  *BuildCommands                   `json:"commands,omitempty" yaml:"commands,omitempty"`
+	Vercel    *VercelSettings                  `json:"vercel,omitempty" yaml:"vercel,omitempty"`
 	PodGroup  *PodGroup                        `json:"pod_group,omitempty" yaml:"pod_group,omitempty"`
 	Worker    *providercontract.WorkerSettings `json:"worker,omitempty" yaml:"worker,omitempty"`
 	Placement *PlacementConstraints            `json:"placement,omitempty" yaml:"placement,omitempty"`
@@ -815,6 +817,7 @@ func checkFarp(add func(string, string, ...any), path string, f *Farp) {
 }
 
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	checkVercel(add, path, s)
 	if err := providercontract.ValidatePodGroup(s.PodGroup); err != nil {
 		add(path+".pod_group", "%s", err.Error())
 	}
@@ -1179,6 +1182,12 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.HealthPath != "" {
 		out.HealthPath = o.HealthPath
+	}
+	if o.Commands != nil {
+		out.Commands = o.Commands
+	}
+	if o.Vercel != nil {
+		out.Vercel = o.Vercel
 	}
 	if o.Build != nil {
 		out.Build = o.Build

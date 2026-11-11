@@ -53,6 +53,7 @@ import type { ProductKey } from "@/components/product-logos"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, toneOf, type Tone } from "@/components/runs"
 import { ServiceAddress } from "@/components/service-address"
+import { ServiceBuildSettings } from "@/components/service-build-settings"
 import { ServiceScaling } from "@/components/service-scaling"
 import { SiteHeader, type Crumb } from "@/components/site-header"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -606,6 +607,12 @@ function Loaded({
             project={project}
             row={row}
             environments={environments}
+          />
+          <ServiceBuildSettings
+            project={project}
+            name={name}
+            environments={environments}
+            deployed={row.deployed}
           />
           <ServiceScaling
             project={project}

@@ -21,3 +21,71 @@ Attach a resource to a running service through the same reviewed manifest flow. 
 Other compatible deployment targets receive the resource's application variables. Cloud account administration tokens are never substituted for application credentials. Credentials, grants, bridge metadata and target identity are checked again on retries.
 
 See [Vercel storage](https://vercel.com/docs/storage) for native product and Marketplace behavior.
+
+## Deploy a monorepo as one project
+
+You can deploy the services in a repository's `vercel.json` together. Choose the frontend's **Settings**, enable **Deploy as one Vercel Services project**, and set the project root to the directory containing that file. Use `.` for the repository root.
+
+Keep one Loomplane manifest entry for the Vercel project. Its `source` selects the frontend found by analysis, so you can still manage its variables and deployment history. The Vercel project root is separate:
+
+```yaml
+version: 1
+services:
+  app:
+    source: apps/web
+    provider: vercel
+    vercel:
+      services: true
+      root: .
+      service_commands:
+        web:
+          install: pnpm install --frozen-lockfile
+          build: pnpm --filter web build
+```
+
+Define the applications, routes and private bindings in that root's `vercel.json`:
+
+```json
+{
+  "services": {
+    "web": { "root": "apps/web" },
+    "api": { "root": "services/api", "framework": "fastapi" }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "web" } }
+  ]
+}
+```
+
+Remove separate Loomplane entries for the members when you want them deployed only inside this project. Review that plan carefully if those entries already have running deployments: their removal follows Loomplane's normal deletion flow.
+
+The group shares one deployment, environment, URL and rollback history. Retrying resumes that deployment. Variables and resource links belong to the group; configure private member-to-member calls through Vercel bindings. The complete pinned repository is uploaded, including shared packages outside the project root.
+
+Use the current `services` configuration. The older `experimentalServices` format and `vercel.ts` are not supported by this mode. A missing configuration, unknown member command override or top-level build setting stops the deployment. Vercel determines which member frameworks and runtimes it can build.
+
+## Override install and build commands
+
+In a Vercel application's **Settings**, choose an environment and select **Repository default**, **Custom** or **Skip** for each command. In Services mode, enter the exact member name from `vercel.json` before changing its commands.
+
+For a standalone application, the equivalent manifest is:
+
+```yaml
+services:
+  web:
+    source: apps/web
+    provider: vercel
+    commands:
+      install: pnpm install --frozen-lockfile
+      build: pnpm build
+    environments:
+      preview:
+        commands:
+          build: pnpm build:preview
+```
+
+An environment's `commands` or `vercel` block replaces the corresponding base block. Omit a command to keep its repository or provider default. Set it to `""` to skip that step. An empty `commands: {}` restores repository defaults for both commands in that environment.
+
+Overrides change only the uploaded copy of `vercel.json`; your repository is not rewritten. They take effect on the next reviewed deployment and are retained with its configuration for retries and rollback. Keep secrets in Variables because commands appear in manifest history and deployment review. These overrides currently require the Vercel provider.
+
+See [Vercel Services](https://vercel.com/docs/services) and the [service configuration reference](https://vercel.com/docs/services/config-reference) for routing, bindings and runtime options.

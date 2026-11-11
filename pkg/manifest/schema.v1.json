@@ -73,6 +73,41 @@
     }
   },
   "$defs": {
+    "buildCommands": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Vercel command overrides. Omit a field to use the repository default; an empty string skips the step.",
+      "properties": {
+        "install": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "build": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "vercelSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "services": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string",
+          "description": "Directory containing vercel.json, relative to the repository. Defaults to the repository root in Services mode."
+        },
+        "service_commands": {
+          "type": "object",
+          "maxProperties": 100,
+          "additionalProperties": {
+            "$ref": "#/$defs/buildCommands"
+          }
+        }
+      }
+    },
     "name": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,39}$"
@@ -153,6 +188,8 @@
     "settings": {
       "type": "object",
       "properties": {
+        "commands": { "$ref": "#/$defs/buildCommands" },
+        "vercel": { "$ref": "#/$defs/vercelSettings" },
         "cloud_target": {
           "description": "Named target in this environment's assigned Cloud.",
           "type": "string",

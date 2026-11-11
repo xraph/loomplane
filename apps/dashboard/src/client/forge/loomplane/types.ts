@@ -462,6 +462,11 @@ export interface Build {
   registry?: string;
 }
 
+export interface BuildCommands {
+  build?: string;
+  install?: string;
+}
+
 export interface BuildSystem {
   evidence: DiscoveryEvidence;
   name: string;
@@ -2202,6 +2207,7 @@ export interface EditInputBody {
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
+  commands?: BuildCommands;
   enabled?: boolean;
   endpoint?: ManifestEndpoint;
   environment?: string;
@@ -2213,6 +2219,7 @@ export interface EditInputBody {
   section: string;
   size?: SizeEdit;
   target?: string;
+  vercel?: VercelSettings;
 };
   removeResource?: string;
   setUse?: {
@@ -6027,6 +6034,7 @@ export interface ServiceConfig {
   cloudPlacement?: CloudPlacement;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
   clusterDemand?: ClusterDemand;
+  commands?: BuildCommands;
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
@@ -6056,6 +6064,7 @@ export interface ServiceConfig {
   target?: string;
   targetAccountIdentity?: string;
   targetSettings?: Record<string, any>;
+  vercel?: VercelSettings;
   worker?: WorkerSettings;
   workload: string;
 }
@@ -6724,6 +6733,12 @@ export interface Variable {
 
 export interface VariableList {
   variables: Variable[];
+}
+
+export interface VercelSettings {
+  root?: string;
+  serviceCommands?: Record<string, any>;
+  services: boolean;
 }
 
 export interface View {

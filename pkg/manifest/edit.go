@@ -20,6 +20,8 @@ import (
 // Placement changes where an existing service, resource or gateway runs.
 // A nil field leaves its value alone; an empty string restores inheritance.
 type Placement struct {
+	Commands *BuildCommands  `json:"commands,omitempty"`
+	Vercel   *VercelSettings `json:"vercel,omitempty"`
 	// An empty route restores inheritance; nil leaves the route unchanged.
 	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty"`
 	Section         string                                       `json:"section"`
@@ -58,10 +60,10 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.CloudSQLNetwork == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil && p.Scale == nil && p.Size == nil) {
+		(p.Commands == nil && p.Vercel == nil && p.CloudSQLNetwork == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil && p.Scale == nil && p.Size == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
 	}
-	if p.Section != "services" && (p.CloudSQLNetwork != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil || p.Scale != nil || p.Size != nil) {
+	if p.Section != "services" && (p.Commands != nil || p.Vercel != nil || p.CloudSQLNetwork != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil || p.Scale != nil || p.Size != nil) {
 		return nil, fmt.Errorf("%w: cloud_sql_network, cloud_target, cloud_tags, target, endpoint, health_path, build, scale and size edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
@@ -119,6 +121,16 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		if field.value != nil {
 			setPlacementField(target, field.key, scalar(*field.value), *field.value == "")
 		}
+	}
+	for key, block := range map[string]any{"commands": p.Commands, "vercel": p.Vercel} {
+		if key == "commands" && p.Commands == nil || key == "vercel" && p.Vercel == nil {
+			continue
+		}
+		value := &yaml.Node{}
+		if err := value.Encode(block); err != nil {
+			return nil, err
+		}
+		setPlacementField(target, key, value, false)
 	}
 	if p.CloudTags != nil {
 		value := &yaml.Node{}

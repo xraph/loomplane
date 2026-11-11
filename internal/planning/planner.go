@@ -747,6 +747,9 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	if s.Kind != "" {
 		kind = s.Kind
 	}
+	if set.Vercel != nil && set.Vercel.Services {
+		kind = string(provider.WebApp)
+	}
 	if !graph.ServiceKind(kind).Deployable() {
 		p.problem(Finding{
 			Code: "not-deployable", Subject: ServiceSubject, Name: name, Path: base + ".source",
@@ -788,6 +791,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 		cfg.CloudPlacement = &placement
 		p.checkCloudServer(ServiceSubject, name, base, placement)
 	}
+	p.configureVercel(name, base, set, cfg)
 	p.checkRender(name, base, cfg)
 	p.checkAzure(name, base, cfg)
 	p.checkViteRSC(name, base, cfg, gs.Requires)

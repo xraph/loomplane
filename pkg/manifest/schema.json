@@ -173,6 +173,41 @@
     }
   },
   "$defs": {
+    "buildCommands": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Vercel command overrides. Omit a field to use the repository default; an empty string skips the step.",
+      "properties": {
+        "install": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "build": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "vercelSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "services": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string",
+          "description": "Directory containing vercel.json, relative to the repository. Defaults to the repository root in Services mode."
+        },
+        "service_commands": {
+          "type": "object",
+          "maxProperties": 100,
+          "additionalProperties": {
+            "$ref": "#/$defs/buildCommands"
+          }
+        }
+      }
+    },
     "placementGroup": {
       "type": "object",
       "additionalProperties": false,
@@ -636,6 +671,8 @@
     "settings": {
       "type": "object",
       "properties": {
+        "commands": { "$ref": "#/$defs/buildCommands" },
+        "vercel": { "$ref": "#/$defs/vercelSettings" },
         "pod_group": { "$ref": "#/$defs/podGroup" },
         "worker": { "$ref": "#/$defs/workerSettings" },
         "placement": { "$ref": "#/$defs/placementConstraints" },

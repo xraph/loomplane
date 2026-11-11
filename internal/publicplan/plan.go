@@ -92,6 +92,8 @@ type Action struct {
 }
 
 type ServiceConfig struct {
+	Commands              *manifest.BuildCommands              `json:"commands,omitempty"`
+	Vercel                *manifest.VercelSettings             `json:"vercel,omitempty"`
 	Worker                *provider.WorkerSettings             `json:"worker,omitempty"`
 	TargetAccountIdentity string                               `json:"target_account_identity,omitempty"`
 	CapacityMode          string                               `json:"capacity_mode,omitempty"`
@@ -292,7 +294,7 @@ func projectServiceConfig(v *planning.ServiceConfig) *ServiceConfig {
 	if v == nil {
 		return nil
 	}
-	return &ServiceConfig{Worker: projectWorkerSettings(v.Worker), TargetAccountIdentity: v.TargetAccountIdentity, CapacityMode: v.CapacityMode, CapacityIntent: projectCapacityIntent(v.CapacityIntent), CloudPlacement: projectCloudPlacement(v.CloudPlacement), Catalog: v.Catalog, Provider: v.Provider, Region: v.Region, Target: v.Target, TargetSettings: settings(v.TargetSettings), Endpoint: v.Endpoint, HealthPath: v.HealthPath, BuildTarget: projectBuildTarget(v.BuildTarget), Workload: v.Workload, Execution: v.Execution, Service: v.Service, Source: v.Source, Repo: v.Repo, CommitSHA: v.CommitSHA, Ecosystem: v.Ecosystem, Framework: v.Framework, Image: v.Image, Context: v.Context, Build: v.Build, Start: v.Start, Port: v.Port, Scale: v.Scale, Size: v.Size, Public: v.Public, Internal: v.Internal, PrivateEgress: v.PrivateEgress, CloudSQLNetwork: v.CloudSQLNetwork, Env: v.Env, Gateway: v.Gateway, DatabaseGateway: v.DatabaseGateway, Component: projectComponentConfig(v.Component), Farp: v.Farp, GPU: v.GPU, Artifact: v.Artifact, ClusterDemand: clusterDemand(v.ClusterDemand)}
+	return &ServiceConfig{Commands: v.Commands, Vercel: v.Vercel, Worker: projectWorkerSettings(v.Worker), TargetAccountIdentity: v.TargetAccountIdentity, CapacityMode: v.CapacityMode, CapacityIntent: projectCapacityIntent(v.CapacityIntent), CloudPlacement: projectCloudPlacement(v.CloudPlacement), Catalog: v.Catalog, Provider: v.Provider, Region: v.Region, Target: v.Target, TargetSettings: settings(v.TargetSettings), Endpoint: v.Endpoint, HealthPath: v.HealthPath, BuildTarget: projectBuildTarget(v.BuildTarget), Workload: v.Workload, Execution: v.Execution, Service: v.Service, Source: v.Source, Repo: v.Repo, CommitSHA: v.CommitSHA, Ecosystem: v.Ecosystem, Framework: v.Framework, Image: v.Image, Context: v.Context, Build: v.Build, Start: v.Start, Port: v.Port, Scale: v.Scale, Size: v.Size, Public: v.Public, Internal: v.Internal, PrivateEgress: v.PrivateEgress, CloudSQLNetwork: v.CloudSQLNetwork, Env: v.Env, Gateway: v.Gateway, DatabaseGateway: v.DatabaseGateway, Component: projectComponentConfig(v.Component), Farp: v.Farp, GPU: v.GPU, Artifact: v.Artifact, ClusterDemand: clusterDemand(v.ClusterDemand)}
 }
 
 func projectResourceConfig(v *planning.ResourceConfig) *ResourceConfig {

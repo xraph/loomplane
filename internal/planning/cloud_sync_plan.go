@@ -81,6 +81,10 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 				continue
 			}
 		}
+		if (cfg.Commands != nil || cfg.Vercel != nil) && t.Provider != "vercel" {
+			blocked(b.Name, "This deployment uses Vercel build settings. Review a new manifest before moving it to another provider.")
+			continue
+		}
 		if pin.Platform != nil && t.Runtime != platformRuntime && cfg.BuildTarget != nil && cfg.BuildTarget.Builder == platformBuilder {
 			// Loomplane Cloud built the service on its own hosts; the new
 			// target builds it the way that target builds.

@@ -162,6 +162,8 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
+	Commands                   *manifest.BuildCommands        `json:"commands,omitempty"`
+	Vercel                     *manifest.VercelSettings       `json:"vercel,omitempty"`
 	PodGroup                   *manifest.PodGroup             `json:"pod_group,omitempty"`
 	WorkloadCapabilityRevision string                         `json:"workload_capability_revision,omitempty"`
 	Worker                     *provider.WorkerSettings       `json:"worker,omitempty"`

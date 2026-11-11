@@ -381,6 +381,7 @@ func (d *vercelDeploy) run(ctx context.Context, native bool) (*Outcome, error) {
 		return nil, refuse(serr)
 	}
 	if state.DeploymentID == "" {
+		project.Framework, project.RootDirectory = d.settings.Framework, d.settings.RootDirectory
 		id, derr := v.deploy(ctx, tok, job, project, target, refuse)
 		if derr != nil {
 			return nil, derr
@@ -542,14 +543,14 @@ func (d *vercelDeploy) undoNative(ctx context.Context) error {
 // refuse classifies Vercel's answer to the deployment itself.
 func (v *Vercel) deploy(ctx context.Context, tok vercel.Token, job *Job, project *vercel.Project, target vercel.Target, refuse func(error) error) (string, error) {
 	job.Progress(StepDeploying, "Uploading the source to Vercel")
-	files, err := v.upload(ctx, tok, job)
+	files, config, err := v.uploadWithConfig(ctx, tok, job)
 	if err != nil {
 		return "", err
 	}
 	runtimeEnv, buildEnv, _ := vercelDeploymentEnvironments(job)
-	d, err := v.Client.CreateDeploymentWithRuntimeEnv(ctx, tok, project, target, files, map[string]string{
+	d, err := v.Client.CreateDeploymentWithConfig(ctx, tok, project, target, files, map[string]string{
 		"githubCommitSha": job.CommitSHA, "loomplanePlan": job.Plan.ID,
-	}, runtimeEnv, buildEnv)
+	}, runtimeEnv, buildEnv, config)
 	if err != nil {
 		return "", refuse(fmt.Errorf("create the vercel deployment: %w", err))
 	}
@@ -561,14 +562,19 @@ func (v *Vercel) deploy(ctx context.Context, tok vercel.Token, job *Job, project
 // goes, not just the app's directory, so a workspace's shared packages
 // are there when Vercel builds.
 func (v *Vercel) upload(ctx context.Context, tok vercel.Token, job *Job) ([]File, error) {
+	files, _, err := v.uploadWithConfig(ctx, tok, job)
+	return files, err
+}
+
+func (v *Vercel) uploadWithConfig(ctx context.Context, tok vercel.Token, job *Job) (files []File, config map[string]json.RawMessage, err error) {
 	src, _, err := job.Source(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer src.Close() // read-only
 	zr, err := gzip.NewReader(src)
 	if err != nil {
-		return nil, fmt.Errorf("read the source: %w", err)
+		return nil, nil, fmt.Errorf("read the source: %w", err)
 	}
 	defer zr.Close() // read-only
 	tr := tar.NewReader(zr)
@@ -592,7 +598,10 @@ func (v *Vercel) upload(ctx context.Context, tok vercel.Token, job *Job) ([]File
 			}
 		})
 	}
-	var files []File
+	configPath := vercelConfigPath(job.Action.Service)
+	configSeen := false
+	var configData []byte
+	needsConfig := job.Action.Service.Commands != nil || job.Action.Service.Vercel != nil && job.Action.Service.Vercel.Services
 	seen := map[string]bool{}
 	var readErr error
 	for {
@@ -604,17 +613,33 @@ func (v *Vercel) upload(ctx context.Context, tok vercel.Token, job *Job) ([]File
 			readErr = fmt.Errorf("read the source: %w", err)
 			break
 		}
-		if h.Typeflag != tar.TypeReg || h.Size > maxUploadFile {
-			continue
-		}
 		_, rel, ok := strings.Cut(strings.TrimPrefix(h.Name, "./"), "/")
 		if !ok || rel == "" {
+			continue
+		}
+		if h.Typeflag != tar.TypeReg || h.Size > maxUploadFile {
+			if rel == configPath {
+				readErr = errors.New("vercel.json must be a regular file within the upload size limit")
+				break
+			}
 			continue
 		}
 		data, err := io.ReadAll(tr)
 		if err != nil {
 			readErr = fmt.Errorf("read the source: %w", err)
 			break
+		}
+		if rel == strings.TrimSuffix(configPath, ".json")+".ts" && needsConfig {
+			readErr = errors.New("command overrides and Services mode require vercel.json; convert vercel.ts before deploying")
+			break
+		}
+		if rel == configPath {
+			if configSeen {
+				readErr = errors.New("source archive contains duplicate vercel.json files")
+				break
+			}
+			configSeen, configData = true, data
+			continue
 		}
 		sum := sha1.Sum(data) //nolint:gosec // G401: Vercel names file content by its SHA-1
 		sha := hex.EncodeToString(sum[:])
@@ -631,15 +656,35 @@ func (v *Vercel) upload(ctx context.Context, tok vercel.Token, job *Job) ([]File
 			break
 		}
 	}
+	if readErr == nil && (configSeen || needsConfig) {
+		data, err := vercelSourceConfig(configData, job.Action.Service)
+		if err != nil {
+			readErr = err
+		} else if err := json.Unmarshal(data, &config); err != nil {
+			readErr = err
+		} else {
+			sum := sha1.Sum(data) //nolint:gosec // G401: Vercel names file content by its SHA-1
+			sha := hex.EncodeToString(sum[:])
+			files = append(files, File{File: configPath, SHA: sha, Size: int64(len(data))})
+			if !seen[sha] {
+				select {
+				case work <- upload{sha: sha, data: data}:
+				case <-ctx.Done():
+				}
+			}
+		}
+	}
 	close(work)
 	wg.Wait()
 	switch {
 	case failed != nil:
-		return nil, fmt.Errorf("upload to vercel: %w", failed)
+		return nil, nil, fmt.Errorf("upload to vercel: %w", failed)
 	case readErr != nil:
-		return nil, readErr
+		return nil, nil, readErr
+	case ctx.Err() != nil:
+		return nil, nil, ctx.Err()
 	}
-	return files, nil
+	return files, config, nil
 }
 
 // File is one file of a deployment.

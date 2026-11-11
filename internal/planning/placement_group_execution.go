@@ -86,7 +86,7 @@ func (s *PgStore) SavePlacementGroupConfiguration(ctx context.Context, group dom
 		Settings manifest.Settings
 		Needs    []string
 	}{c.Kind, c.Settings, c.Needs})
-	if manifestErr != nil || manifestRevision != c.ManifestRevision || c.Kind != "http-service" || len(c.Needs) != 0 || c.Settings.Build == nil || c.Settings.Build.Image != group.Image || c.Settings.PodGroup != nil || c.Settings.Worker != nil {
+	if c.Settings.Commands != nil || c.Settings.Vercel != nil || manifestErr != nil || manifestRevision != c.ManifestRevision || c.Kind != "http-service" || len(c.Needs) != 0 || c.Settings.Build == nil || c.Settings.Build.Image != group.Image || c.Settings.PodGroup != nil || c.Settings.Worker != nil {
 		return ErrConflict
 	}
 	expected, err := GroupEffectiveConfigurationRevision(c.ManifestRevision, c.Selection.Revision)

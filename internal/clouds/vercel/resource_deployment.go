@@ -2,6 +2,7 @@ package vercel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -65,10 +66,31 @@ func (c *Client) VerifyResourceProject(ctx context.Context, tok Token, projectID
 // belong only to runtimeEnv, while buildEnv contains explicitly supplied build
 // inputs. Neither environment is persisted as project configuration here.
 func (c *Client) CreateDeploymentWithRuntimeEnv(ctx context.Context, tok Token, project *Project, t Target, files []File, meta, runtimeEnv, buildEnv map[string]string) (*Deployment, error) {
+	return c.CreateDeploymentWithConfig(ctx, tok, project, t, files, meta, runtimeEnv, buildEnv, nil)
+}
+
+// CreateDeploymentWithConfig sends parsed repository configuration like the
+// Vercel CLI. Only build and routing fields are accepted; repository data cannot
+// select the account, project, environment, source revision or credentials.
+func (c *Client) CreateDeploymentWithConfig(ctx context.Context, tok Token, project *Project, t Target, files []File, meta, runtimeEnv, buildEnv map[string]string, config map[string]json.RawMessage) (*Deployment, error) {
+	settings := map[string]any{"framework": project.Framework, "rootDirectory": project.RootDirectory, "sourceFilesOutsideRootDirectory": true}
+	for _, key := range []string{"buildCommand", "installCommand", "devCommand", "outputDirectory", "framework", "ignoreCommand"} {
+		if value, ok := config[key]; ok {
+			if key == "ignoreCommand" {
+				key = "commandForIgnoringBuildStep"
+			}
+			settings[key] = value
+		}
+	}
 	body := map[string]any{
 		"name": project.Name, "project": project.ID, "files": files, "meta": meta,
-		"projectSettings": map[string]any{"framework": project.Framework, "rootDirectory": project.RootDirectory},
+		"projectSettings": settings,
 		"env":             runtimeEnv, "build": map[string]any{"env": buildEnv},
+	}
+	for _, key := range []string{"services", "daemons", "rewrites", "redirects", "headers", "routes", "cleanUrls", "trailingSlash", "functions", "crons", "regions", "images", "installCommand", "buildCommand", "devCommand", "ignoreCommand", "outputDirectory", "framework", "version", "builds"} {
+		if value, ok := config[key]; ok {
+			body[key] = value
+		}
 	}
 	if err := t.deployTarget(body); err != nil {
 		return nil, err

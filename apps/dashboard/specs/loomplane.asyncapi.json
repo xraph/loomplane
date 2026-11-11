@@ -4513,6 +4513,12 @@
           },
           "workload": {
             "type": "string"
+          },
+          "commands": {
+            "$ref": "#/components/schemas/BuildCommands"
+          },
+          "vercel": {
+            "$ref": "#/components/schemas/VercelSettings"
           }
         }
       },
@@ -6825,6 +6831,35 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "BuildCommands": {
+        "type": "object",
+        "properties": {
+          "build": {
+            "type": "string"
+          },
+          "install": {
+            "type": "string"
+          }
+        }
+      },
+      "VercelSettings": {
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "service_commands": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "services": {
+            "type": "boolean"
           }
         }
       }
