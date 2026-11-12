@@ -1,0 +1,7 @@
+import type { Codec } from '../codec-runtime';
+import { codec_LatencyHistogram } from './LatencyHistogram';
+import { codec_MetricCoverage } from './MetricCoverage';
+import { codec_MetricSummary_sources } from './MetricSummary.sources';
+import { codec_MetricWindow } from './MetricWindow';
+
+export const codec_MetricSummary: Codec = {"kind": "object", "fields": {"as_of": {"ts": "asOf"}, "cost_status": {"ts": "costStatus"}, "coverage": {"ts": "coverage", "codec": () => codec_MetricCoverage}, "cpu_request_millicores": {"ts": "cpuRequestMillicores"}, "cpu_usage_millicores": {"ts": "cpuUsageMillicores"}, "cpu_utilization": {"ts": "cpuUtilization"}, "current_replicas": {"ts": "currentReplicas"}, "desired_replicas": {"ts": "desiredReplicas"}, "estimated_hourly_micro_usd": {"ts": "estimatedHourlyMicroUsd"}, "freshness": {"ts": "freshness"}, "latency_histogram": {"ts": "latencyHistogram", "codec": () => codec_LatencyHistogram}, "latency_p95_millis": {"ts": "latencyP95Millis"}, "memory_bytes": {"ts": "memoryBytes"}, "observed_cost_micro_usd": {"ts": "observedCostMicroUsd"}, "oldest_observation": {"ts": "oldestObservation"}, "partial": {"ts": "partial"}, "ready_replicas": {"ts": "readyReplicas"}, "reason": {"ts": "reason"}, "requests": {"ts": "requests"}, "sources": {"ts": "sources", "codec": () => codec_MetricSummary_sources}, "window": {"ts": "window", "codec": () => codec_MetricWindow}}, "required": ["as_of", "cost_status", "coverage", "freshness", "partial", "sources", "window"]};

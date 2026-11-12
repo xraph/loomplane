@@ -1,8 +1,9 @@
 import { statusOf } from "@/client/errors"
 import { useFleetInstancesGet } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import { ActiveOperation } from "@/components/fleets/active-operation"
 import { InstanceOverview } from "@/components/fleets/instance-overview"
-import { Observations } from "@/components/fleets/observations"
+import { InstanceMonitoring } from "@/components/fleets/instance-monitoring"
 import { FleetReadState } from "@/components/fleets/read-state"
 import { useFleetRefresh } from "@/components/fleets/use-fleet-refresh"
 import { Page, PageHeading } from "@/components/page"
@@ -81,8 +82,18 @@ export function InstanceDetail({
           />
         ) : (
           <>
+            <ActiveOperation
+              key={`${projectID}:${instanceID}`}
+              projectID={projectID}
+              instance={instance.data}
+              onChanged={instance.refetch}
+            />
             <InstanceOverview instance={instance.data} />
-            <Observations />
+            <InstanceMonitoring
+              key={`${projectID}:${instanceID}`}
+              projectID={projectID}
+              instanceID={instanceID}
+            />
           </>
         )}
       </Page>

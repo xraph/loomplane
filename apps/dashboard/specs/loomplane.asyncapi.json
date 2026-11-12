@@ -1592,12 +1592,6 @@
           "region": {
             "type": "string"
           },
-          "removes_routes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CloudinfraRoute"
-            }
-          },
           "resource": {
             "$ref": "#/components/schemas/ResourceConfig"
           },
@@ -1671,6 +1665,17 @@
             "type": "string"
           },
           "service": {
+            "type": "string"
+          }
+        }
+      },
+      "BuildCommands": {
+        "type": "object",
+        "properties": {
+          "build": {
+            "type": "string"
+          },
+          "install": {
             "type": "string"
           }
         }
@@ -4414,6 +4419,9 @@
           "cluster_demand": {
             "$ref": "#/components/schemas/ClusterDemand"
           },
+          "commands": {
+            "$ref": "#/components/schemas/BuildCommands"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -4508,17 +4516,14 @@
             "type": "object",
             "additionalProperties": true
           },
+          "vercel": {
+            "$ref": "#/components/schemas/VercelSettings"
+          },
           "worker": {
             "$ref": "#/components/schemas/WorkerSettings"
           },
           "workload": {
             "type": "string"
-          },
-          "commands": {
-            "$ref": "#/components/schemas/BuildCommands"
-          },
-          "vercel": {
-            "$ref": "#/components/schemas/VercelSettings"
           }
         }
       },
@@ -4749,6 +4754,24 @@
           }
         }
       },
+      "VercelSettings": {
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "service_commands": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "services": {
+            "type": "boolean"
+          }
+        }
+      },
       "Volume": {
         "type": "object",
         "required": [
@@ -4877,9 +4900,7 @@
             "type": "string",
             "format": "date-time"
           },
-          "data": {
-            "type": "string"
-          },
+          "data": {},
           "kind": {
             "type": "string"
           },
@@ -5230,6 +5251,7 @@
           "environment_id",
           "subject",
           "name",
+          "alias",
           "provider",
           "region",
           "engine",
@@ -5246,12 +5268,13 @@
           "updated_at"
         ],
         "properties": {
+          "alias": {
+            "type": "string"
+          },
           "commit_sha": {
             "type": "string"
           },
-          "config": {
-            "description": "The binding's configuration: the JSON object the server stores, sent as is."
-          },
+          "config": {},
           "connection_id": {
             "type": "string"
           },
@@ -5310,6 +5333,9 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          },
+          "suggested_alias": {
             "type": "string"
           },
           "updated_at": {
@@ -6833,35 +6859,6 @@
             }
           }
         }
-      },
-      "BuildCommands": {
-        "type": "object",
-        "properties": {
-          "build": {
-            "type": "string"
-          },
-          "install": {
-            "type": "string"
-          }
-        }
-      },
-      "VercelSettings": {
-        "type": "object",
-        "required": [
-          "services"
-        ],
-        "properties": {
-          "root": {
-            "type": "string"
-          },
-          "service_commands": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "services": {
-            "type": "boolean"
-          }
-        }
       }
     },
     "messages": {
@@ -6900,9 +6897,7 @@
               "type": "string",
               "format": "date-time"
             },
-            "data": {
-              "type": "string"
-            },
+            "data": {},
             "kind": {
               "type": "string"
             },
@@ -7637,6 +7632,7 @@
             "environment_id",
             "subject",
             "name",
+            "alias",
             "provider",
             "region",
             "engine",
@@ -7653,12 +7649,13 @@
             "updated_at"
           ],
           "properties": {
+            "alias": {
+              "type": "string"
+            },
             "commit_sha": {
               "type": "string"
             },
-            "config": {
-              "type": "string"
-            },
+            "config": {},
             "connection_id": {
               "type": "string"
             },
@@ -7717,6 +7714,9 @@
               "type": "string"
             },
             "subject": {
+              "type": "string"
+            },
+            "suggested_alias": {
               "type": "string"
             },
             "updated_at": {
@@ -7743,6 +7743,7 @@
             "environment_id",
             "subject",
             "name",
+            "alias",
             "provider",
             "region",
             "engine",
@@ -7759,12 +7760,13 @@
             "updated_at"
           ],
           "properties": {
+            "alias": {
+              "type": "string"
+            },
             "commit_sha": {
               "type": "string"
             },
-            "config": {
-              "type": "string"
-            },
+            "config": {},
             "connection_id": {
               "type": "string"
             },
@@ -7823,6 +7825,9 @@
               "type": "string"
             },
             "subject": {
+              "type": "string"
+            },
+            "suggested_alias": {
               "type": "string"
             },
             "updated_at": {
@@ -9913,6 +9918,254 @@
         "name": "realtime.status",
         "title": "realtime.status event",
         "summary": "SSE event: realtime.status"
+      },
+      "api-v1-realtime-eventsrelease_report.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "from_environment_id",
+            "from_environment",
+            "to_environment_id",
+            "to_environment",
+            "scope",
+            "status",
+            "state",
+            "state_reason",
+            "requested_by",
+            "via",
+            "plan_id",
+            "plan_revision",
+            "reused_plan",
+            "task_id",
+            "run_id",
+            "gates",
+            "preview",
+            "decision",
+            "error",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "decision": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "evaluated_at": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "from_environment": {
+              "type": "string"
+            },
+            "from_environment_id": {
+              "type": "string"
+            },
+            "gates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GateCheck"
+              }
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "plan_revision": {
+              "type": "string"
+            },
+            "preview": {
+              "type": "boolean"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "requested_by": {
+              "type": "string"
+            },
+            "reused_plan": {
+              "type": "boolean"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "state": {
+              "type": "string"
+            },
+            "state_reason": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "to_environment": {
+              "type": "string"
+            },
+            "to_environment_id": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "via": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "release_report.deleted",
+        "title": "release_report.deleted event",
+        "summary": "SSE event: release_report.deleted"
+      },
+      "api-v1-realtime-eventsrelease_report.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "from_environment_id",
+            "from_environment",
+            "to_environment_id",
+            "to_environment",
+            "scope",
+            "status",
+            "state",
+            "state_reason",
+            "requested_by",
+            "via",
+            "plan_id",
+            "plan_revision",
+            "reused_plan",
+            "task_id",
+            "run_id",
+            "gates",
+            "preview",
+            "decision",
+            "error",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "decision": {
+              "type": "string"
+            },
+            "error": {
+              "type": "string"
+            },
+            "evaluated_at": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "from_environment": {
+              "type": "string"
+            },
+            "from_environment_id": {
+              "type": "string"
+            },
+            "gates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/GateCheck"
+              }
+            },
+            "id": {
+              "type": "string",
+              "x-forge-id": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "plan_id": {
+              "type": "string"
+            },
+            "plan_revision": {
+              "type": "string"
+            },
+            "preview": {
+              "type": "boolean"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "requested_by": {
+              "type": "string"
+            },
+            "reused_plan": {
+              "type": "boolean"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "state": {
+              "type": "string"
+            },
+            "state_reason": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "to_environment": {
+              "type": "string"
+            },
+            "to_environment_id": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "via": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "release_report.updated",
+        "title": "release_report.updated event",
+        "summary": "SSE event: release_report.updated"
       },
       "api-v1-realtime-eventsrelease_watch.deleted": {
         "payload": {

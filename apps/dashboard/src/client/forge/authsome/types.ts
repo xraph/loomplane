@@ -115,8 +115,12 @@ export interface SwitchOrgRequest {
 }
 
 export interface SwitchOrgResponse {
+  /** Expiration time of session_token */
+  expiresAt?: string;
   orgId?: string;
   sessionId: string;
+  /** New access token carrying the new org_id; set only for JWT apps */
+  sessionToken?: string;
 }
 
 export interface UpdateMemberRequest {

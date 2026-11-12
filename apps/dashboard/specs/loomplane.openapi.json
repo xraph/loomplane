@@ -7,6 +7,27 @@
   },
   "servers": [],
   "paths": {
+    "/api/v1/account/two-step": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Whether your account asks for a code from an authenticator app at sign-in",
+        "operationId": "account.twoStep.get",
+        "responses": {
+          "200": {
+            "description": "Two-step verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwoStep"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/activity": {
       "get": {
         "tags": [
@@ -8369,27 +8390,6 @@
         }
       }
     },
-    "/api/v1/account/two-step": {
-      "get": {
-        "tags": [
-          "Identity"
-        ],
-        "summary": "Whether your account asks for a code from an authenticator app at sign-in",
-        "operationId": "account.twoStep.get",
-        "responses": {
-          "200": {
-            "description": "Two-step verification",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TwoStep"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/nodes/{id}/workloads": {
       "get": {
         "tags": [
@@ -9251,44 +9251,6 @@
         }
       }
     },
-    "/api/v1/platform/cloud/hosts/{host}/rotate-certificate": {
-      "post": {
-        "tags": [
-          "Platform Cloud"
-        ],
-        "summary": "Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it",
-        "operationId": "platformCloudHosts.rotateCertificate",
-        "parameters": [
-          {
-            "name": "host",
-            "in": "path",
-            "description": "Path parameter: host",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "The host and its next client certificate",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NewCertificate"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not a platform user, or no such thing"
-          },
-          "409": {
-            "description": "The host is retired or still trusts the certificate the last rotation replaced"
-          }
-        }
-      }
-    },
     "/api/v1/platform/cloud/hosts/{host}/drain": {
       "post": {
         "tags": [
@@ -9386,6 +9348,44 @@
           },
           "409": {
             "description": "The host isn't drained or still has placements"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/cloud/hosts/{host}/rotate-certificate": {
+      "post": {
+        "tags": [
+          "Platform Cloud"
+        ],
+        "summary": "Make the next client certificate for a host. It is returned this once; the platform switches to it once the host trusts it",
+        "operationId": "platformCloudHosts.rotateCertificate",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "description": "Path parameter: host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The host and its next client certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewCertificate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a platform user, or no such thing"
+          },
+          "409": {
+            "description": "The host is retired or still trusts the certificate the last rotation replaced"
           }
         }
       }
@@ -11480,7 +11480,6 @@
           {
             "name": "keep",
             "in": "query",
-            "description": "Keep names, by binding ID, what stays running when the environment goes, repeated once per binding. Everything else Loomplane made on Vercel and Render for the environment is deleted.",
             "schema": {
               "type": "array",
               "items": {
@@ -16427,6 +16426,840 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/fleet/instances/{id}/active-operation": {
+      "get": {
+        "tags": [
+          "Fleets"
+        ],
+        "summary": "Read the instance's unresolved operation",
+        "operationId": "fleetInstances.activeOperation",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Path parameter: project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unresolved operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/fleet/instances/{id}/events": {
+      "get": {
+        "tags": [
+          "Fleets"
+        ],
+        "summary": "Read an instance event journal",
+        "operationId": "fleetEvents.list",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Path parameter: project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read an instance event journal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid monitoring query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Monitoring reader unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/fleet/instances/{id}/metrics": {
+      "get": {
+        "tags": [
+          "Fleets"
+        ],
+        "summary": "Read instance observations and coverage",
+        "operationId": "fleetMetrics.get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Path parameter: project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read instance observations and coverage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid monitoring query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Monitoring reader unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/fleet/instances/{id}/operations": {
+      "post": {
+        "tags": [
+          "Fleets"
+        ],
+        "summary": "Submit an instance action for review",
+        "description": "Acceptance records the request. It does not authorize or confirm runtime effects.",
+        "operationId": "fleetInstances.requestAction",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Path parameter: project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted action request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Fleet state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Action blocked or invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Fleet admission limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/fleet/operations/{id}": {
       "get": {
         "tags": [
@@ -16579,6 +17412,219 @@
           },
           "422": {
             "description": "Invalid fleet request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/fleet/operations/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Fleets"
+        ],
+        "summary": "Cancel a create request before execution admission",
+        "description": "Only a create request that never held effect authority can be cancelled here. Admitted or ambiguous work requires its reviewed recovery workflow.",
+        "operationId": "fleetOperations.cancel",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Path parameter: project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetCancelOperationInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cancelled operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "description": "HTTP status code"
+                    },
+                    "details": {
+                      "type": "string",
+                      "description": "Additional error details"
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Error message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Operation admitted or instance revision changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/fleetRequestError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid cancellation request",
             "content": {
               "application/json": {
                 "schema": {
@@ -18567,12 +19613,6 @@
           "region": {
             "type": "string"
           },
-          "removes_routes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CloudinfraRoute"
-            }
-          },
           "resource": {
             "$ref": "#/components/schemas/ResourceConfig"
           },
@@ -18590,6 +19630,149 @@
           },
           "subject": {
             "type": "string"
+          }
+        }
+      },
+      "ActionInputBody": {
+        "type": "object",
+        "required": [
+          "kind",
+          "idempotency_key",
+          "expected_revision",
+          "expected_generation"
+        ],
+        "properties": {
+          "delete": {
+            "type": "object",
+            "required": [
+              "retention_policy_id"
+            ],
+            "properties": {
+              "retention_policy_id": {
+                "type": "string"
+              }
+            }
+          },
+          "expected_generation": {
+            "type": "integer"
+          },
+          "expected_revision": {
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "move": {
+            "type": "object",
+            "required": [
+              "target_cloud_id",
+              "target_region",
+              "cutover_mode"
+            ],
+            "properties": {
+              "cutover_mode": {
+                "type": "string"
+              },
+              "target_cloud_id": {
+                "type": "string"
+              },
+              "target_region": {
+                "type": "string"
+              }
+            }
+          },
+          "resize": {
+            "type": "object",
+            "required": [
+              "profile_id"
+            ],
+            "properties": {
+              "profile_id": {
+                "type": "string"
+              }
+            }
+          },
+          "restore": {
+            "type": "object",
+            "required": [
+              "recovery_point_id",
+              "target_stage_id",
+              "target_profile_id"
+            ],
+            "properties": {
+              "recovery_point_id": {
+                "type": "string"
+              },
+              "target_profile_id": {
+                "type": "string"
+              },
+              "target_stage_id": {
+                "type": "string"
+              }
+            }
+          },
+          "resume": {
+            "type": "object"
+          },
+          "retire": {
+            "type": "object",
+            "required": [
+              "retention_policy_id"
+            ],
+            "properties": {
+              "retention_policy_id": {
+                "type": "string"
+              }
+            }
+          },
+          "scale": {
+            "type": "object",
+            "required": [
+              "service",
+              "expected_policy_revision",
+              "policy"
+            ],
+            "properties": {
+              "expected_policy_revision": {
+                "type": "integer"
+              },
+              "policy": {
+                "$ref": "#/components/schemas/ScalingPolicy"
+              },
+              "service": {
+                "type": "string"
+              }
+            }
+          },
+          "suspend": {
+            "type": "object"
+          },
+          "update": {
+            "type": "object",
+            "required": [
+              "release_id",
+              "parameters",
+              "secret_refs"
+            ],
+            "properties": {
+              "parameters": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "release_id": {
+                "type": "string"
+              },
+              "rollout": {
+                "$ref": "#/components/schemas/RolloutMemberPin"
+              },
+              "secret_refs": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
           }
         }
       },
@@ -19542,9 +20725,7 @@
           "commit_sha": {
             "type": "string"
           },
-          "config": {
-            "description": "The binding's configuration: the JSON object the server stores, sent as is."
-          },
+          "config": {},
           "connection_id": {
             "type": "string"
           },
@@ -19613,6 +20794,17 @@
             "format": "date-time"
           },
           "url": {
+            "type": "string"
+          }
+        }
+      },
+      "BindingAliasInputBody": {
+        "type": "object",
+        "required": [
+          "alias"
+        ],
+        "properties": {
+          "alias": {
             "type": "string"
           }
         }
@@ -19913,6 +21105,17 @@
             "type": "string"
           },
           "registry": {
+            "type": "string"
+          }
+        }
+      },
+      "BuildCommands": {
+        "type": "object",
+        "properties": {
+          "build": {
+            "type": "string"
+          },
+          "install": {
             "type": "string"
           }
         }
@@ -20933,6 +22136,27 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/catalogproxy.Session"
+      },
+      "CertificateView": {
+        "type": "object",
+        "required": [
+          "warning",
+          "rotation"
+        ],
+        "properties": {
+          "days_left": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "rotation": {
+            "type": "string"
+          },
+          "warning": {
+            "type": "string"
+          }
+        }
       },
       "ChallengeCredentialInputBody": {
         "type": "object",
@@ -23274,9 +24498,7 @@
           "payload"
         ],
         "properties": {
-          "payload": {
-            "type": "string"
-          },
+          "payload": {},
           "provider": {
             "type": "string"
           },
@@ -24696,6 +25918,23 @@
           }
         }
       },
+      "DeletionPreview": {
+        "type": "object",
+        "required": [
+          "removes"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "string"
+          },
+          "removes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "Delivery": {
         "type": "object",
         "required": [
@@ -25857,6 +27096,9 @@
               "cloud_target": {
                 "type": "string"
               },
+              "commands": {
+                "$ref": "#/components/schemas/BuildCommands"
+              },
               "enabled": {
                 "type": "boolean"
               },
@@ -25889,9 +27131,6 @@
               },
               "target": {
                 "type": "string"
-              },
-              "commands": {
-                "$ref": "#/components/schemas/BuildCommands"
               },
               "vercel": {
                 "$ref": "#/components/schemas/VercelSettings"
@@ -26545,9 +27784,7 @@
             "type": "string",
             "format": "date-time"
           },
-          "data": {
-            "description": "The event's payload: the JSON object the server stores, sent as is."
-          },
+          "data": {},
           "kind": {
             "type": "string"
           },
@@ -26556,6 +27793,56 @@
           },
           "task_id": {
             "type": "string"
+          }
+        }
+      },
+      "EventAcceptance": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "state",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "EventPage": {
+        "type": "object",
+        "required": [
+          "acceptance",
+          "replay_truncated",
+          "items"
+        ],
+        "properties": {
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventAcceptance"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetEvent"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "replay_truncated": {
+            "type": "boolean"
           }
         }
       },
@@ -27362,6 +28649,83 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "FleetCancelOperationInputBody": {
+        "type": "object",
+        "required": [
+          "expected_instance_revision"
+        ],
+        "properties": {
+          "expected_instance_revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "FleetEvent": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "version",
+          "id",
+          "sequence",
+          "fleet_id",
+          "instance_id",
+          "environment_id",
+          "generation",
+          "kind",
+          "occurred_at"
+        ],
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "fleet_id": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/LifecycleEvent"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "release": {
+            "$ref": "#/components/schemas/ReleaseEvent"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "scaling": {
+            "$ref": "#/components/schemas/ScalingEvent"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "integer"
           }
         }
       },
@@ -29397,6 +30761,27 @@
           }
         }
       },
+      "LatencyHistogram": {
+        "type": "object",
+        "required": [
+          "upper_bounds_millis",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "upper_bounds_millis": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      },
       "Leftover": {
         "type": "object",
         "required": [
@@ -29446,6 +30831,20 @@
             "type": "string"
           },
           "url": {
+            "type": "string"
+          }
+        }
+      },
+      "LifecycleEvent": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "state": {
             "type": "string"
           }
         }
@@ -30073,37 +31472,6 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
       },
-      "MigrationFile": {
-        "type": "object",
-        "required": [
-          "path",
-          "status",
-          "additions",
-          "deletions",
-          "patch",
-          "truncated"
-        ],
-        "properties": {
-          "additions": {
-            "type": "integer"
-          },
-          "deletions": {
-            "type": "integer"
-          },
-          "patch": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "truncated": {
-            "type": "boolean"
-          }
-        }
-      },
       "ManifestUse": {
         "properties": {
           "enabled": {
@@ -30248,6 +31616,208 @@
           },
           "tls_secret_name": {
             "type": "string"
+          }
+        }
+      },
+      "MetricCoverage": {
+        "type": "object",
+        "required": [
+          "requests",
+          "expected",
+          "observed",
+          "fresh",
+          "cpu",
+          "memory",
+          "latency",
+          "replicas"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "integer"
+          },
+          "expected": {
+            "type": "integer"
+          },
+          "fresh": {
+            "type": "integer"
+          },
+          "latency": {
+            "type": "integer"
+          },
+          "memory": {
+            "type": "integer"
+          },
+          "observed": {
+            "type": "integer"
+          },
+          "replicas": {
+            "type": "integer"
+          },
+          "requests": {
+            "type": "integer"
+          }
+        }
+      },
+      "MetricSourceObservation": {
+        "type": "object",
+        "required": [
+          "runtime_live",
+          "component",
+          "source"
+        ],
+        "properties": {
+          "component": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "replicas_observed_at": {
+            "type": "string"
+          },
+          "runtime_identity": {
+            "type": "string"
+          },
+          "runtime_live": {
+            "type": "boolean"
+          },
+          "runtime_observed_at": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "MetricSummary": {
+        "type": "object",
+        "required": [
+          "sources",
+          "cost_status",
+          "window",
+          "as_of",
+          "freshness",
+          "partial",
+          "coverage"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cost_status": {
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/MetricCoverage"
+          },
+          "cpu_request_millicores": {
+            "type": "number"
+          },
+          "cpu_usage_millicores": {
+            "type": "number"
+          },
+          "cpu_utilization": {
+            "type": "number"
+          },
+          "current_replicas": {
+            "type": "integer"
+          },
+          "desired_replicas": {
+            "type": "integer"
+          },
+          "estimated_hourly_micro_usd": {
+            "type": "integer"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "latency_histogram": {
+            "$ref": "#/components/schemas/LatencyHistogram"
+          },
+          "latency_p95_millis": {
+            "type": "number"
+          },
+          "memory_bytes": {
+            "type": "number"
+          },
+          "observed_cost_micro_usd": {
+            "type": "integer"
+          },
+          "oldest_observation": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "ready_replicas": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "number"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricSourceObservation"
+            }
+          },
+          "window": {
+            "$ref": "#/components/schemas/MetricWindow"
+          }
+        }
+      },
+      "MetricWindow": {
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MigrationFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "status",
+          "additions",
+          "deletions",
+          "patch",
+          "truncated"
+        ],
+        "properties": {
+          "additions": {
+            "type": "integer"
+          },
+          "deletions": {
+            "type": "integer"
+          },
+          "patch": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
           }
         }
       },
@@ -31485,6 +33055,30 @@
           },
           "ram_gib": {
             "type": "number"
+          }
+        }
+      },
+      "NewCertificate": {
+        "type": "object",
+        "required": [
+          "host",
+          "client_certificate",
+          "client_fingerprint",
+          "expires_at"
+        ],
+        "properties": {
+          "client_certificate": {
+            "type": "string"
+          },
+          "client_fingerprint": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Host"
           }
         }
       },
@@ -32807,17 +34401,6 @@
           },
           "minted_by_key_id": {
             "type": "string"
-          }
-        }
-      },
-      "TwoStep": {
-        "type": "object",
-        "required": [
-          "enabled"
-        ],
-        "properties": {
-          "enabled": {
-            "type": "boolean"
           }
         }
       },
@@ -34269,23 +35852,6 @@
         ],
         "properties": {
           "permissions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
-      "DeletionPreview": {
-        "type": "object",
-        "required": [
-          "removes"
-        ],
-        "properties": {
-          "blocked": {
-            "type": "string"
-          },
-          "removes": {
             "type": "array",
             "items": {
               "type": "string"
@@ -36063,6 +37629,34 @@
           }
         }
       },
+      "ReleaseEvent": {
+        "type": "object",
+        "required": [
+          "campaign_id",
+          "wave",
+          "state"
+        ],
+        "properties": {
+          "campaign_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target_generation": {
+            "type": "integer"
+          },
+          "target_operation_id": {
+            "type": "string"
+          },
+          "wave": {
+            "type": "integer"
+          }
+        }
+      },
       "ReleaseEvidence": {
         "type": "object",
         "required": [
@@ -37808,6 +39402,29 @@
           }
         }
       },
+      "RolloutMemberPin": {
+        "type": "object",
+        "required": [
+          "rollout_id",
+          "dispatch_revision",
+          "instance_id",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "dispatch_revision": {
+            "type": "integer"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "rollout_id": {
+            "type": "string"
+          }
+        }
+      },
       "RouteBinding": {
         "type": "object",
         "required": [
@@ -38469,6 +40086,90 @@
           }
         }
       },
+      "ScalingEvent": {
+        "type": "object",
+        "required": [
+          "service",
+          "policy_revision",
+          "previous_replicas",
+          "desired_replicas",
+          "reason",
+          "writer",
+          "observed_at"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "desired_replicas": {
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "previous_replicas": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "writer": {
+            "type": "string"
+          }
+        }
+      },
+      "ScalingPolicy": {
+        "type": "object",
+        "required": [
+          "version",
+          "revision",
+          "mode",
+          "min_replicas",
+          "max_replicas"
+        ],
+        "properties": {
+          "cooldown_seconds": {
+            "type": "integer"
+          },
+          "cpu_utilization": {
+            "type": "integer"
+          },
+          "downscale_stabilization_seconds": {
+            "type": "integer"
+          },
+          "max_replicas": {
+            "type": "integer"
+          },
+          "min_replicas": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "scale_up_limit": {
+            "type": "integer"
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScalingSignalRef"
+            }
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
       "ScalingPool": {
         "type": "object",
         "properties": {
@@ -38607,6 +40308,21 @@
                 "$ref": "#/components/schemas/ResourceVector"
               }
             }
+          }
+        }
+      },
+      "ScalingSignalRef": {
+        "type": "object",
+        "required": [
+          "name",
+          "revision"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -39273,6 +40989,9 @@
           "cluster_demand": {
             "$ref": "#/components/schemas/ClusterDemand"
           },
+          "commands": {
+            "$ref": "#/components/schemas/BuildCommands"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -39367,17 +41086,14 @@
             "type": "object",
             "additionalProperties": true
           },
+          "vercel": {
+            "$ref": "#/components/schemas/VercelSettings"
+          },
           "worker": {
             "$ref": "#/components/schemas/WorkerSettings"
           },
           "workload": {
             "type": "string"
-          },
-          "commands": {
-            "$ref": "#/components/schemas/BuildCommands"
-          },
-          "vercel": {
-            "$ref": "#/components/schemas/VercelSettings"
           }
         }
       },
@@ -41180,6 +42896,17 @@
           }
         }
       },
+      "TwoStep": {
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "UnreachableAccount": {
         "type": "object",
         "required": [
@@ -41472,6 +43199,24 @@
         ],
         "type": "object",
         "x-forge-envelope": "variables"
+      },
+      "VercelSettings": {
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "service_commands": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "services": {
+            "type": "boolean"
+          }
+        }
       },
       "View": {
         "type": "object",
@@ -42243,91 +43988,6 @@
           },
           "error": {
             "type": "string"
-          }
-        }
-      },
-      "BindingAliasInputBody": {
-        "type": "object",
-        "required": [
-          "alias"
-        ],
-        "properties": {
-          "alias": {
-            "type": "string"
-          }
-        }
-      },
-      "CertificateView": {
-        "type": "object",
-        "required": [
-          "warning",
-          "rotation"
-        ],
-        "properties": {
-          "days_left": {
-            "type": "integer"
-          },
-          "expires_at": {
-            "type": "string"
-          },
-          "rotation": {
-            "type": "string"
-          },
-          "warning": {
-            "type": "string"
-          }
-        }
-      },
-      "NewCertificate": {
-        "type": "object",
-        "required": [
-          "host",
-          "client_certificate",
-          "client_fingerprint",
-          "expires_at"
-        ],
-        "properties": {
-          "client_certificate": {
-            "type": "string"
-          },
-          "client_fingerprint": {
-            "type": "string"
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "host": {
-            "$ref": "#/components/schemas/Host"
-          }
-        }
-      },
-      "BuildCommands": {
-        "type": "object",
-        "properties": {
-          "build": {
-            "type": "string"
-          },
-          "install": {
-            "type": "string"
-          }
-        }
-      },
-      "VercelSettings": {
-        "type": "object",
-        "required": [
-          "services"
-        ],
-        "properties": {
-          "root": {
-            "type": "string"
-          },
-          "service_commands": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "services": {
-            "type": "boolean"
           }
         }
       }

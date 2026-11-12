@@ -4252,7 +4252,53 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly fleetEvents = {
+    /**
+     * Read an instance event journal
+     */
+    list: async (projectId: string, id: string, after?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EventPage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances/${encodeURIComponent(String(id))}/events`;
+      const queryParams: Record<string, any> = {};
+      if (after !== undefined) {
+        queryParams['after'] = after;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EventPage"],
+      };
+
+      return this.request<types.EventPage>(config);
+    },
+
+  };
+
   public readonly fleetInstances = {
+    /**
+     * Read the instance's unresolved operation
+     */
+    activeOperation: async (projectId: string, id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FleetOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances/${encodeURIComponent(String(id))}/active-operation`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FleetOperation"],
+      };
+
+      return this.request<types.FleetOperation>(config);
+    },
+
     /**
      * Request a new instance
      */
@@ -4320,9 +4366,77 @@ export class RESTClient extends Client {
       return this.request<types.InstancePage>(config);
     },
 
+    /**
+     * Submit an instance action for review
+     * Acceptance records the request. It does not authorize or confirm runtime effects.
+     */
+    requestAction: async (projectId: string, id: string, body: types.ActionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FleetOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances/${encodeURIComponent(String(id))}/operations`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ActionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FleetOperation"],
+      };
+
+      return this.request<types.FleetOperation>(config);
+    },
+
+  };
+
+  public readonly fleetMetrics = {
+    /**
+     * Read instance observations and coverage
+     */
+    get: async (projectId: string, id: string, start?: string | undefined, end?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MetricSummary> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances/${encodeURIComponent(String(id))}/metrics`;
+      const queryParams: Record<string, any> = {};
+      if (start !== undefined) {
+        queryParams['start'] = start;
+      }
+      if (end !== undefined) {
+        queryParams['end'] = end;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["MetricSummary"],
+      };
+
+      return this.request<types.MetricSummary>(config);
+    },
+
   };
 
   public readonly fleetOperations = {
+    /**
+     * Cancel a create request before execution admission
+     * Only a create request that never held effect authority can be cancelled here. Admitted or ambiguous work requires its reviewed recovery workflow.
+     */
+    cancel: async (projectId: string, id: string, body: types.FleetCancelOperationInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FleetOperation> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/operations/${encodeURIComponent(String(id))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FleetCancelOperationInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FleetOperation"],
+      };
+
+      return this.request<types.FleetOperation>(config);
+    },
+
     /**
      * Read an instance operation
      */

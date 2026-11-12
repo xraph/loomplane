@@ -59,12 +59,50 @@ export interface Action {
   provider: string;
   reason: string;
   region?: string;
-  removesRoutes?: CloudinfraRoute[];
   resource?: ResourceConfig;
   routes?: CloudinfraRoute[];
   service?: ServiceConfig;
   step: number;
   subject: string;
+}
+
+export interface ActionInputBody {
+  delete?: {
+  retentionPolicyId: string;
+};
+  expectedGeneration: number;
+  expectedRevision: number;
+  idempotencyKey: string;
+  kind: string;
+  move?: {
+  cutoverMode: string;
+  targetCloudId: string;
+  targetRegion: string;
+};
+  resize?: {
+  profileId: string;
+};
+  restore?: {
+  recoveryPointId: string;
+  targetProfileId: string;
+  targetStageId: string;
+};
+  resume?: Record<string, any>;
+  retire?: {
+  retentionPolicyId: string;
+};
+  scale?: {
+  expectedPolicyRevision: number;
+  policy: ScalingPolicy;
+  service: string;
+};
+  suspend?: Record<string, any>;
+  update?: {
+  parameters: Record<string, any>;
+  releaseId: string;
+  rollout?: RolloutMemberPin;
+  secretRefs: Record<string, any>;
+};
 }
 
 export interface ActivityDay {
@@ -348,7 +386,6 @@ export interface BackupList {
 export interface Binding {
   alias: string;
   commitSha: string;
-  /** The binding's configuration: the JSON object the server stores, sent as is. */
   config: any;
   connectionId: string;
   createdAt: string;
@@ -1429,7 +1466,7 @@ export interface ClusterProblem {
 }
 
 export interface ClusterProviderOptions {
-  payload: string;
+  payload: any;
   provider: string;
   version: number;
 }
@@ -2406,11 +2443,24 @@ export interface EnvironmentUsage {
 
 export interface Event {
   at: string;
-  /** The event's payload: the JSON object the server stores, sent as is. */
   data: any;
   kind: string;
   seq: number;
   taskId: string;
+}
+
+export interface EventAcceptance {
+  attempts: number;
+  errorCode?: string;
+  eventId: string;
+  state: string;
+}
+
+export interface EventPage {
+  acceptance: EventAcceptance[];
+  items: FleetEvent[];
+  nextCursor?: string;
+  replayTruncated: boolean;
 }
 
 export interface ExcludeInputBody {
@@ -2646,6 +2696,29 @@ export interface Fleet {
   revision: number;
   status: string;
   updatedAt: string;
+}
+
+export interface FleetCancelOperationInputBody {
+  expectedInstanceRevision: number;
+}
+
+export interface FleetEvent {
+  component?: string;
+  environmentId: string;
+  fleetId: string;
+  generation: number;
+  id: string;
+  instanceId: string;
+  kind: string;
+  lifecycle?: LifecycleEvent;
+  occurredAt: string;
+  operationId?: string;
+  orgId: string;
+  release?: ReleaseEvent;
+  releaseId?: string;
+  scaling?: ScalingEvent;
+  sequence: number;
+  version: number;
 }
 
 export interface FleetOperation {
@@ -3224,6 +3297,11 @@ export interface KubernetesRule {
   verbs: string[];
 }
 
+export interface LatencyHistogram {
+  counts: number[];
+  upperBoundsMillis: number[];
+}
+
 export interface Leftover {
   dataBearing: boolean;
   name: string;
@@ -3238,6 +3316,11 @@ export interface LicenseInfo {
   note?: string;
   title: string;
   url: string;
+}
+
+export interface LifecycleEvent {
+  reason?: string;
+  state: string;
 }
 
 export interface Link {
@@ -3452,6 +3535,57 @@ export interface MemberPrerequisiteInputBody {
   id?: string;
   renewalAuthorityId: string;
   tlsSecretName: string;
+}
+
+export interface MetricCoverage {
+  cpu: number;
+  expected: number;
+  fresh: number;
+  latency: number;
+  memory: number;
+  observed: number;
+  replicas: number;
+  requests: number;
+}
+
+export interface MetricSourceObservation {
+  component: string;
+  observedAt?: string;
+  reason?: string;
+  replicasObservedAt?: string;
+  runtimeIdentity?: string;
+  runtimeLive: boolean;
+  runtimeObservedAt?: string;
+  source: string;
+}
+
+export interface MetricSummary {
+  asOf: string;
+  costStatus: string;
+  coverage: MetricCoverage;
+  cpuRequestMillicores?: number;
+  cpuUsageMillicores?: number;
+  cpuUtilization?: number;
+  currentReplicas?: number;
+  desiredReplicas?: number;
+  estimatedHourlyMicroUsd?: number;
+  freshness: string;
+  latencyHistogram?: LatencyHistogram;
+  latencyP95Millis?: number;
+  memoryBytes?: number;
+  observedCostMicroUsd?: number;
+  oldestObservation?: string;
+  partial: boolean;
+  readyReplicas?: number;
+  reason?: string;
+  requests?: number;
+  sources: MetricSourceObservation[];
+  window: MetricWindow;
+}
+
+export interface MetricWindow {
+  end: string;
+  start: string;
 }
 
 export interface MigrationFile {
@@ -4880,7 +5014,7 @@ export interface RealtimeAgentEnd {
 
 export interface RealtimeAgentEvent {
   at: string;
-  data: string;
+  data: any;
   kind: string;
   seq: number;
   taskId: string;
@@ -5096,6 +5230,15 @@ export interface Release {
   steps?: number[];
   strategy: string;
   thresholds: Thresholds;
+}
+
+export interface ReleaseEvent {
+  campaignId: string;
+  reason?: string;
+  state: string;
+  targetGeneration?: number;
+  targetOperationId?: string;
+  wave: number;
 }
 
 export interface ReleaseEvidence {
@@ -5620,6 +5763,13 @@ export interface RollbackTarget {
   target: ReleaseRef;
 }
 
+export interface RolloutMemberPin {
+  attempt: number;
+  dispatchRevision: number;
+  instanceId: string;
+  rolloutId: string;
+}
+
 export interface RouteBinding {
   address: string;
   backend?: string;
@@ -5815,6 +5965,30 @@ export interface Scale {
   min: number;
 }
 
+export interface ScalingEvent {
+  cloudId?: string;
+  desiredReplicas: number;
+  observedAt: string;
+  policyRevision: number;
+  previousReplicas: number;
+  reason: string;
+  service: string;
+  writer: string;
+}
+
+export interface ScalingPolicy {
+  cooldownSeconds?: number;
+  cpuUtilization?: number;
+  downscaleStabilizationSeconds?: number;
+  maxReplicas: number;
+  minReplicas: number;
+  mode: string;
+  revision: number;
+  scaleUpLimit?: number;
+  signals?: ScalingSignalRef[];
+  version: number;
+}
+
 export interface ScalingPool {
   policy?: CapacityPolicy;
   pool?: Pool;
@@ -5850,6 +6024,11 @@ export interface ScalingPoolInputBody {
   region: string;
   systemReserve: ResourceVector;
 };
+}
+
+export interface ScalingSignalRef {
+  name: string;
+  revision: number;
 }
 
 export interface SecretInputBody {

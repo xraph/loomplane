@@ -96,6 +96,33 @@ The `control` role exposes `/health` and a synthetic `/instances` inventory. Bot
 require a token and reject data writes. Choose a separate port for each process.
 These are workload fixture endpoints, not Loomplane's Fleet API.
 
+## Check API metadata at larger sizes
+
+Use the PostgreSQL integration test to measure metadata admission and paginated
+reads through the registered Fleet API and Go SDK. Set
+`LOOMPLANE_TEST_DATABASE_URL` to an isolated PostgreSQL server where the test
+account can create and drop temporary databases. Keep it separate from your
+development or production data.
+
+```sh
+GOMAXPROCS=2 go test -p 1 -tags=integration ./tests/integration \
+  -run '^TestFleetAPIMetadataLadder$' -count=1 -timeout=15m -v
+```
+
+The test sequentially grows one fleet through 10, 100 and 1,000 records, plus one
+record in another organization whose project rejects the primary reader's list and
+instance requests. It verifies complete pagination over each static dataset at
+page sizes 50, 73 and 200, single-record pages at the smallest size, filters, replay,
+quota rejection and bounded pending-operation reads. The primary fleet's create
+responses and listed records report `waiting_approval`. At each checkpoint, the fixture
+verifies that the primary fleet has no deployment plans, execution authority,
+namespaces or data-resource bindings.
+
+Each `fleet_metadata_measurement` log entry reports the record count, page size,
+number of pages, elapsed creation time for that increment and total time to read
+all matching pages. These are local measurements. They don't establish a
+production fleet-size limit or qualify workload deployment.
+
 ## Cleanup and evidence
 
 Dry runs create no provider resources. You can inspect a recorded resource list
@@ -110,14 +137,14 @@ identifies retained databases, buckets and volumes, and records
 reviewed retention and recovery decision. Local fixture files remain in your
 chosen state directory after the processes stop.
 
-| Check                                          | Evidence available here           |
-| ---------------------------------------------- | --------------------------------- |
-| Configuration and resource bounds              | Offline validation and unit tests |
-| Bootstrap and job replay                       | Local SQLite fixture tests        |
-| Neighbor credential denial                     | Local HTTP fixture tests          |
-| Namespace and managed data isolation           | No live evidence                  |
-| Fleet lifecycle, scaling and release execution | No live harness adapter           |
-| Metadata scale at 10, 100 and 1,000 instances  | Not measured                      |
+| Check                                          | Evidence available here                                       |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| Configuration and resource bounds              | Offline validation and unit tests                             |
+| Bootstrap and job replay                       | Local SQLite fixture tests                                    |
+| Neighbor credential denial                     | Local HTTP fixture tests                                      |
+| Namespace and managed data isolation           | No live evidence                                              |
+| Fleet lifecycle, scaling and release execution | No live harness adapter                                       |
+| Metadata scale at 10, 100 and 1,000 instances  | Registered API and PostgreSQL integration test; metadata only |
 
 The runner returns exit code `0` for a valid dry run, `1` for rejected inputs, and
 `2` when valid inputs request unavailable live execution. You still need separate

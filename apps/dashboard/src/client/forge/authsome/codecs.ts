@@ -33,7 +33,7 @@ export const CODECS: Record<string, Codec> = {
   "OrganizationStatusResponse": {"kind": "object", "fields": {"status": {"ts": "status"}}, "required": ["status"]},
   "SlugAvailableResponse": {"kind": "object", "fields": {"available": {"ts": "available"}}, "required": ["available"]},
   "SwitchOrgRequest": {"kind": "object", "fields": {"org_id": {"ts": "orgId"}}, "required": ["org_id"]},
-  "SwitchOrgResponse": {"kind": "object", "fields": {"org_id": {"ts": "orgId"}, "session_id": {"ts": "sessionId"}}, "required": ["session_id"]},
+  "SwitchOrgResponse": {"kind": "object", "fields": {"expires_at": {"ts": "expiresAt"}, "org_id": {"ts": "orgId"}, "session_id": {"ts": "sessionId"}, "session_token": {"ts": "sessionToken"}}, "required": ["session_id"]},
   "UpdateMemberRequest": {"kind": "object", "fields": {"role": {"ts": "role"}}, "required": ["role"]},
   "UpdateOrgRequest": {"kind": "object", "fields": {"logo": {"ts": "logo"}, "name": {"ts": "name"}}},
 };
