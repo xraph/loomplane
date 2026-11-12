@@ -923,6 +923,10 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 			return address, true, nil
 		}
 	case planning.DependencyNew, planning.DependencyResource:
+		if choice.Kind == catalogconnect.EngineFalkorDB && (field == recipes.FieldTLSMode || field == recipes.FieldCACert) {
+			value, err = r.managedFalkorTLSField(ctx, choice.Resource, field)
+			return value, err == nil, err
+		}
 		connectionURLField := ResourceURL
 		if !published {
 			if kind, found := r.e.kinds().Kind(choice.Kind); found && kind.Service != nil {
@@ -959,6 +963,60 @@ func (r *compositionReads) dependency(ctx context.Context, dependency, field str
 		return "", false, fmt.Errorf("%s's %s dependency: %w", r.resource, dependency, err)
 	}
 	return value, true, nil
+}
+
+// managedFalkorTLSField reads transport metadata from the dependency's pinned
+// recipe. The two existing reusable plaintext revisions predate those outputs.
+func (r *compositionReads) managedFalkorTLSField(ctx context.Context, resource, field string) (string, error) {
+	plan, deployment := r.job.Plan, r.job.Deployment
+	unavailable := fmt.Errorf("%s's managed FalkorDB connection has no reviewed %s; plan again", resource, field)
+	if plan == nil || deployment == nil || plan.ID == "" || plan.ID != deployment.PlanID || plan.OrgID != deployment.OrgID ||
+		plan.ProjectID != deployment.ProjectID || plan.EnvironmentID != deployment.EnvironmentID || resource == "" {
+		return "", unavailable
+	}
+	i := slices.IndexFunc(plan.Actions, func(action planning.Action) bool {
+		return action.ID == "resource:"+resource
+	})
+	if i < 0 {
+		return "", unavailable
+	}
+	action := plan.Actions[i]
+	applyOrKeep := slices.Contains([]planning.Op{planning.Create, planning.Update, planning.Replace, planning.Keep}, action.Op)
+	cfg := action.Resource
+	if action.Subject != planning.ResourceSubject || action.Name != resource || !applyOrKeep || cfg == nil ||
+		cfg.Kind != catalogconnect.EngineFalkorDB || cfg.ExistingResource != nil || cfg.Component == nil ||
+		cfg.Component.Resource != resource || cfg.Target != action.ConnectionID || cfg.Version == "" || cfg.Component.Revision == "" {
+		return "", unavailable
+	}
+	kind, err := r.e.checkComponent(cfg)
+	if err != nil || kind.Service == nil {
+		return "", unavailable
+	}
+	address, err := r.kept(ctx, resource, serviceConnectionField(kind, recipes.FieldURL))
+	if err != nil {
+		return "", err
+	}
+	if address == "" {
+		return "", unavailable
+	}
+	if key := serviceConnectionField(kind, field); key != "" {
+		value, readErr := r.kept(ctx, resource, key)
+		if readErr != nil {
+			return "", readErr
+		}
+		if field == recipes.FieldTLSMode && value != catalogconnect.TLSDisable && value != catalogconnect.TLSVerifyFull {
+			return "", unavailable
+		}
+		return value, nil
+	}
+	if cfg.Version != "4.2" || (cfg.Component.Revision != "2" && cfg.Component.Revision != "3") ||
+		serviceConnectionField(kind, recipes.FieldTLSMode) != "" || serviceConnectionField(kind, recipes.FieldCACert) != "" {
+		return "", unavailable
+	}
+	if field == recipes.FieldTLSMode {
+		return catalogconnect.TLSDisable, nil
+	}
+	return "", nil
 }
 
 // serviceConnectionField is the Vault field for a declared connection output.
@@ -1176,7 +1234,7 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 		var ok bool
 		exactChecker, ok = e.Checker.(endpointDSNChecker)
 		if !ok {
-			return "", errors.New("this Loomplane can't verify resolved search credentials")
+			return "", errors.New("this Loomplane can't verify the resolved engine credentials")
 		}
 	}
 	dialFrom := e.endpointDial

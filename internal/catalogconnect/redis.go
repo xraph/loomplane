@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/xraph/loomplane/internal/recipes"
 )
@@ -36,44 +37,97 @@ func (RedisProber) Probe(ctx context.Context, dial DialFunc, dsn string, req rec
 	if port == "" {
 		port = "6379"
 	}
-	conn, err := dial(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
-	if err != nil {
-		return nil, unreachable(err)
+	if dial == nil {
+		return nil, errors.New("the Redis check requires a guarded dialer")
 	}
-	defer func() { _ = conn.Close() }() // a probe only reads
-	if deadline, ok := ctx.Deadline(); ok {
-		if err = conn.SetDeadline(deadline); err != nil {
-			return nil, unreachable(err)
+	if err = ctx.Err(); err != nil {
+		return nil, redisFailure(err)
+	}
+	conn, dialErr := dial(ctx, "tcp", net.JoinHostPort(u.Hostname(), port))
+	if conn == nil {
+		if err = ctx.Err(); err != nil {
+			return nil, redisFailure(err)
+		}
+		if dialErr == nil {
+			dialErr = errors.New("the Redis dialer returned no connection")
+		}
+		return nil, redisFailure(dialErr)
+	}
+
+	// SSH forwarding channels reject deadlines, and closing a channel can
+	// wait for its transport. Return on cancellation so the target caller
+	// can close that transport.
+	wire := redisProbeConn{Conn: conn, closeOnce: sync.OnceValue(conn.Close)}
+	stop := context.AfterFunc(ctx, func() { _ = wire.Close() })
+	type probeResult struct {
+		report *Report
+		err    error
+	}
+	result := make(chan probeResult, 1)
+	go func() {
+		var completed probeResult
+		if dialErr != nil {
+			completed.err = redisFailure(dialErr)
+		} else {
+			completed.report, completed.err = probeRedisConnection(ctx, wire, u, req)
+		}
+		_ = wire.Close()
+		stop()
+		result <- completed
+	}()
+	select {
+	case <-ctx.Done():
+	case completed := <-result:
+		if ctx.Err() == nil {
+			return completed.report, completed.err
 		}
 	}
-	// Cancelling the probe closes the connection, which ends a read.
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
+	return nil, redisFailure(ctx.Err())
+}
+
+// The worker, cancellation callback and TLS handshake share one raw close.
+type redisProbeConn struct {
+	net.Conn
+	closeOnce func() error
+}
+
+func (c redisProbeConn) Close() error { return c.closeOnce() }
+
+func probeRedisConnection(ctx context.Context, conn net.Conn, u *url.URL, req recipes.Requirement) (*Report, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, redisFailure(err)
+	}
 	if u.Scheme == "rediss" {
 		tc := tls.Client(conn, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})
-		if err = tc.HandshakeContext(ctx); err != nil {
+		if err := tc.HandshakeContext(ctx); err != nil {
 			return nil, redisFailure(err)
 		}
 		conn = tc
 	}
 	c := &respConn{w: conn, r: bufio.NewReader(conn)}
+	do := func(args ...string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return c.do(args...)
+	}
 	if password, ok := u.User.Password(); ok && password != "" {
 		args := []string{"AUTH", password}
 		if name := u.User.Username(); name != "" {
 			args = []string{"AUTH", name, password}
 		}
-		if _, err = c.do(args...); err != nil {
+		if _, err := do(args...); err != nil {
 			return nil, redisFailure(err)
 		}
 	}
-	pong, err := c.do("PING")
+	pong, err := do("PING")
 	if err != nil {
 		return nil, redisFailure(err)
 	}
 	if pong != "PONG" {
 		return nil, refused(fmt.Sprintf("PING answered %q, not PONG", pong))
 	}
-	info, err := c.do("INFO", "server")
+	info, err := do("INFO", "server")
 	if err != nil {
 		return nil, redisFailure(err)
 	}
@@ -98,6 +152,8 @@ func redisFailure(err error) error {
 	var se serverError
 	var ne net.Error
 	switch {
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
 	case errors.As(err, &se):
 		return refused(string(se))
 	case errors.As(err, &ne) && ne.Timeout():

@@ -32,6 +32,17 @@ var (
 	ErrNotAJob = errors.New("not a job")
 )
 
+// GeneratedSecretNotDeclaredError identifies an undeclared secret on a bound composition.
+type GeneratedSecretNotDeclaredError struct {
+	Kind, Version, Revision, Name string
+}
+
+func (e *GeneratedSecretNotDeclaredError) Error() string {
+	return fmt.Sprintf("%s %s revision %s has no generated secret %s", e.Kind, e.Version, e.Revision, e.Name)
+}
+
+func (e *GeneratedSecretNotDeclaredError) Unwrap() error { return ErrComponentNotFound }
+
 // JobRunner runs a bound job component again. *OwnedTarget is the real
 // one (see OwnedTarget.RerunJob). A rerun belongs to no deployment, so the
 // ComponentRun its kind's hooks see, in Files, has an empty DeploymentID
@@ -183,24 +194,29 @@ func (a *CatalogAccess) InternalSecret(ctx context.Context, orgID string, ref Re
 func (a *CatalogAccess) keptSecret(ctx context.Context, orgID string, ref ResourceRef, name string) ([]byte, error) {
 	bindings, err := a.d.Bindings(ctx, orgID, ref.EnvironmentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list bindings for generated secret: %w", err)
 	}
 	parent := composedParent(bindings, orgID, ref)
 	if parent == nil {
 		return nil, fmt.Errorf("%w: %s isn't a composed resource in this environment", ErrComponentNotFound, ref.Resource)
 	}
-	composition := boundResource(parent).Composition
-	if !slices.ContainsFunc(composition.Secrets, func(s recipes.GeneratedSecret) bool { return s.Name == name }) {
-		return nil, fmt.Errorf("%w: %s has no generated secret %s", ErrComponentNotFound, ref.Resource, name)
-	}
 	if a.d.Secrets == nil {
 		return nil, ErrNoCredential
+	}
+	composition := boundResource(parent).Composition
+	if !slices.ContainsFunc(composition.Secrets, func(s recipes.GeneratedSecret) bool { return s.Name == name }) {
+		return nil, &GeneratedSecretNotDeclaredError{
+			Kind: composition.Kind, Version: composition.Version, Revision: composition.Revision, Name: name,
+		}
 	}
 	value, err := a.d.Secrets.Get(ctx, resourceKey(orgID, ref.EnvironmentID, ref.Resource, "secret:"+name))
 	if errors.Is(err, ErrNoCredential) {
 		return nil, fmt.Errorf("%s's generated secret %s hasn't been kept yet", ref.Resource, name)
 	}
-	return value, err
+	if err != nil {
+		return nil, fmt.Errorf("read generated secret %s: %w", name, err)
+	}
+	return value, nil
 }
 
 // RunJob runs a bound job component of a composed resource again, now,

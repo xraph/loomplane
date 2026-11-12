@@ -44,7 +44,7 @@ func TestProductionEndpointCheckerIncludesSearchAndExistingEngines(t *testing.T)
 			t.Fatalf("production prober missing for %s", engine)
 		}
 	}
-	if checker.Probers["falkordb"] != nil || checker.Probers["duckdb"] != nil {
+	if checker.Probers["duckdb"] != nil {
 		t.Fatal("unqualified engine enabled")
 	}
 }

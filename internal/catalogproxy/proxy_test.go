@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -172,6 +172,7 @@ type upstream struct {
 	handler  http.HandlerFunc
 	// transport, when set, answers instead of handler.
 	transport http.RoundTripper
+	closed    int
 }
 
 func (u *upstream) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -198,6 +199,19 @@ func (u *upstream) seen() []*http.Request {
 	return slices.Clone(u.requests)
 }
 
+func (u *upstream) Close() error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.closed++
+	return nil
+}
+
+func (u *upstream) closes() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.closed
+}
+
 // componentDialer is a target that reaches every component through up.
 type componentDialer struct {
 	deployments.Executor
@@ -205,7 +219,7 @@ type componentDialer struct {
 }
 
 func (d componentDialer) ComponentTransport(context.Context, *planning.Binding, int) (http.RoundTripper, io.Closer, error) {
-	return d.up, io.NopCloser(nil), nil
+	return d.up, d.up, nil
 }
 
 // sampleBindings are a deployed "app" of the sample kind and a "db"
@@ -646,9 +660,57 @@ func TestProxyChannelFailureIs502(t *testing.T) {
 	h.warnMu.Lock()
 	defer h.warnMu.Unlock()
 	token := strings.TrimPrefix(base, "/catalog-admin/")
-	if len(h.warnings) != 1 || !strings.Contains(h.warnings[0], "connection refused") || !strings.Contains(h.warnings[0], "resource app") || strings.Contains(h.warnings[0], token) {
+	if len(h.warnings) != 1 || !strings.Contains(h.warnings[0], "connection refused") || !strings.Contains(h.warnings[0], "resource app") || strings.Contains(h.warnings[0], token) || strings.Contains(h.warnings[0], adminToken) ||
+		!strings.Contains(h.warnings[0], "credential [redacted]") {
 		t.Fatalf("warnings: %q", h.warnings)
 	}
+}
+
+func TestProxyResponseReadFailureRedactsCredential(t *testing.T) {
+	h := newHarness(t, sampleTarget())
+	body := &failingResponseBody{}
+	h.up.transport = fixedTransport{res: func(r *http.Request) *http.Response {
+		token := r.Header.Get("X-Octopus-Admin-Token")
+		if token != adminToken {
+			t.Fatal("upstream request missed its delegated credential")
+		}
+		body.err = fmt.Errorf("connection reset reading page for credential %s", token)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/html"}, "X-Octopus-Admin-Token": {token}},
+			Body:       body,
+			Request:    r,
+		}
+	}}
+	w := h.do(http.MethodGet, h.open(t)+"/admin", nil)
+	if w.Code != http.StatusBadGateway || strings.TrimSpace(w.Body.String()) != msgRead ||
+		len(w.Header().Values("X-Octopus-Admin-Token")) != 0 {
+		t.Fatal("read failure did not return a fixed 502 without the credential")
+	}
+	if body.closed != 1 || h.up.closes() != 1 {
+		t.Fatal("read failure did not close the response body and channel")
+	}
+
+	h.warnMu.Lock()
+	defer h.warnMu.Unlock()
+	if len(h.warnings) != 1 ||
+		!strings.Contains(h.warnings[0], "read the admin's answer") ||
+		!strings.Contains(h.warnings[0], "connection reset reading page for credential [redacted]") ||
+		strings.Contains(h.warnings[0], adminToken) {
+		t.Fatal("read warning lost the failure detail or exposed the credential")
+	}
+}
+
+type failingResponseBody struct {
+	err    error
+	closed int
+}
+
+func (b *failingResponseBody) Read([]byte) (int, error) { return 0, b.err }
+
+func (b *failingResponseBody) Close() error {
+	b.closed++
+	return nil
 }
 
 func TestProxySecretFailureIsAFixedMessage(t *testing.T) {
@@ -670,6 +732,6 @@ func TestProxySecretFailureIsAFixedMessage(t *testing.T) {
 
 type errTransport struct{}
 
-func (errTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("dial tcp 10.0.0.9:9090: connection refused")
+func (errTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("dial tcp 10.0.0.9:9090: connection refused with credential %s", r.Header.Get("X-Octopus-Admin-Token"))
 }

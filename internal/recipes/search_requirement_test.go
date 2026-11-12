@@ -16,7 +16,7 @@ func TestSearchRequirementRegistration(t *testing.T) {
 		{"elasticsearch", nil, true}, {"elasticsearch", []string{"disable"}, true}, {"elasticsearch", []string{"verify-full"}, true}, {"elasticsearch", []string{"disable", "verify-full"}, true},
 		{"opensearch", nil, true}, {"opensearch", []string{"verify-full"}, true},
 		{"opensearch", []string{"disable"}, false}, {"opensearch", []string{"require"}, false}, {"elasticsearch", []string{"require"}, false},
-		{"elasticsearch", []string{"prefer"}, false}, {"opensearch", []string{"unknown"}, false}, {"falkordb", nil, false}, {"duckdb", nil, false},
+		{"elasticsearch", []string{"prefer"}, false}, {"opensearch", []string{"unknown"}, false}, {"duckdb", nil, false},
 	} {
 		k := recipestest.Sample()
 		k.Dependencies[0].External = &recipes.Requirement{Engine: tc.engine, TLS: tc.modes}

@@ -322,6 +322,8 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 				err = g.POST(rt.path, rt.handler, rt.opts...)
 			case http.MethodPut:
 				err = g.PUT(rt.path, rt.handler, rt.opts...)
+			case http.MethodPatch:
+				err = g.PATCH(rt.path, rt.handler, rt.opts...)
 			case http.MethodDelete:
 				err = g.DELETE(rt.path, rt.handler, rt.opts...)
 			}

@@ -281,6 +281,10 @@ func TestCatalogAccessGeneratedSecret(t *testing.T) {
 	if _, err := access.GeneratedSecret(t.Context(), member, security.DeploymentApprove, app, "admin-password"); err == nil || errors.Is(err, ErrComponentNotFound) {
 		t.Fatalf("missing secret: %v", err)
 	}
+	withoutStore := newCatalogAccess(t, log, &componentDialer{log: log}, nil)
+	if _, err := withoutStore.InternalSecret(t.Context(), "org", app, "root-password"); !errors.Is(err, ErrNoCredential) {
+		t.Fatalf("undeclared with nil secret store: %v", err)
+	}
 }
 
 func TestComponentRunChannelReachesItselfAndEarlierComponents(t *testing.T) {
@@ -429,14 +433,26 @@ func TestInternalSecretReadsTheGeneratedSecret(t *testing.T) {
 		ref    ResourceRef
 		secret string
 	}{
-		"undeclared":       {"org", app, "root-password"},
-		"a component":      {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app--api"}, "admin-password"},
-		"another project":  {"org", ResourceRef{ProjectID: "elsewhere", EnvironmentID: "env", Resource: "app"}, "admin-password"},
-		"another org":      {"other", app, "admin-password"},
-		"unknown resource": {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "other"}, "admin-password"},
+		"undeclared":          {"org", app, "root-password"},
+		"a component":         {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "app--api"}, "admin-password"},
+		"another project":     {"org", ResourceRef{ProjectID: "elsewhere", EnvironmentID: "env", Resource: "app"}, "admin-password"},
+		"another org":         {"other", app, "admin-password"},
+		"another environment": {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "elsewhere", Resource: "app"}, "root-password"},
+		"unknown resource":    {"org", ResourceRef{ProjectID: "proj", EnvironmentID: "env", Resource: "other"}, "admin-password"},
 	} {
-		if _, err = access.InternalSecret(t.Context(), tc.org, tc.ref, tc.secret); !errors.Is(err, ErrComponentNotFound) {
+		_, err = access.InternalSecret(t.Context(), tc.org, tc.ref, tc.secret)
+		if !errors.Is(err, ErrComponentNotFound) {
 			t.Fatalf("%s: %v", name, err)
+		}
+		var undeclared *GeneratedSecretNotDeclaredError
+		typed := errors.As(err, &undeclared)
+		if name == "undeclared" {
+			want := GeneratedSecretNotDeclaredError{Kind: "sample", Version: "1", Revision: "1", Name: tc.secret}
+			if !typed || *undeclared != want {
+				t.Fatalf("%s: missing exact declaration identity: %v", name, err)
+			}
+		} else if typed {
+			t.Fatalf("%s: mis-scoped binding reported a declaration error", name)
 		}
 	}
 	if slices.ContainsFunc(log.all(), func(c string) bool { return strings.HasPrefix(c, "require") }) {

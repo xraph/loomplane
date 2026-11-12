@@ -30,7 +30,7 @@ func (SearchProber) Probe(ctx context.Context, dial DialFunc, raw string, req re
 	if err != nil {
 		return nil, err
 	}
-	if req.Engine != "" && req.Engine != a.Engine || len(req.Extensions) > 0 || len(req.Preload) > 0 || req.CreateRole {
+	if a.Engine != EngineElasticsearch && a.Engine != EngineOpenSearch || req.Engine != "" && req.Engine != a.Engine || len(req.Extensions) > 0 || len(req.Preload) > 0 || req.CreateRole {
 		return nil, invalidEngineAccess()
 	}
 	if len(req.TLS) > 0 && !slices.Contains(req.TLS, a.TLS) {

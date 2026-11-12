@@ -288,6 +288,7 @@ const (
 	FieldDatabase = "database"
 	FieldAdminURL = "admin-url" // the superuser URL; postgres-family dependencies only
 	FieldCACert   = "ca_cert"   // public PEM CA certificate for verified TLS
+	FieldTLSMode  = "tls_mode"  // explicit connection transport policy
 	FieldQuery    = "query"     // raw query string of the dependency URL
 )
 

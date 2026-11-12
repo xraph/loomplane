@@ -19,6 +19,7 @@ import (
 const (
 	EngineElasticsearch = "elasticsearch"
 	EngineOpenSearch    = "opensearch"
+	EngineFalkorDB      = "falkordb"
 	maxEngineAccess     = 96 * 1024
 )
 
@@ -44,14 +45,14 @@ func (EngineAccess) Format(w fmt.State, _ rune) {
 // IsEngineAccessEngine includes only engines with an implemented native prober.
 func IsEngineAccessEngine(engine string) bool {
 	switch engine {
-	case EngineElasticsearch, EngineOpenSearch:
+	case EngineElasticsearch, EngineOpenSearch, EngineFalkorDB:
 		return true
 	}
 	return false
 }
 
 func invalidEngineAccess() error {
-	return fmt.Errorf("%w: supply one search host, application username and password, and a supported TLS mode with certificate-only inline CA data", ErrInvalid)
+	return fmt.Errorf("%w: supply one engine host, application username and password, and a supported TLS mode with certificate-only inline CA data", ErrInvalid)
 }
 
 // EncodeEngineAccess validates and encodes the Vault contract.
@@ -123,11 +124,14 @@ func ParseEngineAccess(raw string) (EngineAccess, error) {
 }
 
 func normalizeEngineAccess(a *EngineAccess) error {
-	if !IsEngineAccessEngine(a.Engine) || !engineHost(a.Host) || !engineCredential(a.Username, 256) || !engineCredential(a.Password, 4096) || strings.Contains(a.Username, ":") {
+	if !IsEngineAccessEngine(a.Engine) || !engineHost(a.Host) || !engineCredential(a.Username, 256) || !engineCredential(a.Password, 4096) || a.Engine != EngineFalkorDB && strings.Contains(a.Username, ":") {
 		return invalidEngineAccess()
 	}
 	if a.Port == 0 {
 		a.Port = 9200
+		if a.Engine == EngineFalkorDB {
+			a.Port = 6379
+		}
 	}
 	if a.Port < 1 || a.Port > 65535 {
 		return invalidEngineAccess()
@@ -254,18 +258,25 @@ func EngineAccessField(raw, field string) (string, error) {
 		return "", nil
 	case "ca_cert":
 		return a.CACert, nil
+	case "tls_mode":
+		if a.Engine == EngineFalkorDB {
+			return a.TLS, nil
+		}
 	case "url":
+		authority := net.JoinHostPort(a.Host, strconv.Itoa(a.Port))
+		if a.Engine == EngineFalkorDB {
+			return authority, nil
+		}
 		scheme := "https"
 		if a.TLS == TLSDisable {
 			scheme = "http"
 		}
-		return (&url.URL{Scheme: scheme, Host: net.JoinHostPort(a.Host, strconv.Itoa(a.Port))}).String(), nil
-	default:
-		return "", fmt.Errorf("%w: the search connection does not expose that field", ErrInvalid)
+		return (&url.URL{Scheme: scheme, Host: authority}).String(), nil
 	}
+	return "", fmt.Errorf("%w: the engine connection does not expose that field", ErrInvalid)
 }
 
-// RedactEngineAccess removes search credentials and inline CA data from diagnostics.
+// RedactEngineAccess removes engine credentials and inline CA data from diagnostics.
 // You can also pass legacy DSNs; they leave the message unchanged.
 func RedactEngineAccess(msg, raw string) string {
 	if len(raw) > maxEngineAccess {

@@ -63,7 +63,7 @@ func TestEngineAccessRejectsAmbiguousOrUnqualifiedInput(t *testing.T) {
 	invalid := []string{
 		raw + "{}", strings.Replace(raw, `"host":`, `"Host":`, 1), strings.Replace(raw, `"host":`, `"host":"other","host":`, 1),
 		strings.Replace(raw, `"port":9200`, `"port":null`, 1), strings.Replace(raw, `"port":9200`, `"port":1.5`, 1),
-		strings.Replace(raw, `"engine":"elasticsearch"`, `"engine":"duckdb"`, 1), strings.Replace(raw, `"engine":"elasticsearch"`, `"engine":"falkordb"`, 1),
+		strings.Replace(raw, `"engine":"elasticsearch"`, `"engine":"duckdb"`, 1),
 		strings.Replace(raw, `"host":"search.example"`, `"host":"search.example/other"`, 1), strings.Replace(raw, `"host":"search.example"`, `"host":"search.example:9200"`, 1),
 		strings.Replace(raw, `"tls":"disable"`, `"tls":"require"`, 1), strings.Replace(raw, `"tls":"disable"`, `"tls":"insecure"`, 1),
 		strings.TrimSuffix(raw, "}") + `,"ca_cert":"/etc/ssl/cert.pem"}`,

@@ -43,7 +43,7 @@ type Checker struct {
 	Probers map[string]Prober
 }
 
-var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineS3: "S3", EngineGCS: "Google Cloud Storage", EngineElasticsearch: "Elasticsearch", EngineOpenSearch: "OpenSearch"}
+var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineS3: "S3", EngineGCS: "Google Cloud Storage", EngineElasticsearch: "Elasticsearch", EngineOpenSearch: "OpenSearch", EngineFalkorDB: "FalkorDB"}
 
 // EngineTitle names an engine the way checks word it: "PostgreSQL",
 // "Redis".
@@ -88,7 +88,7 @@ func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirem
 		return nil, errors.New("check a DSN: no dialer")
 	}
 	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS && req.Engine != EngineR2 && !IsAPIEngine(req.Engine) && !IsEngineAccessEngine(req.Engine) {
-		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis, search and bucket endpoints, not %q", ErrInvalid, req.Engine)
+		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis, search, FalkorDB and bucket endpoints, not %q", ErrInvalid, req.Engine)
 	}
 	dsn = strings.TrimSpace(dsn)
 	e := &Endpoint{Engine: req.Engine}

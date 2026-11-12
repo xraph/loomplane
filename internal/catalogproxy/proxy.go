@@ -282,7 +282,7 @@ func (s *Service) forward(ctx context.Context, cancel context.CancelFunc, w http
 		refuse(w, http.StatusGatewayTimeout, msgTimeout)
 		return
 	case err != nil:
-		s.warn("send to the admin", rec, err)
+		s.warn("send to the admin", rec, redactCredential(err, credential))
 		refuse(w, http.StatusBadGateway, msgReach)
 		return
 	}
@@ -368,6 +368,22 @@ func (s *Service) warn(what string, rec *Record, err error) {
 	}
 }
 
+// redactCredential removes any delegated credential included in an upstream error.
+func redactCredential(err error, header http.Header) error {
+	msg := err.Error()
+	for _, values := range header {
+		for _, value := range values {
+			if value != "" {
+				msg = strings.ReplaceAll(msg, value, "[redacted]")
+			}
+		}
+	}
+	if msg == err.Error() {
+		return err
+	}
+	return errors.New(msg)
+}
+
 // activity marks a watched response as used whenever bytes pass.
 type activity struct {
 	w      io.Writer
@@ -444,7 +460,7 @@ func (s *Service) respond(w http.ResponseWriter, r *http.Request, res *http.Resp
 		for k := range h {
 			delete(h, k)
 		}
-		s.warn("read the admin's answer", rec, err)
+		s.warn("read the admin's answer", rec, redactCredential(err, credential))
 		refuse(w, http.StatusBadGateway, msgRead)
 		return
 	}

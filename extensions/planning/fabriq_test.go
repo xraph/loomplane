@@ -34,6 +34,10 @@ func (downFabriq) Channel(context.Context, security.Principal, security.Permissi
 	return nil, errors.New("dial lp-x:8081: connection refused")
 }
 
+func (downFabriq) GeneratedSecret(context.Context, security.Principal, security.Permission, deployments.ResourceRef, string) ([]byte, error) {
+	return nil, deployments.ErrNoCredential
+}
+
 func (downFabriq) RunJob(context.Context, string, deployments.ResourceRef, string, string) (owned.JobResult, error) {
 	return owned.JobResult{}, errors.New("not here")
 }
