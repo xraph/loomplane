@@ -79,13 +79,12 @@ func (o *Observer) retire(ctx context.Context, r deployments.Release, resource s
 	if len(retiring) == 0 {
 		return nil
 	}
-	ref := deployments.ComponentRef{ResourceRef: deployments.ResourceRef{ProjectID: r.ProjectID, EnvironmentID: r.EnvironmentID, Resource: resource}, Component: consoleComponent, Port: consolePort}
-	ch, err := o.h.d.Access.InternalChannel(ctx, r.OrgID, ref)
+	ref := deployments.ResourceRef{ProjectID: r.ProjectID, EnvironmentID: r.EnvironmentID, Resource: resource}
+	admin, closeChannel, err := o.h.internalAdmin(ctx, r.OrgID, ref)
 	if err != nil {
-		return fmt.Errorf("reach Fabriq's console: %w", err)
+		return err
 	}
-	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
-	admin := &AdminClient{Channel: ch}
+	defer closeChannel()
 	var errs []error
 	for _, k := range retiring {
 		errs = append(errs, o.h.revoke(ctx, admin, r.OrgID, r.EnvironmentID, resource, k))

@@ -49,7 +49,14 @@ type RestoreInput struct {
 	TargetStageID   string `json:"target_stage_id"`
 	TargetProfileID string `json:"target_profile_id"`
 }
-type MoveInput struct {
+
+// MoveInput retains the public Go name while keeping the API schema distinct.
+type MoveInput = FleetMoveInput
+
+// FleetMoveInput selects the reviewed destination and cutover mode.
+//
+//nolint:revive // Keep the API schema name distinct.
+type FleetMoveInput struct {
 	TargetCloudID string `json:"target_cloud_id"`
 	TargetRegion  string `json:"target_region"`
 	CutoverMode   string `json:"cutover_mode"`

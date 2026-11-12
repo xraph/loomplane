@@ -3,6 +3,8 @@ package fabriqloom_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -97,7 +99,12 @@ func (f *fakeAdmin) RoundTrip(r *http.Request) (*http.Response, error) {
 		w.Header().Set("Content-Type", "text/javascript")
 		_, _ = io.WriteString(w, `console.log("fabriq")`)
 	case "/admin/meta":
-		// nginx adds the operator key and drops the browser's cookie.
+		// Simulate an upstream that echoes the credential header.
+		echo := r.Header.Get(fixtureControlHeader)
+		if echo == "" {
+			echo = "upstream-echo"
+		}
+		w.Header().Set(fixtureControlHeader, echo)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	default:
@@ -149,7 +156,7 @@ func (d dialer) ComponentTransport(_ context.Context, b *planning.Binding, port 
 // proj, with both projections off.
 func fabriqBindings(t *testing.T) []*planning.Binding {
 	t.Helper()
-	composition, err := recipes.Default().Resolve("fabriq", "1.9", "amd64", "server")
+	kind, composition, err := recipes.Default().ResolveRevision("fabriq", "1.9", "1", "amd64", "server")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +169,7 @@ func fabriqBindings(t *testing.T) []*planning.Binding {
 		}
 		out = append(out, &planning.Binding{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Subject: planning.ResourceSubject, Name: planning.ComponentActionName("fabriq", c.Name), Provider: "server", ConnectionID: "conn", ExternalID: "inst_" + c.Name, Config: raw})
 	}
-	parent, err := json.Marshal(planning.ResourceConfig{Provider: "server", Target: "conn", Kind: "fabriq", Version: "1.9", Composition: &planning.CompositionConfig{Kind: "fabriq", Version: "1.9", Revision: composition.Revision}})
+	parent, err := json.Marshal(planning.ResourceConfig{Provider: "server", Target: "conn", Kind: "fabriq", Version: "1.9", Composition: &planning.CompositionConfig{Kind: "fabriq", Version: "1.9", Revision: composition.Revision, Secrets: kind.Secrets}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +183,8 @@ func TestAdminTargetIsRegistered(t *testing.T) {
 		len(got.AllowedPrefixes) != 1 || got.AllowedPrefixes[0] != want.AllowedPrefixes[0] {
 		t.Fatalf("got %+v", got)
 	}
-	if got.Header != nil {
-		t.Fatal("the console's nginx adds the operator key; the proxy must send no credential")
+	if got.Header == nil {
+		t.Fatal("the proxy has no control credential resolver")
 	}
 	if fabriqloom.ConsoleBasePath != "/fabriq/" {
 		t.Fatalf("base path %q", fabriqloom.ConsoleBasePath)
@@ -191,7 +198,8 @@ func TestFabriqAdminWorksThroughTheProxy(t *testing.T) {
 	var dials []dial
 	var dialMu sync.Mutex
 	access := deployments.NewCatalogAccess(deployments.CatalogAccessDeps{
-		Authz: allowAll{}, Bindings: list, Executors: map[string]deployments.Executor{"server": dialer{rt: fake, mu: &dialMu, dials: &dials}},
+		Authz: allowAll{}, Bindings: list, Secrets: newMemSecrets(),
+		Executors: map[string]deployments.Executor{"server": dialer{rt: fake, mu: &dialMu, dials: &dials}},
 	})
 	svc := catalogproxy.NewService(catalogproxy.Deps{
 		Store: &memStore{rows: map[string]catalogproxy.Record{}}, Access: access, Authz: allowAll{}, Bindings: list,
@@ -248,15 +256,19 @@ func TestFabriqAdminWorksThroughTheProxy(t *testing.T) {
 		t.Fatalf("asset: %d reached as %q", w.Code, fake.last().URL.Path)
 	}
 
-	// The API goes through with nothing of the browser's credentials, and
-	// Loomplane adds none: the console's nginx adds the operator key.
+	// The historical recipe still works, and the proxy strips spoofed
+	// control headers and upstream echoes.
 	w = do(base+"/fabriq/admin/meta", http.Header{
 		"Authorization": {"Bearer lp_browser_key"}, "Cookie": {"lp_session=abc"}, "X-Tenant-Id": {"acme"},
+		fixtureControlHeader: {"spoofed", "also spoofed"},
 	})
 	if w.Code != http.StatusOK || w.Body.String() != `{"ok":true}` {
 		t.Fatalf("meta: %d %q", w.Code, w.Body.String())
 	}
 	r := fake.last()
+	if len(r.Header.Values(fixtureControlHeader)) != 0 || len(w.Header().Values(fixtureControlHeader)) != 0 {
+		t.Fatal("historical console received a spoofed token or sent an echo to the browser")
+	}
 	if r.URL.Path != "/admin/meta" {
 		t.Fatalf("meta reached the console as %q", r.URL.Path)
 	}
@@ -292,5 +304,138 @@ func TestFabriqAdminWorksThroughTheProxy(t *testing.T) {
 	}
 	if got := fake.paths(); len(got) != reached {
 		t.Fatalf("a refused path reached the console: %v", got[reached:])
+	}
+}
+
+func TestFabriqAdminProxyControlCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		value              []byte
+		storeErr           error
+		declared, nilStore bool
+		status             int
+	}{
+		{name: "valid", value: []byte(fixtureControlToken), declared: true, status: http.StatusOK},
+		{name: "missing", declared: true, status: http.StatusBadGateway},
+		{name: "empty", value: []byte{}, declared: true, status: http.StatusBadGateway},
+		{name: "malformed", value: []byte(strings.ToUpper(fixtureControlToken)), declared: true, status: http.StatusBadGateway},
+		{name: "unknown revision", status: http.StatusBadGateway},
+		{name: "legacy without store", nilStore: true, status: http.StatusBadGateway},
+		{name: "vault error", storeErr: errors.New("read failed for " + fixtureControlToken), declared: true, status: http.StatusBadGateway},
+		{name: "vault impersonates declaration", storeErr: &deployments.GeneratedSecretNotDeclaredError{Kind: "fabriq", Version: "1.9", Revision: "1", Name: fixtureControlSecret}, declared: true, status: http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bindings := fabriqBindings(t)
+			parent := bindings[len(bindings)-1]
+			var config planning.ResourceConfig
+			if err := json.Unmarshal(parent.Config, &config); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.nilStore {
+				config.Composition.Revision = "gated-fixture"
+			}
+			if tc.declared {
+				config.Composition.Secrets = append(config.Composition.Secrets, recipes.GeneratedSecret{Name: fixtureControlSecret, Bytes: 32, Encoding: "hex"})
+			}
+			var err error
+			parent.Config, err = json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var store deployments.ResourceSecrets
+			if !tc.nilStore {
+				store = controlFixtureSecrets{value: tc.value, err: tc.storeErr}
+			}
+			list := func(context.Context, string, string) ([]*planning.Binding, error) { return bindings, nil }
+			fake := &fakeAdmin{}
+			var dials []dial
+			var dialMu sync.Mutex
+			authz := allowAll{}
+			access := deployments.NewCatalogAccess(deployments.CatalogAccessDeps{
+				Authz: authz, Bindings: list, Secrets: store,
+				Executors: map[string]deployments.Executor{"server": dialer{rt: fake, mu: &dialMu, dials: &dials}},
+			})
+			var warnings []string
+			svc := catalogproxy.NewService(catalogproxy.Deps{
+				Store: &memStore{rows: map[string]catalogproxy.Record{}}, Access: access, Authz: authz, Bindings: list,
+				Warn: func(msg string, err error) { warnings = append(warnings, msg+": "+err.Error()) },
+			})
+			session, err := svc.Open(t.Context(), as("admin"), fabriqRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, session.URL+"admin/meta", nil)
+			r.Header.Add(fixtureControlHeader, "forged")
+			r.Header.Add(fixtureControlHeader, "forged-again")
+			r.Header.Set("Authorization", "Bearer browser")
+			w := httptest.NewRecorder()
+			svc.Handler().ServeHTTP(w, r)
+			if w.Code != tc.status {
+				t.Fatalf("status %d, want %d", w.Code, tc.status)
+			}
+			if strings.Contains(session.URL, fixtureControlToken) || strings.Contains(w.Body.String(), fixtureControlToken) ||
+				strings.Contains(strings.Join(warnings, "\n"), fixtureControlToken) || len(w.Header().Values(fixtureControlHeader)) != 0 {
+				t.Fatal("proxy exposed the control credential")
+			}
+			if tc.status != http.StatusOK {
+				if len(dials) != 0 || len(fake.paths()) != 0 {
+					t.Fatal("bad credential opened a channel or reached the console")
+				}
+				return
+			}
+			got := fake.last().Header
+			values := got.Values(fixtureControlHeader)
+			if len(values) != 1 || values[0] != fixtureControlToken || len(got.Values("Authorization")) != 0 {
+				t.Fatal("proxy did not replace spoofed credentials with the resource token")
+			}
+		})
+	}
+}
+
+type controlFixtureSecrets struct {
+	deployments.ResourceSecrets
+	value []byte
+	err   error
+}
+
+func (s controlFixtureSecrets) Get(_ context.Context, key string) ([]byte, error) {
+	if key != deployments.ResourceKey("org", "env", "fabriq", "secret:"+fixtureControlSecret) {
+		return nil, fmt.Errorf("unexpected credential scope: %s", key)
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.value == nil {
+		return nil, deployments.ErrNoCredential
+	}
+	return slices.Clone(s.value), nil
+}
+
+func TestFabriqControlCredentialRejectsUnknownIdentities(t *testing.T) {
+	historical := deployments.GeneratedSecretNotDeclaredError{Kind: "fabriq", Version: "1.9", Revision: "1", Name: fixtureControlSecret}
+	wrongKind := historical
+	wrongKind.Kind = "fabriq-library"
+	wrongVersion := historical
+	wrongVersion.Version = "1.10"
+	wrongName := historical
+	wrongName.Name = "admin-key"
+	for name, err := range map[string]error{
+		"wrong kind":          &wrongKind,
+		"wrong version":       &wrongVersion,
+		"wrong secret":        &wrongName,
+		"missing parent":      deployments.ErrComponentNotFound,
+		"wrapped declaration": fmt.Errorf("binding source failed: %w", &historical),
+	} {
+		t.Run(name, func(t *testing.T) {
+			header, err := fabriqloom.AdminTarget.Header(t.Context(), func(string) ([]byte, error) {
+				return nil, err
+			})
+			if err == nil || header != nil {
+				t.Fatal("an unknown credential source selected legacy routing")
+			}
+		})
+	}
+	if header, err := fabriqloom.AdminTarget.Header(t.Context(), nil); err == nil || header != nil {
+		t.Fatal("missing credential reader selected legacy routing")
 	}
 }

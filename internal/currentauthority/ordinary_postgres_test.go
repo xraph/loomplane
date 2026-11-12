@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,15 +19,20 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/grove/drivers/pgdriver/pgmigrate"
 	"github.com/xraph/grove/migrate"
+	"github.com/xraph/grove/observability"
+	"github.com/xraph/grove/observability/telemetrytest"
 	keyid "github.com/xraph/keysmith/id"
 	keypg "github.com/xraph/keysmith/store/postgres"
 	"github.com/xraph/warden"
 	"github.com/xraph/warden/assignment"
 	wardenid "github.com/xraph/warden/id"
 	"github.com/xraph/warden/policy"
+	"github.com/xraph/warden/role"
+	"github.com/xraph/warden/store"
 	wardenpg "github.com/xraph/warden/store/postgres"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -43,6 +49,7 @@ type ordinaryPGFixture struct {
 	binding Binding
 	env     string
 	project string
+	probe   *ordinaryCheckProbe
 }
 
 func newOrdinaryPGFixture(t *testing.T) *ordinaryPGFixture {
@@ -123,7 +130,8 @@ func newOrdinaryPGFixture(t *testing.T) *ordinaryPGFixture {
 		return checkErr
 	}}
 	router := &storeRouter{owner: f.c, ordinary: f.store}
-	f.engine, err = warden.NewEngine(warden.WithStore(router), warden.WithCache(NewFreshCache(f.c, warden.NewMemoryCache())))
+	f.probe = &ordinaryCheckProbe{Cache: NewFreshCache(f.c, warden.NewMemoryCache())}
+	f.engine, err = warden.NewEngine(warden.WithStore(router), warden.WithCache(f.probe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,32 +171,72 @@ func newOrdinaryPGFixture(t *testing.T) *ordinaryPGFixture {
 	return f
 }
 
+// The probe delegates caching and authority to the real engine. It observes
+// the checks without changing the installed plugin set.
+type ordinaryCheckProbe struct {
+	warden.Cache
+	before func(context.Context, string, string, *warden.CheckRequest)
+	after  func(context.Context, *warden.CheckResult)
+}
+
+func (p *ordinaryCheckProbe) Get(ctx context.Context, tenant, namespace string, req *warden.CheckRequest) (*warden.CheckResult, bool) {
+	if p.before != nil {
+		p.before(ctx, tenant, namespace, req)
+	}
+	return p.Cache.Get(ctx, tenant, namespace, req)
+}
+
+func (p *ordinaryCheckProbe) Set(ctx context.Context, tenant, namespace string, req *warden.CheckRequest, result *warden.CheckResult) {
+	p.Cache.Set(ctx, tenant, namespace, req, result)
+	if p.after != nil {
+		p.after(ctx, result)
+	}
+}
+
 func (f *ordinaryPGFixture) run(t *testing.T, permission security.Permission, resource string) error {
 	t.Helper()
-	b := f.binding
-	b.RecordID = fmt.Sprintf("candidate-%d", time.Now().UnixNano())
-	b.AttemptID = b.RecordID
-	result := f.c.Run(t.Context(), b, func(ctx context.Context, a *Attempt) error {
+	return f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
 		d, err := a.EvaluateOrdinary(ctx, permission, resource)
 		if err != nil {
 			return err
 		}
-		if d.kind != ordinaryDecision || d.ordinary == nil || d.ordinary.permission != permission || d.ordinary.resource != resource {
+		ns, _ := security.ProjectNamespace(resource)
+		want := ordinaryRequirementProof{permission: permission, resource: resource, namespace: ns}
+		if d.kind != ordinaryDecision || d.ordinary == nil || d.ordinary.count != 1 || d.ordinary.requirements[0] != want {
 			return ErrDecision
 		}
-		return a.Stage(ctx, d, b, func(ctx context.Context, tx driver.Tx, at time.Time) error {
-			_, err := tx.Exec(ctx, `INSERT INTO authority_candidates(id,authorized_at) VALUES($1,$2)`, b.RecordID, at)
-			return err
-		})
+		return stageOrdinaryPGCandidate(ctx, a, d, b)
 	})
-	var candidates int
-	if err := f.main.QueryRow(t.Context(), `SELECT count(*) FROM authority_candidates WHERE id=$1`, b.RecordID).Scan(&candidates); err != nil {
-		t.Fatal(err)
-	}
-	if (result == nil && candidates != 1) || (result != nil && candidates != 0) {
-		t.Fatalf("candidate outcome count=%d err=%v", candidates, result)
-	}
+}
+
+func (f *ordinaryPGFixture) runAll(t *testing.T, requirements []OrdinaryRequirement) error {
+	t.Helper()
+	return f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+		d, err := a.EvaluateOrdinaryAll(ctx, requirements)
+		if err != nil {
+			return err
+		}
+		return stageOrdinaryPGCandidate(ctx, a, d, b)
+	})
+}
+
+func (f *ordinaryPGFixture) runCandidate(t *testing.T, work func(context.Context, *Attempt, Binding) error) error {
+	t.Helper()
+	b := f.binding
+	b.RecordID = fmt.Sprintf("candidate-%d", time.Now().UnixNano())
+	b.AttemptID = b.RecordID
+	result := f.c.OrdinaryAuthority().RunOrdinary(t.Context(), b, func(ctx context.Context, a *Attempt) error {
+		return work(ctx, a, b)
+	})
+	assertOrdinaryInstallationCandidate(t, f, b.RecordID, result)
 	return result
+}
+
+func stageOrdinaryPGCandidate(ctx context.Context, a *Attempt, d *Decision, b Binding) error {
+	return a.Stage(ctx, d, b, func(ctx context.Context, tx driver.Tx, at time.Time) error {
+		_, err := tx.Exec(ctx, `INSERT INTO authority_candidates(id,authorized_at) VALUES($1,$2)`, b.RecordID, at)
+		return err
+	})
 }
 
 func TestOrdinaryPostgresInstalledProfileAndCurrentPerson(t *testing.T) {
@@ -199,6 +247,10 @@ func TestOrdinaryPostgresInstalledProfileAndCurrentPerson(t *testing.T) {
 		if _, err := f.main.Exec(ctx, q, args...); err != nil {
 			t.Fatal(err)
 		}
+	}
+	requirements := []OrdinaryRequirement{
+		{Permission: security.ProjectRead, ResourceID: f.project},
+		{Permission: security.DeploymentRead, ResourceID: f.project},
 	}
 	t.Run("supported installed schema and ordinary proof", func(t *testing.T) {
 		if err := f.run(t, security.ProjectRead, f.project); err != nil {
@@ -214,7 +266,7 @@ func TestOrdinaryPostgresInstalledProfileAndCurrentPerson(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			exec(tt.change)
 			defer exec(tt.restore)
-			if err := f.run(t, security.ProjectRead, f.project); err == nil {
+			if err := f.runAll(t, requirements); err == nil {
 				t.Fatal("ineligible person accepted")
 			}
 		})
@@ -226,7 +278,7 @@ func TestOrdinaryPostgresInstalledProfileAndCurrentPerson(t *testing.T) {
 		defer func() { f.binding = old }()
 		exec(`INSERT INTO keysmith_keys(id,tenant_id,app_id,name,prefix,hint,key_hash,created_by,metadata,expires_at) VALUES($1,$2,$3,'Saved','lp','hint','hash',$4,'{"access":"write"}',now()+interval '1 hour')`, kid.String(), old.Actor.OrgID, old.AppID, old.Actor.UserID)
 		f.binding.Actor.KeyID = kid.String()
-		if err := f.run(t, security.ProjectRead, f.project); err != nil {
+		if err := f.runAll(t, requirements); err != nil {
 			t.Fatal(err)
 		}
 		exec(`INSERT INTO keysmith_scopes(id,tenant_id,app_id,name) VALUES($1,$2,$3,'test')`, scope.String(), old.Actor.OrgID, old.AppID)
@@ -238,20 +290,47 @@ func TestOrdinaryPostgresInstalledProfileAndCurrentPerson(t *testing.T) {
 		if len(k.Scopes) != 0 {
 			t.Fatal("fixture did not reproduce unhydrated GetKey")
 		}
-		if err = f.run(t, security.ProjectRead, f.project); err == nil {
+		if err = f.runAll(t, requirements); err == nil {
 			t.Fatal("persisted scopes accepted")
 		}
 		exec(`DELETE FROM keysmith_key_scopes WHERE key_id=$1`, kid.String())
 		exec(`UPDATE keysmith_keys SET revoked_at=now() WHERE id=$1`, kid.String())
-		if err = f.run(t, security.ProjectRead, f.project); err == nil {
+		if err = f.runAll(t, requirements); err == nil {
 			t.Fatal("revoked saved key accepted")
 		}
 		exec(`UPDATE keysmith_keys SET revoked_at=NULL WHERE id=$1`, kid.String())
+		for _, mutate := range []struct {
+			set        string
+			value, old any
+		}{
+			{"created_by=$2", authid.NewUserID().String(), old.Actor.UserID},
+			{"metadata=$2::jsonb", `{"access":"read"}`, `{"access":"write"}`},
+			{"expires_at=$2", time.Now().Add(-time.Hour), time.Now().Add(time.Hour)},
+		} {
+			exec(`UPDATE keysmith_keys SET `+mutate.set+` WHERE id=$1`, kid.String(), mutate.value)
+			if err = f.runAll(t, requirements); !errors.Is(err, apikeys.ErrRejected) {
+				t.Fatalf("ineligible key (%s) accepted: %v", mutate.set, err)
+			}
+			exec(`UPDATE keysmith_keys SET `+mutate.set+` WHERE id=$1`, kid.String(), mutate.old)
+		}
 		exec(`UPDATE authsome_users SET email_verified=false`)
-		if err = f.run(t, security.ProjectRead, f.project); err == nil {
+		if err = f.runAll(t, requirements); err == nil {
 			t.Fatal("unverified key creator accepted")
 		}
 		exec(`UPDATE authsome_users SET email_verified=true`)
+	})
+	t.Run("different current person or organization", func(t *testing.T) {
+		original := f.binding
+		defer func() { f.binding = original }()
+		f.binding.Actor.UserID = authid.NewUserID().String()
+		if err := f.runAll(t, requirements); !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("different user=%v", err)
+		}
+		f.binding = original
+		f.binding.Actor.OrgID = authid.NewOrgID().String()
+		if err := f.runAll(t, requirements); !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("different organization=%v", err)
+		}
 	})
 	t.Run("generic decision forbidden", func(t *testing.T) {
 		err := f.c.Run(ctx, f.binding, func(ctx context.Context, a *Attempt) error {
@@ -301,7 +380,7 @@ func TestOrdinaryPostgresInstalledProfileAndCurrentPerson(t *testing.T) {
 	t.Run("temporal interval", func(t *testing.T) { testOrdinaryTemporalInterval(t, f) })
 	t.Run("independent writer fence", func(t *testing.T) { testOrdinaryWriterFence(t, f) })
 	t.Run("source project reverse order", func(t *testing.T) { testOrdinaryProjectReverseOrder(t, f) })
-	if err := f.run(t, security.ProjectRead, f.project); err != nil {
+	if err := f.runAll(t, requirements); err != nil {
 		t.Fatal("later clean attempt:", err)
 	}
 }
@@ -436,6 +515,10 @@ func isLockScheduleError(err error) bool {
 
 func testOrdinaryTeamAgreement(t *testing.T, f *ordinaryPGFixture) {
 	ctx := t.Context()
+	requirements := []OrdinaryRequirement{
+		{Permission: security.DeploymentRead, ResourceID: f.project},
+		{Permission: security.ProjectDelete, ResourceID: f.project},
+	}
 	org, user := f.binding.Actor.OrgID, f.binding.Actor.UserID
 	exec := func(q string, args ...any) {
 		t.Helper()
@@ -470,21 +553,21 @@ func testOrdinaryTeamAgreement(t *testing.T, f *ordinaryPGFixture) {
 			t.Error(checkErr)
 		}
 	}()
-	if err = f.run(t, security.ProjectDelete, f.project); err != nil {
+	if err = f.runAll(t, requirements); err != nil {
 		t.Fatal(err)
 	}
 	exec(`DELETE FROM loomplane_team_grants WHERE id='team-one'`)
 	addGrant("team-two")
-	if err = f.run(t, security.ProjectDelete, f.project); err != nil {
+	if err = f.runAll(t, requirements); err != nil {
 		t.Fatal("equal-role source replacement:", err)
 	}
 	exec(`DELETE FROM loomplane_team_grants WHERE id='team-two'`)
-	if err = f.run(t, security.ProjectDelete, f.project); err == nil {
+	if err = f.runAll(t, requirements); err == nil {
 		t.Fatal("last winning source removal accepted")
 	}
 	addGrant("team-two")
 	exec(`UPDATE loomplane_projects SET org_id='other' WHERE id=$1`, f.project)
-	if err = f.run(t, security.ProjectDelete, f.project); err == nil {
+	if err = f.runAll(t, requirements); err == nil {
 		t.Fatal("cross-workspace project grant accepted")
 	}
 	exec(`UPDATE loomplane_projects SET org_id=$1 WHERE id=$2`, org, f.project)
@@ -493,7 +576,7 @@ func testOrdinaryTeamAgreement(t *testing.T, f *ordinaryPGFixture) {
 		t.Fatal("removed member accepted")
 	}
 	exec(`INSERT INTO authsome_members(id,org_id,user_id,role) VALUES($1,$2,$3,'member')`, authid.NewMemberID().String(), org, user)
-	if err = f.run(t, security.ProjectDelete, f.project); err == nil {
+	if err = f.runAll(t, requirements); err == nil {
 		t.Fatal("reinvitation revived stale team membership")
 	}
 	saved, err := f.store.GetAssignment(ctx, org, row.ID)
@@ -865,5 +948,552 @@ func TestOrdinaryPostgresShadowAggregateCannotFabricateFacts(t *testing.T) {
 	}
 	if banned || !verified || revoked || scoped {
 		t.Fatal("qualified reads changed persisted eligibility")
+	}
+}
+
+type ordinaryCheckReader struct {
+	store.Store
+	slugs           []string
+	assignmentPages int
+	failResource    string
+	readFailure     error
+}
+
+func (r *ordinaryCheckReader) GetRoleBySlug(ctx context.Context, tenant, namespace, slug string) (*role.Role, error) {
+	r.slugs = append(r.slugs, slug)
+	return r.Store.GetRoleBySlug(ctx, tenant, namespace, slug)
+}
+
+func (r *ordinaryCheckReader) ListAssignments(ctx context.Context, filter *assignment.ListFilter) ([]*assignment.Assignment, error) {
+	r.assignmentPages++
+	return r.Store.ListAssignments(ctx, filter)
+}
+
+func (r *ordinaryCheckReader) ListRolesForSubjectOnResource(ctx context.Context, tenant string, namespaces []string, kind, subject, resourceType, resourceID string) ([]wardenid.RoleID, error) {
+	if r.readFailure != nil && resourceID == r.failResource {
+		return nil, r.readFailure
+	}
+	return r.Store.ListRolesForSubjectOnResource(ctx, tenant, namespaces, kind, subject, resourceType, resourceID)
+}
+
+func TestOrdinaryPostgresConjunction(t *testing.T) {
+	f := newOrdinaryPGFixture(t)
+	t.Run("canonical proof and one validation", func(t *testing.T) { testOrdinaryConjunctionProof(t, f) })
+	t.Run("first middle and last denial with stale cache", func(t *testing.T) { testOrdinaryConjunctionDenials(t, f) })
+	t.Run("error after an allow", func(t *testing.T) { testOrdinaryConjunctionReadError(t, f) })
+	t.Run("one interval", func(t *testing.T) { testOrdinaryConjunctionInterval(t, f) })
+	t.Run("cancellation and reader lifecycle", func(t *testing.T) { testOrdinaryConjunctionInterruption(t, f) })
+	t.Run("single decision and stage", func(t *testing.T) { testOrdinaryConjunctionDecisionLifecycle(t, f) })
+}
+
+func testOrdinaryConjunctionProof(t *testing.T, f *ordinaryPGFixture) {
+	ordered := []OrdinaryRequirement{
+		{Permission: security.DeploymentRead, ResourceID: f.project},
+		{Permission: security.ProjectRead},
+		{Permission: security.ProjectRead, ResourceID: f.project},
+		{Permission: security.ProjectUpdate, ResourceID: f.project},
+	}
+	full := make([]OrdinaryRequirement, MaxOrdinaryRequirements)
+	for i := range full {
+		full[i] = OrdinaryRequirement{Permission: security.ProjectRead, ResourceID: fmt.Sprintf("proj_%026d", i)}
+	}
+	reader, ok := f.c.backend.(*nativeBackend)
+	if !ok {
+		t.Fatal("missing native reader")
+	}
+	baseReader := f.c.reader
+	baseClock := f.c.now
+	t.Cleanup(func() {
+		f.c.reader, f.c.now = baseReader, baseClock
+		reader.reader.SetMetrics(nil)
+		f.probe.before, f.probe.after = nil, nil
+	})
+	for _, tc := range []struct {
+		name         string
+		requirements []OrdinaryRequirement
+	}{
+		{"one exact empty resource", ordered[1:2]},
+		{"one exact opaque resource", []OrdinaryRequirement{{Permission: security.ProjectRead, ResourceID: " project "}}},
+		{"two resources for one permission", ordered[1:3]},
+		{"two actions on one resource", ordered[2:]},
+		{"permutation across resource types", ordered},
+		{"maximum", full},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var previous ordinaryProof
+			for _, reverse := range []bool{false, true} {
+				input := slices.Clone(tc.requirements)
+				if reverse {
+					slices.Reverse(input)
+				}
+				queries := telemetrytest.NewMetrics()
+				reader.reader.SetMetrics(queries)
+				counts := &ordinaryCheckReader{Store: baseReader}
+				f.c.reader = counts
+				checks, completed, clockCalls := 0, 0, 0
+				f.c.now = func() time.Time {
+					clockCalls++
+					return time.Now()
+				}
+				f.probe.before = func(ctx context.Context, tenant, ns string, req *warden.CheckRequest) {
+					if ctx.Value(scopeKey{}) == nil || tenant != f.binding.Actor.OrgID ||
+						req.TenantID != tenant || req.Subject.Kind != warden.SubjectUser || req.Subject.ID != f.binding.Actor.UserID {
+						t.Fatalf("unbound engine check tenant=%q request=%+v", tenant, req)
+					}
+					if checks >= len(tc.requirements) || checks != completed {
+						t.Fatalf("engine check order started=%d completed=%d", checks, completed)
+					}
+					want := tc.requirements[checks]
+					wantNS, _ := security.ProjectNamespace(want.ResourceID)
+					if req.Action.Name != want.Permission.Action || req.Resource.Type != want.Permission.Resource ||
+						req.Resource.ID != want.ResourceID || req.NamespacePath != wantNS || ns != wantNS {
+						t.Fatalf("check %d request=%+v namespace=%q want=%+v namespace=%q", checks, req, ns, want, wantNS)
+					}
+					if checks == 0 {
+						clear(input) // The API has already captured the entire set.
+					}
+					checks++
+				}
+				f.probe.after = func(_ context.Context, result *warden.CheckResult) {
+					if !result.Allowed {
+						t.Fatal("unexpected engine denial")
+					}
+					completed++
+				}
+				err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+					// An inherited namespace cannot redirect a root check.
+					checkCtx := warden.WithNamespace(ctx, "inherited")
+					d, evalErr := a.EvaluateOrdinaryAll(checkCtx, input)
+					if evalErr != nil {
+						return evalErr
+					}
+					if d.ordinary == nil || d.ordinary.count != len(tc.requirements) {
+						t.Fatalf("decision proof=%+v", d.ordinary)
+					}
+					for i, want := range tc.requirements {
+						ns, _ := security.ProjectNamespace(want.ResourceID)
+						if got := d.ordinary.requirements[i]; got != (ordinaryRequirementProof{permission: want.Permission, resource: want.ResourceID, namespace: ns}) {
+							t.Fatalf("proof %d=%+v", i, got)
+						}
+					}
+					if reverse && previous != *d.ordinary {
+						t.Fatal("permuted input changed the proof")
+					}
+					previous = *d.ordinary
+					return stageOrdinaryPGCandidate(ctx, a, d, b)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if checks != len(tc.requirements) || completed != checks || clockCalls != 2 {
+					t.Fatalf("started=%d completed=%d clock reads=%d", checks, completed, clockCalls)
+				}
+				if !slices.Equal(counts.slugs, []string{security.RoleOwner, security.RoleAdmin, security.RoleDeveloper, security.RoleViewer}) ||
+					counts.assignmentPages != 1 {
+					t.Fatalf("catalog=%v assignment pages=%d", counts.slugs, counts.assignmentPages)
+				}
+				facts := make(map[string]uint64)
+				for _, series := range queries.Series(observability.OperationDurationMetric) {
+					facts[series.Labels["db.collection.name"]] += series.Count
+				}
+				if facts["authsome_users"] != 1 || facts["loomplane_team_members"] != 1 {
+					t.Fatalf("person/team reads=%v", facts)
+				}
+			}
+		})
+	}
+	t.Run("singleton exact root resources", func(t *testing.T) {
+		f.probe.after = nil
+		f.c.reader, f.c.now = baseReader, baseClock
+		for _, resource := range []string{"", " project "} {
+			checks := 0
+			f.probe.before = func(_ context.Context, _, ns string, req *warden.CheckRequest) {
+				checks++
+				if req.Resource.ID != resource || req.NamespacePath != "" || ns != "" {
+					t.Fatalf("singleton resource=%q resolved namespace=%q request=%+v", resource, ns, req)
+				}
+			}
+			err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+				d, err := a.EvaluateOrdinary(warden.WithNamespace(ctx, "inherited"), security.ProjectRead, resource)
+				if err != nil {
+					return err
+				}
+				want := ordinaryRequirementProof{permission: security.ProjectRead, resource: resource}
+				if d.ordinary == nil || d.ordinary.count != 1 || d.ordinary.requirements[0] != want {
+					t.Fatalf("singleton proof=%+v", d.ordinary)
+				}
+				return stageOrdinaryPGCandidate(ctx, a, d, b)
+			})
+			if err != nil || checks != 1 {
+				t.Fatalf("singleton resource=%q checks=%d err=%v", resource, checks, err)
+			}
+		}
+	})
+}
+
+func testOrdinaryConjunctionDenials(t *testing.T, f *ordinaryPGFixture) {
+	ctx := t.Context()
+	org := f.binding.Actor.OrgID
+	admin, err := f.store.GetRoleBySlug(ctx, org, "", security.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements := make([]OrdinaryRequirement, 3)
+	grants := make([]assignment.Assignment, len(requirements))
+	for i := range requirements {
+		resource := fmt.Sprintf("proj_%026d", i+1)
+		requirements[i] = OrdinaryRequirement{Permission: security.ProjectDelete, ResourceID: resource}
+		ns, _ := security.ProjectNamespace(resource)
+		grants[i] = assignment.Assignment{
+			ID: wardenid.NewAssignmentID(), TenantID: org, SubjectKind: "user", SubjectID: f.binding.Actor.UserID,
+			RoleID: admin.ID, NamespacePath: ns, ResourceType: "project", ResourceID: resource, GrantedBy: "manual", CreatedAt: time.Now(),
+		}
+		if err := f.store.CreateAssignment(ctx, &grants[i]); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := f.store.DeleteAssignment(context.Background(), org, grants[i].ID); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	if err := f.runAll(t, requirements); err != nil {
+		t.Fatal(err)
+	}
+	for i, req := range requirements {
+		t.Run(fmt.Sprintf("denial at %d", i+1), func(t *testing.T) {
+			// The ordinary check populates the cache. Removing the row directly
+			// preserves the stale cached answer while the conjunction reads fresh.
+			if err := f.authz.Require(ctx, f.binding.Actor, req.Permission, req.ResourceID); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.DeleteAssignment(ctx, org, grants[i].ID); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := f.store.CreateAssignment(context.Background(), &grants[i]); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := f.authz.Require(ctx, f.binding.Actor, req.Permission, req.ResourceID); err != nil {
+				t.Fatalf("ordinary permission was not cached: %v", err)
+			}
+			var allowed []bool
+			f.probe.after = func(_ context.Context, result *warden.CheckResult) {
+				allowed = append(allowed, result.Allowed)
+			}
+			defer func() { f.probe.after = nil }()
+			if err := f.runAll(t, requirements); !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("denied requirement=%v", err)
+			}
+			if len(allowed) != i+1 {
+				t.Fatalf("checks continued after denial: %v", allowed)
+			}
+			for j, ok := range allowed {
+				if ok != (j < i) {
+					t.Fatalf("conjunction outcomes=%v", allowed)
+				}
+			}
+		})
+	}
+	t.Run("owner-only requirement after an allow", func(t *testing.T) {
+		err := f.runAll(t, []OrdinaryRequirement{
+			{Permission: security.BackupRetire, ResourceID: f.project},
+			{Permission: security.AnalysisRun, ResourceID: f.project},
+		})
+		if !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("non-owner backup retirement=%v", err)
+		}
+	})
+	if err := f.runAll(t, requirements); err != nil {
+		t.Fatalf("later clean attempt: %v", err)
+	}
+}
+
+func testOrdinaryConjunctionReadError(t *testing.T, f *ordinaryPGFixture) {
+	original := f.c.reader
+	failure := errors.New("second requirement backend read failed")
+	f.c.reader = &ordinaryCheckReader{Store: original, failResource: f.project, readFailure: failure}
+	t.Cleanup(func() {
+		f.c.reader = original
+		f.probe.after = nil
+	})
+	allowed := 0
+	f.probe.after = func(_ context.Context, result *warden.CheckResult) {
+		if result.Allowed {
+			allowed++
+		}
+	}
+	err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+		d, evalErr := a.EvaluateOrdinaryAll(ctx, []OrdinaryRequirement{
+			{Permission: security.ProjectRead, ResourceID: f.project},
+			{Permission: security.ProjectRead},
+		})
+		if d != nil || !errors.Is(evalErr, failure) {
+			t.Fatalf("backend failure decision=%v err=%v", d, evalErr)
+		}
+		// Even a caller that ignores the evaluation error cannot stage a write.
+		return a.Stage(ctx, d, b, func(context.Context, driver.Tx, time.Time) error {
+			t.Fatal("stage ran after a failed conjunction")
+			return nil
+		})
+	})
+	if allowed != 1 || !errors.Is(err, failure) || !errors.Is(err, ErrPoisoned) {
+		t.Fatalf("earlier allows=%d run=%v", allowed, err)
+	}
+}
+
+func testOrdinaryConjunctionInterval(t *testing.T, f *ordinaryPGFixture) {
+	requirements := []OrdinaryRequirement{
+		{Permission: security.DeploymentRead, ResourceID: f.project},
+		{Permission: security.ProjectRead, ResourceID: f.project},
+	}
+	originalClock := f.c.now
+	originalBinding := f.binding
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"persisted boundary between checks", ErrTemporal},
+		{"clock reversal between checks", ErrTemporal},
+		{"key expires at the decision instant", apikeys.ErrRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				f.c.now, f.binding = originalClock, originalBinding
+				f.probe.after = nil
+			})
+			start := time.Now().UTC().Truncate(time.Microsecond)
+			boundary, end := start.Add(time.Second), start.Add(2*time.Second)
+			switch tc.name {
+			case "persisted boundary between checks":
+				org := f.binding.Actor.OrgID
+				p := &policy.Policy{
+					ID: wardenid.NewPolicyID(), TenantID: org, Name: "unrelated temporal deny",
+					Effect: policy.EffectDeny, IsActive: true, Actions: []string{"unrelated"}, Resources: []string{"project"},
+					NotAfter: &boundary,
+				}
+				if err := f.store.CreatePolicy(t.Context(), p); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := f.store.DeletePolicy(context.Background(), org, p.ID); err != nil {
+						t.Error(err)
+					}
+				})
+			case "clock reversal between checks":
+				end = start.Add(-time.Second)
+			case "key expires at the decision instant":
+				id := keyid.NewKeyID().String()
+				if _, err := f.main.Exec(t.Context(), `INSERT INTO keysmith_keys(id,tenant_id,app_id,name,prefix,hint,key_hash,created_by,metadata,expires_at) VALUES($1,$2,$3,'Temporal','lp','hint',$1,$4,'{"access":"write"}',$5)`,
+					id, f.binding.Actor.OrgID, f.binding.AppID, f.binding.Actor.UserID, end); err != nil {
+					t.Fatal(err)
+				}
+				f.binding.Actor.KeyID = id
+				t.Cleanup(func() {
+					if _, err := f.main.Exec(context.Background(), `DELETE FROM keysmith_keys WHERE id=$1`, id); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			clockReads, allowed := 0, 0
+			now := start
+			f.c.now = func() time.Time {
+				clockReads++
+				return now
+			}
+			f.probe.after = func(_ context.Context, result *warden.CheckResult) {
+				if !result.Allowed {
+					t.Fatal("permission check denied before interval validation")
+				}
+				allowed++
+				now = end
+			}
+			if err := f.runAll(t, requirements); !errors.Is(err, tc.want) || allowed != 2 || clockReads != 2 {
+				t.Fatalf("interval result=%v allows=%d clock reads=%d", err, allowed, clockReads)
+			}
+		})
+	}
+	if err := f.runAll(t, requirements); err != nil {
+		t.Fatalf("stable interval: %v", err)
+	}
+}
+
+func testOrdinaryConjunctionInterruption(t *testing.T, f *ordinaryPGFixture) {
+	requirements := []OrdinaryRequirement{
+		{Permission: security.DeploymentRead, ResourceID: f.project},
+		{Permission: security.ProjectRead, ResourceID: f.project},
+	}
+	for _, duringSecond := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel during second=%v", duringSecond), func(t *testing.T) {
+			defer func() { f.probe.before, f.probe.after = nil, nil }()
+			checks := 0
+			err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+				checkCtx, cancel := context.WithCancel(ctx)
+				defer cancel()
+				f.probe.before = func(context.Context, string, string, *warden.CheckRequest) {
+					checks++
+					if checks == 2 && duringSecond {
+						cancel()
+					}
+				}
+				f.probe.after = func(_ context.Context, result *warden.CheckResult) {
+					if result.Allowed && checks == 1 && !duringSecond {
+						cancel()
+					}
+				}
+				d, err := a.EvaluateOrdinaryAll(checkCtx, requirements)
+				if err != nil {
+					return err
+				}
+				return stageOrdinaryPGCandidate(ctx, a, d, b)
+			})
+			wantChecks := 1
+			if duringSecond {
+				wantChecks = 2
+			}
+			if !errors.Is(err, context.Canceled) || checks != wantChecks {
+				t.Fatalf("canceled conjunction=%v engine checks=%d", err, checks)
+			}
+		})
+	}
+	t.Run("engine profile changes during second check", func(t *testing.T) {
+		config := f.engine.Config()
+		rbac := *config.EnableRBAC
+		defer func() {
+			*config.EnableRBAC = rbac
+			f.probe.before = nil
+		}()
+		checks := 0
+		f.probe.before = func(context.Context, string, string, *warden.CheckRequest) {
+			checks++
+			if checks == 2 {
+				*config.EnableRBAC = false
+			}
+		}
+		if err := f.runAll(t, requirements); !errors.Is(err, ErrUnavailable) || checks != 2 {
+			t.Fatalf("profile mutation result=%v checks=%d", err, checks)
+		}
+	})
+	t.Run("pending reader during final validation", func(t *testing.T) {
+		router, ok := f.engine.Store().(*storeRouter)
+		if !ok {
+			t.Fatal("missing store router")
+		}
+		entered := make(chan struct{})
+		done := make(chan error, 1)
+		original := f.c.reader
+		f.c.reader = pendingReadStore{Store: original, entered: entered}
+		defer func() {
+			f.c.reader = original
+			f.probe.after = nil
+		}()
+		checks := 0
+		f.probe.after = func(ctx context.Context, _ *warden.CheckResult) {
+			checks++
+			if checks == len(requirements) {
+				go func() { done <- router.Ping(ctx) }()
+				select {
+				case <-entered:
+				case err := <-done:
+					t.Fatalf("reader did not enter: %v", err)
+				case <-ctx.Done():
+					t.Fatal("reader did not enter before attempt deadline")
+				}
+			}
+		}
+		if err := f.runAll(t, requirements); !errors.Is(err, ErrPending) || checks != 2 {
+			t.Fatalf("pending reader result=%v checks=%d", err, checks)
+		}
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("pending reader was not canceled: %v", err)
+		}
+	})
+	if err := f.runAll(t, requirements); err != nil {
+		t.Fatalf("later clean attempt: %v", err)
+	}
+}
+
+func testOrdinaryConjunctionDecisionLifecycle(t *testing.T, f *ordinaryPGFixture) {
+	requirements := []OrdinaryRequirement{
+		{Permission: security.DeploymentRead, ResourceID: f.project},
+		{Permission: security.ProjectRead, ResourceID: f.project},
+	}
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"second conjunction", ErrDecision},
+		{"singleton then conjunction", ErrDecision},
+		{"conjunction then singleton", ErrDecision},
+		{"wrong durable binding", ErrBinding},
+		{"repeat stage rolls back first stage", ErrDecision},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+				if tc.name == "singleton then conjunction" {
+					if _, err := a.EvaluateOrdinary(ctx, requirements[0].Permission, requirements[0].ResourceID); err != nil {
+						return err
+					}
+					_, err := a.EvaluateOrdinaryAll(ctx, requirements)
+					return err
+				}
+				d, err := a.EvaluateOrdinaryAll(ctx, requirements)
+				if err != nil {
+					return err
+				}
+				switch tc.name {
+				case "second conjunction":
+					_, err = a.EvaluateOrdinaryAll(ctx, requirements)
+					return err
+				case "conjunction then singleton":
+					_, err = a.EvaluateOrdinary(ctx, requirements[0].Permission, requirements[0].ResourceID)
+					return err
+				case "wrong durable binding":
+					b.InputDigest = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+				case "repeat stage rolls back first stage":
+					if err := stageOrdinaryPGCandidate(ctx, a, d, b); err != nil {
+						return err
+					}
+				}
+				return a.Stage(ctx, d, b, func(context.Context, driver.Tx, time.Time) error {
+					t.Fatal("invalid second stage or binding reached the write callback")
+					return nil
+				})
+			})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("decision lifecycle=%v", err)
+			}
+		})
+	}
+	var savedContext context.Context
+	var savedAttempt *Attempt
+	var savedDecision *Decision
+	if err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+		d, err := a.EvaluateOrdinaryAll(ctx, requirements)
+		if err != nil {
+			return err
+		}
+		savedContext, savedAttempt, savedDecision = ctx, a, d
+		return stageOrdinaryPGCandidate(ctx, a, d, b)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := savedAttempt.EvaluateOrdinaryAll(savedContext, requirements); d != nil || !errors.Is(err, ErrExpired) {
+		t.Fatalf("retained attempt decision=%v err=%v", d, err)
+	}
+	if err := f.runCandidate(t, func(ctx context.Context, a *Attempt, b Binding) error {
+		if _, err := a.EvaluateOrdinaryAll(ctx, requirements); err != nil {
+			return err
+		}
+		return a.Stage(ctx, savedDecision, b, func(context.Context, driver.Tx, time.Time) error {
+			t.Fatal("foreign attempt staged a decision")
+			return nil
+		})
+	}); !errors.Is(err, ErrDecision) {
+		t.Fatalf("foreign decision: %v", err)
+	}
+	if err := f.runAll(t, requirements); err != nil {
+		t.Fatalf("later clean attempt: %v", err)
 	}
 }

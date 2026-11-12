@@ -48,7 +48,21 @@ func RuntimeAccessDigest(value any) string {
 }
 
 func EnrollmentRoleRules(in EnrollmentRequest) ([]rbacv1.PolicyRule, error) {
+	if in.InstancePolicy != nil {
+		if err := in.InstancePolicy.Validate(); err != nil {
+			return nil, err
+		}
+	}
+
 	rules := append(RuntimeRoleRules(), rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"serviceaccounts"}, ResourceNames: []string{in.ServiceAccountName}, Verbs: []string{"get"}})
+	// Observation access belongs to the reviewed isolation digest. Existing
+	// policies retain their rules until a separate enrollment is approved.
+	if in.InstancePolicy != nil && in.InstancePolicy.ObservationRevision == provider.InstanceObservationRevision {
+		rules = append(rules,
+			rbacv1.PolicyRule{APIGroups: []string{"metrics.k8s.io"}, Resources: []string{"pods"}, Verbs: []string{"get"}},
+			rbacv1.PolicyRule{APIGroups: []string{"apps"}, Resources: []string{"replicasets"}, Verbs: []string{"get"}},
+		)
+	}
 	if in.RequireIngress {
 		rules = append(rules, rbacv1.PolicyRule{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"ingresses"}, Verbs: []string{"get", "list", "create", "update", "patch", "delete"}})
 	}

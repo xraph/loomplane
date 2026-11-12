@@ -94,11 +94,12 @@ func sweepFailure(err error) error {
 }
 
 // Catalog is how the panel's service reaches a Fabriq, hosted or library.
-// *deployments.CatalogAccess is the real one: Components and Channel check
-// the principal's permission on the project first.
+// *deployments.CatalogAccess is the real one. It checks the principal's
+// permission on the project before listing, dialing or reading a secret.
 type Catalog interface {
 	Components(ctx context.Context, p security.Principal, need security.Permission, ref deployments.ResourceRef) ([]*planning.Binding, error)
 	Channel(ctx context.Context, p security.Principal, need security.Permission, ref deployments.ComponentRef) (*deployments.ComponentChannel, error)
+	GeneratedSecret(ctx context.Context, p security.Principal, need security.Permission, ref deployments.ResourceRef, name string) ([]byte, error)
 	RunJob(ctx context.Context, orgID string, ref deployments.ResourceRef, component, name string) (owned.JobResult, error)
 }
 
@@ -236,7 +237,12 @@ func (s *Service) console(ctx context.Context, p security.Principal, need securi
 	if err != nil {
 		return nil, nil, unavailable(err)
 	}
-	return &AdminClient{Channel: ch}, func() { _ = ch.Close() }, nil //nolint:errcheck // nothing to do about it
+	admin, closeChannel, err := newAdminClient(ch, func() (controlCredential, error) {
+		return resolveControlCredential(func(name string) ([]byte, error) {
+			return s.Access.GeneratedSecret(ctx, p, need, ref, name)
+		})
+	})
+	return admin, closeChannel, unavailable(err)
 }
 
 // Status reports a Fabriq's stack: a hosted one's through its console, a

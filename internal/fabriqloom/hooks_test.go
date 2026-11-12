@@ -191,10 +191,12 @@ func vaultKey(id string) string {
 // fakeAccess opens channels to the fake for Loomplane's own background
 // work, or fails with err.
 type fakeAccess struct {
-	f      *fakeFabriq
-	err    error
-	mu     sync.Mutex
-	opened []deployments.ComponentRef
+	f            *fakeFabriq
+	err          error
+	mu           sync.Mutex
+	opened       []deployments.ComponentRef
+	controlToken []byte
+	secretErr    error
 }
 
 func (a *fakeAccess) InternalChannel(_ context.Context, orgID string, ref deployments.ComponentRef) (*deployments.ComponentChannel, error) {
@@ -208,6 +210,15 @@ func (a *fakeAccess) InternalChannel(_ context.Context, orgID string, ref deploy
 		return nil, errors.New("not the fabriq console")
 	}
 	return a.f.channel(), nil
+}
+
+func (a *fakeAccess) InternalSecret(_ context.Context, orgID string, ref deployments.ResourceRef, name string) ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if orgID != "org" || ref != fabriqRef || name != fixtureControlSecret {
+		return nil, deployments.ErrComponentNotFound
+	}
+	return slices.Clone(a.controlToken), a.secretErr
 }
 
 func (a *fakeAccess) opens() int {
@@ -231,7 +242,7 @@ type harness struct {
 
 func newHarness(tenants ...string) *harness {
 	h := &harness{f: newFakeFabriq(tenants...), keys: &memKeys{}, secrets: newMemSecrets()}
-	h.access = &fakeAccess{f: h.f}
+	h.access = &fakeAccess{f: h.f, controlToken: []byte(fixtureControlToken)}
 	h.hooks = fabriqloom.NewHooks(h.deps())
 	return h
 }
@@ -305,6 +316,9 @@ func TestBindConsumerIssuesOncePerService(t *testing.T) {
 	h := newHarness("acme")
 	first := h.bind(t, "api", "acme")
 	second := h.bind(t, "api", "acme")
+	if strings.Contains(first, fixtureControlToken) || strings.Contains(second, fixtureControlToken) {
+		t.Fatal("consumer DSN included the console credential")
+	}
 	if first != second {
 		t.Fatal("two binds gave api two DSNs")
 	}
@@ -406,7 +420,7 @@ func TestBindConsumerPromotesPendingKey(t *testing.T) {
 	oldID := idOf(t, h.f, old)
 	// What Rotate leaves: a key issued with the active record's tenant,
 	// kept pending.
-	admin := &fabriqloom.AdminClient{Channel: h.f.channel()}
+	admin := fixtureAdmin(t, h.f)
 	issued, err := admin.IssueKey(t.Context(), "loomplane:api")
 	if err != nil {
 		t.Fatal(err)
@@ -511,7 +525,7 @@ func TestBindConsumerConflictKeepsTheWinner(t *testing.T) {
 	var winner string
 	h.keys.beforeInsert = func(r *fabriqloom.KeyRecord) {
 		// Another release of api records its key first.
-		admin := &fabriqloom.AdminClient{Channel: h.f.channel()}
+		admin := fixtureAdmin(t, h.f)
 		issued, err := admin.IssueKey(context.Background(), "loomplane:api")
 		if err != nil {
 			t.Error(err)
@@ -754,7 +768,11 @@ func TestReadyReportsAFailedSweep(t *testing.T) {
 func adminRun(h *harness, component string) deployments.ComponentRun {
 	return deployments.ComponentRun{
 		OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "fabriq", Kind: "fabriq", Provider: "server",
-		Component: recipes.ResolvedComponent{Component: recipes.Component{Name: component}},
+		Component: recipes.ResolvedComponent{Component: recipes.Component{Name: component, Env: []recipes.EnvVar{
+			{Name: fixtureControlEnv, Secret: fixtureControlSecret},
+		}}},
+		Env:     map[string]string{fixtureControlEnv: fixtureControlToken},
+		Secrets: map[string][]byte{fixtureControlSecret: []byte(fixtureControlToken)},
 		Channel: func(_ context.Context, component, port string) (*deployments.ComponentChannel, error) {
 			if component != "admin" || port != "http" {
 				return nil, errors.New("only the console's http port reaches the admin API")
@@ -769,8 +787,12 @@ func TestReadyChecksTheOperatorKey(t *testing.T) {
 	if err := h.hooks.Ready(t.Context(), adminRun(h, "admin")); err != nil {
 		t.Fatal(err)
 	}
-	if n := h.f.count(http.MethodGet, "/admin/tenants"); n != 1 {
+	requests := h.f.seen()
+	if n := h.f.count(http.MethodGet, "/admin/tenants"); n != 2 {
 		t.Fatalf("GET /admin/tenants %d times", n)
+	}
+	if len(requests[0].Header.Values(fixtureControlHeader)) != 0 || requests[1].Header.Get(fixtureControlHeader) != fixtureControlToken {
+		t.Fatal("readiness did not check refusal before sending the credential")
 	}
 	h.f.refuse = http.StatusUnauthorized
 	err := h.hooks.Ready(t.Context(), adminRun(h, "admin"))
@@ -794,5 +816,208 @@ func TestReadyChecksTheOperatorKey(t *testing.T) {
 	err = h.hooks.Ready(t.Context(), adminRun(h, "admin"))
 	if !errors.Is(err, fabriqloom.ErrAPIVersion) || !strings.HasPrefix(err.Error(), "this Fabriq server speaks another admin API version") || strings.Contains(err.Error(), "operator key") {
 		t.Fatalf("426: %v", err)
+	}
+}
+
+func TestReadyRequiresMatchingRenderedControlCredential(t *testing.T) {
+	for name, alter := range map[string]func(*deployments.ComponentRun){
+		"missing secret": func(run *deployments.ComponentRun) {
+			delete(run.Secrets, fixtureControlSecret)
+		},
+		"malformed secret": func(run *deployments.ComponentRun) {
+			run.Secrets[fixtureControlSecret] = []byte(strings.ToUpper(fixtureControlToken))
+		},
+		"missing env": func(run *deployments.ComponentRun) {
+			delete(run.Env, fixtureControlEnv)
+		},
+		"env differs": func(run *deployments.ComponentRun) {
+			run.Env[fixtureControlEnv] = strings.Repeat("b", 64)
+		},
+		"wrong env source": func(run *deployments.ComponentRun) {
+			run.Component.Env[0].Secret = "admin-key"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness("acme")
+			run := adminRun(h, "admin")
+			alter(&run)
+			err := h.hooks.Ready(t.Context(), run)
+			if err == nil || strings.Contains(err.Error(), fixtureControlToken) {
+				t.Fatal("bad rendered credential was accepted or exposed")
+			}
+			if len(h.f.seen()) != 0 || h.f.closes() != 1 {
+				t.Fatal("bad rendered credential reached the console or leaked its channel")
+			}
+		})
+	}
+}
+
+func TestReadyChecksControlGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, servedToken, errorText string
+		requests                     int
+	}{
+		{"ungated runtime", "", "without a token with HTTP 200", 1},
+		{"wrong rendered token", strings.Repeat("b", 64), "refused Loomplane's control credential (HTTP 403)", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness("acme")
+			h.f.controlToken = tc.servedToken
+			err := h.hooks.Ready(t.Context(), adminRun(h, "admin"))
+			if err == nil || !strings.Contains(err.Error(), tc.errorText) {
+				t.Fatal("readiness accepted a failed control gate check")
+			}
+			if len(h.f.seen()) != tc.requests || h.f.closes() != 1 {
+				t.Fatal("failed gate check did not stop readiness")
+			}
+		})
+	}
+}
+
+func legacyAdminRun(t *testing.T, h *harness, architecture string) deployments.ComponentRun {
+	t.Helper()
+	_, history, err := recipes.Default().ResolveRevision("fabriq", "1.9", "1", architecture, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := adminRun(h, "admin")
+	for _, component := range history.Components {
+		if component.Name == "admin" {
+			run.Component = component
+			break
+		}
+	}
+	run.Secrets = map[string][]byte{"admin-key": []byte("fq_fixture_operator")}
+	run.Env = map[string]string{
+		"FABRIQ_ADMIN_UPSTREAM":     "http://lp-fabriq:8081",
+		"FABRIQ_ADMIN_UPSTREAM_KEY": string(run.Secrets["admin-key"]),
+		"FABRIQ_ADMIN_BASE_PATH":    fabriqloom.ConsoleBasePath,
+	}
+	for _, env := range run.Component.Env {
+		if env.Name == "LOOMPLANE_FABRIQ_SERVER_IMAGE" {
+			run.Env[env.Name] = env.Value
+		}
+	}
+	return run
+}
+
+func TestReadyRequiresHistoricalImageAndEnv(t *testing.T) {
+	for _, architecture := range []string{"amd64", "arm64"} {
+		t.Run(architecture, func(t *testing.T) {
+			h := newHarness("acme")
+			h.f.controlToken = ""
+			if err := h.hooks.Ready(t.Context(), legacyAdminRun(t, h, architecture)); err != nil {
+				t.Fatal(err)
+			}
+			if n := h.f.count(http.MethodGet, "/admin/tenants"); n != 1 {
+				t.Fatalf("historical tenant requests: %d", n)
+			}
+		})
+	}
+	for name, alter := range map[string]func(*deployments.ComponentRun){
+		"different image": func(run *deployments.ComponentRun) {
+			run.Component.Image = "ghcr.io/xraph/fabriq-admin@sha256:" + strings.Repeat("a", 64)
+		},
+		"different env contract": func(run *deployments.ComponentRun) {
+			run.Component.Env[1].Secret = "different-secret"
+		},
+		"different rendered env": func(run *deployments.ComponentRun) {
+			run.Env["FABRIQ_ADMIN_BASE_PATH"] = "/"
+		},
+		"unexpected rendered token": func(run *deployments.ComponentRun) {
+			run.Env[fixtureControlEnv] = fixtureControlToken
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness("acme")
+			h.f.controlToken = ""
+			run := legacyAdminRun(t, h, "amd64")
+			alter(&run)
+			if err := h.hooks.Ready(t.Context(), run); err == nil || strings.Contains(err.Error(), fixtureControlToken) {
+				t.Fatal("modified historical component was accepted or exposed a credential")
+			}
+			if len(h.f.seen()) != 0 || h.f.closes() != 1 {
+				t.Fatal("modified historical component reached the console or leaked its channel")
+			}
+		})
+	}
+}
+
+func TestHookControlCredentialFailuresKeepRemoteKeys(t *testing.T) {
+	ctx := t.Context()
+	h := newHarness("acme")
+	old := idOf(t, h.f, h.bind(t, "api", "acme"))
+	current := idOf(t, h.f, h.bind(t, "api", "globex"))
+	h.access.secretErr = errors.New("Vault failure with " + fixtureControlToken)
+	seen, closed := len(h.f.seen()), h.f.closes()
+
+	if _, err := h.hooks.BindConsumer(ctx, h.consumer("jobs", "another")); err == nil || strings.Contains(err.Error(), fixtureControlToken) {
+		t.Fatal("credential failure let bind reach Fabriq or exposed the credential")
+	}
+	if err := h.hooks.ReleaseConsumer(ctx, h.consumer("api", "globex")); err == nil || strings.Contains(err.Error(), fixtureControlToken) {
+		t.Fatal("credential failure let release reach Fabriq or exposed the credential")
+	}
+	if err := fabriqloom.NewObserver(h.deps()).Released(ctx, release(t, "api", "fabriq")); err == nil || strings.Contains(err.Error(), fixtureControlToken) {
+		t.Fatal("credential failure let the observer revoke a key or exposed the credential")
+	}
+	if len(h.f.seen()) != seen || h.f.closes() != closed+3 {
+		t.Fatal("failed credentials reached Fabriq or left channels open")
+	}
+	if len(h.keys.inState("api", fabriqloom.KeyActive)) != 1 || len(h.keys.inState("api", fabriqloom.KeyRetiring)) != 1 {
+		t.Fatal("credential failure changed the live records")
+	}
+	for _, id := range []string{old, current} {
+		if !h.secrets.has(id) || h.f.key(id).RevokedAt != nil {
+			t.Fatal("a live key was revoked or forgotten")
+		}
+	}
+
+	h.access.secretErr = nil
+	h.access.controlToken = []byte(strings.Repeat("b", 64))
+	if err := h.hooks.ReleaseConsumer(ctx, h.consumer("api", "globex")); err == nil {
+		t.Fatal("the wrong token revoked live keys")
+	}
+	for _, id := range []string{old, current} {
+		if !h.secrets.has(id) || h.f.key(id).RevokedAt != nil {
+			t.Fatal("the wrong token revoked or forgot a live key")
+		}
+	}
+
+	// Removal still forgets the local keys when no matching parent remains.
+	h.access.secretErr = deployments.ErrComponentNotFound
+	seen, closed = len(h.f.seen()), h.f.closes()
+	if err := h.hooks.Removed(ctx, deployments.ComposedResource{
+		OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "fabriq", Kind: "fabriq",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.f.seen()) != seen || h.f.closes() != closed+1 {
+		t.Fatal("removal tried the console without a credential or left its channel open")
+	}
+	for _, id := range []string{old, current} {
+		if h.secrets.has(id) || h.f.key(id).RevokedAt != nil {
+			t.Fatal("removal failed to forget a key locally or touched a remote key")
+		}
+	}
+}
+
+func TestConsumerControlCredentialUsesExactScope(t *testing.T) {
+	for name, alter := range map[string]func(*deployments.Consumer){
+		"org":         func(c *deployments.Consumer) { c.OrgID = "other" },
+		"project":     func(c *deployments.Consumer) { c.ProjectID = "other" },
+		"environment": func(c *deployments.Consumer) { c.EnvironmentID = "other" },
+		"resource":    func(c *deployments.Consumer) { c.Resource = "other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness("acme")
+			c := h.consumer("api", "acme")
+			alter(&c)
+			if _, err := h.hooks.BindConsumer(t.Context(), c); err == nil {
+				t.Fatal("wrong scope obtained a credential")
+			}
+			if len(h.f.seen()) != 0 || h.f.closes() != 1 {
+				t.Fatal("wrong scope reached Fabriq or left its channel open")
+			}
+		})
 	}
 }

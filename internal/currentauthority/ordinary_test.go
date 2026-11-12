@@ -3,6 +3,8 @@ package currentauthority
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -48,6 +50,8 @@ func TestOrdinaryFactsSuppliedInstantAndEligibility(t *testing.T) {
 				{"ban equality", func(f *ordinaryFacts) { f.banned = true; f.banUntil = optionalInstant{at, true} }, true},
 				{"wrong app", func(f *ordinaryFacts) { f.app = authid.NewAppID().String() }, false}, {"wrong workspace app", func(f *ordinaryFacts) { f.orgApp = authid.NewAppID().String() }, false},
 				{"absent membership", func(f *ordinaryFacts) { f.member = "" }, false}, {"wrong user", func(f *ordinaryFacts) { f.user = authid.NewUserID().String() }, false},
+				{"wrong organization", func(f *ordinaryFacts) { f.org = authid.NewOrgID().String() }, false},
+				{"invalid environment", func(f *ordinaryFacts) { f.env = f.app }, false},
 			} {
 				f := base
 				if tt.change != nil {
@@ -147,12 +151,120 @@ func TestOrdinaryProofCannotUseGenericDecision(t *testing.T) {
 		t.Fatal("generic proof accepted")
 	}
 	d.kind = ordinaryDecision
-	d.ordinary = &ordinaryProof{permission: security.ProjectRead, facts: f}
+	d.ordinary = &ordinaryProof{
+		count:        1,
+		requirements: [MaxOrdinaryRequirements]ordinaryRequirementProof{{permission: security.ProjectRead}},
+		facts:        f,
+	}
 	if err := d.validateOrdinary(a); err != nil {
 		t.Fatal(err)
 	}
-	d.ordinary.namespace = "foreign"
+	d.ordinary.requirements[0].namespace = "foreign"
 	if !errors.Is(d.validateOrdinary(a), ErrDecision) {
 		t.Fatal("namespace mutation accepted")
+	}
+}
+
+func TestOrdinaryAllRejectsInvalidInputBeforeReading(t *testing.T) {
+	read := OrdinaryRequirement{Permission: security.ProjectRead, ResourceID: "project"}
+	oversized := make([]OrdinaryRequirement, MaxOrdinaryRequirements+1)
+	for i := range oversized {
+		oversized[i] = OrdinaryRequirement{Permission: security.ProjectRead, ResourceID: fmt.Sprint(i)}
+	}
+	oversizedRepeated := slices.Clone(oversized)
+	oversizedRepeated[1] = oversizedRepeated[0]
+	for _, tc := range []struct {
+		name         string
+		requirements []OrdinaryRequirement
+	}{
+		{"nil", nil},
+		{"empty", []OrdinaryRequirement{}},
+		{"oversized", oversized},
+		{"oversized with duplicates", oversizedRepeated},
+		{"empty permission resource", []OrdinaryRequirement{read, {Permission: security.Permission{Action: "read"}}}},
+		{"empty permission action", []OrdinaryRequirement{read, {Permission: security.Permission{Resource: "project"}}}},
+		{"nonadjacent duplicate", []OrdinaryRequirement{read, {Permission: security.ProjectRead, ResourceID: "other"}, read}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &recordingStore{}
+			_, a := routerAttempt(t, reader)
+			a.binding.app = "installed-app"
+			a.profile.mode = installedProfile
+			a.profile.ordinary = &ordinaryProfile{appID: a.binding.app, authorizer: &security.Authorizer{}}
+			a.owner.now = func() time.Time {
+				t.Fatal("invalid requirements opened an authority interval")
+				return time.Time{}
+			}
+			d, err := a.EvaluateOrdinaryAll(a.ctx, tc.requirements)
+			if d != nil || a.decision != nil || !errors.Is(err, ErrDecision) || reader.calls != 0 {
+				t.Fatalf("invalid requirements decision=%v published=%v err=%v reads=%d", d, a.decision, err, reader.calls)
+			}
+			d, err = a.EvaluateOrdinary(a.ctx, read.Permission, read.ResourceID)
+			if d != nil || !errors.Is(err, ErrPoisoned) || !errors.Is(err, ErrDecision) {
+				t.Fatalf("attempt recovered after invalid input: decision=%v err=%v", d, err)
+			}
+		})
+	}
+}
+
+func TestOrdinaryAllRejectsCorruptProof(t *testing.T) {
+	b, facts := ordinaryTestFacts()
+	_, a := routerAttempt(t, &recordingStore{})
+	a.binding = b
+	a.profile.mode = installedProfile
+	a.profile.ordinary = &ordinaryProfile{appID: b.app, requireEmail: true}
+	project := "proj_01h455vb4pex5vsknk084sn02q"
+	base := ordinaryProof{
+		count: 3,
+		requirements: [MaxOrdinaryRequirements]ordinaryRequirementProof{
+			{permission: security.DeploymentRead, resource: project, namespace: "proj-01h455vb4pex5vsknk084sn02q"},
+			{permission: security.ProjectRead},
+			{permission: security.ProjectRead, resource: project, namespace: "proj-01h455vb4pex5vsknk084sn02q"},
+		},
+		facts:        facts,
+		requireEmail: true,
+	}
+	d := &Decision{kind: ordinaryDecision, attempt: a, binding: b, ordinary: &base, at: time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)}
+	if err := d.validate(a); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*ordinaryProof)
+	}{
+		{"negative count", func(p *ordinaryProof) { p.count = -1 }},
+		{"zero count", func(p *ordinaryProof) { p.count = 0 }},
+		{"oversized count", func(p *ordinaryProof) { p.count = MaxOrdinaryRequirements + 1 }},
+		{"underreported count", func(p *ordinaryProof) { p.count-- }},
+		{"overreported count", func(p *ordinaryProof) { p.count++ }},
+		{"missing permission resource", func(p *ordinaryProof) { p.requirements[1].permission.Resource = "" }},
+		{"missing permission action", func(p *ordinaryProof) { p.requirements[1].permission.Action = "" }},
+		{"wrong order", func(p *ordinaryProof) { p.requirements[1], p.requirements[2] = p.requirements[2], p.requirements[1] }},
+		{"duplicate", func(p *ordinaryProof) { p.requirements[2] = p.requirements[1] }},
+		{"wrong derived namespace", func(p *ordinaryProof) { p.requirements[2].namespace = "" }},
+		{"nonzero unused entry", func(p *ordinaryProof) { p.requirements[MaxOrdinaryRequirements-1].resource = "unproved" }},
+		{"wrong email policy", func(p *ordinaryProof) { p.requireEmail = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := base
+			tc.change(&corrupt)
+			check := *d
+			check.ordinary = &corrupt
+			if err := check.validate(a); !errors.Is(err, ErrDecision) {
+				t.Fatalf("invalid proof: %v", err)
+			}
+		})
+	}
+	corrupt := base
+	corrupt.facts.verified = false
+	check := *d
+	check.ordinary = &corrupt
+	if err := check.validate(a); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("invalid copied facts: %v", err)
+	}
+	check = *d
+	check.fleet = &fleetProof{}
+	if err := check.validate(a); !errors.Is(err, ErrDecision) {
+		t.Fatalf("mixed proof: %v", err)
 	}
 }

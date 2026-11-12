@@ -13,6 +13,15 @@ import (
 )
 
 func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string, heartbeat func([]byte) error) error {
+	if s.InstanceNamespaces != nil {
+		call, finish, err := s.InstanceNamespaces.beginNamespaceCall(ctx)
+		if err != nil {
+			return err
+		}
+		// Register before leasing and retain ownership through the deferred audit.
+		defer finish()
+		ctx = call
+	}
 	if s.Clusters == nil {
 		return ErrInvalid
 	}

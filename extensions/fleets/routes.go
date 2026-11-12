@@ -47,6 +47,12 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			return err
 		}
 	}
+	if err := e.monitoringRoutes(g); err != nil {
+		return err
+	}
+	if err := e.actionRoutes(g); err != nil {
+		return err
+	}
 	return g.POST("/instances", e.createInstance, forge.WithName("fleetInstances.create"), forge.WithSummary("Request a new instance"), forge.WithRequestSchema(fleet.CreateInstanceInput{}), forge.WithResponseSchema(http.StatusAccepted, "Accepted instance request", fleet.OperationResult{}), forge.WithErrorResponses(), forge.WithResponseSchema(http.StatusConflict, "Fleet state conflict", fleetRequestError{}), forge.WithResponseSchema(http.StatusUnprocessableEntity, "Invalid fleet request", fleetRequestError{}), forge.WithResponseSchema(http.StatusTooManyRequests, "Fleet admission limit", fleetRequestError{}))
 }
 

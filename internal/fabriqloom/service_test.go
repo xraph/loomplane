@@ -52,15 +52,38 @@ type fakeCatalog struct {
 	// adminErr fails channels to the admin component only.
 	adminErr error
 	// workerReady is what the worker's /_/readyz answers: 200 when 0.
-	workerReady int
-	opened      []deployments.ComponentRef
-	result      owned.JobResult
-	jobErr      error
-	jobs        []jobCall
+	workerReady  int
+	opened       []deployments.ComponentRef
+	controlToken []byte
+	secretErr    error
+	secretReads  []secretRead
+	result       owned.JobResult
+	jobErr       error
+	jobs         []jobCall
+}
+
+type secretRead struct {
+	principal security.Principal
+	need      security.Permission
+	ref       deployments.ResourceRef
+	name      string
 }
 
 func newFakeCatalog(f *fakeFabriq) *fakeCatalog {
-	return &fakeCatalog{f: f, kind: "fabriq", on: map[string]bool{"falkordb": true}, roles: roles}
+	return &fakeCatalog{f: f, kind: "fabriq", on: map[string]bool{"falkordb": true}, roles: roles, controlToken: []byte(fixtureControlToken)}
+}
+
+func (c *fakeCatalog) GeneratedSecret(_ context.Context, p security.Principal, need security.Permission, ref deployments.ResourceRef, name string) ([]byte, error) {
+	if err := c.allow(p, need); err != nil {
+		return nil, err
+	}
+	if ref != fabriqRef || name != fixtureControlSecret {
+		return nil, deployments.ErrComponentNotFound
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.secretReads = append(c.secretReads, secretRead{p, need, ref, name})
+	return slices.Clone(c.controlToken), c.secretErr
 }
 
 func (c *fakeCatalog) allow(p security.Principal, need security.Permission) error {
@@ -632,5 +655,45 @@ func TestLibraryStatusHasNoTenants(t *testing.T) {
 	}
 	if _, err = h.svc.Revoke(t.Context(), as("admin"), fabriqRef, "web"); !errors.Is(err, fabriqloom.ErrInvalid) {
 		t.Fatalf("revoke: %v", err)
+	}
+}
+
+func TestPanelControlCredentialScopeAndCleanup(t *testing.T) {
+	h := newServiceHarness(nil, "acme")
+	ctx := t.Context()
+	if _, err := h.svc.Tenants(ctx, as("viewer"), fabriqRef); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.svc.CreateTenant(ctx, as("developer"), fabriqRef, "other"); err != nil {
+		t.Fatal(err)
+	}
+	want := []secretRead{
+		{as("viewer"), security.DeploymentRead, fabriqRef, fixtureControlSecret},
+		{as("developer"), security.DeploymentCreate, fabriqRef, fixtureControlSecret},
+	}
+	for i, got := range h.catalog.secretReads {
+		if i >= len(want) || got.principal.UserID != want[i].principal.UserID || got.principal.OrgID != want[i].principal.OrgID ||
+			got.need != want[i].need || got.ref != want[i].ref || got.name != want[i].name {
+			t.Fatal("secret read used the wrong permission or scope")
+		}
+	}
+	if len(h.catalog.secretReads) != len(want) {
+		t.Fatal("each action must resolve its own credential")
+	}
+
+	h.catalog.secretErr = errors.New("Vault failure with " + fixtureControlToken)
+	seen, closed := len(h.f.seen()), h.f.closes()
+	if _, _, err := h.svc.CreateTenant(ctx, as("viewer"), fabriqRef, "forbidden"); !errors.Is(err, security.ErrForbidden) {
+		t.Fatal("viewer was not denied")
+	}
+	if len(h.catalog.secretReads) != len(want) || h.f.closes() != closed {
+		t.Fatal("a denied action reached credential resolution or opened a channel")
+	}
+	_, _, err := h.svc.CreateTenant(ctx, as("developer"), fabriqRef, "denied")
+	if !errors.Is(err, fabriqloom.ErrUnavailable) || strings.Contains(err.Error(), fixtureControlToken) {
+		t.Fatal("secret failure was not safely reported")
+	}
+	if len(h.f.seen()) != seen || h.f.closes() != closed+1 {
+		t.Fatal("failed credential reached the API or left its channel open")
 	}
 }

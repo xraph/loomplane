@@ -1,6 +1,11 @@
 package fabriqloom
 
-import "github.com/xraph/loomplane/internal/catalogproxy"
+import (
+	"context"
+	"net/http"
+
+	"github.com/xraph/loomplane/internal/catalogproxy"
+)
 
 // ConsoleBasePath is the path fabriq-admin serves under. It is fixed at
 // "/fabriq/" because the console is told its base path when it starts, and a
@@ -10,14 +15,23 @@ import "github.com/xraph/loomplane/internal/catalogproxy"
 // before a request reaches the console's nginx.
 const ConsoleBasePath = "/fabriq/"
 
-// AdminTarget opens the console through the admin proxy. It sends no
-// credential: fabriq-admin's nginx adds the operator key itself, from
-// FABRIQ_ADMIN_UPSTREAM_KEY, and the proxy drops any Authorization header the
-// browser sends. The admin component's port serves nothing but the console
-// and its /admin/ API, which is why StripPrefix may be a whole allowed prefix.
+// AdminTarget opens the console through the admin proxy. The proxy supplies
+// the resource's control token, and nginx adds its own operator key upstream.
+// The console and its /admin/ API share the admin component's port.
 var AdminTarget = catalogproxy.Target{
 	Component: "admin", Port: "http", Root: ConsoleBasePath,
 	AllowedPrefixes: []string{ConsoleBasePath}, StripPrefix: "/fabriq",
+	Header: func(_ context.Context, read func(name string) ([]byte, error)) (http.Header, error) {
+		credential, err := resolveControlCredential(read)
+		if err != nil {
+			return nil, err
+		}
+		header := http.Header{controlTokenHeader: nil}
+		if credential.token != "" {
+			header.Set(controlTokenHeader, credential.token)
+		}
+		return header, nil
+	},
 }
 
 func init() { catalogproxy.Register("fabriq", AdminTarget) }

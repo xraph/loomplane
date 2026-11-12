@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	authid "github.com/xraph/authsome/id"
 	"github.com/xraph/grove/driver"
+	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/grove/observability"
 	keyid "github.com/xraph/keysmith/id"
 	"github.com/xraph/warden"
@@ -104,7 +105,10 @@ func (f *ordinaryInstallationPG) run(t *testing.T, input Binding) error {
 	input.RecordID = fmt.Sprintf("installed-ordinary-%d", time.Now().UnixNano())
 	input.AttemptID = input.RecordID
 	err := f.ordinary.RunOrdinary(t.Context(), input, func(ctx context.Context, a *Attempt) error {
-		d, err := a.EvaluateOrdinary(ctx, security.ProjectRead, f.fixture.project)
+		d, err := a.EvaluateOrdinaryAll(ctx, []OrdinaryRequirement{
+			{Permission: security.ProjectRead, ResourceID: f.fixture.project},
+			{Permission: security.DeploymentRead, ResourceID: f.fixture.project},
+		})
 		if err != nil {
 			return err
 		}
@@ -158,10 +162,19 @@ func assertOrdinaryInstallationCandidate(t *testing.T, f *ordinaryPGFixture, rec
 	}
 }
 
+func (f *ordinaryInstallationPG) assertSchema(t *testing.T, main *pgdriver.PgDB, app, want string) {
+	t.Helper()
+	schema, err := f.ordinary.OrdinarySchemaForApp(main, app)
+	if schema != want || (want == "" && !errors.Is(err, ErrUnavailable)) || (want != "" && err != nil) {
+		t.Fatalf("ordinary schema=%q want=%q err=%v", schema, want, err)
+	}
+}
+
 func TestOrdinaryInstallationPostgresTypedLifecycle(t *testing.T) {
 	fixture := ordinaryInstallationPGFixture(t)
 	f := newOrdinaryInstallationPG(t, fixture)
 	work := func(context.Context, *Attempt) error { t.Fatal("unavailable callback ran"); return nil }
+	f.assertSchema(t, fixture.main, fixture.binding.AppID, "")
 	if err := f.ordinary.RunOrdinary(t.Context(), fixture.binding, work); !errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)
 	}
@@ -169,6 +182,19 @@ func TestOrdinaryInstallationPostgresTypedLifecycle(t *testing.T) {
 	if installErr != nil || report.Ordinary != ProfileReady || report.Fleet != ProfileReady {
 		t.Fatalf("joint installation report=%+v err=%v", report, installErr)
 	}
+	f.assertPools(t, 2)
+	f.assertSchema(t, fixture.main, fixture.binding.AppID, fixture.schema)
+	f.assertSchema(t, fixture.main, authid.NewAppID().String(), "")
+	other := pgdriver.New()
+	if err := other.Open(t.Context(), fixture.dsn, driver.WithPoolSize(1)); err != nil {
+		t.Fatal("open second test database handle")
+	}
+	t.Cleanup(func() {
+		if err := other.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	f.assertSchema(t, other, fixture.binding.AppID, "")
 	f.assertPools(t, 2)
 	installation, profile := f.coordinator.installation, f.coordinator.profile
 	if installation == nil || installation.backend != f.coordinator.backend || installation.main != fixture.main || installation.engine != f.engine || installation.owner != fixture.role || profile.ordinary.migrationRole != fixture.role {
@@ -219,10 +245,50 @@ func TestOrdinaryInstallationPostgresTypedLifecycle(t *testing.T) {
 	if err := f.authorizer.Require(t.Context(), fixture.binding.Actor, security.ProjectRead, fixture.project); err != nil {
 		t.Fatalf("normal identity after installation: %v", err)
 	}
+	// Hold an admitted attempt so shutdown can stop admission before close.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- f.ordinary.RunOrdinary(t.Context(), fixture.binding, func(ctx context.Context, _ *Attempt) error {
+			close(entered)
+			<-release
+			return ctx.Err()
+		})
+	}()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("ordinary attempt did not start: %v", err)
+	case <-time.After(AttemptLimit):
+		t.Fatal("ordinary attempt did not start")
+	}
+	stop, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := f.coordinator.Shutdown(stop); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown with active attempt=%v", err)
+	}
+	f.assertSchema(t, fixture.main, fixture.binding.AppID, "")
+	f.assertPools(t, 2)
+	close(release)
 	if err := f.coordinator.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("drained ordinary attempt=%v", err)
+	}
+	f.assertSchema(t, fixture.main, fixture.binding.AppID, "")
 	f.assertPools(t, 0)
+	if err := fixture.main.Ping(t.Context()); err != nil {
+		t.Fatalf("main database after ordinary shutdown: %v", err)
+	}
 	if err := f.ordinary.RunOrdinary(t.Context(), fixture.binding, work); !errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)
 	}
@@ -286,6 +352,12 @@ func TestOrdinaryInstallationPostgresIndependentKinds(t *testing.T) {
 				}
 				f.assertPools(t, 2)
 			}
+			if tc.ordinary == ProfileReady {
+				f.assertSchema(t, fixture.main, fixture.binding.AppID, fixture.schema)
+				f.assertPools(t, 2)
+			} else {
+				f.assertSchema(t, fixture.main, fixture.binding.AppID, "")
+			}
 			ordinaryErr := f.run(t, fixture.binding)
 			if (ordinaryErr == nil) != (tc.ordinary == ProfileReady) || (tc.ordinary != ProfileReady && !errors.Is(ordinaryErr, ErrUnavailable)) {
 				t.Fatalf("ordinary result=%v", ordinaryErr)
@@ -341,6 +413,7 @@ func TestOrdinaryInstallationPostgresCommonSchemaFailure(t *testing.T) {
 			if !errors.Is(err, ErrUnavailable) || report.Ordinary != ProfileUnavailable || report.Fleet != ProfileUnavailable || f.coordinator.installation != nil || f.coordinator.profile != nil {
 				t.Fatalf("common schema failure=%+v %v", report, err)
 			}
+			f.assertSchema(t, fixture.main, fixture.binding.AppID, "")
 			f.assertPools(t, 0)
 		})
 	}

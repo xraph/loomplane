@@ -1,6 +1,7 @@
 package fabriqloom_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,17 +22,17 @@ import (
 
 // fakeFabriq stands in for fabriq-admin's nginx and the Fabriq server
 // behind it, as a component channel to the admin component's http port
-// reaches them. nginx adds the operator key itself, so the fake takes a
-// request only when it carries no Authorization header, and treats it as
-// sent with the operator key. Setting refuse answers every request with
-// that status instead, as Fabriq does when the injected key is refused
-// (401) or nginx does when the server is down (502).
+// reaches them. It requires the control credential before serving the API.
+// The legacy fixture expects no control header. Setting refuse answers
+// requests that pass the gate with the specified status.
 type fakeFabriq struct {
-	mu       sync.Mutex
-	tenants  map[string]time.Time
-	keys     []*fakeKey // in issue order
-	requests []fakeRequest
-	refuse   int
+	mu           sync.Mutex
+	tenants      map[string]time.Time
+	keys         []*fakeKey // in issue order
+	requests     []fakeRequest
+	controlToken string
+	closed       int
+	refuse       int
 	// failRevoke answers DELETE /admin/keys/:id with 500.
 	failRevoke bool
 	// revokeNotFound answers DELETE /admin/keys/:id with 404, as Fabriq
@@ -56,10 +57,17 @@ type fakeRequest struct {
 	Body         string
 }
 
+const (
+	fixtureControlToken  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	fixtureControlHeader = "X-Fabriq-Control-Token"
+	fixtureControlSecret = "admin-control-token"
+	fixtureControlEnv    = "FABRIQ_ADMIN_CONTROL_TOKEN"
+)
+
 var tenantRule = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 func newFakeFabriq(tenants ...string) *fakeFabriq {
-	f := &fakeFabriq{tenants: map[string]time.Time{}}
+	f := &fakeFabriq{tenants: map[string]time.Time{}, controlToken: fixtureControlToken}
 	for _, t := range tenants {
 		f.tenants[t] = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	}
@@ -80,7 +88,14 @@ func (f *fakeFabriq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, fakeRequest{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone(), Body: string(raw)})
+	control := r.Header.Values(fixtureControlHeader)
 	switch {
+	case f.controlToken != "" && (len(control) != 1 || control[0] != f.controlToken):
+		w.WriteHeader(http.StatusForbidden)
+		return
+	case f.controlToken == "" && len(control) != 0:
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	case r.Header.Get("Authorization") != "":
 		// Loomplane never sends its own: nginx injects the operator key.
 		w.WriteHeader(http.StatusBadRequest)
@@ -230,8 +245,35 @@ func (f *fakeFabriq) channel() *deployments.ComponentChannel {
 	return &deployments.ComponentChannel{
 		Client:  &http.Client{Transport: f, Timeout: 5 * time.Second},
 		BaseURL: &url.URL{Scheme: "http", Host: "component"},
-		Close:   func() error { return nil },
+		Close: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.closed++
+			return nil
+		},
 	}
+}
+
+func (f *fakeFabriq) closes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
+}
+
+func fixtureAdmin(t *testing.T, f *fakeFabriq) *fabriqloom.AdminClient {
+	t.Helper()
+	ch := f.channel()
+	admin, err := fabriqloom.NewTestAdminClient(ch, func(name string) ([]byte, error) {
+		if name != fixtureControlSecret {
+			t.Fatal("looked up the wrong secret")
+		}
+		return []byte(fixtureControlToken), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ch.Close() })
+	return admin
 }
 
 func (f *fakeFabriq) seen() []fakeRequest {
@@ -304,7 +346,7 @@ func (f *fakeFabriq) use(id string, at time.Time) {
 
 func TestAdminClientSpeaksPlan2aContract(t *testing.T) {
 	f := newFakeFabriq()
-	admin := &fabriqloom.AdminClient{Channel: f.channel()}
+	admin := fixtureAdmin(t, f)
 	ctx := t.Context()
 
 	tenant, created, err := admin.EnsureTenant(ctx, "acme")
@@ -390,7 +432,7 @@ func TestAdminClientReadsEntityTypesAndMigrations(t *testing.T) {
 	f := newFakeFabriq("acme")
 	f.types = []string{"a", "b", "c"}
 	f.applied = []string{"202610210001", "202610210035"}
-	admin := &fabriqloom.AdminClient{Channel: f.channel()}
+	admin := fixtureAdmin(t, f)
 	ctx := t.Context()
 	n, err := admin.EntityTypeCount(ctx, "acme")
 	if err != nil || n != 3 {
@@ -434,4 +476,59 @@ func noSecret(t *testing.T, f *fakeFabriq, err error) {
 	if strings.Contains(err.Error(), "fabriq://") {
 		t.Fatal("an error carries a DSN")
 	}
+}
+
+func TestAdminClientControlCredential(t *testing.T) {
+	t.Run("zero value", func(t *testing.T) {
+		var admin fabriqloom.AdminClient
+		if _, err := admin.Tenants(t.Context()); err == nil {
+			t.Fatal("zero credential was accepted")
+		}
+	})
+
+	t.Run("header only", func(t *testing.T) {
+		f := newFakeFabriq()
+		ch := f.channel()
+		ch.Client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			if r.Header.Get(fixtureControlHeader) != fixtureControlToken || r.Header.Get("Authorization") != "" {
+				t.Error("request did not carry only the control credential")
+			}
+			if strings.Contains(r.URL.String(), fixtureControlToken) || strings.Contains(string(raw), fixtureControlToken) {
+				t.Error("control credential appeared outside its header")
+			}
+			return nil, fmt.Errorf("transport echoed %s: %w", r.Header.Get(fixtureControlHeader), context.DeadlineExceeded)
+		})
+		admin, err := fabriqloom.NewTestAdminClient(ch, func(string) ([]byte, error) {
+			return []byte(fixtureControlToken), nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = admin.EnsureTenant(t.Context(), "acme")
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "transport echoed [redacted]") || strings.Contains(err.Error(), fixtureControlToken) {
+			t.Fatal("transport error lost its cause or exposed the credential")
+		}
+	})
+
+	t.Run("historical", func(t *testing.T) {
+		f := newFakeFabriq("acme")
+		f.controlToken = ""
+		admin, err := fabriqloom.NewTestAdminClient(f.channel(), func(string) ([]byte, error) {
+			return nil, &deployments.GeneratedSecretNotDeclaredError{Kind: "fabriq", Version: "1.9", Revision: "1", Name: fixtureControlSecret}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tenants, err := admin.Tenants(t.Context())
+		if err != nil || len(tenants) != 1 {
+			t.Fatalf("historical tenants: %d, %v", len(tenants), err)
+		}
+		if got := f.seen(); len(got) != 1 || len(got[0].Header.Values(fixtureControlHeader)) != 0 {
+			t.Fatal("historical request carried a control header")
+		}
+	})
 }

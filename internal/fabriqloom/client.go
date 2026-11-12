@@ -71,12 +71,11 @@ func (e *StatusError) Unwrap() error {
 
 // AdminClient speaks Fabriq's admin API (Plan 2a) through fabriq-admin, the
 // stack's console: a channel to component "admin", port "http", path
-// /admin/.... It sends no Authorization header, which no component channel
-// may carry: the console's nginx adds the operator key itself, from
-// FABRIQ_ADMIN_UPSTREAM_KEY, and passes X-Tenant-ID and
-// X-Fabriq-Api-Version on to the server.
+// /admin/.... It sends the control token to nginx, which supplies its own
+// operator key upstream and passes X-Tenant-ID and X-Fabriq-Api-Version through.
 type AdminClient struct {
-	Channel *deployments.ComponentChannel
+	channel    *deployments.ComponentChannel
+	credential controlCredential
 }
 
 // Tenant is a Fabriq tenant.
@@ -249,8 +248,8 @@ func (c *AdminClient) AppliedMigrations(ctx context.Context, tenant string) (ver
 // An answer whose status isn't in accept is a *StatusError, and what
 // Fabriq wrote is never read for it.
 func (c *AdminClient) call(ctx context.Context, method, path, tenant string, body, out any, accept ...int) (int, error) {
-	if c.Channel == nil || c.Channel.Client == nil || c.Channel.BaseURL == nil {
-		return 0, errors.New("no channel to Fabriq's console")
+	if !c.credential.valid() {
+		return 0, errControlCredential
 	}
 	var reader io.Reader
 	if body != nil {
@@ -260,25 +259,22 @@ func (c *AdminClient) call(ctx context.Context, method, path, tenant string, bod
 		}
 		reader = bytes.NewReader(raw)
 	}
-	ref, err := url.Parse(path)
+	req, err := c.request(ctx, method, path, reader)
 	if err != nil {
 		return 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.Channel.BaseURL.ResolveReference(ref).String(), reader)
-	if err != nil {
-		return 0, err
+	if c.credential.token != "" {
+		req.Header.Set(controlTokenHeader, c.credential.token)
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Fabriq-Api-Version", apiVersion)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if tenant != "" {
 		req.Header.Set("X-Tenant-ID", tenant)
 	}
-	res, err := c.Channel.Client.Do(req)
+	res, err := c.send(req)
 	if err != nil {
-		return 0, fmt.Errorf("reach Fabriq's admin API: %w", err)
+		return 0, err
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, maxResponse)) //nolint:errcheck // draining for reuse only
@@ -289,8 +285,53 @@ func (c *AdminClient) call(ctx context.Context, method, path, tenant string, bod
 	}
 	if out != nil && res.StatusCode/100 == 2 {
 		if err := json.NewDecoder(io.LimitReader(res.Body, maxResponse)).Decode(out); err != nil {
-			return res.StatusCode, fmt.Errorf("read Fabriq's answer to %s %s: %w", method, path, err)
+			return res.StatusCode, fmt.Errorf("read Fabriq's answer to %s %s: %w", method, path, c.credential.redactErr(err))
 		}
 	}
 	return res.StatusCode, nil
+}
+
+func (c *AdminClient) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	if c.channel == nil || c.channel.Client == nil || c.channel.BaseURL == nil {
+		return nil, errors.New("no channel to Fabriq's console")
+	}
+	ref, err := url.Parse(path)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.channel.BaseURL.ResolveReference(ref).String(), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Fabriq-Api-Version", apiVersion)
+	return req, nil
+}
+
+func (c *AdminClient) send(req *http.Request) (*http.Response, error) {
+	res, err := c.channel.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("reach Fabriq's admin API: %w", c.credential.redactErr(err))
+	}
+	return res, nil
+}
+
+// checkControlGate checks that a gated console refuses an unauthenticated request.
+func (c *AdminClient) checkControlGate(ctx context.Context) error {
+	if c.credential.legacy {
+		return nil
+	}
+	req, err := c.request(ctx, http.MethodGet, "/admin/tenants", nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.send(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusForbidden {
+		return fmt.Errorf("Fabriq's control gate answered a request without a token with HTTP %d", res.StatusCode) //nolint:staticcheck // ST1005: Fabriq is a name
+	}
+	return nil
 }

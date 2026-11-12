@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	authid "github.com/xraph/authsome/id"
+	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -59,4 +60,39 @@ func (o *OrdinaryAuthority) RunOrdinary(ctx context.Context, binding Binding, wo
 		return ErrUnavailable
 	}
 	return o.coordinator.Run(ctx, binding, work)
+}
+
+// OrdinarySchemaForApp returns the installed schema for your exact main database
+// and application. The schema may be used for primary reads while the database
+// remains available. Use RunOrdinary to check current permission for a write.
+func (o *OrdinaryAuthority) OrdinarySchemaForApp(main *pgdriver.PgDB, appID string) (string, error) {
+	if o == nil || o.coordinator == nil || main == nil || appID == "" {
+		return "", ErrUnavailable
+	}
+	c := o.coordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	installed := c.installation
+	if c.installing || c.stopping || c.closing || c.closed || installed == nil {
+		return "", ErrUnavailable
+	}
+	if installed.main != main || installed.appID != appID || installed.backend == nil ||
+		c.backend != installed.backend || installed.schema == "" || c.schema != installed.schema {
+		return "", ErrUnavailable
+	}
+	p := c.profile
+	if p == nil || p.mode != installedProfile || p.ordinary == nil || installed.engine == nil || p.engine != installed.engine {
+		return "", ErrUnavailable
+	}
+	ordinary := p.ordinary
+	if ordinary.appID != installed.appID || installed.owner == 0 || ordinary.migrationRole != installed.owner {
+		return "", ErrUnavailable
+	}
+	if err := p.verify(); err != nil {
+		return "", err
+	}
+	if !ordinary.authorizer.MatchesEngineStore(installed.engine, installed.engine.Store()) {
+		return "", ErrUnavailable
+	}
+	return installed.schema, nil
 }

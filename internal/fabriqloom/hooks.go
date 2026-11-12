@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -24,11 +25,11 @@ const (
 	serverPort      = "api"
 )
 
-// Channels opens channels to a composed resource's components for
-// Loomplane's own background work. *deployments.CatalogAccess is the real
-// one.
+// Channels opens channels and reads generated secrets for Loomplane's
+// background work. *deployments.CatalogAccess is the real one.
 type Channels interface {
 	InternalChannel(ctx context.Context, orgID string, ref deployments.ComponentRef) (*deployments.ComponentChannel, error)
+	InternalSecret(ctx context.Context, orgID string, ref deployments.ResourceRef, name string) ([]byte, error)
 }
 
 var _ Channels = (*deployments.CatalogAccess)(nil)
@@ -90,12 +91,20 @@ func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 	if err != nil {
 		return fmt.Errorf("reach Fabriq's console: %w", err)
 	}
-	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
-	admin := &AdminClient{Channel: ch}
+	admin, closeChannel, err := newAdminClient(ch, func() (controlCredential, error) {
+		return runControlCredential(run)
+	})
+	if err != nil {
+		return err
+	}
+	defer closeChannel()
+	if err := admin.checkControlGate(ctx); err != nil {
+		return err
+	}
 	_, err = admin.Tenants(ctx)
 	var status *StatusError
-	if errors.As(err, &status) && !errors.Is(err, ErrUnreachable) && !errors.Is(err, ErrAPIVersion) {
-		return fmt.Errorf("Fabriq refused Loomplane's operator key (HTTP %d)", status.Status) //nolint:staticcheck // ST1005: the step shows this sentence as written
+	if errors.As(err, &status) && status.Status == http.StatusForbidden && !admin.credential.legacy {
+		return errors.New("Fabriq's console refused Loomplane's control credential (HTTP 403)") //nolint:staticcheck // ST1005: Fabriq is a name
 	}
 	if err != nil {
 		return err
@@ -162,12 +171,11 @@ func (h *Hooks) BindConsumer(ctx context.Context, c deployments.Consumer) (strin
 	if err != nil {
 		return "", err
 	}
-	ch, err := c.Channel(ctx, consoleComponent, consolePort)
+	admin, closeChannel, err := h.consumerAdmin(ctx, c)
 	if err != nil {
-		return "", fmt.Errorf("reach Fabriq's console: %w", err)
+		return "", err
 	}
-	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
-	admin := &AdminClient{Channel: ch}
+	defer closeChannel()
 	if _, _, err = admin.EnsureTenant(ctx, tenant); err != nil {
 		return "", fmt.Errorf("create Fabriq tenant %s: %w", tenant, err)
 	}
@@ -368,16 +376,15 @@ func (h *Hooks) ReleaseConsumer(ctx context.Context, c deployments.Consumer) err
 			live = append(live, r)
 		}
 	}
-	ch, err := c.Channel(ctx, consoleComponent, consolePort)
+	admin, closeChannel, err := h.consumerAdmin(ctx, c)
 	if err != nil {
 		if len(live) == 0 {
 			h.d.warn("sweep the unrecorded Fabriq keys of "+c.Service, err)
 			return nil
 		}
-		return fmt.Errorf("reach Fabriq's console: %w", err)
+		return err
 	}
-	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
-	admin := &AdminClient{Channel: ch}
+	defer closeChannel()
 	sweep := h.revokeOrphans(ctx, admin, c)
 	var remote *fabriqError
 	if len(live) == 0 && errors.As(sweep, &remote) {
@@ -428,11 +435,10 @@ func (h *Hooks) Removed(ctx context.Context, res deployments.ComposedResource) e
 	if len(live) == 0 {
 		return nil
 	}
-	var admin *AdminClient
-	ref := deployments.ComponentRef{ResourceRef: deployments.ResourceRef{ProjectID: res.ProjectID, EnvironmentID: res.EnvironmentID, Resource: res.Resource}, Component: consoleComponent, Port: consolePort}
-	if ch, cerr := h.d.Access.InternalChannel(ctx, res.OrgID, ref); cerr == nil {
-		defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
-		admin = &AdminClient{Channel: ch}
+	ref := deployments.ResourceRef{ProjectID: res.ProjectID, EnvironmentID: res.EnvironmentID, Resource: res.Resource}
+	admin, closeChannel, err := h.internalAdmin(ctx, res.OrgID, ref)
+	if err == nil {
+		defer closeChannel()
 	}
 	var errs []error
 	for _, r := range live {
@@ -445,6 +451,37 @@ func (h *Hooks) Removed(ctx context.Context, res deployments.ComposedResource) e
 		errs = append(errs, h.forget(ctx, res.OrgID, res.EnvironmentID, res.Resource, r))
 	}
 	return errors.Join(errs...)
+}
+
+func (h *Hooks) consumerAdmin(ctx context.Context, c deployments.Consumer) (*AdminClient, func(), error) {
+	ch, err := c.Channel(ctx, consoleComponent, consolePort)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reach Fabriq's console: %w", err)
+	}
+	ref := deployments.ResourceRef{ProjectID: c.ProjectID, EnvironmentID: c.EnvironmentID, Resource: c.Resource}
+	return h.boundAdmin(ctx, ch, c.OrgID, ref)
+}
+
+func (h *Hooks) internalAdmin(ctx context.Context, orgID string, ref deployments.ResourceRef) (*AdminClient, func(), error) {
+	if h.d.Access == nil {
+		return nil, nil, errControlCredential
+	}
+	ch, err := h.d.Access.InternalChannel(ctx, orgID, deployments.ComponentRef{ResourceRef: ref, Component: consoleComponent, Port: consolePort})
+	if err != nil {
+		return nil, nil, fmt.Errorf("reach Fabriq's console: %w", err)
+	}
+	return h.boundAdmin(ctx, ch, orgID, ref)
+}
+
+func (h *Hooks) boundAdmin(ctx context.Context, ch *deployments.ComponentChannel, orgID string, ref deployments.ResourceRef) (*AdminClient, func(), error) {
+	return newAdminClient(ch, func() (controlCredential, error) {
+		if h.d.Access == nil {
+			return controlCredential{}, errControlCredential
+		}
+		return resolveControlCredential(func(name string) ([]byte, error) {
+			return h.d.Access.InternalSecret(ctx, orgID, ref, name)
+		})
+	})
 }
 
 // inState is the first record in state, or nil.

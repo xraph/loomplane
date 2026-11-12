@@ -125,3 +125,109 @@ func TestOrdinaryAuthorityHandleRefusesBeforeInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOrdinarySchemaForAppExactInstallation(t *testing.T) {
+	assertUnavailable := func(t *testing.T, handle *OrdinaryAuthority, main *pgdriver.PgDB, app string) {
+		t.Helper()
+		if schema, err := handle.OrdinarySchemaForApp(main, app); schema != "" || !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("unavailable ordinary schema=%q err=%v", schema, err)
+		}
+	}
+	var nilCoordinator *Coordinator
+	for _, handle := range []*OrdinaryAuthority{nil, {}, nilCoordinator.OrdinaryAuthority(), (&Coordinator{}).OrdinaryAuthority()} {
+		assertUnavailable(t, handle, pgdriver.New(), "app")
+	}
+	for _, name := range []string{
+		"exact", "nil main", "wrong main", "empty app", "wrong app", "empty installed app",
+		"no installation", "nil backend", "wrong backend", "empty schema", "wrong schema",
+		"no profile", "mechanism profile", "Fleet only", "nil engine", "wrong engine",
+		"wrong ordinary app", "no owner", "wrong migration role", "nil authorizer",
+		"authorizer engine", "authorizer store", "mutated engine config", "appended plugin",
+		"installing", "stopping", "closing", "closed",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, installed, authorizer := ordinaryInstallationCandidate(t)
+			ordinary, err := captureOrdinaryProfile(c, installed, authorizer, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			router, ok := installed.engine.Store().(*storeRouter)
+			if !ok {
+				t.Fatal("fixture lost the canonical router")
+			}
+			p, err := captureEngineProfile(installed.engine, router)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.ordinary = ordinary
+			c.installation, c.backend, c.schema, c.profile = installed, installed.backend, installed.schema, p
+			main, app := installed.main, installed.appID
+			switch name {
+			case "nil main":
+				main = nil
+			case "wrong main":
+				main = pgdriver.New()
+			case "empty app":
+				app = ""
+			case "wrong app":
+				app = authid.NewAppID().String()
+			case "empty installed app":
+				installed.appID = ""
+			case "no installation":
+				c.installation = nil
+			case "nil backend":
+				installed.backend, c.backend = nil, nil
+			case "wrong backend":
+				c.backend = &nativeBackend{}
+			case "empty schema":
+				installed.schema, c.schema = "", ""
+			case "wrong schema":
+				c.schema = "other"
+			case "no profile":
+				c.profile = nil
+			case "mechanism profile":
+				p.mode = mechanismProfile
+			case "Fleet only":
+				p.ordinary, p.fleet = nil, &fleetProfile{appID: app}
+			case "nil engine":
+				installed.engine, p.engine = nil, nil
+			case "wrong engine":
+				p.engine = &warden.Engine{}
+			case "wrong ordinary app":
+				ordinary.appID = authid.NewAppID().String()
+			case "no owner":
+				installed.owner, ordinary.migrationRole = 0, 0
+			case "wrong migration role":
+				ordinary.migrationRole++
+			case "nil authorizer":
+				ordinary.authorizer = nil
+			case "authorizer engine":
+				ordinary.authorizer = security.NewAuthorizer(&warden.Engine{}, installed.engine.Store(), nil)
+			case "authorizer store":
+				ordinary.authorizer = security.NewAuthorizer(installed.engine, &ordinaryInstallationStoreWrapper{installed.engine.Store()}, nil)
+			case "mutated engine config":
+				config := installed.engine.Config()
+				*config.EnableRBAC = false
+			case "appended plugin":
+				installed.engine.Plugins().Register(&namedPlugin{name: "extra"})
+			case "installing":
+				c.installing = true
+			case "stopping":
+				c.stopping = true
+			case "closing":
+				c.closing = true
+			case "closed":
+				c.closed = true
+			}
+			handle := c.OrdinaryAuthority()
+			if name == "exact" {
+				// The main database is unopened and the profile is ordinary-only.
+				if schema, err := handle.OrdinarySchemaForApp(main, app); err != nil || schema != "qualified" {
+					t.Fatalf("exact ordinary schema=%q err=%v", schema, err)
+				}
+				return
+			}
+			assertUnavailable(t, handle, main, app)
+		})
+	}
+}

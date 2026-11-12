@@ -13,18 +13,22 @@ const DefaultInstanceContainerStorageMiB int64 = 64
 
 const InstanceIsolationRevision = "kubernetes-instance-isolation-v1"
 
+// InstanceObservationRevision permits namespace-scoped metrics and owner reads.
+const InstanceObservationRevision = "kubernetes-instance-observation-v1"
+
 // InstanceIsolationPolicy is derived from reviewed placement and resource grants.
 // It describes enforcement; it does not itself prove that a cluster enforces it.
 type InstanceIsolationPolicy struct {
-	Revision           string                    `json:"revision"`
-	PodSecurityVersion string                    `json:"pod_security_version"`
-	CPUMillis          int64                     `json:"cpu_millis"`
-	MemoryMiB          int64                     `json:"memory_mib"`
-	EphemeralMiB       int64                     `json:"ephemeral_mib"`
-	MaxPods            int64                     `json:"max_pods"`
-	Egress             []InstanceNetworkEndpoint `json:"egress,omitempty"`
-	IngressPeers       []InstanceNamespacePeer   `json:"ingress_peers,omitempty"`
-	EgressPeers        []InstanceNamespacePeer   `json:"egress_peers,omitempty"`
+	ObservationRevision string                    `json:"observation_revision,omitempty"`
+	Revision            string                    `json:"revision"`
+	PodSecurityVersion  string                    `json:"pod_security_version"`
+	CPUMillis           int64                     `json:"cpu_millis"`
+	MemoryMiB           int64                     `json:"memory_mib"`
+	EphemeralMiB        int64                     `json:"ephemeral_mib"`
+	MaxPods             int64                     `json:"max_pods"`
+	Egress              []InstanceNetworkEndpoint `json:"egress,omitempty"`
+	IngressPeers        []InstanceNamespacePeer   `json:"ingress_peers,omitempty"`
+	EgressPeers         []InstanceNamespacePeer   `json:"egress_peers,omitempty"`
 }
 
 type InstanceNetworkPort struct {
@@ -49,7 +53,7 @@ var instanceSecurityVersion = regexp.MustCompile(`^v1\.(\d{2})$`)
 
 func (p InstanceIsolationPolicy) Validate() error {
 	version := instanceSecurityVersion.FindStringSubmatch(p.PodSecurityVersion)
-	if p.Revision != InstanceIsolationRevision || len(version) != 2 || p.CPUMillis < 1 || p.CPUMillis > 1_000_000_000 || p.MemoryMiB < 1 || p.MemoryMiB > 1_000_000_000 || p.EphemeralMiB < 1 || p.EphemeralMiB > 1_000_000_000 || p.MaxPods < 1 || p.MaxPods > 10000 || len(p.Egress) > 64 || len(p.IngressPeers) > 16 || len(p.EgressPeers) > 16 {
+	if (p.ObservationRevision != "" && p.ObservationRevision != InstanceObservationRevision) || p.Revision != InstanceIsolationRevision || len(version) != 2 || p.CPUMillis < 1 || p.CPUMillis > 1_000_000_000 || p.MemoryMiB < 1 || p.MemoryMiB > 1_000_000_000 || p.EphemeralMiB < 1 || p.EphemeralMiB > 1_000_000_000 || p.MaxPods < 1 || p.MaxPods > 10000 || len(p.Egress) > 64 || len(p.IngressPeers) > 16 || len(p.EgressPeers) > 16 {
 		return ErrWorkloadSpec
 	}
 	minor, err := strconv.Atoi(version[1])

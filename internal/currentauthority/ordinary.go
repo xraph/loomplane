@@ -1,8 +1,10 @@
 package currentauthority
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	authid "github.com/xraph/authsome/id"
@@ -46,11 +48,54 @@ type ordinaryFacts struct {
 	keyUntil                                               optionalInstant
 }
 
-type ordinaryProof struct {
+// MaxOrdinaryRequirements bounds the number of permission checks in one attempt.
+const MaxOrdinaryRequirements = 16
+
+// OrdinaryRequirement names a permission and the exact resource to check.
+type OrdinaryRequirement struct {
+	Permission security.Permission
+	ResourceID string
+}
+
+type ordinaryRequirementProof struct {
 	permission          security.Permission
 	resource, namespace string
-	facts               ordinaryFacts
-	requireEmail        bool
+}
+
+func compareOrdinaryRequirements(left, right ordinaryRequirementProof) int {
+	return cmp.Or(
+		cmp.Compare(left.permission.Resource, right.permission.Resource),
+		cmp.Compare(left.permission.Action, right.permission.Action),
+		cmp.Compare(left.resource, right.resource),
+	)
+}
+
+type ordinaryProof struct {
+	requirements [MaxOrdinaryRequirements]ordinaryRequirementProof
+	count        int
+	facts        ordinaryFacts
+	requireEmail bool
+}
+
+func (p *ordinaryProof) validRequirements() bool {
+	if p.count < 1 || p.count > MaxOrdinaryRequirements {
+		return false
+	}
+	for i, req := range p.requirements[:p.count] {
+		ns, _ := security.ProjectNamespace(req.resource)
+		if req.permission.Resource == "" || req.permission.Action == "" || req.namespace != ns {
+			return false
+		}
+		if i > 0 && compareOrdinaryRequirements(p.requirements[i-1], req) >= 0 {
+			return false
+		}
+	}
+	for _, req := range p.requirements[p.count:] {
+		if req != (ordinaryRequirementProof{}) {
+			return false
+		}
+	}
+	return true
 }
 
 func (f ordinaryFacts) validate(b binding, requiredEmail bool, at time.Time) error {
@@ -104,6 +149,12 @@ func actor(b binding) security.Principal {
 // EvaluateOrdinary checks the bound person and exact resource after domain guards.
 // It requires the private ordinary profile qualified by the owned installer.
 func (a *Attempt) EvaluateOrdinary(ctx context.Context, permission security.Permission, resourceID string) (*Decision, error) {
+	return a.EvaluateOrdinaryAll(ctx, []OrdinaryRequirement{{Permission: permission, ResourceID: resourceID}})
+}
+
+// EvaluateOrdinaryAll checks every requirement in one authority interval after
+// domain guards. Supply the complete set for the operation you will stage.
+func (a *Attempt) EvaluateOrdinaryAll(ctx context.Context, requirements []OrdinaryRequirement) (*Decision, error) {
 	if a.binding.kind != security.KindUser {
 		return nil, a.fail(ErrBinding)
 	}
@@ -113,8 +164,21 @@ func (a *Attempt) EvaluateOrdinary(ctx context.Context, permission security.Perm
 	if a.binding.app != a.profile.ordinary.appID {
 		return nil, a.fail(ErrBinding)
 	}
-	proof := &ordinaryProof{permission: permission, resource: resourceID, requireEmail: a.profile.ordinary.requireEmail}
-	proof.namespace, _ = security.ProjectNamespace(resourceID)
+	count := len(requirements)
+	if count < 1 || count > MaxOrdinaryRequirements {
+		return nil, a.fail(ErrDecision)
+	}
+	ordinary := a.profile.ordinary
+	proof := &ordinaryProof{count: count, requireEmail: ordinary.requireEmail}
+	checks := proof.requirements[:count]
+	for i, req := range requirements {
+		ns, _ := security.ProjectNamespace(req.ResourceID)
+		checks[i] = ordinaryRequirementProof{permission: req.Permission, resource: req.ResourceID, namespace: ns}
+	}
+	slices.SortFunc(checks, compareOrdinaryRequirements)
+	if !proof.validRequirements() {
+		return nil, a.fail(ErrDecision)
+	}
 	return a.evaluate(ctx, func(ctx context.Context) error {
 		facts, grants, err := a.readOrdinaryFacts(ctx)
 		if err != nil {
@@ -144,8 +208,19 @@ func (a *Attempt) EvaluateOrdinary(ctx context.Context, permission security.Perm
 		if verifyErr := security.VerifyCurrentManagedRoles(a.binding.org, a.binding.user, desired, catalog, rows); verifyErr != nil {
 			return verifyErr
 		}
-		_, err = a.profile.ordinary.authorizer.CheckUnrepaired(ctx, actor(a.binding), permission, resourceID, facts.memberRole)
-		return err
+		person := actor(a.binding)
+		// Warden uses the context namespace when a request has an empty
+		// namespace. Start at root so opaque resource IDs stay at root.
+		checkCtx := warden.WithNamespace(ctx, "")
+		for _, req := range checks {
+			if ctxErr := checkCtx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if _, checkErr := ordinary.authorizer.CheckUnrepaired(checkCtx, person, req.permission, req.resource, facts.memberRole); checkErr != nil {
+				return checkErr
+			}
+		}
+		return nil
 	}, proof, nil)
 }
 
@@ -195,8 +270,7 @@ func (d *Decision) validateOrdinary(a *Attempt) error {
 		return ErrDecision
 	}
 	p := d.ordinary
-	ns, _ := security.ProjectNamespace(p.resource)
-	if p.permission.Resource == "" || p.permission.Action == "" || p.namespace != ns || p.requireEmail != a.profile.ordinary.requireEmail {
+	if p.requireEmail != a.profile.ordinary.requireEmail || !p.validRequirements() {
 		return ErrDecision
 	}
 	return p.facts.validate(a.binding, p.requireEmail, d.at)

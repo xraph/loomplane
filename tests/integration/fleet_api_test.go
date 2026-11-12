@@ -131,13 +131,69 @@ func verifyFleetAPIClient(t *testing.T, r *running, cfg config.Config) {
 	if _, err = sdk.GetFleetInstance(t.Context(), uuid.NewString(), got.ID); !errors.Is(err, lpclient.ErrNotFound) {
 		t.Fatalf("hidden project: %v", err)
 	}
+
+	summary, err := sdk.GetFleetMetrics(t.Context(), project.ID, got.ID, fleet.MetricWindow{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Window.End.Sub(summary.Window.Start) != 15*time.Minute || summary.Window.End.After(time.Now()) || summary.Freshness != "unknown" || summary.CPUUtilization != nil || summary.CurrentReplicas != nil || summary.CostStatus != "unknown" {
+		t.Fatalf("unqualified observation changed meaning: %+v", summary)
+	}
+	journal, err := sdk.ListFleetEvents(t.Context(), project.ID, got.ID, "", 2)
+	if err != nil || journal.Items == nil {
+		t.Fatalf("event replay: %+v %v", journal, err)
+	}
+	if _, err = sdk.GetFleetMetrics(t.Context(), uuid.NewString(), got.ID, fleet.MetricWindow{}); !errors.Is(err, lpclient.ErrNotFound) {
+		t.Fatalf("hidden metric scope: %v", err)
+	}
+	if _, err = sdk.ListFleetEvents(t.Context(), uuid.NewString(), got.ID, "", 2); !errors.Is(err, lpclient.ErrNotFound) {
+		t.Fatalf("hidden event scope: %v", err)
+	}
 	var reader keyBody
 	c.must(http.StatusCreated, http.MethodPost, "/api/v1/api-keys", map[string]any{"name": "Fleet read", "access": "read"}, &reader)
 	if _, err = lpclient.New(r.srv.URL, reader.Secret).CreateFleetInstance(t.Context(), project.ID, input); !errors.Is(err, lpclient.ErrForbidden) {
 		t.Fatalf("read-only create: %v", err)
 	}
+
+	if _, err = lpclient.New(r.srv.URL, reader.Secret).GetFleetMetrics(t.Context(), project.ID, got.ID, fleet.MetricWindow{}); err != nil {
+		t.Fatalf("read-only metrics: %v", err)
+	}
+
+	active, err := sdk.GetActiveFleetOperation(t.Context(), project.ID, got.ID)
+	if err != nil || active.ID != accepted.Operation.ID {
+		t.Fatalf("active operation: %+v %v", active, err)
+	}
+	action := fleet.ActionInput{Kind: "suspend", IdempotencyKey: "operator-request", ExpectedRevision: got.Revision, ExpectedGeneration: got.DesiredGeneration, Suspend: &fleet.SuspendInput{}}
+	if _, err = sdk.RequestFleetInstanceAction(t.Context(), project.ID, got.ID, action); !errors.Is(err, lpclient.ErrConflict) {
+		t.Fatalf("unready action must conflict: %v", err)
+	}
+	if _, err = lpclient.New(r.srv.URL, reader.Secret).CancelFleetOperation(t.Context(), project.ID, active.ID, got.Revision); !errors.Is(err, lpclient.ErrForbidden) {
+		t.Fatalf("read-only cancel: %v", err)
+	}
+	if _, err = sdk.CancelFleetOperation(t.Context(), uuid.NewString(), active.ID, got.Revision); !errors.Is(err, lpclient.ErrNotFound) {
+		t.Fatalf("hidden cancellation scope: %v", err)
+	}
+	if _, err = sdk.CancelFleetOperation(t.Context(), project.ID, active.ID, got.Revision+1); !errors.Is(err, lpclient.ErrConflict) {
+		t.Fatalf("stale cancellation revision: %v", err)
+	}
+	for range 2 {
+		cancelled, cancelErr := sdk.CancelFleetOperation(t.Context(), project.ID, active.ID, got.Revision)
+		if cancelErr != nil || cancelled.ID != active.ID || cancelled.Status != "cancelled" {
+			t.Fatalf("cancellation replay: %+v %v", cancelled, cancelErr)
+		}
+	}
+	if _, err = sdk.GetActiveFleetOperation(t.Context(), project.ID, got.ID); !errors.Is(err, lpclient.ErrNotFound) {
+		t.Fatalf("cancelled mutation remained active: %v", err)
+	}
 	c.must(http.StatusNoContent, http.MethodDelete, "/api/v1/api-keys/"+key.Key.ID, nil, nil)
 	if _, err = sdk.GetFleetInstance(t.Context(), project.ID, got.ID); !errors.Is(err, lpclient.ErrUnauthorized) {
 		t.Fatalf("revoked key: %v", err)
 	}
+	if _, err = sdk.GetFleetMetrics(t.Context(), project.ID, got.ID, fleet.MetricWindow{}); !errors.Is(err, lpclient.ErrUnauthorized) {
+		t.Fatalf("revoked metric key: %v", err)
+	}
+	if _, err = sdk.ListFleetEvents(t.Context(), project.ID, got.ID, "", 2); !errors.Is(err, lpclient.ErrUnauthorized) {
+		t.Fatalf("revoked event key: %v", err)
+	}
+
 }
