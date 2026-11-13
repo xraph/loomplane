@@ -195,5 +195,4 @@ func verifyFleetAPIClient(t *testing.T, r *running, cfg config.Config) {
 	if _, err = sdk.ListFleetEvents(t.Context(), project.ID, got.ID, "", 2); !errors.Is(err, lpclient.ErrUnauthorized) {
 		t.Fatalf("revoked event key: %v", err)
 	}
-
 }

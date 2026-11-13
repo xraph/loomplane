@@ -13,6 +13,11 @@ import { FleetDetail } from "./fleet-detail"
 import { InstanceDetail } from "./instance-detail"
 
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+// InstanceDetail mounts ActiveOperation, which reads permissions. These
+// tests are about read access, so nobody here may act on an operation.
+vi.mock("@/lib/organization", () => ({
+  useOrganization: () => ({ can: () => false }),
+}))
 vi.mock("@/lib/router", () => ({
   Link: ({
     children,
@@ -61,6 +66,14 @@ function serve(
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://localhost")
     reads.push(url)
+    // The instance page's operation, event and metric panels aren't under
+    // test here. Answering them as missing keeps them out of the way.
+    if (
+      /\/instances\/instance-a\/(active-operation|events|metrics)$/.test(
+        url.pathname
+      )
+    )
+      return Response.json({ error: "not found", code: 404 }, { status: 404 })
     if (url.pathname.endsWith("/instances/instance-a")) {
       const status = options.instanceStatus?.() ?? 200
       return Response.json(

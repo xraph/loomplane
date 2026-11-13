@@ -212,7 +212,7 @@ func TestFalkorProbeTLSVerifiesHostAndCA(t *testing.T) {
 			a.Host, a.TLS, a.CACert = tc.host, TLSVerifyFull, tc.root
 			dial := falkorTestDial(t, tc.host+":6379", func(conn net.Conn) {
 				server := tls.Server(conn, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}})
-				if err := server.Handshake(); err != nil {
+				if err := server.HandshakeContext(t.Context()); err != nil {
 					if tc.valid {
 						t.Error("verified TLS handshake failed")
 					}

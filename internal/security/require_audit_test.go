@@ -141,6 +141,11 @@ var workspaceChecks = map[string]int{
 	// The watcher's status, paused for the budget or not, is agent:use
 	// at the root, like the agent's own status.
 	"internal/agentwatch/watcher.go:Status": 1,
+	// Replaying a fleet event's dead letter re-sends its payload to a
+	// receiver an operator fixed, so it takes a workspace admin
+	// (member:manage at the root) as well as project:update on the fleet's
+	// own project.
+	"internal/fleets/delivery.go:RetryEventDelivery": 1,
 }
 
 // rootChecks walks every non-test Go file under internal and extensions
@@ -226,8 +231,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 104 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 105 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

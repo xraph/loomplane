@@ -231,7 +231,7 @@ func validateFalkorHello(value falkorValue) error {
 	for _, module := range modules.members {
 		entry := falkorPairs(module, 4)
 		name, ver, args := entry["name"], entry["ver"], entry["args"]
-		if name.kind != '$' || len(name.text) == 0 || len(name.text) > 128 || seen[name.text] ||
+		if name.kind != '$' || name.text == "" || len(name.text) > 128 || seen[name.text] ||
 			ver.kind != ':' || entry["path"].kind != '$' || args.kind != '*' || len(args.members) > 64 {
 			return errFalkorResponse
 		}

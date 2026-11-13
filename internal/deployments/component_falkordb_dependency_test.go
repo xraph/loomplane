@@ -70,8 +70,8 @@ func checkFalkorDependencyAccess(t *testing.T, mode, ca string) {
 		if actual != raw || req.Engine != a.Engine || req.MinVersion != "4.2" || len(req.TLS) != 1 || req.TLS[0] != a.TLS || catalogconnect.ConsumerFrom(ctx).Title != "Sample" {
 			t.Fatal("FalkorDB recheck lost the requirement or resolved access")
 		}
-		if _, err := dial(ctx, "tcp", "graph.example:6379"); err != nil {
-			return nil, err
+		if _, dialErr := dial(ctx, "tcp", "graph.example:6379"); dialErr != nil {
+			return nil, dialErr
 		}
 		return &catalogconnect.Report{Version: "4.2.2"}, nil
 	})

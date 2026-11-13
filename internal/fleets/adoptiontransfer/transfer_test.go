@@ -87,25 +87,25 @@ func TestIntentPinsAndCopies(t *testing.T) {
 			}
 		})
 	}
-	copy := intent.Fields()
-	copy.Source.NamespaceUID = "changed"
-	copy.ActorDigest = strings.Repeat("2", 64)
+	fields := intent.Fields()
+	fields.Source.NamespaceUID = "changed"
+	fields.ActorDigest = strings.Repeat("2", 64)
 	if intent.Fields() != original {
 		t.Fatal("caller mutated immutable intent")
 	}
-	changed, err := NewIntent(copy)
+	changed, err := NewIntent(fields)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if changed.Digest() == intent.Digest() {
 		t.Fatal("identity not bound into digest")
 	}
-	copy = original
-	copy.Direction = Reverse
-	copy.PredecessorID = "completed-forward"
-	copy.PriorEpoch = 5
-	copy.Epoch = 6
-	if _, err = NewIntent(copy); err != nil {
+	fields = original
+	fields.Direction = Reverse
+	fields.PredecessorID = "completed-forward"
+	fields.PriorEpoch = 5
+	fields.Epoch = 6
+	if _, err = NewIntent(fields); err != nil {
 		t.Fatal("new reverse intent rejected:", err)
 	}
 }
@@ -225,8 +225,8 @@ func TestHistoricalReceiptsAndIndependentStateCopies(t *testing.T) {
 	if !reflect.DeepEqual(replay, s) {
 		t.Fatal("exact receipt replay appended history")
 	}
-	copy := s.Receipts()
-	copy[0] = Receipt{}
+	receipts := s.Receipts()
+	receipts[0] = Receipt{}
 	if s.Receipts()[0].Fields().ID != r.Fields().ID {
 		t.Fatal("returned history aliases state")
 	}

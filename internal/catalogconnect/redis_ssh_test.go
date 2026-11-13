@@ -150,7 +150,7 @@ func serveRedisForwardedExchange(conn net.Conn) error {
 		}
 	}
 	if _, err := readCommand(reader); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("expected EOF after INFO server, got %v", err)
+		return fmt.Errorf("expected EOF after INFO server, got %w", err)
 	}
 	return nil
 }

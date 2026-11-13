@@ -98,8 +98,8 @@ func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 		return err
 	}
 	defer closeChannel()
-	if err := admin.checkControlGate(ctx); err != nil {
-		return err
+	if gateErr := admin.checkControlGate(ctx); gateErr != nil {
+		return gateErr
 	}
 	_, err = admin.Tenants(ctx)
 	var status *StatusError

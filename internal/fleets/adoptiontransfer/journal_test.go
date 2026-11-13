@@ -105,7 +105,6 @@ func TestSourceClaimIgnoresFleetAndRotatableAttachment(t *testing.T) {
 	intent, _, _ := fixture(t)
 	f := intent.Fields()
 	key := SourceKey(f.Source)
-	f.FleetID = "other-fleet"
 	f.Source.AttachmentID = "new-attachment"
 	f.Source.ConnectionID = "new-connection"
 	f.Source.AttachmentRevision++
