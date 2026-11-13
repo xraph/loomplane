@@ -57,10 +57,10 @@ func (e *Extension) requestAction(c forge.Context) error {
 		return err
 	}
 	var input fleet.ActionInput
-	if err = decodeRequest(c, &input); err != nil {
-		return err
+	if decodeErr := decodeRequest(c, &input); decodeErr != nil {
+		return decodeErr
 	}
-	if err = input.Validate(); err != nil {
+	if input.Validate() != nil {
 		return fail(domain.ErrInvalid)
 	}
 	svc, ok := e.svc.(actionService)
@@ -111,8 +111,8 @@ func (e *Extension) cancelOperation(c forge.Context) error {
 		return fail(domain.ErrNotFound)
 	}
 	var input FleetCancelOperationInput
-	if err = decodeRequest(c, &input); err != nil {
-		return err
+	if decodeErr := decodeRequest(c, &input); decodeErr != nil {
+		return decodeErr
 	}
 	if input.ExpectedInstanceRevision < 1 {
 		return fail(domain.ErrInvalid)

@@ -12,8 +12,8 @@ import (
 
 const (
 	controlTokenSecret = "admin-control-token"
-	controlTokenEnv    = "FABRIQ_ADMIN_CONTROL_TOKEN"
-	controlTokenHeader = "X-Fabriq-Control-Token"
+	controlTokenEnv    = "FABRIQ_ADMIN_CONTROL_TOKEN" //nolint:gosec // G101: names a variable, holds no credential
+	controlTokenHeader = "X-Fabriq-Control-Token"     //nolint:gosec // G101: an HTTP header's name, not a credential
 	legacyVersion      = "1.9"
 	legacyRevision     = "1"
 )
@@ -132,7 +132,7 @@ func legacyAdminEnvMatches(env []recipes.EnvVar, run deployments.ComponentRun) b
 func newAdminClient(ch *deployments.ComponentChannel, resolve func() (controlCredential, error)) (*AdminClient, func(), error) {
 	closeChannel := func() {
 		if ch != nil && ch.Close != nil {
-			_ = ch.Close()
+			_ = ch.Close() //nolint:errcheck // the channel is abandoned; there is nothing left to retry
 		}
 	}
 	credential, err := resolve()

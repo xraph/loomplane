@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -154,8 +155,8 @@ func (s *PgStore) append(ctx context.Context, org, id string, c Command) (result
 		return Journal{}, err
 	}
 	var now time.Time
-	if err = tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
-		return Journal{}, err
+	if scanErr := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); scanErr != nil {
+		return Journal{}, scanErr
 	}
 	result, err = current.Apply(c, now)
 	if err != nil {
@@ -170,10 +171,15 @@ func (s *PgStore) append(ctx context.Context, org, id string, c Command) (result
 	if err != nil || len(payload) > 65536 {
 		return Journal{}, ErrInvalid
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_transfer_entries(transfer_id,revision,payload) VALUES($1,$2,$3)`, id, int64(result.State().Revision()), string(payload)); err != nil {
+	stored := result.State().Revision()
+	if stored > math.MaxInt64 {
+		return Journal{}, ErrInvalid
+	}
+	revision := int64(stored)
+	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_fleet_transfer_entries(transfer_id,revision,payload) VALUES($1,$2,$3)`, id, revision, string(payload)); err != nil {
 		return Journal{}, mapStoreError(err)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE loomplane_fleet_transfer_journals SET revision=$3,head_digest=$4 WHERE id=$1 AND org_id=$2`, id, org, int64(result.State().Revision()), result.digest); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_fleet_transfer_journals SET revision=$3,head_digest=$4 WHERE id=$1 AND org_id=$2`, id, org, revision, result.digest); err != nil {
 		return Journal{}, err
 	}
 	err = tx.Commit()
@@ -205,8 +211,8 @@ func loadJournal(ctx context.Context, tx driver.Tx, org, id string) (Journal, er
 	}
 	var last int64 = 1
 	for {
-		if err = ctx.Err(); err != nil {
-			return Journal{}, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return Journal{}, ctxErr
 		}
 		rows, queryErr := tx.Query(ctx, `SELECT revision,payload FROM loomplane_fleet_transfer_entries WHERE transfer_id=$1 AND revision>$2 ORDER BY revision LIMIT 128`, id, last)
 		if queryErr != nil {
@@ -220,7 +226,7 @@ func loadJournal(ctx context.Context, tx driver.Tx, org, id string) (Journal, er
 				rows.Close()
 				return Journal{}, err
 			}
-			if sequence != last+1 || sequence > revision || len(payload) > 65536 {
+			if sequence < 1 || sequence != last+1 || sequence > revision || len(payload) > 65536 {
 				rows.Close()
 				return Journal{}, ErrInvalid
 			}

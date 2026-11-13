@@ -24,13 +24,13 @@ func RenewInstanceRuntimeToken(ctx context.Context, k kubeclient.Interface, in E
 		Request EnrollmentRequest
 		State   EnrollmentState
 	}{in, *state}
-	raw, err := json.Marshal(frozen)
-	if err != nil {
-		return "", time.Time{}, err
+	raw, marshalErr := json.Marshal(frozen)
+	if marshalErr != nil {
+		return "", time.Time{}, marshalErr
 	}
 	frozen.Request = EnrollmentRequest{}
 	frozen.State = EnrollmentState{}
-	if err = json.Unmarshal(raw, &frozen); err != nil {
+	if err := json.Unmarshal(raw, &frozen); err != nil {
 		return "", time.Time{}, err
 	}
 	in, saved := frozen.Request, &frozen.State
@@ -48,23 +48,23 @@ func RenewInstanceRuntimeToken(ctx context.Context, k kubeclient.Interface, in E
 		}
 	}
 	check := func(ctx context.Context) error {
-		if err := ctx.Err(); err != nil {
-			return err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
-		if err := checkpoint(ctx); err != nil {
-			return err
+		if checkErr := checkpoint(ctx); checkErr != nil {
+			return checkErr
 		}
 		return ctx.Err()
 	}
-	if err = check(ctx); err != nil {
+	if err := check(ctx); err != nil {
 		return "", time.Time{}, err
 	}
 	// Complete receipts make enrollment read-only: absent or changed objects
 	// fail verification before any creation path can run.
-	if err = EnrollRuntime(ctx, k, in, saved, func(ctx context.Context, _ *EnrollmentState) error { return check(ctx) }); err != nil {
+	if err := EnrollRuntime(ctx, k, in, saved, func(ctx context.Context, _ *EnrollmentState) error { return check(ctx) }); err != nil {
 		return "", time.Time{}, err
 	}
-	if err = check(ctx); err != nil {
+	if err := check(ctx); err != nil {
 		return "", time.Time{}, err
 	}
 	token, expires, err := RequestRuntimeToken(ctx, k, in.Namespace, in.ServiceAccountName, now)
@@ -73,10 +73,10 @@ func RenewInstanceRuntimeToken(ctx context.Context, k kubeclient.Interface, in E
 	}
 	// Token issuance can race an external RBAC or isolation change. Recheck
 	// the complete enrollment before returning material for publication.
-	if err = EnrollRuntime(ctx, k, in, saved, func(ctx context.Context, _ *EnrollmentState) error { return check(ctx) }); err != nil {
+	if err := EnrollRuntime(ctx, k, in, saved, func(ctx context.Context, _ *EnrollmentState) error { return check(ctx) }); err != nil {
 		return "", time.Time{}, err
 	}
-	if err = check(ctx); err != nil {
+	if err := check(ctx); err != nil {
 		return "", time.Time{}, err
 	}
 	return token, expires, nil

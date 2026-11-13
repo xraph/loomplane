@@ -128,7 +128,7 @@ func (s *Service) tunnel(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(conn, target) //nolint:errcheck // Closing either peer ends the tunnel; there is no second response.
 	_ = target.Close()
 	_ = conn.Close()
-	<-done //nolint:errcheck // Both tunnel peers are closed; wait for the other copy without writing another response.
+	<-done // Both tunnel peers are closed; wait for the other copy without writing another response.
 }
 
 func imageDigest(raw []byte) (string, error) {

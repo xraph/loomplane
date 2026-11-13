@@ -228,9 +228,15 @@ func TestFleetAdoptionJournalPagedRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := state.State().Revision(); got != 1 {
+		t.Fatalf("accepted transfer at revision %d, want 1", got)
+	}
 	state, err = store.Apply(t.Context(), f.scope.OrgID, "transfer", adoptiontransfer.Command{Kind: adoptiontransfer.Claim, ExpectedRevision: 1, Lease: adoptiontransfer.Lease{Token: "worker", ExpiresAt: time.Now().UTC().Add(4 * time.Minute)}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := state.State().Revision(); got != 2 {
+		t.Fatalf("claimed transfer at revision %d, want 2", got)
 	}
 	state, err = store.Apply(t.Context(), f.scope.OrgID, "transfer", adoptiontransfer.Command{Kind: adoptiontransfer.Begin, ExpectedRevision: 2, LeaseToken: "worker", Step: adoptiontransfer.Fence, AttemptID: "original"})
 	if err != nil {

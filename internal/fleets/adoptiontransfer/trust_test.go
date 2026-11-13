@@ -18,7 +18,7 @@ func TestTrustedReceiptReloadsExactPendingIdentity(t *testing.T) {
 	s = apply(t, s, Command{Kind: Begin, Step: Fence, AttemptID: "original"}, now)
 	expected := receipt(t, s, Fence, Confirmed, now)
 	called := false
-	reader := proofReaderFunc(func(_ context.Context, i Intent, ref string) (Receipt, error) {
+	reader := proofReaderFunc(func(_ context.Context, i Intent, _ string) (Receipt, error) {
 		called = true
 		if i.Digest() != s.Intent().Digest() {
 			t.Fatal("lost trusted lookup pins")

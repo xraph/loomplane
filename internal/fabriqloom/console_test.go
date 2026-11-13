@@ -419,7 +419,7 @@ func TestFabriqControlCredentialRejectsUnknownIdentities(t *testing.T) {
 	wrongVersion.Version = "1.10"
 	wrongName := historical
 	wrongName.Name = "admin-key"
-	for name, err := range map[string]error{
+	for name, sourceErr := range map[string]error{
 		"wrong kind":          &wrongKind,
 		"wrong version":       &wrongVersion,
 		"wrong secret":        &wrongName,
@@ -428,7 +428,7 @@ func TestFabriqControlCredentialRejectsUnknownIdentities(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			header, err := fabriqloom.AdminTarget.Header(t.Context(), func(string) ([]byte, error) {
-				return nil, err
+				return nil, sourceErr
 			})
 			if err == nil || header != nil {
 				t.Fatal("an unknown credential source selected legacy routing")

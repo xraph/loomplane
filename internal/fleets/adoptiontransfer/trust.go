@@ -32,7 +32,7 @@ func ResolveReceipt(ctx context.Context, reader ReceiptReader, state State, refe
 			return Receipt{}, ErrConflict
 		}
 	}
-	if err = checkReceipt(state, receipt, canonicalTime(now)); err != nil {
+	if err := checkReceipt(state, receipt, canonicalTime(now)); err != nil {
 		return Receipt{}, err
 	}
 	return receipt, nil
