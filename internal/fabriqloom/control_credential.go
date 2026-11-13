@@ -12,8 +12,10 @@ import (
 
 const (
 	controlTokenSecret = "admin-control-token"
-	controlTokenEnv    = "FABRIQ_ADMIN_CONTROL_TOKEN" //nolint:gosec // G101: names a variable, holds no credential
-	controlTokenHeader = "X-Fabriq-Control-Token"     //nolint:gosec // G101: an HTTP header's name, not a credential
+	// #nosec G101 -- names a variable, holds no credential
+	controlTokenEnv = "FABRIQ_ADMIN_CONTROL_TOKEN"
+	// #nosec G101 -- an HTTP header's name, not a credential
+	controlTokenHeader = "X-Fabriq-Control-Token"
 	legacyVersion      = "1.9"
 	legacyRevision     = "1"
 )
