@@ -1,6 +1,6 @@
 module github.com/xraph/loomplane
 
-go 1.26.10
+go 1.26.11
 
 require (
 	cloud.google.com/go/cloudsqlconn v1.25.4
