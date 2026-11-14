@@ -39,8 +39,8 @@ func TestCredit_DiscountsOneInvoiceThenGoes(t *testing.T) {
 	clock = at("2026-12-01T01:15:00Z")
 	_ = s.CloseMonth(ctx)
 	totals := totalsByMonth(t, s)
-	if totals["2026-10"] != types.USD(200) || totals["2026-11"] != types.USD(500) {
-		t.Fatalf("totals %v: October $5 - $3, November $5", totals)
+	if totals["2026-10"] != types.USD(1200) || totals["2026-11"] != types.USD(1500) {
+		t.Fatalf("totals %v: October $15 - $3, November $15", totals)
 	}
 
 	// The row says who granted it, why, and which invoice used it; the
@@ -63,7 +63,7 @@ func TestCredit_DiscountsOneInvoiceThenGoes(t *testing.T) {
 	}
 }
 
-// A $20 credit on a $5 month: total 0, marked paid by the sync with no
+// A $20 credit on a $15 month: total 0, marked paid by the sync with no
 // Stripe call.
 func TestCredit_LargerThanTheBillIsAFreeInvoice(t *testing.T) {
 	clock := at("2026-10-05T00:00:00Z")
@@ -86,11 +86,11 @@ func TestCredit_LargerThanTheBillIsAFreeInvoice(t *testing.T) {
 	if !paid {
 		t.Fatal("Loomplane's row isn't paid")
 	}
-	// What the credit didn't use is gone with it: November pays $5.
+	// What the credit didn't use is gone with it: November pays $15.
 	clock = at("2026-12-01T01:15:00Z")
 	_ = s.CloseMonth(ctx)
-	if got := totalsByMonth(t, s)["2026-11"]; got != types.USD(500) {
-		t.Fatalf("November %v, want $5: an unused credit doesn't roll over", got)
+	if got := totalsByMonth(t, s)["2026-11"]; got != types.USD(1500) {
+		t.Fatalf("November %v, want $15: an unused credit doesn't roll over", got)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestCredit_RacingACloseDiscountsOneInvoice(t *testing.T) {
 		}
 		totals := totalsByMonth(t, s)
 		oct, nov := totals["2026-10"].Amount, totals["2026-11"].Amount
-		if oct+nov != 700 || (oct != 200 && nov != 200) {
+		if oct+nov != 2700 || (oct != 1200 && nov != 1200) {
 			t.Fatalf("run %d: October %d November %d, want $3 off one of them", run, oct, nov)
 		}
 		var used int
@@ -238,8 +238,8 @@ func TestCredit_AnUnrecordedCouponDiscountsNothing(t *testing.T) {
 	if err := s.CloseMonth(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := totalsByMonth(t, s)["2026-10"]; got != types.USD(500) {
-		t.Fatalf("October %v, want $5: an unrecorded coupon discounted it", got)
+	if got := totalsByMonth(t, s)["2026-10"]; got != types.USD(1500) {
+		t.Fatalf("October %v, want $15: an unrecorded coupon discounted it", got)
 	}
 	if _, err := s.l.Store().GetCouponByID(ctx, c.ID); err == nil {
 		t.Fatal("the unrecorded coupon is still there")

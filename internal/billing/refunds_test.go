@@ -49,7 +49,7 @@ func (r *refundSpy) RefundInvoice(ctx context.Context, _ string, amount *types.M
 	return true, nil
 }
 
-// paidInvoiceWorld is an October invoice of $5 for org_1, synced to Stripe
+// paidInvoiceWorld is an October invoice of $15 for org_1, synced to Stripe
 // and marked paid.
 func paidInvoiceWorld(t *testing.T) (*Service, *pgdriver.PgDB, string) {
 	t.Helper()
@@ -64,7 +64,7 @@ func paidInvoiceWorld(t *testing.T) (*Service, *pgdriver.PgDB, string) {
 		t.Fatal(err)
 	}
 	invs := invoicesFor(t, s, "org_1")
-	if len(invs) != 1 || invs[0].Total != types.USD(500) {
+	if len(invs) != 1 || invs[0].Total != types.USD(1500) {
 		t.Fatalf("invoices %+v", invs)
 	}
 	invID := invs[0].ID.String()
@@ -96,8 +96,8 @@ func TestRefund_RecordedOncePerKey(t *testing.T) {
 	if spy.calls != 1 {
 		t.Fatalf("Stripe refunded %d times for one key", spy.calls)
 	}
-	if spy.amounts[0] != 500 || spy.keys[0] != "rk_1" {
-		t.Fatalf("sent %v with keys %v, want the rest ($5) under rk_1", spy.amounts, spy.keys)
+	if spy.amounts[0] != 1500 || spy.keys[0] != "rk_1" {
+		t.Fatalf("sent %v with keys %v, want the rest ($15) under rk_1", spy.amounts, spy.keys)
 	}
 	inv, _ := s.l.Store().GetInvoice(t.Context(), mustInvoiceID(t, invID))
 	if inv.Status != invoice.StatusPaid {
@@ -134,7 +134,7 @@ func TestRefund_RefusesAFreeInvoice(t *testing.T) {
 	s, _, _ := billingWorld(t, &clock)
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
-	if err := s.GrantCredit(ctx, "org_1", 500, "", "rex"); err != nil {
+	if err := s.GrantCredit(ctx, "org_1", 1500, "", "rex"); err != nil {
 		t.Fatal(err)
 	}
 	clock = at("2026-11-01T01:15:00Z")
@@ -158,8 +158,8 @@ func TestRefund_RefusesMoreThanIsLeft(t *testing.T) {
 	spy := &refundSpy{}
 	s.payments = spy
 	ctx := t.Context()
-	three, four, two := int64(300), int64(400), int64(200)
-	if _, err := s.Refund(ctx, invID, &three, "rk_1", "rex"); err != nil {
+	thirteen, four, two := int64(1300), int64(400), int64(200)
+	if _, err := s.Refund(ctx, invID, &thirteen, "rk_1", "rex"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Refund(ctx, invID, &four, "rk_2", "rex"); !errors.Is(err, ErrRefundTooLarge) {
@@ -171,11 +171,11 @@ func TestRefund_RefusesMoreThanIsLeft(t *testing.T) {
 	if _, err := s.Refund(ctx, invID, nil, "rk_4", "rex"); !errors.Is(err, ErrNotRefundable) {
 		t.Fatalf("after all of it: %v", err)
 	}
-	if spy.calls != 2 || spy.amounts[0] != 300 || spy.amounts[1] != 200 {
+	if spy.calls != 2 || spy.amounts[0] != 1300 || spy.amounts[1] != 200 {
 		t.Fatalf("Stripe got %v", spy.amounts)
 	}
 	pis, err := s.PlatformInvoices(ctx, "org_1")
-	if err != nil || len(pis) != 1 || pis[0].RefundedCents != 500 || pis[0].RefundableCents != 0 {
+	if err != nil || len(pis) != 1 || pis[0].RefundedCents != 1500 || pis[0].RefundableCents != 0 {
 		t.Fatalf("platform invoices %+v %v", pis, err)
 	}
 }
@@ -303,7 +303,7 @@ func TestRefund_DefinitiveFailuresDeleteAmbiguousOnesStay(t *testing.T) {
 	}
 	pis, _ := s.PlatformInvoices(ctx, "org_1")
 	if len(pis) != 1 || len(pis[0].PendingRefunds) != 1 || pis[0].PendingRefunds[0].RefundKey != "rk_2" ||
-		!pis[0].PendingRefunds[0].Resendable || pis[0].PendingRefunds[0].Cents != 500 || pis[0].RefundedCents != 0 {
+		!pis[0].PendingRefunds[0].Resendable || pis[0].PendingRefunds[0].Cents != 1500 || pis[0].RefundedCents != 0 {
 		t.Fatalf("platform invoices %+v", pis)
 	}
 	// The same key sends it again, under that key, and it is made.
@@ -398,13 +398,13 @@ func TestRefund_UnsentIsSentAgain(t *testing.T) {
 	s.payments = spy
 	ctx := t.Context()
 	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_refunds (refund_key, invoice_id, org_id, cents, full_refund, refunded_by, created_at)
-		VALUES ('rk_1', $1, 'org_1', 500, false, 'rex', $2)`, invID, s.now()); err != nil {
+		VALUES ('rk_1', $1, 'org_1', 1500, false, 'rex', $2)`, invID, s.now()); err != nil {
 		t.Fatal(err)
 	}
 	if res, err := s.Refund(ctx, invID, nil, "rk_1", "rex"); err != nil || !res.Full || !res.Resent {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if spy.calls != 1 || spy.amounts[0] != 500 || spy.keys[0] != "rk_1" {
+	if spy.calls != 1 || spy.amounts[0] != 1500 || spy.keys[0] != "rk_1" {
 		t.Fatalf("calls %d %v %v", spy.calls, spy.amounts, spy.keys)
 	}
 	var sent bool
@@ -460,7 +460,7 @@ func TestSettleRefund_MadeDroppedAndRefused(t *testing.T) {
 		}
 	}
 	pis, _ := s.PlatformInvoices(ctx, "org_1")
-	if len(pis[0].PendingRefunds) != 2 || pis[0].PendingRefunds[0].Resendable || pis[0].RefundableCents != 100 {
+	if len(pis[0].PendingRefunds) != 2 || pis[0].PendingRefunds[0].Resendable || pis[0].RefundableCents != 1100 {
 		t.Fatalf("before settling: %+v", pis[0])
 	}
 	if err := s.SettleRefund(ctx, invID, "rk_made", true, "", "rex"); err == nil {
@@ -482,14 +482,14 @@ func TestSettleRefund_MadeDroppedAndRefused(t *testing.T) {
 		t.Fatalf("settling a confirmed refund: %v", err)
 	}
 	pis, _ = s.PlatformInvoices(ctx, "org_1")
-	if len(pis[0].PendingRefunds) != 0 || pis[0].RefundedCents != 200 || pis[0].RefundableCents != 300 {
+	if len(pis[0].PendingRefunds) != 0 || pis[0].RefundedCents != 200 || pis[0].RefundableCents != 1300 {
 		t.Fatalf("after settling: %+v", pis[0])
 	}
 	// The made one is a replay now; the dropped one's amount refunds again.
 	if res, err := s.Refund(ctx, invID, nil, "rk_made", "rex"); err != nil || !res.Replay {
 		t.Fatalf("the made refund's key: %+v %v", res, err)
 	}
-	if res, err := s.Refund(ctx, invID, nil, "rk_new", "rex"); err != nil || spy.calls != 1 || spy.amounts[0] != 300 {
+	if res, err := s.Refund(ctx, invID, nil, "rk_new", "rex"); err != nil || spy.calls != 1 || spy.amounts[0] != 1300 {
 		t.Fatalf("the rest after settling: %+v %v, Stripe got %v", res, err, spy.amounts)
 	}
 }

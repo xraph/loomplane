@@ -55,13 +55,13 @@ func TestOrgDelete_InvoicesBeforeCancel(t *testing.T) {
 	org := authsomeid.NewOrgID().String() // "org_1" isn't an authsome workspace id
 	_ = s.MarkCardReady(ctx, org)
 	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
-	_ = s.Record(ctx, usageOf(org, "a", 900, at("2026-11-14T10:00:00Z")))
+	_ = s.Record(ctx, usageOf(org, "a", 1900, at("2026-11-14T10:00:00Z")))
 	hook := newOrgDeleteHook(s) // what NewOrgDeleteHook wraps
 	if err := hook.OnAfterOrgDelete(ctx, mustOrgID(t, org)); err != nil {
 		t.Fatal(err)
 	}
 	invs := invoicesFor(t, s, org)
-	if len(invs) != 1 || invs[0].Total != types.USD(900) || invs[0].Status != invoice.StatusPending {
+	if len(invs) != 1 || invs[0].Total != types.USD(1900) || invs[0].Status != invoice.StatusPending {
 		t.Fatalf("on delete: %+v", invs)
 	}
 }
@@ -101,9 +101,9 @@ func TestOrgDelete_RightAfterTheMonthEnds(t *testing.T) {
 	org := authsomeid.NewOrgID().String()
 	_ = s.MarkCardReady(ctx, org)
 	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
-	_ = s.Record(ctx, usageOf(org, "october", 800, at("2026-10-10T10:00:00Z")))
+	_ = s.Record(ctx, usageOf(org, "october", 1800, at("2026-10-10T10:00:00Z")))
 	clock = at("2026-11-01T00:10:00Z")
-	_ = s.Record(ctx, usageOf(org, "november", 700, at("2026-11-01T00:05:00Z")))
+	_ = s.Record(ctx, usageOf(org, "november", 1700, at("2026-11-01T00:05:00Z")))
 	if err := newOrgDeleteHook(s).OnAfterOrgDelete(ctx, mustOrgID(t, org)); err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +116,8 @@ func TestOrgDelete_RightAfterTheMonthEnds(t *testing.T) {
 	for _, inv := range invoicesFor(t, s, org) {
 		totals[inv.PeriodStart.UTC().Format("2006-01")] = inv.Total
 	}
-	// October: $5 + $8 - $5. November to the delete: $5 + $7 - $5.
-	if len(totals) != 2 || totals["2026-10"] != types.USD(800) || totals["2026-11"] != types.USD(700) {
+	// October: $15 + $18 - $15. November to the delete: $15 + $17 - $15.
+	if len(totals) != 2 || totals["2026-10"] != types.USD(1800) || totals["2026-11"] != types.USD(1700) {
 		t.Fatalf("totals %v", totals)
 	}
 	clock = at("2026-12-01T01:15:00Z")
@@ -149,12 +149,12 @@ func TestOrgDelete_StuckUsageLeavesItToTheClose(t *testing.T) {
 		t.Fatalf("invoiced short on delete: %d", n)
 	}
 	cancelLikeAuthsome(t, s, org)
-	_, _ = pg.Exec(ctx, `UPDATE loomplane_billing_usage SET micro_usd = 6000000 WHERE id = 'bad'`) // $6
+	_, _ = pg.Exec(ctx, `UPDATE loomplane_billing_usage SET micro_usd = 16000000 WHERE id = 'bad'`) // $16
 	clock = at("2026-12-01T01:15:00Z")
 	if err := s.CloseMonth(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if invs := invoicesFor(t, s, org); len(invs) != 1 || invs[0].Total != types.USD(600) {
+	if invs := invoicesFor(t, s, org); len(invs) != 1 || invs[0].Total != types.USD(1600) {
 		t.Fatalf("November after the close: %+v", invs)
 	}
 }

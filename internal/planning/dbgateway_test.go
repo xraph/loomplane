@@ -409,16 +409,16 @@ func TestDatabaseGatewayLabels(t *testing.T) {
 // target tagged web, and a default placement on ECS.
 func dbgwCloudFixture() (*cloudprofiles.Assignment, []ConnectionOption) {
 	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 3, Revision: 4,
-			Targets: []cloudprofiles.Target{
-				{ID: "target-run", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "run", Provider: cloudRun, ConnectionID: "g", Region: "us-east4", Revision: 5, Tags: []string{"db"}},
-				{ID: "target-web", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "web", Provider: "vercel", ConnectionID: "v", Revision: 6, Tags: []string{"web"}},
-			},
-			DefaultPlacement: &cloudprofiles.DefaultPlacement{Provider: ecsFargate, ConnectionID: "aws", Region: "us-east-2"},
-		}, []ConnectionOption{
-			{ID: "g", Cloud: "gcp", Ready: true, Details: map[string]string{"project_id": "proj"}},
-			{ID: "v", Cloud: "vercel", Ready: true, Details: map[string]string{"team_id": "team"}},
-			{ID: "aws", Cloud: "aws", Ready: true, Account: "123456789012", Region: "us-east-2", Details: map[string]string{"region": "us-east-2"}},
-		}
+		Targets: []cloudprofiles.Target{
+			{ID: "target-run", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "run", Provider: cloudRun, ConnectionID: "g", Region: "us-east4", Revision: 5, Tags: []string{"db"}},
+			{ID: "target-web", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "web", Provider: "vercel", ConnectionID: "v", Revision: 6, Tags: []string{"web"}},
+		},
+		DefaultPlacement: &cloudprofiles.DefaultPlacement{Provider: ecsFargate, ConnectionID: "aws", Region: "us-east-2"},
+	}, []ConnectionOption{
+		{ID: "g", Cloud: "gcp", Ready: true, Details: map[string]string{"project_id": "proj"}},
+		{ID: "v", Cloud: "vercel", Ready: true, Details: map[string]string{"team_id": "team"}},
+		{ID: "aws", Cloud: "aws", Ready: true, Account: "123456789012", Region: "us-east-2", Details: map[string]string{"region": "us-east-2"}},
+	}
 }
 
 const dbgwPlacementBase = "version: 1\nresources:\n  db: {kind: postgres, provider: digitalocean, gateway: true}\n"

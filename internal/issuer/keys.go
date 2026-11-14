@@ -293,7 +293,7 @@ type jwk struct {
 }
 
 // publicJWK returns the key's kid, its RFC 7638 thumbprint, and its JWK.
-func publicJWK(pub *rsa.PublicKey) (string, json.RawMessage, error) {
+func publicJWK(pub *rsa.PublicKey) (kid string, public json.RawMessage, err error) {
 	n := base64.RawURLEncoding.EncodeToString(pub.N.Bytes())
 	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes())
 	// RFC 7638: the required members, in lexical order, with no spaces.
@@ -306,8 +306,8 @@ func publicJWK(pub *rsa.PublicKey) (string, json.RawMessage, error) {
 		return "", nil, fmt.Errorf("encode an issuer key thumbprint: %w", err)
 	}
 	sum := sha256.Sum256(thumb)
-	kid := base64.RawURLEncoding.EncodeToString(sum[:])
-	public, err := json.Marshal(jwk{Kty: "RSA", Use: "sig", Alg: "RS256", KID: kid, N: n, E: e})
+	kid = base64.RawURLEncoding.EncodeToString(sum[:])
+	public, err = json.Marshal(jwk{Kty: "RSA", Use: "sig", Alg: "RS256", KID: kid, N: n, E: e})
 	if err != nil {
 		return "", nil, fmt.Errorf("encode an issuer key: %w", err)
 	}

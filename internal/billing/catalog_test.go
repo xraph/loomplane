@@ -24,10 +24,10 @@ func TestSeedCatalog_IdempotentAndExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cloud.Status != plan.StatusActive || cloud.TrialDays != 0 || cloud.Pricing.BaseAmount != types.USD(500) || cloud.Pricing.BillingPeriod != plan.PeriodMonthly {
+	if cloud.Status != plan.StatusActive || cloud.TrialDays != 0 || cloud.Pricing.BaseAmount != types.USD(1500) || cloud.Pricing.BillingPeriod != plan.PeriodMonthly {
 		t.Fatalf("cloud plan %+v", cloud)
 	}
-	if len(cloud.Credits) != 1 || cloud.Credits[0].Key != "usage" || cloud.Credits[0].Amount != types.USD(500) || !slices.Equal(cloud.Credits[0].FeatureKeys, BaseFeatures) {
+	if len(cloud.Credits) != 1 || cloud.Credits[0].Key != "usage" || cloud.Credits[0].Amount != types.USD(1500) || !slices.Equal(cloud.Credits[0].FeatureKeys, BaseFeatures) {
 		t.Fatalf("cloud credit %+v", cloud.Credits)
 	}
 	for _, k := range BaseFeatures {
@@ -129,7 +129,7 @@ func TestSeedCatalog_PutsAChangedPlanBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.TrialDays != 0 || got.Pricing.BaseAmount != types.USD(500) || got.Credits[0].Amount != types.USD(500) || got.Pricing.Tiers[0].UnitAmount != types.USD(1) {
+	if got.TrialDays != 0 || got.Pricing.BaseAmount != types.USD(1500) || got.Credits[0].Amount != types.USD(1500) || got.Pricing.Tiers[0].UnitAmount != types.USD(1) {
 		t.Fatalf("the seed left the change: %+v", got)
 	}
 	if got.ID.String() != planID || got.Pricing.ID.String() != priceID || got.Features[0].ID.String() != featureID {

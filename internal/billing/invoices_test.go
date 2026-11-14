@@ -89,7 +89,7 @@ func TestCloseMonth_BillsBasePlusOverageWithCredit(t *testing.T) {
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
 	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
-	_ = s.Record(ctx, compute("a", 800, at("2026-10-10T10:00:00Z"))) // $8.00 of usage
+	_ = s.Record(ctx, compute("a", 1800, at("2026-10-10T10:00:00Z"))) // $18.00 of usage
 	clock = at("2026-11-01T01:15:00Z")
 	if err := s.CloseMonth(ctx); err != nil {
 		t.Fatal(err)
@@ -99,14 +99,14 @@ func TestCloseMonth_BillsBasePlusOverageWithCredit(t *testing.T) {
 		t.Fatalf("invoices %d", len(invs))
 	}
 	inv := invs[0]
-	// $5 base + $8 usage - $5 credit = $8: "$8 of usage pays $5 + $3".
-	if inv.Total != types.USD(800) || inv.Status != invoice.StatusPending || len(fs.synced) != 1 {
+	// $15 base + $18 usage - $15 credit = $18: "$18 of usage pays $15 + $3".
+	if inv.Total != types.USD(1800) || inv.Status != invoice.StatusPending || len(fs.synced) != 1 {
 		t.Fatalf("total %v status %s synced %v", inv.Total, inv.Status, fs.synced)
 	}
 }
 
 func TestCloseMonth_UsageUnderCreditPaysBase(t *testing.T) {
-	// $3 of usage pays $5.
+	// $3 of usage pays $15.
 	clock := at("2026-10-05T00:00:00Z")
 	s, _, fs := billingWorld(t, &clock)
 	ctx := t.Context()
@@ -122,8 +122,8 @@ func TestCloseMonth_UsageUnderCreditPaysBase(t *testing.T) {
 		t.Fatalf("invoices %d", len(invs))
 	}
 	inv := invs[0]
-	if inv.Total != types.USD(500) || inv.Status != invoice.StatusPending || len(fs.synced) != 1 {
-		t.Fatalf("total %v status %s synced %v, want $5.00 pending and sent", inv.Total, inv.Status, fs.synced)
+	if inv.Total != types.USD(1500) || inv.Status != invoice.StatusPending || len(fs.synced) != 1 {
+		t.Fatalf("total %v status %s synced %v, want $15.00 pending and sent", inv.Total, inv.Status, fs.synced)
 	}
 	if !inv.PeriodStart.Equal(at("2026-10-01T00:00:00Z")) || !inv.PeriodEnd.Equal(at("2026-11-01T00:00:00Z")) {
 		t.Fatalf("period %v to %v, want October", inv.PeriodStart, inv.PeriodEnd)
@@ -136,15 +136,15 @@ func TestCloseMonth_LastHourOnTheInvoice(t *testing.T) {
 	ctx := t.Context()
 	_ = s.MarkCardReady(ctx, "org_1")
 	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
-	_ = s.Record(ctx, compute("big", 500, at("2026-10-10T10:00:00Z")))
+	_ = s.Record(ctx, compute("big", 1500, at("2026-10-10T10:00:00Z")))
 	clock = at("2026-11-01T00:02:30Z") // the last hour arrives
 	_ = s.Record(ctx, compute("platform:pl_1:1:2026-10-31T23:00:00Z:compute_vcpu_hours", 100, at("2026-10-31T23:00:00Z")))
 	clock = at("2026-11-01T01:15:00Z")
 	if err := s.CloseMonth(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if inv := invoicesFor(t, s, "org_1")[0]; inv.Total != types.USD(600) {
-		t.Fatalf("total %v, want $6.00 (the last hour is October's)", inv.Total)
+	if inv := invoicesFor(t, s, "org_1")[0]; inv.Total != types.USD(1600) {
+		t.Fatalf("total %v, want $16.00 (the last hour is October's)", inv.Total)
 	}
 }
 
@@ -346,7 +346,7 @@ func TestCloseMonth_OneWorkspacesStuckUsageHoldsOnlyIt(t *testing.T) {
 	for _, org := range []string{"org_1", "org_2"} {
 		_ = s.MarkCardReady(ctx, org)
 	}
-	_ = s.Record(ctx, compute("good", 800, at("2026-10-10T10:00:00Z")))
+	_ = s.Record(ctx, compute("good", 1800, at("2026-10-10T10:00:00Z")))
 	// org_2's row can't be batched: a negative price never adds up.
 	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_usage (id, org_id, feature, quantity, rate_micro_usd, micro_usd, occurred_at, resource_ref)
 		VALUES ('bad', 'org_2', 'compute_vcpu_hours', 1, 10000, -1, '2026-10-10T10:00:00Z', 'pl_2')`); err != nil {
@@ -356,7 +356,7 @@ func TestCloseMonth_OneWorkspacesStuckUsageHoldsOnlyIt(t *testing.T) {
 	if err := s.CloseMonth(ctx); err == nil {
 		t.Fatal("the close hid org_2's stuck usage")
 	}
-	if invs := invoicesFor(t, s, "org_1"); len(invs) != 1 || invs[0].Total != types.USD(800) {
+	if invs := invoicesFor(t, s, "org_1"); len(invs) != 1 || invs[0].Total != types.USD(1800) {
 		t.Fatalf("org_1 waited on org_2: %+v", invs)
 	}
 	if n := len(invoicesFor(t, s, "org_2")); n != 0 {
@@ -372,7 +372,7 @@ func TestCloseMonth_OneWorkspacesStuckUsageHoldsOnlyIt(t *testing.T) {
 	if err := s.CloseMonthIfOpen(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if invs := invoicesFor(t, s, "org_2"); len(invs) != 1 || invs[0].Total != types.USD(500) {
+	if invs := invoicesFor(t, s, "org_2"); len(invs) != 1 || invs[0].Total != types.USD(1500) {
 		t.Fatalf("org_2 after the catch-up: %+v", invs)
 	}
 	if n := len(invoicesFor(t, s, "org_1")); n != 1 {
@@ -440,8 +440,8 @@ func TestCloseMonth_DeletesOnlyTheCreditsItUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	invs := invoicesFor(t, s, "org_1")
-	if len(invs) != 1 || invs[0].Total != types.USD(200) {
-		t.Fatalf("October: %+v, want $5 - $3", invs)
+	if len(invs) != 1 || invs[0].Total != types.USD(1200) {
+		t.Fatalf("October: %+v, want $15 - $3", invs)
 	}
 	if _, err := s.l.Store().GetCoupon(ctx, used, testAppID); !errors.Is(err, ledger.ErrCouponNotFound) {
 		t.Fatalf("the used credit's coupon: %v", err)
@@ -465,8 +465,8 @@ func TestCloseMonth_DeletesOnlyTheCreditsItUsed(t *testing.T) {
 	for _, inv := range invoicesFor(t, s, "org_1") {
 		totals[inv.PeriodStart.UTC().Format("2006-01")] = inv.Total
 	}
-	if totals["2026-11"] != types.USD(400) {
-		t.Fatalf("totals %v, want November $5 - $1", totals)
+	if totals["2026-11"] != types.USD(1400) {
+		t.Fatalf("totals %v, want November $15 - $1", totals)
 	}
 }
 
@@ -631,8 +631,8 @@ func TestCloseMonth_CreditWithAClockAheadAppliesOnce(t *testing.T) {
 	for _, inv := range invoicesFor(t, s, "org_1") {
 		totals[inv.PeriodStart.UTC().Format("2006-01")] = inv.Total
 	}
-	if totals["2026-10"] != types.USD(200) || totals["2026-11"] != types.USD(500) {
-		t.Fatalf("totals %v: October $5 - $3, November $5", totals)
+	if totals["2026-10"] != types.USD(1200) || totals["2026-11"] != types.USD(1500) {
+		t.Fatalf("totals %v: October $15 - $3, November $15", totals)
 	}
 	var deleted bool
 	_ = pg.QueryRow(ctx, `SELECT deleted_at IS NOT NULL FROM loomplane_billing_credits WHERE id = 'lpc_ahead'`).Scan(&deleted)
@@ -942,8 +942,8 @@ func TestCloseMonth_VoidedInvoiceReleasesItsCredits(t *testing.T) {
 			november = inv.ID.String()
 		}
 	}
-	if totals["2026-11"] != types.USD(200) || totals["2026-12"] != types.USD(500) {
-		t.Fatalf("totals %v: November $5 - $3, December $5", totals)
+	if totals["2026-11"] != types.USD(1200) || totals["2026-12"] != types.USD(1500) {
+		t.Fatalf("totals %v: November $15 - $3, December $15", totals)
 	}
 	if inv, deleted := creditRow(t, pg, "lpc_kept"); inv != november || !deleted {
 		t.Fatalf("lpc_kept after November: invoice %q deleted %v", inv, deleted)

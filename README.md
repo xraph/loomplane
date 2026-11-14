@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="Go 1.26" src="https://img.shields.io/badge/Go-1.26-2F5C78?style=flat-square&logo=go&logoColor=FAFAFA&labelColor=171717" />
+  <img alt="Go 1.27" src="https://img.shields.io/badge/Go-1.27-2F5C78?style=flat-square&logo=go&logoColor=FAFAFA&labelColor=171717" />
   <a href="LICENSE"><img alt="License: FSL-1.1-ALv2" src="https://img.shields.io/badge/license-FSL--1.1--ALv2-2F5C78?style=flat-square&labelColor=171717" /></a>
 </p>
 
@@ -38,7 +38,7 @@ Your applications don't need Forge, or Go. Everything runs in your own clouds, o
 
 ## Quick start
 
-You'll need Go 1.26 (the right patch release downloads itself), Node.js 24 with pnpm, and Docker with Compose for the local PostgreSQL.
+You'll need Go 1.27 (the right patch release downloads itself), Node.js 24 with pnpm, and Docker with Compose for the local PostgreSQL.
 
 ```bash
 make up                                       # PostgreSQL on localhost:55532

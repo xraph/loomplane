@@ -23,7 +23,7 @@ func TestOverview_PlansAndModeNeverTheKey(t *testing.T) {
 		if o.StripeMode != want {
 			t.Errorf("%q: %s, want %s", key, o.StripeMode, want)
 		}
-		if len(o.Plans) != 2 || o.Plans[0] != (PlanPrice{Slug: PlanCloud, BaseCents: 500, CreditCents: 500}) ||
+		if len(o.Plans) != 2 || o.Plans[0] != (PlanPrice{Slug: PlanCloud, BaseCents: 1500, CreditCents: 1500}) ||
 			o.Plans[1] != (PlanPrice{Slug: PlanAI, BaseCents: 1000, CreditCents: 1000}) {
 			t.Fatalf("plans %+v", o.Plans)
 		}
@@ -48,7 +48,7 @@ func TestWorkspaces_StatusAndThisMonth(t *testing.T) {
 	}
 	_ = s.MarkCardReady(ctx, "org_1")
 	_, _ = s.SetRate(ctx, platformcloud.FeatureComputeVCPUHours, 10_000, "rex")
-	if err := s.Record(ctx, compute("a", 800, at("2026-10-04T10:00:00Z"))); err != nil { // $8.00 of usage
+	if err := s.Record(ctx, compute("a", 1800, at("2026-10-04T10:00:00Z"))); err != nil { // $18.00 of usage
 		t.Fatal(err)
 	}
 	if _, err := s.SetAI(ctx, "org_1", true); err != nil {
@@ -68,14 +68,14 @@ func TestWorkspaces_StatusAndThisMonth(t *testing.T) {
 	if len(ws) != 3 {
 		t.Fatalf("workspaces %+v", ws)
 	}
-	// $5 base + $3 over the credit + $10 add-on.
-	if w := by["org_1"]; w != (WorkspaceBilling{OrgID: "org_1", Name: "Acme", Status: StatusActive, PeriodTotalCents: 1800, OverageCents: 300, AIEnabled: true}) {
+	// $15 base + $3 over the credit + $10 add-on.
+	if w := by["org_1"]; w != (WorkspaceBilling{OrgID: "org_1", Name: "Acme", Status: StatusActive, PeriodTotalCents: 2800, OverageCents: 300, AIEnabled: true}) {
 		t.Errorf("org_1 %+v", w)
 	}
 	if w := by["org_2"]; w != (WorkspaceBilling{OrgID: "org_2", Name: "Bolt", Status: StatusPendingPayment}) {
 		t.Errorf("org_2 %+v", w)
 	}
-	if w := by["org_gone"]; w.Name != "" || w.Status != StatusActive || w.PeriodTotalCents != 500 {
+	if w := by["org_gone"]; w.Name != "" || w.Status != StatusActive || w.PeriodTotalCents != 1500 {
 		t.Errorf("org_gone %+v", w)
 	}
 	if _, ok := by["org_x"]; ok {

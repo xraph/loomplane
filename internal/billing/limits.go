@@ -14,10 +14,11 @@ import (
 )
 
 // What each month's subscriptions include, in US cents: the base plan's
-// usage credit and the AI add-on's.
+// usage credit and the AI add-on's. Each plan's credit is its price, so
+// these follow the catalog and can't drift from what ledger bills.
 const (
-	baseCreditCents = 500
-	aiCreditCents   = 1000
+	baseCreditCents = cloudBaseCents
+	aiCreditCents   = aiBaseCents
 )
 
 // maxSpendingLimitCents is the highest limit an owner can set: $1,000,000.00.

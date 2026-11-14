@@ -602,16 +602,16 @@ func TestSummary_CreditOverageAndProjection(t *testing.T) {
 	}
 	_ = s.MarkCardReady(ctx, "org_1")
 	_, _ = s.SetRate(ctx, "compute_vcpu_hours", 10_000, "rex")
-	_ = s.Record(ctx, compute("a", 800, at("2026-11-01T10:00:00Z"))) // $8.00
-	_ = s.Record(ctx, compute("b", 900, at("2026-10-31T23:00:00Z"))) // October: not this month
+	_ = s.Record(ctx, compute("a", 1800, at("2026-11-01T10:00:00Z"))) // $18.00
+	_ = s.Record(ctx, compute("b", 900, at("2026-10-31T23:00:00Z")))  // October: not this month
 	fp.listErr = nil
 	fp.methods = []provider.PaymentMethod{{Brand: "visa", Last4: "4242", IsDefault: true}}
 	sum, err = s.Summary(ctx, "org_1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.BaseCreditUsedCents != 500 || sum.AICreditUsedCents != 0 || sum.OverageCents != 300 || sum.ProjectedTotalCents != 800 {
-		t.Fatalf("credit %d + %d overage %d projected %d, want 500, 0, 300 and $5 + $3",
+	if sum.BaseCreditUsedCents != 1500 || sum.AICreditUsedCents != 0 || sum.OverageCents != 300 || sum.ProjectedTotalCents != 1800 {
+		t.Fatalf("credit %d + %d overage %d projected %d, want 1500, 0, 300 and $15 + $3",
 			sum.BaseCreditUsedCents, sum.AICreditUsedCents, sum.OverageCents, sum.ProjectedTotalCents)
 	}
 	if !sum.PeriodStart.Equal(at("2026-11-01T00:00:00Z")) || !sum.PeriodEnd.Equal(at("2026-12-01T00:00:00Z")) {
@@ -623,11 +623,11 @@ func TestSummary_CreditOverageAndProjection(t *testing.T) {
 			vcpu = u.Cents
 		}
 	}
-	if vcpu != 800 || len(sum.PaymentMethods) != 1 {
+	if vcpu != 1800 || len(sum.PaymentMethods) != 1 {
 		t.Fatalf("usage %+v cards %+v", sum.Usage, sum.PaymentMethods)
 	}
 	// With the add-on, AI's credit is its own: $12 of AI uses all $10 of
-	// it and none of the plan's $5, which base usage used already.
+	// it and none of the plan's $15, which base usage used already.
 	if _, err = s.SetAI(ctx, "org_1", true); err != nil {
 		t.Fatal(err)
 	}
@@ -638,8 +638,8 @@ func TestSummary_CreditOverageAndProjection(t *testing.T) {
 	if sum, err = s.Summary(ctx, "org_1"); err != nil {
 		t.Fatal(err)
 	}
-	if sum.BaseCreditUsedCents != 500 || sum.AICreditUsedCents != 1000 || sum.OverageCents != 500 || sum.ProjectedTotalCents != 2000 {
-		t.Fatalf("with AI: credit %d + %d overage %d projected %d, want 500, 1000, $3 + $2 and $5 + $10 + $5",
+	if sum.BaseCreditUsedCents != 1500 || sum.AICreditUsedCents != 1000 || sum.OverageCents != 500 || sum.ProjectedTotalCents != 3000 {
+		t.Fatalf("with AI: credit %d + %d overage %d projected %d, want 1500, 1000, $3 + $2 and $15 + $10 + $5",
 			sum.BaseCreditUsedCents, sum.AICreditUsedCents, sum.OverageCents, sum.ProjectedTotalCents)
 	}
 	// Stripe failing is an error, not an empty list.
@@ -699,7 +699,7 @@ func TestInvoices_NewestFirstWithThePlan(t *testing.T) {
 		t.Fatalf("invoices %+v", invs)
 	}
 	for _, inv := range invs {
-		if inv.Plan != PlanCloud || inv.TotalCents != 500 || inv.Status != string(invoice.StatusPending) {
+		if inv.Plan != PlanCloud || inv.TotalCents != 1500 || inv.Status != string(invoice.StatusPending) {
 			t.Fatalf("invoice %+v", inv)
 		}
 	}

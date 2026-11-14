@@ -6,7 +6,7 @@ If you change a pin, update this file in the same commit.
 
 ## Versions
 
-Go 1.26.9 is pinned in `go.mod` and in CI. The versions below were checked against the module proxy and downloaded source on October 22, 2026.
+Go 1.27.4 is pinned in `go.mod` and in CI. The versions below were checked against the module proxy and downloaded source on October 22, 2026.
 
 | Library | Module | Pinned | License at that version |
 |---|---|---|---|

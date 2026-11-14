@@ -67,12 +67,12 @@ func qualifyAgentExecutable(ctx context.Context, enrollments *workloadidentity.E
 				err = errors.Join(err, signalErr)
 			}
 			select {
-			case <-finished: // Teardown sent SIGTERM; preserve the initiating qualification error.
+			case <-finished: //nolint:errcheck // Teardown sent SIGTERM; preserve the initiating qualification error.
 			case <-time.After(3 * time.Second):
 				if killErr := command.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 					err = errors.Join(err, killErr)
 				}
-				<-finished // Teardown killed the process; preserve the initiating qualification error.
+				<-finished //nolint:errcheck // Teardown killed the process; preserve the initiating qualification error.
 			}
 		}
 	}()

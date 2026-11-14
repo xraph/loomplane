@@ -110,7 +110,7 @@ func TestEvaluate_LimitReachedSuspends(t *testing.T) {
 	s, pg, spy, sent := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(300))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z")) // 400 overage
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z")) // 400 overage
 	if err := s.Evaluate(ctx, "org_1"); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestEvaluate_LimitReachedSuspends(t *testing.T) {
 func TestEvaluate_LimitLoweredBelowSpend(t *testing.T) {
 	s, pg, _, _ := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
-	spent(t, pg, "org_1", 1400, at("2026-11-14T10:00:00Z")) // 900 overage, no limit yet
+	spent(t, pg, "org_1", 2400, at("2026-11-14T10:00:00Z")) // 900 overage, no limit yet
 	_ = s.Evaluate(ctx, "org_1")
 	if a, _ := s.Account(ctx, "org_1"); a.Status != StatusActive {
 		t.Fatalf("no limit: %s", a.Status)
@@ -141,7 +141,7 @@ func TestEvaluate_RaisedLimitRestores(t *testing.T) {
 	s, pg, spy, _ := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	a, _ := s.SetSpendingLimit(ctx, "org_1", ptr(1000))
 	if a.Status != StatusActive || !slices.Contains(spy.calls, "restore spending_limit") {
@@ -155,7 +155,7 @@ func TestEvaluate_NewMonthClears(t *testing.T) {
 	s.now = func() time.Time { return clock }
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(0))
-	spent(t, pg, "org_1", 600, at("2026-11-30T10:00:00Z"))
+	spent(t, pg, "org_1", 1600, at("2026-11-30T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	clock = at("2026-12-01T00:15:00Z")
 	_ = s.Evaluate(ctx, "org_1")
@@ -171,9 +171,9 @@ func TestEvaluate_ZeroLimitStopsAtCredit(t *testing.T) {
 	spent(t, pg, "org_1", 100, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	if a, _ := s.Account(ctx, "org_1"); a.Status != StatusActive {
-		t.Fatalf("$1 of $5 included with a $0 limit: %s", a.Status)
+		t.Fatalf("$1 of $15 included with a $0 limit: %s", a.Status)
 	}
-	spent(t, pg, "org_1", 400, at("2026-11-14T11:00:00Z"))
+	spent(t, pg, "org_1", 1400, at("2026-11-14T11:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	if a, _ := s.Account(ctx, "org_1"); a.Status != StatusLimited {
 		t.Fatalf("credit used up with a $0 limit: %s", a.Status)
@@ -184,7 +184,7 @@ func TestEvaluate_NoticesOncePerPeriodButAgainAfterARestore(t *testing.T) {
 	s, pg, _, sent := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	_ = s.Evaluate(ctx, "org_1")
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(1000)) // restored
@@ -247,7 +247,7 @@ func TestEvaluate_PayingLeavesAReachedLimitSuspended(t *testing.T) {
 	s, pg, spy, _ := limitedWorld(t, now)
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_billing_invoices(invoice_id, org_id, subscription_id, plan, period_start, payment_failed_at)
 		VALUES ('inv_1','org_1','sub_1','cloud','2026-10-01T00:00:00Z', $1)`, now.Add(-100*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestEvaluate_AIOnlyWorkspaceGetsRestoredNotice(t *testing.T) {
 	spy.noTenant = true
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	if err := s.Evaluate(ctx, "org_1"); err != nil {
 		t.Fatalf("no tenant is nothing to stop, not an error: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestEvaluate_TenantRestoreSendsNoBillingRestored(t *testing.T) {
 	s, pg, _, sent := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	_, _ = s.SetSpendingLimit(ctx, "org_1", nil)
 	if hasKind(*sent, NoticeRestored) {
@@ -303,7 +303,7 @@ func TestEvaluate_ReadErrorChangesNothing(t *testing.T) {
 	s, pg, spy, _ := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	// Raise the limit, then lose the usage table: nothing may be lifted
 	// or stopped on a read that failed.
@@ -330,7 +330,7 @@ func TestEvaluate_FailedSuspendKeepsTheStateAndRetries(t *testing.T) {
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
 	spy.fail = errors.New("host unreachable")
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	if err := s.Evaluate(ctx, "org_1"); err == nil {
 		t.Fatal("a failed suspend came back nil")
 	}
@@ -356,7 +356,7 @@ func TestEvaluate_ConcurrentEvaluationsLimitOnce(t *testing.T) {
 	s, pg, _, sent := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(100))
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() { _ = s.Evaluate(ctx, "org_1") })
@@ -383,7 +383,7 @@ func TestEvaluate_NoCardDoesNothing(t *testing.T) {
 	if _, err := s.SetSpendingLimit(ctx, "org_2", ptr(0)); err != nil {
 		t.Fatal(err)
 	}
-	spent(t, pg, "org_2", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_2", 1900, at("2026-11-14T10:00:00Z"))
 	if err := s.Evaluate(ctx, "org_2"); err != nil {
 		t.Fatal(err)
 	}
@@ -407,17 +407,17 @@ func TestSetSpendingLimit_RefusesOutOfRange(t *testing.T) {
 func TestSpend_TotalsTheMonth(t *testing.T) {
 	s, pg, _, _ := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
-	// 700.5 cents of base over two features, each rounded down on its own:
-	// 300 + 400 = 700. AI 1500. Usage outside November doesn't count.
+	// 1700.5 cents of base over two features, each rounded down on its own:
+	// 300 + 1400 = 1700. AI 1500. Usage outside November doesn't count.
 	spentMicro(t, pg, "org_1", "compute_vcpu_hours", 3_005_000, at("2026-11-02T00:00:00Z"))
-	spentMicro(t, pg, "org_1", "egress_gb", 4_000_000, at("2026-11-30T23:59:59Z"))
+	spentMicro(t, pg, "org_1", "egress_gb", 14_000_000, at("2026-11-30T23:59:59Z"))
 	spentMicro(t, pg, "org_1", FeatureAIUSD, 15_000_000, at("2026-11-03T00:00:00Z"))
 	spentMicro(t, pg, "org_1", "egress_gb", 9_000_000, at("2026-10-31T23:59:59Z"))
 	spentMicro(t, pg, "org_1", "egress_gb", 9_000_000, at("2026-12-01T00:00:00Z"))
 	spentMicro(t, pg, "org_9", "egress_gb", 9_000_000, at("2026-11-05T00:00:00Z"))
 
 	sp, err := s.Spend(ctx, "org_1", at("2026-11-20T00:00:00Z"))
-	want := PeriodSpend{BaseUsageCents: 700, AIUsageCents: 1500, OverageCents: 200 + 1500}
+	want := PeriodSpend{BaseUsageCents: 1700, AIUsageCents: 1500, OverageCents: 200 + 1500}
 	if err != nil || sp != want {
 		t.Fatalf("no add-on: %+v %v, want %+v", sp, err, want)
 	}
@@ -468,20 +468,20 @@ func TestEvaluate_CreditAndLimitNotices(t *testing.T) {
 		return nil
 	}
 
-	spent(t, pg, "org_1", 399, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1199, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	if len(*sent) != 0 {
 		t.Fatalf("under 80%%: %v", *sent)
 	}
-	spent(t, pg, "org_1", 1, at("2026-11-14T10:01:00Z")) // 400
+	spent(t, pg, "org_1", 1, at("2026-11-14T10:01:00Z")) // 1200
 	_ = s.Evaluate(ctx, "org_1")
 	n := find(NoticeCredit80)
 	if n == nil || n.SubjectID != "credit_80:2026-11" || n.OrgID != "org_1" || n.Path != "/settings/billing" ||
 		n.Title != "80% of this month's included usage is used" ||
-		n.Body != "This workspace has used $4.00 of the $5.00 of usage included this month. Usage past $5.00 is added to next month's invoice." {
+		n.Body != "This workspace has used $12.00 of the $15.00 of usage included this month. Usage past $15.00 is added to next month's invoice." {
 		t.Fatalf("credit_80: %+v", n)
 	}
-	spent(t, pg, "org_1", 100, at("2026-11-14T10:02:00Z")) // 500
+	spent(t, pg, "org_1", 300, at("2026-11-14T10:02:00Z")) // 1500
 	_ = s.Evaluate(ctx, "org_1")
 	n = find(NoticeCredit100)
 	if n == nil || n.SubjectID != "credit_100:2026-11" || n.Title != "This month's included usage is used" ||
@@ -519,7 +519,7 @@ func TestEvaluate_ZeroLimitSendsNoLimit80(t *testing.T) {
 	s, pg, _, sent := limitedWorld(t, at("2026-11-15T00:00:00Z"))
 	ctx := t.Context()
 	_, _ = s.SetSpendingLimit(ctx, "org_1", ptr(0))
-	spent(t, pg, "org_1", 450, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1350, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	if hasKind(*sent, NoticeLimit80) || hasKind(*sent, NoticeLimit100) || !hasKind(*sent, NoticeCredit80) {
 		t.Fatalf("%v", *sent)
@@ -534,7 +534,7 @@ func TestEvaluate_LimitedDropsTheCachedAIAnswer(t *testing.T) {
 	if err := s.Gate().CanRun(ctx, "org_1", metering.KindAIPlatform, false); err != nil {
 		t.Fatalf("before the limit: %v", err)
 	}
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	_ = s.Evaluate(ctx, "org_1")
 	var blocked *metering.BlockedError
 	if err := s.Gate().CanRun(ctx, "org_1", metering.KindAIPlatform, false); !errors.As(err, &blocked) {
@@ -550,9 +550,9 @@ func TestEvaluateAll_EveryCardedAccount(t *testing.T) {
 	}
 	_, _ = pg.Exec(ctx, `UPDATE loomplane_billing_accounts SET spending_limit_cents=100`)
 	_, _ = s.SetSpendingLimit(ctx, "org_3", ptr(0)) // no card
-	spent(t, pg, "org_1", 900, at("2026-11-14T10:00:00Z"))
+	spent(t, pg, "org_1", 1900, at("2026-11-14T10:00:00Z"))
 	spent(t, pg, "org_2", 100, at("2026-11-14T10:00:00Z"))
-	spent(t, pg, "org_3", 900, at("2026-11-14T10:00:01Z")) // the helper's ids are cents and time
+	spent(t, pg, "org_3", 1900, at("2026-11-14T10:00:01Z")) // the helper's ids are cents and time
 	n := spy.count()
 	if err := s.EvaluateAll(ctx); err != nil {
 		t.Fatal(err)

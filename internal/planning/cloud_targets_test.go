@@ -18,12 +18,12 @@ import (
 
 func cloudTargetFixture() (*cloudprofiles.Assignment, []ConnectionOption) {
 	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 3, Revision: 4, Targets: []cloudprofiles.Target{
-			{ID: "target-a", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "frontend", Provider: "vercel", ConnectionID: "a", Revision: 5},
-			{ID: "target-b", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "preview", Provider: "vercel", ConnectionID: "b", Revision: 6},
-		}}, []ConnectionOption{
-			{ID: "a", Cloud: "vercel", Ready: true, Details: map[string]string{"team_id": "team-a"}},
-			{ID: "b", Cloud: "vercel", Ready: true, Details: map[string]string{"team_id": "team-b"}},
-		}
+		{ID: "target-a", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "frontend", Provider: "vercel", ConnectionID: "a", Revision: 5},
+		{ID: "target-b", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "preview", Provider: "vercel", ConnectionID: "b", Revision: 6},
+	}}, []ConnectionOption{
+		{ID: "a", Cloud: "vercel", Ready: true, Details: map[string]string{"team_id": "team-a"}},
+		{ID: "b", Cloud: "vercel", Ready: true, Details: map[string]string{"team_id": "team-b"}},
+	}
 }
 
 func cloudTargetGraph() *graph.Graph {
