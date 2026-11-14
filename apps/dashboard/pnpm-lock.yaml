@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  '@authsome/ui-core@1.8.3': e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06
-
 importers:
 
   .:
@@ -15,14 +12,14 @@ importers:
         specifier: 4.0.163
         version: 4.0.163(react@19.3.0)(zod@4.6.5)
       '@authsome/ui-components':
-        specifier: 1.8.3
-        version: 1.8.3(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 1.12.0
+        version: 1.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@authsome/ui-core':
-        specifier: 1.8.3
-        version: 1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)
+        specifier: 1.12.0
+        version: 1.12.0
       '@authsome/ui-react':
-        specifier: 1.8.3
-        version: 1.8.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 1.12.0
+        version: 1.12.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@base-ui/react':
         specifier: ^1.9.0
         version: 1.9.0(@date-fns/tz@1.5.0)(@types/react@19.3.0)(date-fns@4.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -33,11 +30,11 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@forge-go/client-core':
-        specifier: 1.13.0
-        version: 1.13.0
+        specifier: 1.13.7
+        version: 1.13.7
       '@forge-go/client-react':
-        specifier: 1.13.0
-        version: 1.13.0(@forge-go/client-core@1.13.0)(react@19.3.0)
+        specifier: 1.13.7
+        version: 1.13.7(@forge-go/client-core@1.13.7)(react@19.3.0)
       '@forge-go/dashboard-host':
         specifier: 0.3.0
         version: 0.3.0(@forge-go/dashboard-kit@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@17.0.2)(react@19.3.0)(redux@5.0.1))(@forge-go/dashboard-plugin@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@forge-go/dashboard-runtime@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react-router@8.5.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
@@ -246,17 +243,17 @@ packages:
     resolution: {integrity: sha512-YnVzxDxLaqL0t7Q4wfcgHZjg55Wm6y5EaO7Bhu3q9J7wq/8iw3PhsnWiOQhYekx4VexnbkgWpTT6n+QIV7kczw==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@authsome/ui-components@1.8.3':
-    resolution: {integrity: sha512-5wNxpDc/51h4KbhTzzZIZy0tCw/JnTH3HZvUa28zK1FBs3kNFG+xJ/TUEcWP+Iby62i8DNqv/YQI9tJKljs5Gg==}
+  '@authsome/ui-components@1.12.0':
+    resolution: {integrity: sha512-u2ffhtqlZ7KgrOpvz/R+8CJltO/6FY1u4uMiWdy6NpvRxlSGJm1oPovaxK1+zMwBnROiQVyRIZf20Jg/iI5yAw==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
 
-  '@authsome/ui-core@1.8.3':
-    resolution: {integrity: sha512-v0Hig8V9pP9El+vDU2MbXDzQ82lYYi+idnU5TrDjCxPOQIe0YD8Tq5npEMNsPpv0RwT53WYG2ZL6Ly5lgxK1AA==}
+  '@authsome/ui-core@1.12.0':
+    resolution: {integrity: sha512-P9cZIgGHjdiBBHv6FtaC5/k6FMB6rKUV2EqsgK1otdbpxEtrNRgXd4wFl1vIRjb5Ff8Q0xB26ggBrphvDh9dIQ==}
 
-  '@authsome/ui-react@1.8.3':
-    resolution: {integrity: sha512-9Bw2M8K+V753db7pAPl+Ew61CsjtDdMv7t4C5Nk80T6tXVo4va9EjlaehtEFnc7K1t5BT3hT9gAVX6rwd2zrMw==}
+  '@authsome/ui-react@1.12.0':
+    resolution: {integrity: sha512-a5FBaLNBdSMPJY9EyWYSL6RxgKW+2XW104s3IS/xQoi2duV1cQq53AAhUyVjiz6yVDK1ngDSVVFsKzE5DM3ZQQ==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
@@ -622,13 +619,13 @@ packages:
   '@fontsource-variable/inter@5.3.0':
     resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
 
-  '@forge-go/client-core@1.13.0':
-    resolution: {integrity: sha512-rc3pJagpG5KErwpGKU3LwMld+3MCSYJIJy6drvqC5Pz5fbHH74D+z1FfL7hE3Fl5Bw6SrmVUbk3HkjOKAAIeYg==}
+  '@forge-go/client-core@1.13.7':
+    resolution: {integrity: sha512-qqisEC3hi4xB8bjqgk17IZjUSOvrXb3oMAxtl1vQb/P2nkKdQ/5dvc5paSpFInr7IlVCry1rgROuXoZ1SWkfUA==}
 
-  '@forge-go/client-react@1.13.0':
-    resolution: {integrity: sha512-EAWCeoGgUm17/PZNSfbEBUU0XfS0e+lwQ3p1iu5LdIrFFHvvfhf2ry/c6eOPeNM/Lj6PcG4mhi3QKrhf0gk06w==}
+  '@forge-go/client-react@1.13.7':
+    resolution: {integrity: sha512-ynTulrsLz3feFZpFTnR65Qzf1xz3scobP34YnPIfuMggPje14MAK7Ic1vkY1288ZzffqdwWCA10Irr6811iV2Q==}
     peerDependencies:
-      '@forge-go/client-core': ^1.13.0
+      '@forge-go/client-core': ^1.13.7
       react: ^18.0.0 || ^19.0.0
 
   '@forge-go/dashboard-host@0.3.0':
@@ -2894,6 +2891,9 @@ packages:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
 
+  libphonenumber-js@1.12.23:
+    resolution: {integrity: sha512-RN3q3gImZ91BvRDYjWp7ICz3gRn81mW5L4SW+2afzNCC0I/nkXstBgZThQGTE3S/9q5J90FH4dP+TXx8NhdZKg==}
+
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
     engines: {node: '>= 12.0.0'}
@@ -4422,10 +4422,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@authsome/ui-components@1.8.3(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@authsome/ui-components@1.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)
-      '@authsome/ui-react': 1.8.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@authsome/ui-core': 1.12.0
+      '@authsome/ui-react': 1.12.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-avatar': 1.2.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-checkbox': 1.3.12(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-dialog': 1.2.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -4440,6 +4440,7 @@ snapshots:
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       input-otp: 1.5.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      libphonenumber-js: 1.12.23
       lucide-react: 1.55.0(@types/react@19.3.0)(react@19.3.0)
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
@@ -4448,11 +4449,11 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@authsome/ui-core@1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)': {}
+  '@authsome/ui-core@1.12.0': {}
 
-  '@authsome/ui-react@1.8.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@authsome/ui-react@1.12.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)
+      '@authsome/ui-core': 1.12.0
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 
@@ -4921,11 +4922,11 @@ snapshots:
 
   '@fontsource-variable/inter@5.3.0': {}
 
-  '@forge-go/client-core@1.13.0': {}
+  '@forge-go/client-core@1.13.7': {}
 
-  '@forge-go/client-react@1.13.0(@forge-go/client-core@1.13.0)(react@19.3.0)':
+  '@forge-go/client-react@1.13.7(@forge-go/client-core@1.13.7)(react@19.3.0)':
     dependencies:
-      '@forge-go/client-core': 1.13.0
+      '@forge-go/client-core': 1.13.7
       react: 19.3.0
 
   '@forge-go/dashboard-host@0.3.0(@forge-go/dashboard-kit@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@17.0.2)(react@19.3.0)(redux@5.0.1))(@forge-go/dashboard-plugin@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@forge-go/dashboard-runtime@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react-router@8.5.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)':
@@ -7227,6 +7228,8 @@ snapshots:
     dependencies:
       prelude-ls: 1.2.1
       type-check: 0.4.0
+
+  libphonenumber-js@1.12.23: {}
 
   lightningcss-android-arm64@1.32.0:
     optional: true
