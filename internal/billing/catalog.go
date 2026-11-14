@@ -55,7 +55,7 @@ var featureNames = map[string]string{
 
 // The plans' prices and included credit, in cents.
 const (
-	cloudBaseCents = 500
+	cloudBaseCents = 1500
 	aiBaseCents    = 1000
 )
 
@@ -68,13 +68,13 @@ const (
 // catalog is both plans exactly as the Global Constraints have them. A
 // plan's usage is recorded in cents, so each feature has one graduated tier
 // at one cent a unit with no upper bound, and nothing is included (Limit 0):
-// the credit pool is what pays for the first $5 or $10.
+// the credit pool is what pays for the first $15 or $10.
 func catalog(appID string) []*plan.Plan {
 	return []*plan.Plan{
 		{
 			Name:        "Loomplane Cloud",
 			Slug:        PlanCloud,
-			Description: "Runs on Loomplane Cloud, with $5.00 of usage included every month.",
+			Description: "Runs on Loomplane Cloud, with $15.00 of usage included every month.",
 			Currency:    currency,
 			Status:      plan.StatusActive,
 			TrialDays:   0,

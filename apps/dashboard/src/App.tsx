@@ -20,6 +20,7 @@ import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
 import { HeaderSlotProvider } from "@/components/header-slot"
 import { useAgentDock } from "@/components/shell"
 import { WorkspaceFrame } from "@/components/workspace-frame"
+import { CardRequiredContext } from "@/lib/card-required"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
@@ -40,6 +41,14 @@ const CardGate =
   import.meta.env.VITE_LOOMPLANE_EDITION === "cloud"
     ? lazy(() =>
         import("@/cloud/card-gate").then((m) => ({ default: m.CardGate }))
+      )
+    : null
+// It also tells the layout whether the workspace needs a card, so the sidebar
+// can disable what the gate would refuse.
+const CardStatus =
+  import.meta.env.VITE_LOOMPLANE_EDITION === "cloud"
+    ? lazy(() =>
+        import("@/cloud/card-gate").then((m) => ({ default: m.CardStatus }))
       )
     : null
 
@@ -272,42 +281,50 @@ function WorkspaceLayout({ orgId }: { orgId: string }) {
   const focus = !!dock?.open && dock.mode === "focus"
   const docked = !!dock?.open && dock.mode === "docked" && !mobile
   const [slot, setSlot] = useState<HTMLDivElement | null>(null)
+  const [cardRequired, setCardRequired] = useState(false)
   return (
-    <SidebarProvider defaultOpen={sidebarOpenAtLoad()}>
-      <AppSidebar />
-      {/* Keyed on the organization, so switching remounts every page. */}
-      <SidebarInset
-        key={orgId}
-        className={cn(
-          "min-w-0",
-          focus && "md:hidden",
-          docked && "h-svh overflow-hidden"
+    <CardRequiredContext.Provider value={cardRequired}>
+      <SidebarProvider defaultOpen={sidebarOpenAtLoad()}>
+        {CardStatus && (
+          <Suspense fallback={null}>
+            <CardStatus key={orgId} onChange={setCardRequired} />
+          </Suspense>
         )}
-      >
-        <div ref={setSlot} className="shrink-0 empty:hidden" />
-        <HeaderSlotProvider value={docked ? slot : null}>
-          <div
-            data-scroll-restoration-id={docked ? "page" : undefined}
-            className={cn(
-              "flex flex-1 flex-col",
-              docked && "min-h-0 overflow-y-auto"
-            )}
-          >
-            {CardGate ? (
-              <Suspense fallback={<PageLoading />}>
-                <CardGate>
-                  <Outlet />
-                </CardGate>
-              </Suspense>
-            ) : (
-              <Outlet />
-            )}
-          </div>
-        </HeaderSlotProvider>
-        <AppStatusBar />
-      </SidebarInset>
-      <AgentDock />
-    </SidebarProvider>
+        <AppSidebar />
+        {/* Keyed on the organization, so switching remounts every page. */}
+        <SidebarInset
+          key={orgId}
+          className={cn(
+            "min-w-0",
+            focus && "md:hidden",
+            docked && "h-svh overflow-hidden"
+          )}
+        >
+          <div ref={setSlot} className="shrink-0 empty:hidden" />
+          <HeaderSlotProvider value={docked ? slot : null}>
+            <div
+              data-scroll-restoration-id={docked ? "page" : undefined}
+              className={cn(
+                "flex flex-1 flex-col",
+                docked && "min-h-0 overflow-y-auto"
+              )}
+            >
+              {CardGate ? (
+                <Suspense fallback={<PageLoading />}>
+                  <CardGate>
+                    <Outlet />
+                  </CardGate>
+                </Suspense>
+              ) : (
+                <Outlet />
+              )}
+            </div>
+          </HeaderSlotProvider>
+          <AppStatusBar />
+        </SidebarInset>
+        <AgentDock />
+      </SidebarProvider>
+    </CardRequiredContext.Provider>
   )
 }
 

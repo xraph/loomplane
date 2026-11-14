@@ -28,7 +28,7 @@ type Summary struct {
 	// Usage has every billed feature, in display order, then any other
 	// feature with usage.
 	Usage []FeatureUsage
-	// BaseCreditUsedCents is the plan's included usage spent: up to $5.00
+	// BaseCreditUsedCents is the plan's included usage spent: up to $15.00
 	// of base usage. AICreditUsedCents is the add-on's: up to $10.00 of AI
 	// while the add-on covers the month, else 0. Each is shown against its
 	// own credit.

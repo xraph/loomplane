@@ -46,7 +46,7 @@ import {
 import { dollars, monthDay, parseUSD, shortDate, wireDollars } from "./money"
 
 // The base plan's included usage, in cents.
-const INCLUDED_CENTS = 500
+const INCLUDED_CENTS = 1500
 const AI_INCLUDED_CENTS = 1000
 
 const statusLabel: Record<BillingStatus, string> = {
@@ -159,7 +159,7 @@ function PlanSection({ account }: { account: Account }) {
           </Badge>
         </div>
         <p className="text-[13px] text-muted-foreground">
-          $5 a month, including $5 of usage.
+          $15 a month, including $15 of usage.
         </p>
         <Progress
           aria-label="Included usage"

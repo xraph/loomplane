@@ -256,7 +256,7 @@ export function OrganizationForm({
           embed this file's text, don't carry it. The guard looks for it. */}
       {import.meta.env.VITE_LOOMPLANE_EDITION === "cloud" && (
         <p className="text-[12.5px] text-muted-foreground">
-          {"$5 a month, including "}$5 of usage. You&apos;ll add a card next.
+          {"$15 a month, including "}$15 of usage. You&apos;ll add a card next.
         </p>
       )}
       <Button

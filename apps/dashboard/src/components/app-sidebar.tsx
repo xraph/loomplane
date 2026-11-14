@@ -52,6 +52,7 @@ import {
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
 import { aiNavItems } from "@/lib/ai-nav"
+import { useCardRequired } from "@/lib/card-required"
 import { useCloudSettingsGroups } from "@/hooks/use-cloud-settings-groups"
 import { useAgent, useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
@@ -89,6 +90,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { can } = useOrganization()
   const { platformAdmin, platformOwner } = useInstance()
   const { openNewProject } = useShell()
+  const cardRequired = useCardRequired()
   const features = useFeatures()
   const agent = useAgent()
   const dock = useAgentDock()
@@ -361,6 +363,9 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           path={path}
           runs={runs}
           onNew={can("project:create") ? openNewProject : undefined}
+          newDisabled={
+            cardRequired ? "Add a card to create projects" : undefined
+          }
         />
         <NavSettings
           groups={mergeSettingsGroups(settings, cloudGroups)}
@@ -430,10 +435,12 @@ function Projects({
   path,
   runs,
   onNew,
+  newDisabled,
 }: {
   path: string
   runs: Run[]
   onNew?: () => void
+  newDisabled?: string
 }) {
   const list = useQuery(useProjectsList)
   if (!list.data) {
@@ -504,6 +511,7 @@ function Projects({
         )
       }}
       onNew={onNew}
+      newDisabled={newDisabled}
       anchor={anchors.projects}
     />
   )

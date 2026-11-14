@@ -69,7 +69,7 @@ function account(over: Partial<Account> = {}) {
     base_credit_used_cents: 0,
     ai_credit_used_cents: 0,
     overage_cents: 0,
-    projected_total_cents: 500,
+    projected_total_cents: 1500,
     payment_methods: [
       {
         brand: "visa",
@@ -101,26 +101,26 @@ afterEach(() => {
   state.assigned = []
 })
 
-it("shows included usage as dollars of five", async () => {
+it("shows included usage as dollars of fifteen", async () => {
   account({ base_credit_used_cents: 300 })
   render(<BillingPage />)
   expect(
-    await screen.findByText("Included usage: $3.00 of $5.00 used")
+    await screen.findByText("Included usage: $3.00 of $15.00 used")
   ).toBeInTheDocument()
   expect(
-    screen.getByText("$5 a month, including $5 of usage.")
+    screen.getByText("$15 a month, including $15 of usage.")
   ).toBeInTheDocument()
 })
 
 it("shows AI credit against the add-on, never as base usage", async () => {
   account({
     ai_enabled: true,
-    base_credit_used_cents: 200,
+    base_credit_used_cents: 600,
     ai_credit_used_cents: 1000,
   })
   render(<BillingPage />)
   expect(
-    await screen.findByText("Included usage: $2.00 of $5.00 used")
+    await screen.findByText("Included usage: $6.00 of $15.00 used")
   ).toBeInTheDocument()
   expect(
     screen.getByText("Included AI: $10.00 of $10.00 used")
@@ -134,7 +134,7 @@ it("shows AI credit against the add-on, never as base usage", async () => {
 it("shows no AI credit while the add-on is off", async () => {
   account()
   render(<BillingPage />)
-  await screen.findByText("Included usage: $0.00 of $5.00 used")
+  await screen.findByText("Included usage: $0.00 of $15.00 used")
   expect(screen.queryByText(/Included AI/)).not.toBeInTheDocument()
 })
 

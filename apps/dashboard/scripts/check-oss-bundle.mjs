@@ -18,7 +18,7 @@ const MARKERS = [
   "__LOOMPLANE_CLOUD__",
   "/api/v1/billing",
   "/api/v1/platform/billing",
-  "including $5 of usage",
+  "including $15 of usage",
   "settings/billing",
   "platform/billing",
 ]

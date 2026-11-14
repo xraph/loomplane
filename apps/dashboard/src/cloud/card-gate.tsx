@@ -1,7 +1,7 @@
 // The cloud edition's card gate. A workspace with no card can look around and
 // set itself up, and nothing else: every other page shows one panel that says
 // what to do, instead of pages whose every action would be refused.
-import { type ReactNode, useState } from "react"
+import { type ReactNode, useEffect, useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
 import { Page } from "@/components/page"
@@ -38,17 +38,43 @@ export function allowedWithoutCard(path: string): boolean {
   )
 }
 
-/** CardGate shows children, or the card panel while the workspace is pending. */
-export function CardGate({ children }: { children: ReactNode }) {
-  const path = usePath()
+/** useNeedsCard reads the workspace's billing status: still loading, or
+ * whether it needs a card before anything runs. */
+function useNeedsCard(): { loading: boolean; needsCard: boolean } {
   const status = useBillingStatus()
   // A missing status route is another edition's server, and any other failure
   // is no reason to lock people out. Only a payment refusal blocks.
   const refused = !!status.error && statusOf(status.error) === 402
   const pending = status.data?.status === "pending_payment"
-  if (!status.data && !status.error) return <PageLoading />
-  if ((pending || refused) && !allowedWithoutCard(path)) return <CardPanel />
+  return {
+    loading: !status.data && !status.error,
+    needsCard: pending || refused,
+  }
+}
+
+/** CardGate shows children, or the card panel while the workspace is pending. */
+export function CardGate({ children }: { children: ReactNode }) {
+  const path = usePath()
+  const { loading, needsCard } = useNeedsCard()
+  if (loading) return <PageLoading />
+  if (needsCard && !allowedWithoutCard(path)) return <CardPanel />
   return <>{children}</>
+}
+
+/** CardStatus renders nothing. It tells the layout whether the workspace
+ * needs a card, so the parts outside the gate (the sidebar) can follow. */
+export function CardStatus({
+  onChange,
+}: {
+  onChange: (needsCard: boolean) => void
+}) {
+  const { needsCard } = useNeedsCard()
+  useEffect(() => {
+    onChange(needsCard)
+  }, [needsCard, onChange])
+  // Leaving the workspace clears it, so the next one starts unblocked.
+  useEffect(() => () => onChange(false), [onChange])
+  return null
 }
 
 function CardPanel() {
@@ -76,7 +102,7 @@ function CardPanel() {
                 Add a card to start using Loomplane Cloud
               </h1>
               <p className="text-[13.5px] text-muted-foreground">
-                $5 a month, including $5 of usage. Nothing runs in this
+                $15 a month, including $15 of usage. Nothing runs in this
                 workspace until a card is on file. You can still connect clouds
                 and invite people.
               </p>

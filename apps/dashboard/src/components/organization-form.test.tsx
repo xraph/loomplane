@@ -89,11 +89,11 @@ it("says what Cloud costs, in the cloud edition only", () => {
   render(<OrganizationForm onCreated={async () => {}} />)
   expect(
     screen.getByText(
-      "$5 a month, including $5 of usage. You'll add a card next."
+      "$15 a month, including $15 of usage. You'll add a card next."
     )
   ).toBeInTheDocument()
   cleanup()
   vi.unstubAllEnvs()
   render(<OrganizationForm onCreated={async () => {}} />)
-  expect(screen.queryByText(/including \$5 of usage/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/including \$15 of usage/)).not.toBeInTheDocument()
 })

@@ -44,6 +44,7 @@ export function NavProjects({
   projects,
   menu,
   onNew,
+  newDisabled,
   anchor,
 }: {
   projects: NavProject[]
@@ -51,6 +52,8 @@ export function NavProjects({
   menu?: (p: NavProject) => ReactNode
   /** Shows a New project entry under the list when set. */
   onNew?: () => void
+  /** Greys out the New project entry, with this as the reason. */
+  newDisabled?: string
   /** A data-tour name for the group, so a walkthrough can point at it. */
   anchor?: string
 }) {
@@ -117,8 +120,12 @@ export function NavProjects({
         {onNew && (
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip="New project"
-              onClick={onNew}
+              tooltip={newDisabled ?? "New project"}
+              onClick={newDisabled ? undefined : onNew}
+              // aria-disabled, not disabled: the tooltip trigger keeps
+              // disabled for itself and never passes it to the button.
+              aria-disabled={newDisabled ? true : undefined}
+              aria-description={newDisabled}
               className="text-sidebar-foreground/70"
             >
               <span className="-m-0.5 flex size-5 items-center justify-center rounded-[5px] border border-dashed border-sidebar-foreground/30">
