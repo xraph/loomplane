@@ -131,11 +131,13 @@ func TestOutboundSendsTextLongerThanShieldScans(t *testing.T) {
 
 // A task's ID is 32 characters, and shield's entropy check blocked the ones
 // whose characters were spread widely enough, as secrets. IDs aren't scanned.
+// Shield 1.10.2 clears typeids itself, but only those whose prefix is all
+// letters; a prefix with a digit is still taken for a secret, so this uses one.
 func TestLongIDsAreNotTakenForSecrets(t *testing.T) {
 	eng := seeded(t, "org_a")
 	s := &agentsafety.Scanner{Engine: eng}
 	ctx := bound(t, "org_a")
-	const id = "atask_0123456789abcdefghjkmnpqrs"
+	const id = "atask2_0123456789abcdefghjkmnpqrs"
 	text := "The review " + id + " finished."
 
 	raw, err := eng.ScanInput(ctx, &scan.Input{Text: text, Profile: presets.InfraAgentInput, Source: agentsafety.SourceToolResult, Untrusted: true})

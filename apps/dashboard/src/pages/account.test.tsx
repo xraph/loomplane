@@ -1,4 +1,5 @@
 import { ClientProvider } from "@forge-go/client-react"
+import { AuthClientError } from "@authsome/ui-core"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
@@ -474,11 +475,45 @@ describe("two-step verification", () => {
       await within(section).findByRole("button", { name: "Make new ones" })
     )
     const dialog = await screen.findByRole("dialog")
+    await userEvent.type(
+      within(dialog).getByLabelText("Code from the app"),
+      "246810"
+    )
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Make new codes" })
     )
-    expect(auth.client.regenerateMFARecoveryCodes).toHaveBeenCalledWith({}, "")
+    expect(auth.client.regenerateMFARecoveryCodes).toHaveBeenCalledWith(
+      { code: "246810" },
+      ""
+    )
     expect(await within(dialog).findByText("cccc-3333")).toBeInTheDocument()
+  })
+
+  it("keeps the old recovery codes when the app's code is wrong", async () => {
+    auth.client.regenerateMFARecoveryCodes = vi.fn(async () => {
+      throw new AuthClientError("invalid code", 401)
+    })
+    serveTwoStep({ enabled: true })
+    security()
+    const section = await screen.findByRole("region", {
+      name: "Two-step verification",
+    })
+    await userEvent.click(
+      await within(section).findByRole("button", { name: "Make new ones" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    await userEvent.type(
+      within(dialog).getByLabelText("Code from the app"),
+      "000000"
+    )
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Make new codes" })
+    )
+    expect(
+      await within(dialog).findByRole("button", { name: "Make new codes" })
+    ).toBeInTheDocument()
+    expect(within(dialog).queryByText("cccc-3333")).not.toBeInTheDocument()
+    expect(within(dialog).getByLabelText("Code from the app")).toHaveValue("")
   })
 })
 

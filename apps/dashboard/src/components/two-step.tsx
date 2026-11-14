@@ -369,24 +369,31 @@ export function TurnOffTwoStep({ onChanged }: { onChanged: () => void }) {
   )
 }
 
-/** NewRecoveryCodes replaces the recovery codes and shows the new ones once. */
+/**
+ * NewRecoveryCodes takes a current code from the app, replaces the recovery
+ * codes and shows the new ones once. A recovery code isn't taken: making new
+ * ones should prove the authenticator is still at hand.
+ */
 export function NewRecoveryCodes() {
   const { client, token } = useAccountClient()
   const [open, setOpen] = useState(false)
+  const [code, setCode] = useState("")
   const [codes, setCodes] = useState<string[]>()
   const [kept, setKept] = useState(false)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState("")
 
-  const make = async () => {
+  const make = async (e: FormEvent) => {
+    e.preventDefault()
     setProblem("")
     setBusy(true)
     try {
-      setCodes((await client.regenerateMFARecoveryCodes({}, token)).codes)
+      setCodes((await client.regenerateMFARecoveryCodes({ code }, token)).codes)
     } catch (err) {
       setProblem(factorProblem(err, "No new codes were made."))
     } finally {
       setBusy(false)
+      setCode("")
     }
   }
 
@@ -396,6 +403,7 @@ export function NewRecoveryCodes() {
       onOpenChange={(o) => {
         setOpen(o)
         if (!o) {
+          setCode("")
           setCodes(undefined)
           setKept(false)
           setProblem("")
@@ -406,35 +414,48 @@ export function NewRecoveryCodes() {
         Make new ones
       </DialogTrigger>
       <DialogContent className="sm:max-w-[480px]">
-        <DialogHeader>
-          <DialogTitle>
-            {codes
-              ? "Save your new recovery codes"
-              : "Make new recovery codes?"}
-          </DialogTitle>
-          <DialogDescription>
-            {codes ? recoveryNote : "Your old codes stop working, used or not."}
-          </DialogDescription>
-        </DialogHeader>
-        {codes && <RecoveryCodes codes={codes} kept={kept} onKept={setKept} />}
-        <FieldProblem text={problem} />
-        <DialogFooter>
-          {codes ? (
-            <Button disabled={!kept} onClick={() => setOpen(false)}>
-              Done
-            </Button>
-          ) : (
-            <>
-              <Button variant="outline" onClick={() => setOpen(false)}>
+        {codes ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Save your new recovery codes</DialogTitle>
+              <DialogDescription>{recoveryNote}</DialogDescription>
+            </DialogHeader>
+            <RecoveryCodes codes={codes} kept={kept} onKept={setKept} />
+            <DialogFooter>
+              <Button disabled={!kept} onClick={() => setOpen(false)}>
+                Done
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <form onSubmit={(e) => void make(e)} className="grid gap-4">
+            <DialogHeader>
+              <DialogTitle>Make new recovery codes?</DialogTitle>
+              <DialogDescription>
+                Your old codes stop working, used or not.
+              </DialogDescription>
+            </DialogHeader>
+            <CodeField
+              label="Code from the app"
+              value={code}
+              onChange={setCode}
+            />
+            <FieldProblem text={problem} />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setOpen(false)}
+              >
                 Cancel
               </Button>
-              <Button disabled={busy} onClick={() => void make()}>
+              <Button type="submit" disabled={busy}>
                 {busy && <Spinner />}
                 Make new codes
               </Button>
-            </>
-          )}
-        </DialogFooter>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   )

@@ -89,8 +89,8 @@ github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.76.0 h1:y04O7jqZa6HM0JkoPhSI4
 github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.76.0/go.mod h1:lunO76NgN61cnlgsoB/67nAMsexF0YfXXtF5v4Fnb40=
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.92.2 h1:EgZ2zXnUAlPTkSvUicRCR5bBHm5ws9pGidRgmwCRQ9U=
 github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.92.2/go.mod h1:LvyCX/2B66WkJ3qgeD2QGZtQaCInPQxZcFOAenHJz2s=
-github.com/aws/aws-sdk-go-v2/service/codebuild v1.79.0 h1:w5/h6ETIOHLJ+diFkNTmF3VP/BL66KVOjXNdZAJ2s6A=
-github.com/aws/aws-sdk-go-v2/service/codebuild v1.79.0/go.mod h1:nw9J9NmOsBl+w/y4A8wOLlzWtD3YC0Wd+iVGb10mxAg=
+github.com/aws/aws-sdk-go-v2/service/codebuild v1.78.12 h1:1leXm1hUObAS3Olyz3cHoLqxIYkjLCsG3e+nZBew09s=
+github.com/aws/aws-sdk-go-v2/service/codebuild v1.78.12/go.mod h1:nw9J9NmOsBl+w/y4A8wOLlzWtD3YC0Wd+iVGb10mxAg=
 github.com/aws/aws-sdk-go-v2/service/costexplorer v1.74.9 h1:VcaFYDUGtfA5hPpGrWYnrlFcngwHMTdUh2z7yKefkyc=
 github.com/aws/aws-sdk-go-v2/service/costexplorer v1.74.9/go.mod h1:FxJj3LoSxba3ra/jSWGYbppH1I1fcmnVZCHwcWfcfv4=
 github.com/aws/aws-sdk-go-v2/service/ec2 v1.347.0 h1:g+2QZq6gbCn/jhTY7YsXflh+WlbX/zH/2bzKMlXuv3M=
