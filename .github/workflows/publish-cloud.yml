@@ -82,7 +82,7 @@ jobs:
           else
             echo "Publishing $TAG. latest stays on ${newest:-nothing yet}." >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Require a private package before pushing
+      - name: Require a non-public package before pushing
         env:
           # A classic personal access token with read:packages, stored as a
           # secret of the cloud-production environment. Fine-grained tokens
@@ -97,10 +97,16 @@ jobs:
             echo "::error::Couldn't read ghcr.io/xraph/loomplane-cloud (missing, or the token can't see it). Create it as a private package before re-running."
             exit 1
           }
-          if [ "$visibility" != "private" ]; then
-            echo "::error::ghcr.io/xraph/loomplane-cloud is ${visibility}. Make the package private before re-running."
-            exit 1
-          fi
+          # GitHub reports "internal" for packages that inherit visibility in
+          # some org setups, even after they're set to private. Both keep the
+          # image off anonymous pulls, so accept either.
+          case "$visibility" in
+            private|internal) ;;
+            *)
+              echo "::error::ghcr.io/xraph/loomplane-cloud is ${visibility}. Make the package private before re-running."
+              exit 1
+              ;;
+          esac
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
