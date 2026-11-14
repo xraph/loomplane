@@ -1,8 +1,8 @@
-// The cookie mode of authsome's AuthManager (session: "cookie", in
-// @authsome/ui-core since 1.12): the session stays in the backend's httpOnly cookie, so no
-// token is stored, sent or kept, and a reload asks the backend who's signed
-// in. These drive the real manager over a fake fetch that records every
-// request.
+// The cookie mode of authsome's AuthManager (session: "cookie", built into
+// @authsome/ui-core since 1.12): the session stays in the backend's httpOnly
+// cookie, so no token is stored, sent or kept, and a reload asks the backend
+// who's signed in. These drive the real manager over a fake fetch that
+// records every request.
 import { AuthManager, type TokenStorage } from "@authsome/ui-core"
 import { describe, expect, it, vi } from "vitest"
 
