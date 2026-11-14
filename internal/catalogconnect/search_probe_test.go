@@ -402,6 +402,11 @@ func TestSearchMalformedWireClosesWithoutRetry(t *testing.T) {
 		raw, _ := EncodeEngineAccess(searchAccess(EngineElasticsearch))
 		_, err := (SearchProber{}).Probe(t.Context(), dial, raw, recipes.Requirement{})
 		<-done
+		// Since Go 1.27 the transport closes a connection whose body failed
+		// on its own goroutine, just after Probe returns, so give it a moment.
+		for deadline := time.Now().Add(time.Second); closes.Load() == 0 && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
 		if err == nil || calls.Load() != 1 || closes.Load() != 1 {
 			t.Fatal("malformed response accepted, retried or leaked a connection")
 		}
