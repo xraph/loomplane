@@ -477,7 +477,7 @@ describe("two-step verification", () => {
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Make new codes" })
     )
-    expect(auth.client.regenerateMFARecoveryCodes).toHaveBeenCalledWith("")
+    expect(auth.client.regenerateMFARecoveryCodes).toHaveBeenCalledWith({}, "")
     expect(await within(dialog).findByText("cccc-3333")).toBeInTheDocument()
   })
 })

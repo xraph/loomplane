@@ -382,7 +382,7 @@ export function NewRecoveryCodes() {
     setProblem("")
     setBusy(true)
     try {
-      setCodes((await client.regenerateMFARecoveryCodes(token)).codes)
+      setCodes((await client.regenerateMFARecoveryCodes({}, token)).codes)
     } catch (err) {
       setProblem(factorProblem(err, "No new codes were made."))
     } finally {
