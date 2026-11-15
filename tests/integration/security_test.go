@@ -62,6 +62,7 @@ func TestSecurity_organizationsAndRolesHoldEverywhere(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := signUp(email)
+		verifyEmail(t, cfg.Database.URL, email)
 		if code := c.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": u.Query().Get("token")}, nil); code != http.StatusOK && code != http.StatusCreated {
 			t.Fatalf("accept: %d", code)
 		}
@@ -186,6 +187,7 @@ func TestSecurity_organizationsAndRolesHoldEverywhere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	verifyEmail(t, cfg.Database.URL, "grace@example.com")
 	if code := grace.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": iu.Query().Get("token")}, nil); code != http.StatusOK && code != http.StatusCreated {
 		t.Fatalf("accept: %d", code)
 	}

@@ -480,6 +480,7 @@ func TestPlatform_invitationMakesADeveloper(t *testing.T) {
 
 	// Grace signs up with the invited email and accepts through authsome.
 	grace := signUp("grace@example.com")
+	verifyEmail(t, cfg.Database.URL, "grace@example.com")
 	var member struct {
 		OrgID string `json:"org_id"`
 	}

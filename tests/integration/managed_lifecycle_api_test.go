@@ -54,6 +54,7 @@ func TestManagedLifecyclePublicAPI(t *testing.T) {
 	}
 	viewer := &client{t: t, base: a.c.base, key: a.c.key}
 	account(t, viewer, "lifecycle-viewer@example.test")
+	verifyEmail(t, a.dsn, "lifecycle-viewer@example.test")
 	code := viewer.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": accept.Query().Get("token")}, nil)
 	if code != http.StatusOK && code != http.StatusCreated {
 		t.Fatalf("accept: %d", code)

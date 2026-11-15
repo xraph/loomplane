@@ -124,6 +124,7 @@ func TestAPIKeys_actAsTheirMakerUntilRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	grace := signUp("grace@example.com")
+	verifyEmail(t, cfg.Database.URL, "grace@example.com")
 	if code := grace.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": u.Query().Get("token")}, nil); code != http.StatusOK && code != http.StatusCreated {
 		t.Fatalf("accept: status %d", code)
 	}

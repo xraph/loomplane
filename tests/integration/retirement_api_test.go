@@ -251,6 +251,7 @@ func TestRetirementAPIIsScopedAndVerifiesBytesBeforeRetry(t *testing.T) {
 	}
 	admin.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "retirement-admin@example.test", "password": "Correct-horse-battery-9"}, &signed)
 	admin.token = signed.SessionToken
+	verifyEmail(t, cfg.Database.URL, "retirement-admin@example.test")
 	status := admin.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": inviteURL.Query().Get("token")}, nil)
 	if status != http.StatusOK && status != http.StatusCreated {
 		t.Fatalf("admin invitation: %d", status)
