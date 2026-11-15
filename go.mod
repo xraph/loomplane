@@ -62,7 +62,7 @@ require (
 	github.com/stripe/stripe-go/v87 v87.1.0
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.12.0
+	github.com/xraph/authsome v1.12.1
 	github.com/xraph/bastion v1.4.2
 	github.com/xraph/chronicle v1.11.0
 	github.com/xraph/chronicle/extension v1.11.0
@@ -71,7 +71,7 @@ require (
 	github.com/xraph/cortex v1.10.6
 	github.com/xraph/cortex/extension v1.10.6
 	github.com/xraph/ctrlplane v1.8.1
-	github.com/xraph/dispatch v1.9.5
+	github.com/xraph/dispatch v1.9.7
 	github.com/xraph/forge v1.13.7
 	github.com/xraph/forge/extensions/conduit v1.13.7
 	github.com/xraph/go-utils v1.5.0
@@ -200,7 +200,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.2 // indirect
 	github.com/go-playground/validator/v10 v10.30.6 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/go-webauthn/webauthn v0.17.4 // indirect
+	github.com/go-webauthn/webauthn v0.18.2 // indirect
 	github.com/go-webauthn/x v0.3.1 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gofrs/uuid/v5 v5.5.1 // indirect
