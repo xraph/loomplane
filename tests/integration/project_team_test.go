@@ -35,6 +35,7 @@ func (w *teamsWorld) joinAs(c *client, email, role string) {
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	verifyEmail(w.t, w.dsn, email)
 	if code := c.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": u.Query().Get("token")}, nil); code != http.StatusOK && code != http.StatusCreated {
 		w.t.Fatalf("%s accepts: status %d", email, code)
 	}

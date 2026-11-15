@@ -20,7 +20,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/rds v1.133.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.51.0
-	github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.50.0
+	github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.49.12
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/containernetworking/cni v1.3.1
@@ -62,7 +62,7 @@ require (
 	github.com/stripe/stripe-go/v87 v87.1.0
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.12.0
+	github.com/xraph/authsome v1.12.1
 	github.com/xraph/bastion v1.4.2
 	github.com/xraph/chronicle v1.11.0
 	github.com/xraph/chronicle/extension v1.11.0
@@ -71,7 +71,7 @@ require (
 	github.com/xraph/cortex v1.10.6
 	github.com/xraph/cortex/extension v1.10.6
 	github.com/xraph/ctrlplane v1.8.1
-	github.com/xraph/dispatch v1.9.5
+	github.com/xraph/dispatch v1.9.7
 	github.com/xraph/forge v1.13.7
 	github.com/xraph/forge/extensions/conduit v1.13.7
 	github.com/xraph/go-utils v1.5.0

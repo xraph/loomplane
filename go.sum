@@ -121,8 +121,8 @@ github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10 h1:WBJb2VxRzzKnuN94YWqZPiu5a5z
 github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10/go.mod h1:8NhAIBVYkVHq0hIbbzujdoou0VkKwMdG+De9e5oX6qI=
 github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.51.0 h1:caWOS7HN0IKMRSuxxcScg39MxIg4/DgFQbW6xNjQN1I=
 github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.51.0/go.mod h1:pvkKaFkbMw9ehRD+fraRB1pdNyIFMeMOOo5Y4+NWB58=
-github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.50.0 h1:2Id9n1VdQKsElfGN0eiA8fZZc/3J5OGPQSV3cd9J3fo=
-github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.50.0/go.mod h1:Azf1g/OnnCwTXh8LxNw6ejxa0c2PNnnuRP+6Fi7/G+g=
+github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.49.12 h1:dhlj1J9cS+gpPXLXCLhOfVOzoTSnr+EWmPoBMBqeRv8=
+github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.49.12/go.mod h1:Azf1g/OnnCwTXh8LxNw6ejxa0c2PNnnuRP+6Fi7/G+g=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 h1:ssrDA6AKfXEc3h0Pf4EI4vQ8sN5Zd136SrU9Tjr0XPc=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1/go.mod h1:LdwHjKqPE9VCC7sTlWcOAizZx3ZJYjmfwC/EW2tIIAE=
 github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 h1:ANAoa+qt3/9kXnvQVgUyxcTzhzZf4DqaBS+M2DQrELU=
@@ -782,8 +782,8 @@ github.com/xdg-go/stringprep v1.0.4 h1:XLI/Ng3O1Atzq0oBs3TWm+5ZVgkq2aqdlvP9JtoZ6
 github.com/xdg-go/stringprep v1.0.4/go.mod h1:mPGuuIYwz7CmR2bT9j4GbQqutWS1zV24gijq1dTyGkM=
 github.com/xlab/treeprint v1.2.0 h1:HzHnuAF1plUN2zGlAFHbSQP2qJ0ZAD3XF5XD7OesXRQ=
 github.com/xlab/treeprint v1.2.0/go.mod h1:gj5Gd3gPdKtR1ikdDK6fnFLdmIS0X30kTTuNd/WEJu0=
-github.com/xraph/authsome v1.12.0 h1:6S2nGikX4dDzAUAaD4dEikarlExA3euPwMZLNHNDFis=
-github.com/xraph/authsome v1.12.0/go.mod h1:vQpwXAFZj8Tt4XY8oF+f1wsvh+IOsU34rFQO0X4t8no=
+github.com/xraph/authsome v1.12.1 h1:yWxi7xlSiSgh52nWkYBn6dKBiKY9DlhHX9CxXOHwCYs=
+github.com/xraph/authsome v1.12.1/go.mod h1:t/2Id0S+RKAH7FMGz1XiVhRo8KypnD+8aZoXDPQXfNU=
 github.com/xraph/bastion v1.4.2 h1:kHXVoNUVazHIUAZq1bHcmi2EU8TPTFyX0l/ukzZHtro=
 github.com/xraph/bastion v1.4.2/go.mod h1:862Zqo8bol14XVglystGodqNBo72qAXIux0giixBYtw=
 github.com/xraph/chronicle v1.11.0 h1:+aRFsdO089LfVym2qyct+0GIF/G+WnDVFG7NTlw6o8M=
@@ -806,8 +806,8 @@ github.com/xraph/cortex/sentinel v1.10.6 h1:FtSXHghMEDEXAJYf4LIi83SjPWVA8CZ9hetQ
 github.com/xraph/cortex/sentinel v1.10.6/go.mod h1:Q1ZzZWJ6dMwS227iXJwHhRYV9cVL7FVf4TF3cv8xWB8=
 github.com/xraph/ctrlplane v1.8.1 h1:RP/XoqouePA65yWsQQ7XYf2lrA7d2bVGNoGjOOIH5bM=
 github.com/xraph/ctrlplane v1.8.1/go.mod h1:2g10bPmnT6jlqr/dg8sqdUg8ALovQSIDze6XLMGdvow=
-github.com/xraph/dispatch v1.9.5 h1:yl+Ib+ROIl6N83Y5CFWO5OLi0jvae+uTIyBieyMokik=
-github.com/xraph/dispatch v1.9.5/go.mod h1:V4slR2pJiMBgVJND2DJp7Wr7ty3cLlh7EiHtdmbwYY8=
+github.com/xraph/dispatch v1.9.7 h1:JSvIRn9AXpmIJl3Pt/3DHPainIQ2uDUaf2lv6ED1UJM=
+github.com/xraph/dispatch v1.9.7/go.mod h1:uIbsPkpVeqan1GPJxJtowOXd7Dfo8h4VSqk5aS2Suxk=
 github.com/xraph/farp v1.3.1 h1:Dlcpo+gPqfx5SKFd67shPD9pl9aZqMO4txyAPFV59Y0=
 github.com/xraph/farp v1.3.1/go.mod h1:Nlli8WUsxvQL5wXiJqcAn6OsUHBzKJxrl9JLJ9J6Wqo=
 github.com/xraph/farp/discovery v1.3.1 h1:mwwBC++ftbGDlMds6IGA/kof4dAprfV2WjdMZJf3fi4=

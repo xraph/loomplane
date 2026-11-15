@@ -31,6 +31,7 @@ type teamsWorld struct {
 	r       *running
 	app     forge.App
 	sql     *pgx.Conn
+	dsn     string
 	key     string
 	org     string
 	ada     *client
@@ -47,7 +48,7 @@ func newTeamsWorld(t *testing.T) *teamsWorld {
 	cfg.Database.URL = freshDatabase(t)
 	cfg.Orchestration.PollInterval = 100 * time.Millisecond
 	cfg.AI.Enabled = false
-	w := &teamsWorld{t: t, key: cfg.Identity.PublishableKey}
+	w := &teamsWorld{t: t, key: cfg.Identity.PublishableKey, dsn: cfg.Database.URL}
 	w.r = startApp(t, cfg, func(a forge.App) { w.app = a })
 	t.Cleanup(w.r.stop)
 	conn, err := pgx.Connect(t.Context(), cfg.Database.URL)
@@ -89,6 +90,7 @@ func (w *teamsWorld) join(c *client, email string) {
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	verifyEmail(w.t, w.dsn, email)
 	if code := c.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": u.Query().Get("token")}, nil); code != http.StatusOK && code != http.StatusCreated {
 		w.t.Fatalf("%s accepts: status %d", email, code)
 	}

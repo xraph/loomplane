@@ -344,6 +344,7 @@ func joinAs(t *testing.T, a *agentOrg, email, role string) *client {
 	_, token, _ := strings.Cut(created.AcceptPath, "token=")
 	c := &client{t: t, base: a.r.srv.URL, key: a.cfg.Identity.PublishableKey}
 	account(t, c, email)
+	verifyEmail(t, a.cfg.Database.URL, email)
 	if code := c.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": token}, nil); code != http.StatusOK && code != http.StatusCreated {
 		t.Fatalf("accept: %d", code)
 	}

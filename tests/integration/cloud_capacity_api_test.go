@@ -33,6 +33,7 @@ type capacityAPI struct {
 	c                   *client
 	org, cloud, project string
 	sql                 *pgx.Conn
+	dsn                 string
 	store               *cloudinfra.PgStore
 	deploys             *deployments.PgStore
 }
@@ -57,7 +58,7 @@ func capacityAPISetup(t *testing.T, configure ...func(*config.Config)) *capacity
 	if err = connections.NewPgStore(db).CreateConnection(t.Context(), &connections.Connection{ID: "capacity-do", OrgID: org, Cloud: "digitalocean", Name: "Capacity", Account: "account", Status: "ready", Generation: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	return &capacityAPI{r: r, c: c, org: org, cloud: cloud.ID, project: project, sql: sql, store: cloudinfra.NewPgStore(db), deploys: deployments.NewPgStore(db)}
+	return &capacityAPI{r: r, c: c, org: org, cloud: cloud.ID, project: project, sql: sql, dsn: cfg.Database.URL, store: cloudinfra.NewPgStore(db), deploys: deployments.NewPgStore(db)}
 }
 
 func (a *capacityAPI) path(suffix string) string { return "/api/v1/clouds/" + a.cloud + suffix }
@@ -521,6 +522,7 @@ func TestCapacityAPIWaits(t *testing.T) {
 	}
 	viewer.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "watcher@example.test", "password": "Correct-horse-battery-9"}, &auth)
 	viewer.token = auth.SessionToken
+	verifyEmail(t, a.dsn, "watcher@example.test")
 	if code := viewer.do(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": accept.Query().Get("token")}, nil); code != http.StatusOK && code != http.StatusCreated {
 		t.Fatalf("accept: %d", code)
 	}

@@ -621,8 +621,9 @@ func TestSetup_earlierOwnerIsVerifiedOnStart(t *testing.T) {
 }
 
 // ordinaryMember invites email to owner's organization as a viewer and
-// returns a client signed in as them. They hold no platform role.
-func ordinaryMember(t *testing.T, owner *setupClient, email string) *setupClient {
+// returns a client signed in as them. They hold no platform role. dsn is
+// the instance's database, where their address is marked verified.
+func ordinaryMember(t *testing.T, owner *setupClient, dsn, email string) *setupClient {
 	t.Helper()
 	var created struct {
 		AcceptPath string `json:"accept_path"`
@@ -648,6 +649,7 @@ func ordinaryMember(t *testing.T, owner *setupClient, email string) *setupClient
 	if member.cookie == nil {
 		t.Fatalf("%s sign-in set no session cookie", email)
 	}
+	verifyEmail(t, dsn, email)
 	if status, raw, _ := member.send(http.MethodPost, "/authsome/v1/orgs/invitations/accept", map[string]string{"token": token}); status != http.StatusOK && status != http.StatusCreated {
 		t.Fatalf("%s accept: %d %s", email, status, raw)
 	}
@@ -676,7 +678,7 @@ func TestSetup_cloudSignInOffer(t *testing.T) {
 		t.Fatalf("anonymous public config = %+v, want neither", got)
 	}
 
-	grace := ordinaryMember(t, owner, "grace@example.com")
+	grace := ordinaryMember(t, owner, cfg.Database.URL, "grace@example.com")
 	if got := grace.publicConfig(); got.PlatformAdmin || got.CloudSignInOffer {
 		t.Fatalf("an ordinary member's public config = %+v, want neither", got)
 	}

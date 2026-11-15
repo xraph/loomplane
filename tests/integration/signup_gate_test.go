@@ -98,6 +98,15 @@ func execSQL(t *testing.T, dsn, query string, args ...any) {
 	}
 }
 
+// verifyEmail marks the account holding email as having verified it, as
+// using the code in the verification email would. Authsome only lets an
+// invitee accept once the invited address is verified, and these tests
+// sign people up with verification off.
+func verifyEmail(t *testing.T, dsn, email string) {
+	t.Helper()
+	execSQL(t, dsn, `UPDATE authsome_users SET email_verified = true WHERE lower(email) = lower($1)`, email)
+}
+
 func TestSignupGate_pendingRefusesEveryone(t *testing.T) {
 	on, off := true, false
 	for name, waitlist := range map[string]*bool{"waitlist off": &off, "waitlist on": &on, "waitlist unset": nil} {
