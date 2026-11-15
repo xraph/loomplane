@@ -378,6 +378,7 @@ func TestSetup_validation(t *testing.T) {
 	long := strings.Repeat("x", 65)
 	// Five, the most one address may send a minute. The unit tests cover
 	// the other refusals.
+	inOneRateWindow(t)
 	for name, form := range map[string]map[string]string{
 		"no name":         {"email": "ada@example.com", "password": "Correct-horse-battery-9", "organization_name": "Acme"},
 		"bad email":       {"name": "Ada", "email": "not an email", "password": "Correct-horse-battery-9", "organization_name": "Acme"},
