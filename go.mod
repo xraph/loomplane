@@ -82,7 +82,7 @@ require (
 	github.com/xraph/herald v1.10.3
 	github.com/xraph/herald/drivers/apns v1.10.3
 	github.com/xraph/keysmith v1.9.1
-	github.com/xraph/ledger v1.9.2
+	github.com/xraph/ledger v1.9.3
 	github.com/xraph/nexus v1.9.3
 	github.com/xraph/nexus/providers/anthropic v1.9.1
 	github.com/xraph/nexus/providers/openai v1.9.1

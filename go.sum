@@ -842,8 +842,8 @@ github.com/xraph/herald/drivers/apns v1.10.3 h1:B24dlJj+UrZ1bzpndL7IJHUvDhXXprPo
 github.com/xraph/herald/drivers/apns v1.10.3/go.mod h1:MUbgvOsvjcda3SGf4LjQLtLQrsVflAbZAXKnpiBBU78=
 github.com/xraph/keysmith v1.9.1 h1:ZtZ+j1ZbxHKMJzkRnZWwo0hJLsB86Ro5oe7sWCoMKlQ=
 github.com/xraph/keysmith v1.9.1/go.mod h1:WPSJLvoXi8g8LvV2+Tg4JOafGeb+/PlC8ZaW8XYIYss=
-github.com/xraph/ledger v1.9.2 h1:h+9wWFkf1rGmdWknqTlaVu7eBTIZw0qpuWzQ+vQuPV0=
-github.com/xraph/ledger v1.9.2/go.mod h1:k769SQtmWXI9I4DKbja26oZdH/sW29qE/8Y5iNstsdg=
+github.com/xraph/ledger v1.9.3 h1:oz4tlIdDxThus7nX28vpQW//DPzM1yDUStkJV90jQrQ=
+github.com/xraph/ledger v1.9.3/go.mod h1:qJvX411LrVwLXwkkVh1UAjUxRpj44c99XvCRjImKSFA=
 github.com/xraph/nexus v1.9.3 h1:swjUBnkGFYs6f0sifyW7a7CmHetwjmslUKGsH19CFhQ=
 github.com/xraph/nexus v1.9.3/go.mod h1:0hU8ddSNwAw1bh7HlAe9v4ftR0VR0FlYZqpRjKAuhT0=
 github.com/xraph/nexus/providers/anthropic v1.9.1 h1:xoIc53B8DmKun+MLPWTFruMGotpSPoCWeOvBx8uk87g=
