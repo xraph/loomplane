@@ -307,6 +307,7 @@ func TestNodes_listCancelAndLimitJoinTokens(t *testing.T) {
 			Inventory: nodeproto.Inventory{OS: "linux", Arch: "amd64"}, NodeVersion: buildinfo.Version, ProtocolVersion: nodeproto.Version,
 		}, nil)
 	}
+	inOneRateWindow(t) // every join from here on counts against one window
 	if got := join(scoped.Token); got != http.StatusUnauthorized {
 		t.Fatalf("join with a cancelled token: %d", got)
 	}

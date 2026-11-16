@@ -391,6 +391,20 @@ func TestSignupGate_burstCantWedgeThePool(t *testing.T) {
 	}
 }
 
+// inOneRateWindow waits, when it has to, so that what follows starts with
+// at least half of a rate-limit window left. The limiter Loomplane gives
+// authsome counts in fixed windows aligned to the minute, so a run of
+// requests that crosses a boundary starts counting again from zero. Under
+// -race on CI a handful of sign-ups can take long enough for that to happen.
+func inOneRateWindow(t *testing.T) {
+	t.Helper()
+	const window = time.Minute // authsome's default, which these tests keep
+	now := time.Now()
+	if left := now.Truncate(window).Add(window).Sub(now); left < window/2 {
+		time.Sleep(left + 100*time.Millisecond)
+	}
+}
+
 // authsome takes three sign-ups a minute from one address. The gate runs
 // in front of that route, so it counts against the same budget first: a
 // flood from one address gets 429s before the gate looks anything up, so
@@ -405,6 +419,7 @@ func TestSignupGate_floodIsRateLimited(t *testing.T) {
 	}
 
 	flood := &setupClient{t: t, base: c.base, key: c.key, from: "203.0.113.7"}
+	inOneRateWindow(t)
 	codes := make([]int, 0, 6)
 	for i := range 6 {
 		status, _, _ := flood.send(http.MethodPost, "/authsome/v1/signup",
@@ -426,6 +441,7 @@ func TestSignupGate_floodIsRateLimited(t *testing.T) {
 	// again on authsome's route: three invited people can sign up from one
 	// address, and only a fourth sign-up is turned away.
 	office := &setupClient{t: t, base: c.base, key: c.key, from: "192.0.2.10"}
+	inOneRateWindow(t)
 	for i := range 3 {
 		email := fmt.Sprintf("colleague%d@example.com", i)
 		if status, raw, _ := c.send(http.MethodPost, "/api/v1/invitations", map[string]string{"email": email}); status != http.StatusCreated {

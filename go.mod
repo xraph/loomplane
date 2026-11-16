@@ -62,7 +62,7 @@ require (
 	github.com/stripe/stripe-go/v87 v87.1.0
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/xraph/authsome v1.12.1
+	github.com/xraph/authsome v1.12.2
 	github.com/xraph/bastion v1.4.2
 	github.com/xraph/chronicle v1.11.0
 	github.com/xraph/chronicle/extension v1.11.0
@@ -82,7 +82,7 @@ require (
 	github.com/xraph/herald v1.10.3
 	github.com/xraph/herald/drivers/apns v1.10.3
 	github.com/xraph/keysmith v1.9.1
-	github.com/xraph/ledger v1.9.2
+	github.com/xraph/ledger v1.9.3
 	github.com/xraph/nexus v1.9.3
 	github.com/xraph/nexus/providers/anthropic v1.9.1
 	github.com/xraph/nexus/providers/openai v1.9.1
