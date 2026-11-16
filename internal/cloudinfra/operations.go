@@ -21,14 +21,14 @@ import (
 // ErrNoProviderResource refuses a change to a managed server whose create
 // never recorded a provider resource, such as one the provider rejected.
 // Only deletion can act on it. It is an ErrConflict, so it answers 409.
-var ErrNoProviderResource error = &conflictSentence{text: "This server never got a provider resource, so it can't be resized. Delete it and create it again."}
+var ErrNoProviderResource error = &conflictSentenceError{text: "This server never got a provider resource, so it can't be resized. Delete it and create it again."}
 
-// conflictSentence is an ErrConflict whose text is a full sentence for the
+// conflictSentenceError is an ErrConflict whose text is a full sentence for the
 // person reviewing the change, shown as written.
-type conflictSentence struct{ text string }
+type conflictSentenceError struct{ text string }
 
-func (e *conflictSentence) Error() string { return e.text }
-func (e *conflictSentence) Unwrap() error { return ErrConflict }
+func (e *conflictSentenceError) Error() string { return e.text }
+func (e *conflictSentenceError) Unwrap() error { return ErrConflict }
 
 // MaxServerNameLength bounds a server's name. Providers that need a
 // hostname derive one from it, so it fits one DNS label.

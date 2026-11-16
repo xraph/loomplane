@@ -191,7 +191,7 @@ func TestDeleteFailedServerWithoutResourceID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := svc.deleteServer(ctx, preview, v, adapter, provider.InfrastructureCredential{Provider: "digitalocean", AccountID: "team-1"}); err != nil {
+		if err = svc.deleteServer(ctx, preview, v, adapter, provider.InfrastructureCredential{Provider: "digitalocean", AccountID: "team-1"}); err != nil {
 			t.Fatalf("deleteServer: %v", err)
 		}
 		updated, err := store.GetServer(ctx, "org", "cloud_1", "server_1")
@@ -237,10 +237,10 @@ func TestDeleteFailedServerWithoutResourceID(t *testing.T) {
 		// Even if preview ran before the droplet appeared (ResourceID == ""), deleteServer reconciles by tag, issues DELETE, and confirms absence on the next pass.
 		preview.ResourceID = ""
 		cred := provider.InfrastructureCredential{Provider: "digitalocean", AccountID: "team-1"}
-		if err := svc.deleteServer(ctx, preview, v, adapter, cred); !errors.Is(err, ErrPending) {
+		if err = svc.deleteServer(ctx, preview, v, adapter, cred); !errors.Is(err, ErrPending) {
 			t.Fatalf("first deleteServer pass: got %v, want ErrPending", err)
 		}
-		if err := svc.deleteServer(ctx, preview, v, adapter, cred); err != nil {
+		if err = svc.deleteServer(ctx, preview, v, adapter, cred); err != nil {
 			t.Fatalf("second deleteServer pass: %v", err)
 		}
 		updated, err := store.GetServer(ctx, "org", "cloud_1", "server_1")
