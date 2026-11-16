@@ -220,9 +220,10 @@ func (s *Service) provider(cloud string) error {
 }
 
 // SetSignInApp saves the platform's app for a cloud, on behalf of userID.
-// The secret goes to Vault and the client ID to the database. Saving it
-// clears any problem the cloud had with the app before. Whether userID may
-// is the caller's to check.
+// The secret goes to Vault and the client ID to the database. A blank secret
+// keeps the saved one, but only for the same client ID: a secret belongs to
+// its client. Saving it clears any problem the cloud had with the app
+// before. Whether userID may is the caller's to check.
 func (s *Service) SetSignInApp(ctx context.Context, userID, cloud string, in AppInput) (*SignInApp, error) {
 	if err := s.provider(cloud); err != nil {
 		return nil, err
@@ -231,6 +232,13 @@ func (s *Service) SetSignInApp(ctx context.Context, userID, cloud string, in App
 		return nil, ErrAppLocked
 	}
 	clientID, secret, slug := strings.TrimSpace(in.ClientID), strings.TrimSpace(in.ClientSecret), strings.TrimSpace(in.Slug)
+	if clientID != "" && secret == "" {
+		kept, err := s.keptSecret(ctx, cloud, clientID)
+		if err != nil {
+			return nil, err
+		}
+		secret = kept
+	}
 	if clientID == "" || secret == "" {
 		return nil, fmt.Errorf("%w: give the app's client ID and client secret", ErrInvalid)
 	}
@@ -256,6 +264,29 @@ func (s *Service) SetSignInApp(ctx context.Context, userID, cloud string, in App
 	}
 	s.recordApp(ctx, "cloud_signin_app.set", userID, cloud, clientID)
 	return &SignInApp{Cloud: cloud, Source: AppFromPlatform, ClientID: clientID, Slug: slug, UpdatedBy: userID, UpdatedAt: &now}, nil
+}
+
+// keptSecret is the saved secret of the platform's app for cloud when that
+// app has clientID, and empty otherwise.
+func (s *Service) keptSecret(ctx context.Context, cloud, clientID string) (string, error) {
+	stored, err := s.Apps.GetApp(ctx, cloud)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if stored.ClientID != clientID {
+		return "", nil
+	}
+	secret, err := s.AppSecrets.Reveal(ctx, cloud)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(secret), nil
 }
 
 // DeleteSignInApp removes the platform's app for a cloud, and any problem

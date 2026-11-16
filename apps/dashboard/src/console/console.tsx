@@ -12,6 +12,7 @@ import trovePlugin from "@forge-go/dashboard-plugin-trove"
 import wardenPlugin from "@forge-go/dashboard-plugin-warden"
 
 import "./console.css"
+import integrationsPlugin from "./integrations"
 
 // Module scope: the dashboard memoizes on object identity. A plugin shows
 // only while the server registers a contributor of the same name.
@@ -31,6 +32,9 @@ const plugins = [
   heraldPlugin,
   relayPlugin,
   keysmithPlugin,
+  // Loomplane's own: the OAuth apps people sign in to clouds and repository
+  // hosts with (extensions/connections/console.go).
+  integrationsPlugin,
 ]
 
 // The Forge console, for platform admins. Loomplane serves its contract at

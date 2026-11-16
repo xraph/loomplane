@@ -29,6 +29,8 @@ LOOMPLANE_GITLAB_CLIENT_SECRET="<the Secret>"
 
 On Helm, set `gitlab.clientID` in your values and `secrets.gitlabClientSecret`, or put `LOOMPLANE_GITLAB_CLIENT_SECRET` in the Secret named by `secrets.existingSecret`. You can also put a `gitlab:` block with `client_id` and `client_secret` in `config.local.yaml`. Set both or neither. Loomplane refuses to start with only one. With neither, public projects still work and private ones can't be read.
 
+You can set the application in the instance console instead, under **Integrations** at `/__console/@integrations`, if you're a platform owner or admin. It's live in `loomplane` at once and in `loomplane-worker` within 30 seconds, with no restart, and **Check with GitLab** tells you whether GitLab knows the Application ID and Secret before anyone signs in. The variables win while they're set. GitLab sign-ins belong to their application, so with a different one each GitLab connection made with the old one has to sign in again.
+
 ## A self-managed GitLab
 
 The operator can list it under `gitlab.hosts`, with an application registered on that GitLab the same way as above:
@@ -41,7 +43,7 @@ gitlab:
       client_secret: "<the Secret>"
 ```
 
-A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in a `gitlab:` block in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works. Links Loomplane builds to a repository, such as **Open on git.example.com**, always use https, so a GitLab served over plain http gets https links that only open if the host answers https too.
+A list can't come from one environment variable, so `gitlab.hosts` has none. Put it in a `gitlab:` block in `config.local.yaml`. `web_url` has no path and may be http or https. Loomplane trusts these hosts, so a GitLab on your private network works. Links Loomplane builds to a repository, such as **Open on git.example.com**, always use https, so a GitLab served over plain http gets https links that only open if the host answers https too. The instance console's **Integrations** section lists these hosts and can check their applications with **Check with GitLab**, but you change them only here.
 
 An organization can add its own instead. Someone who may connect repositories opens **Integrations**, chooses **Add a self-managed GitLab**, and enters the address, an Application ID and a Secret. The dialog shows the callback URL to use. Loomplane is stricter about these:
 

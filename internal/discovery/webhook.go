@@ -21,6 +21,10 @@ var ErrBadSignature = errors.New("the webhook's signature doesn't match")
 type Webhooks struct {
 	// Secret is the webhook secret set on the GitHub App.
 	Secret []byte
+	// SecretFor, when set, gives the secret each delivery is checked with
+	// instead: the one saved for the platform's App, which can change while
+	// Loomplane runs.
+	SecretFor func(ctx context.Context) []byte
 	// Installations lists the organizations that connected an App
 	// installation.
 	Installations func(ctx context.Context, installationID int64) ([]string, error)
@@ -46,13 +50,33 @@ type pushEvent struct {
 	} `json:"installation"`
 }
 
-// Verify checks a delivery's X-Hub-Signature-256 header against its body.
+// CurrentSecret is the secret deliveries are checked with now, empty when
+// webhooks are off.
+func (w *Webhooks) CurrentSecret(ctx context.Context) []byte {
+	if w.SecretFor != nil {
+		return w.SecretFor(ctx)
+	}
+	return w.Secret
+}
+
+// Verify checks a delivery's X-Hub-Signature-256 header against its body,
+// with Secret.
 func (w *Webhooks) Verify(signature string, body []byte) error {
+	return verifyGitHub(w.Secret, signature, body)
+}
+
+// VerifyNow checks a delivery's X-Hub-Signature-256 header against its
+// body, with the current secret.
+func (w *Webhooks) VerifyNow(ctx context.Context, signature string, body []byte) error {
+	return verifyGitHub(w.CurrentSecret(ctx), signature, body)
+}
+
+func verifyGitHub(secret []byte, signature string, body []byte) error {
 	got, ok := strings.CutPrefix(signature, "sha256=")
-	if !ok || len(w.Secret) == 0 {
+	if !ok || len(secret) == 0 {
 		return ErrBadSignature
 	}
-	want := hmac.New(sha256.New, w.Secret)
+	want := hmac.New(sha256.New, secret)
 	want.Write(body)
 	sum, err := hex.DecodeString(got)
 	if err != nil || !hmac.Equal(sum, want.Sum(nil)) {

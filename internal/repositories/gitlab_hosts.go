@@ -110,33 +110,95 @@ var orgClient = sync.OnceValue(func() *http.Client {
 // GitLabRegistry knows the GitLab hosts Loomplane reads besides gitlab.com's
 // static one: the operator's, and the ones organizations register.
 type GitLabRegistry struct {
-	// Instance are the operator's hosts. They are trusted, so their
-	// readers may reach private addresses and use plain http.
+	// Instance are the operator's hosts from configuration. They are
+	// trusted, so their readers may reach private addresses and use plain
+	// http.
 	Instance []GitLabHost
-	Store    GitLabStore
+	// Managed, when set, gives the operator's hosts saved at runtime, with
+	// their client secrets: gitlab.com once its OAuth application is saved
+	// for the platform. A host Instance has too keeps Instance's.
+	Managed func(ctx context.Context) []GitLabInstanceApp
+	Store   GitLabStore
 	// AllowOrganizationHosts lets organizations register hosts of their own.
 	// Their readers connect only to public addresses.
 	AllowOrganizationHosts bool
 }
 
+// GitLabInstanceApp is an operator's host saved at runtime, and the secret
+// of the OAuth application Loomplane signs in to it with.
+type GitLabInstanceApp struct {
+	Host   GitLabHost
+	Secret string
+}
+
 var _ HostRegistry = (*GitLabRegistry)(nil)
 
-func (g GitLabRegistry) instance(host string) (GitLabHost, bool) {
+// instances are the operator's hosts: configuration's, then the managed
+// ones configuration doesn't have.
+func (g GitLabRegistry) instances(ctx context.Context) []GitLabHost {
+	out := make([]GitLabHost, 0, len(g.Instance)+1)
+	for _, h := range g.Instance {
+		h.Instance = true
+		out = append(out, h)
+	}
+	if g.Managed == nil {
+		return out
+	}
+	for _, m := range g.Managed(ctx) {
+		if g.configured(m.Host.Host) {
+			continue
+		}
+		h := m.Host
+		h.Instance = true
+		out = append(out, h)
+	}
+	return out
+}
+
+// configured reports whether configuration sets host.
+func (g GitLabRegistry) configured(host string) bool {
 	host = canonicalGitLabHost(host)
 	for _, h := range g.Instance {
 		if canonicalGitLabHost(h.Host) == host {
-			h.Instance = true
+			return true
+		}
+	}
+	return false
+}
+
+func (g GitLabRegistry) instance(ctx context.Context, host string) (GitLabHost, bool) {
+	host = canonicalGitLabHost(host)
+	for _, h := range g.instances(ctx) {
+		if canonicalGitLabHost(h.Host) == host {
 			return h, true
 		}
 	}
 	return GitLabHost{}, false
 }
 
+// managedSecret is the client secret of a managed host, when configuration
+// doesn't set the host.
+func (g GitLabRegistry) managedSecret(ctx context.Context, host string) (string, bool) {
+	if g.Managed == nil {
+		return "", false
+	}
+	if g.configured(host) {
+		return "", false
+	}
+	host = canonicalGitLabHost(host)
+	for _, m := range g.Managed(ctx) {
+		if canonicalGitLabHost(m.Host.Host) == host {
+			return m.Secret, true
+		}
+	}
+	return "", false
+}
+
 // Host returns host as orgID may use it: an instance host, or one orgID
 // registered.
 func (g GitLabRegistry) Host(ctx context.Context, orgID, host string) (GitLabHost, bool, error) {
 	host = canonicalGitLabHost(host)
-	if h, ok := g.instance(host); ok {
+	if h, ok := g.instance(ctx, host); ok {
 		return h, true, nil
 	}
 	if !g.AllowOrganizationHosts || g.Store == nil {
@@ -168,7 +230,7 @@ func (g GitLabRegistry) PathParser(ctx context.Context, orgID, host string) (Pat
 // to have checked, with PathParser or Host. A store error is no reader.
 func (g GitLabRegistry) Reader(ctx context.Context, host string) (Reader, bool) {
 	host = canonicalGitLabHost(host)
-	if h, ok := g.instance(host); ok {
+	if h, ok := g.instance(ctx, host); ok {
 		return NewGitLab(h.WebURL, nil), true
 	}
 	if !g.AllowOrganizationHosts || g.Store == nil {

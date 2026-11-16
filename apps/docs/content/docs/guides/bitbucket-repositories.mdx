@@ -33,6 +33,12 @@ LOOMPLANE_BITBUCKET_CLIENT_SECRET=<the consumer's secret>
 
 Set both or neither. Loomplane refuses to start with only one. With neither, Bitbucket keeps working for public repositories, and connecting a workspace is refused with a message saying there's no consumer. Values Bitbucket turns down don't stop Loomplane starting. You still get public repositories, but not private ones until you fix them, as [Revoking access](#revoking-access) explains. The [configuration reference](/docs/reference/configuration) lists `LOOMPLANE_BITBUCKET_API_URL` and `LOOMPLANE_BITBUCKET_WEB_URL` too, which you'd change only to point at a test double.
 
+### Or set it in the instance console
+
+Instead of the variables, a platform owner or admin can paste the consumer's key and secret into the instance console, under **Integrations** at `/__console/@integrations`. It's live in `loomplane` at once and in `loomplane-worker` within 30 seconds, with no restart. **Check with Bitbucket** redeems a made-up code with the key and secret, so Bitbucket's answer says whether it knows them before anyone connects a workspace.
+
+The variables win while they're set, and the console then only shows them. Workspace sign-ins belong to their consumer, so with a different consumer each connected workspace has to be connected again.
+
 ## Connect a workspace
 
 An owner or admin opens **Integrations**, finds the Bitbucket card, types the workspace's slug (the `acme` in `bitbucket.org/acme`) and chooses **Connect workspace**. Bitbucket asks them to approve the consumer and sends them back to Loomplane. If they've approved it before, Bitbucket skips the question.

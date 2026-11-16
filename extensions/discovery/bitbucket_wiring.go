@@ -41,7 +41,7 @@ func (s bitbucketSecrets) Reveal(ctx context.Context, orgID, connectionID string
 // bitbucketConnections builds the organization Bitbucket connections, over
 // the configured OAuth consumer or none. A Loomplane without one still
 // builds them, so public repositories are read the same way.
-func bitbucketConnections(cfg config.Config, db *grove.DB, authz repositories.Authorizer, audit repositories.BitbucketAuditor, log forge.Logger) (*repositories.BitbucketConnections, error) {
+func bitbucketConnections(cfg config.Config, db *grove.DB, apps *repositories.PlatformApps, authz repositories.Authorizer, audit repositories.BitbucketAuditor, log forge.Logger) (*repositories.BitbucketConnections, error) {
 	stateKey, err := security.DeriveKey(cfg.SecretKey, repositories.BitbucketStateKeyLabel)
 	if err != nil {
 		return nil, err
@@ -63,6 +63,11 @@ func bitbucketConnections(cfg config.Config, db *grove.DB, authz repositories.Au
 		api = bitbucketOAuth(cfg.Bitbucket)
 	}
 	conns := repositories.NewBitbucketConnections(repositories.NewPgStore(pgdriver.Unwrap(db)), api, secrets, authz, audit, stateKey)
+	// Configuration's consumer wins; without one, the consumer saved for
+	// the platform is used, whichever it is at the time.
+	if api == nil && apps != nil {
+		conns.UseConsumer(apps.BitbucketSource(cfg.Bitbucket.APIURL, cfg.Bitbucket.WebURL))
+	}
 	conns.SetWarn(func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) })
 	return conns, nil
 }
@@ -88,11 +93,10 @@ func bitbucketWebhooks(cfg config.Config, pg *pgdriver.PgDB, conns *repositories
 		DefaultBranch: repositories.NewBitbucket(cfg.Bitbucket.APIURL, cfg.Bitbucket.WebURL).DefaultBranch,
 		Warn:          func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}
-	// An interface holding a nil *BitbucketOAuth isn't nil, so it's set only
-	// when there is a consumer.
-	if cfg.Bitbucket.Configured() {
-		w.API = bitbucketOAuth(cfg.Bitbucket)
-	}
+	// Adding and removing hooks acts with a workspace's own token, never the
+	// consumer's credentials, so it works whichever consumer signed the
+	// workspace in: configuration's or the one saved for the platform.
+	w.API = bitbucketOAuth(cfg.Bitbucket)
 	return w, nil
 }
 

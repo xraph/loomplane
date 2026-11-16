@@ -53,7 +53,13 @@ type Extension struct {
 	// streams reach joined nodes, for the servers they connect.
 	streams server.NodeStreams
 	svc     *connections.Service
-	issuer  *issuer.Service
+	// store is the service's Postgres store, which the console also reads.
+	store *connections.PgStore
+	// audit records changes the console makes; container is where the
+	// console finds what other extensions provide.
+	audit     auditor
+	container forge.Container
+	issuer    *issuer.Service
 	// platformUser says whether a request is a platform owner's or admin's,
 	// for the routes that manage the platform's sign-in apps.
 	platformUser identity.PlatformUser
@@ -116,6 +122,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("connections needs the audit trail: %w", err)
 	}
+	e.container = c
 
 	// Credentials get a key of their own, derived from secret_key, apart
 	// from the variables' key.
@@ -129,6 +136,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
+	e.audit = auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
 	// Loomplane's own OpenID Connect issuer, for keyless connections. Its
 	// private keys share the credentials' key but live under a Vault app
 	// of their own.
@@ -166,10 +174,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		}
 	}
 	store := connections.NewPgStore(pg)
+	e.store = store
 	e.svc = connections.NewService(
 		store, secrets,
 		checkers,
-		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
+		authz, e.audit,
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
 	// Signing in. The platform's sign-in app secrets share the credentials'
@@ -335,3 +344,17 @@ func (a auditor) RecordApp(ctx context.Context, action, userID, cloud, clientID 
 }
 
 var _ connections.AppAuditor = auditor{}
+
+// RecordRepositoryApp records a change to a repository host's app, in the
+// platform's stream like a cloud's. The secret never reaches it.
+func (a auditor) RecordRepositoryApp(ctx context.Context, action, userID, key, clientID string) {
+	if a.chronicle == nil {
+		return
+	}
+	b := a.chronicle.Warning(ctx, action, "repository_app", key).
+		Category("integrations").AppID(a.appID).TenantID(platformadmin.AuditTenant).UserID(userID).Outcome("success").
+		Meta("host", key).Meta("client_id", clientID)
+	if err := b.Record(); err != nil {
+		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
+	}
+}

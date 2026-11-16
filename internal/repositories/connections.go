@@ -109,13 +109,16 @@ type ConnectGitHubInput struct {
 // Connections manages an organization's GitHub App installations, and
 // mints the tokens analyses read private repositories with.
 type Connections struct {
-	store    Store
-	app      GitHubApp
-	authz    Authorizer
-	audit    Auditor
-	stateKey []byte
-	now      func() time.Time
-	warn     func(msg string, err error)
+	store Store
+	// app is the GitHub App from configuration, or nil. appSource, when
+	// set, says which App to use on each call instead.
+	app       GitHubApp
+	appSource func(context.Context) GitHubApp
+	authz     Authorizer
+	audit     Auditor
+	stateKey  []byte
+	now       func() time.Time
+	warn      func(msg string, err error)
 }
 
 // SetWarn sets where failures that don't fail the call are reported. No
@@ -128,14 +131,27 @@ func NewConnections(store Store, app GitHubApp, authz Authorizer, audit Auditor,
 	return &Connections{store: store, app: app, authz: authz, audit: audit, stateKey: stateKey, now: time.Now}
 }
 
+// UseApp makes each call use the App fn returns then, nil meaning none:
+// the one saved for the platform, which can change while Loomplane runs.
+func (c *Connections) UseApp(fn func(context.Context) GitHubApp) { c.appSource = fn }
+
+// currentApp is the App this call uses, or nil.
+func (c *Connections) currentApp(ctx context.Context) GitHubApp {
+	if c.appSource != nil {
+		return c.appSource(ctx)
+	}
+	return c.app
+}
+
 // Status returns the organization's connection, and a link to connect
 // another account for those who may.
 func (c *Connections) Status(ctx context.Context, p security.Principal) (*GitHubStatus, error) {
 	if err := c.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
 		return nil, err
 	}
-	st := &GitHubStatus{Configured: c.app != nil, Installations: []GitHubInstallation{}}
-	if c.app == nil {
+	app := c.currentApp(ctx)
+	st := &GitHubStatus{Configured: app != nil, Installations: []GitHubInstallation{}}
+	if app == nil {
 		return st, nil
 	}
 	recs, err := c.store.ListInstallations(ctx, p.OrgID)
@@ -143,7 +159,7 @@ func (c *Connections) Status(ctx context.Context, p security.Principal) (*GitHub
 		return nil, err
 	}
 	for _, r := range recs {
-		st.Installations = append(st.Installations, c.view(r))
+		st.Installations = append(st.Installations, view(app, r))
 	}
 	may, err := c.authz.Allowed(ctx, p, security.RepositoryConnect)
 	if err != nil {
@@ -154,7 +170,7 @@ func (c *Connections) Status(ctx context.Context, p security.Principal) (*GitHub
 		if err != nil {
 			return nil, err
 		}
-		st.InstallURL = c.app.InstallURL(state)
+		st.InstallURL = app.InstallURL(state)
 	}
 	return st, nil
 }
@@ -165,7 +181,8 @@ func (c *Connections) Connect(ctx context.Context, p security.Principal, in Conn
 	if err := c.authz.Require(ctx, p, security.RepositoryConnect, ""); err != nil {
 		return nil, err
 	}
-	if c.app == nil {
+	app := c.currentApp(ctx)
+	if app == nil {
 		return nil, ErrAppNotConfigured
 	}
 	st, err := VerifyState(c.stateKey, in.State, c.now())
@@ -179,11 +196,11 @@ func (c *Connections) Connect(ctx context.Context, p security.Principal, in Conn
 	if in.InstallationID <= 0 {
 		return nil, fmt.Errorf("%w: no installation", ErrBadState)
 	}
-	err = c.app.VerifyInstaller(ctx, in.Code, in.InstallationID)
+	err = app.VerifyInstaller(ctx, in.Code, in.InstallationID)
 	if err != nil {
 		return nil, err
 	}
-	inst, err := c.app.Installation(ctx, in.InstallationID)
+	inst, err := app.Installation(ctx, in.InstallationID)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +215,7 @@ func (c *Connections) Connect(ctx context.Context, p security.Principal, in Conn
 	if c.audit != nil {
 		c.audit.Record(ctx, "github.connect", p, inst)
 	}
-	v := c.view(rec)
+	v := view(app, rec)
 	return &v, nil
 }
 
@@ -234,7 +251,8 @@ func (c *Connections) Repositories(ctx context.Context, p security.Principal) ([
 	if err := c.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
 		return nil, err
 	}
-	if c.app == nil {
+	app := c.currentApp(ctx)
+	if app == nil {
 		return []ConnectedRepository{}, nil
 	}
 	recs, err := c.store.ListInstallations(ctx, p.OrgID)
@@ -243,7 +261,7 @@ func (c *Connections) Repositories(ctx context.Context, p security.Principal) ([
 	}
 	out := []ConnectedRepository{}
 	for _, r := range recs {
-		repos, err := c.app.Repositories(ctx, r.ID)
+		repos, err := app.Repositories(ctx, r.ID)
 		if err != nil {
 			return nil, fmt.Errorf("repositories of %s: %w", r.Account, err)
 		}
@@ -261,7 +279,8 @@ func (c *Connections) Repositories(ctx context.Context, p security.Principal) ([
 // read anonymously. Only the organization's own installations are ever
 // used: another organization's can't read this one's code.
 func (c *Connections) Token(ctx context.Context, orgID string, repo Repository) (string, error) {
-	if c.app == nil {
+	app := c.currentApp(ctx)
+	if app == nil {
 		return "", nil
 	}
 	recs, err := c.store.ListInstallations(ctx, orgID)
@@ -272,7 +291,7 @@ func (c *Connections) Token(ctx context.Context, orgID string, repo Repository) 
 		if !strings.EqualFold(r.Account, repo.Owner) {
 			continue
 		}
-		tok, err := c.app.RepositoryToken(ctx, r.ID, repo.Name)
+		tok, err := app.RepositoryToken(ctx, r.ID, repo.Name)
 		if errors.Is(err, ErrNotFound) {
 			// The installation can't see this repository, or it's gone.
 			return "", nil
@@ -289,7 +308,7 @@ func (c *Connections) Token(ctx context.Context, orgID string, repo Repository) 
 // every PermissionsTTL. When GitHub can't be asked, the last ones read
 // still count, and the error is returned only when there are none.
 func (c *Connections) Access(ctx context.Context, orgID, repo string) (IssueAccess, error) {
-	acc, _, err := c.access(ctx, orgID, repo)
+	acc, _, err := c.access(ctx, c.currentApp(ctx), orgID, repo)
 	return acc, err
 }
 
@@ -298,7 +317,8 @@ func (c *Connections) Access(ctx context.Context, orgID, repo string) (IssueAcce
 // an installation that hasn't accepted the permission, and
 // ErrNoInstallation otherwise, each with Access's reason.
 func (c *Connections) Issues(ctx context.Context, orgID, repo string) (Issues, error) {
-	acc, r, err := c.access(ctx, orgID, repo)
+	app := c.currentApp(ctx)
+	acc, r, err := c.access(ctx, app, orgID, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +328,7 @@ func (c *Connections) Issues(ctx context.Context, orgID, repo string) (Issues, e
 		}
 		return nil, fmt.Errorf("%w: %s", ErrNoInstallation, acc.Reason)
 	}
-	tok, err := c.app.IssuesToken(ctx, acc.InstallationID, r.Name)
+	tok, err := app.IssuesToken(ctx, acc.InstallationID, r.Name)
 	var se *statusError
 	if errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusUnprocessableEntity) {
 		// The installation can't see the repository, is gone, or no
@@ -320,12 +340,12 @@ func (c *Connections) Issues(ctx context.Context, orgID, repo string) (Issues, e
 	if err != nil {
 		return nil, fmt.Errorf("mint an issues token for %s: %w", r.FullName(), issueError(err))
 	}
-	return c.app.IssuesClient(tok, r), nil
+	return app.IssuesClient(tok, r), nil
 }
 
-func (c *Connections) access(ctx context.Context, orgID, key string) (IssueAccess, Repository, error) {
+func (c *Connections) access(ctx context.Context, app GitHubApp, orgID, key string) (IssueAccess, Repository, error) {
 	acc := IssueAccess{Repository: key}
-	if c.app == nil {
+	if app == nil {
 		acc.Reason = "This Loomplane has no GitHub App, so reports go to Herald only"
 		return acc, Repository{}, nil
 	}
@@ -356,9 +376,9 @@ func (c *Connections) access(ctx context.Context, orgID, key string) (IssueAcces
 		acc.Reason = "No GitHub App installation on " + repo.Owner + " is connected to this workspace"
 		return acc, repo, nil
 	}
-	_, acc.ManageURL = c.app.AccountURLs(rec.Account, rec.AccountType, rec.ID)
+	_, acc.ManageURL = app.AccountURLs(rec.Account, rec.AccountType, rec.ID)
 	acc.InstallationID, acc.Account = rec.ID, rec.Account
-	if err := c.permissions(ctx, rec); err != nil {
+	if err := c.permissions(ctx, app, rec); err != nil {
 		return acc, repo, err
 	}
 	if rec.Permissions[IssuesPermission] != "write" {
@@ -374,12 +394,12 @@ func (c *Connections) access(ctx context.Context, orgID, key string) (IssueAcces
 // ones, reports the failure, and records the attempt, so the next read
 // waits PermissionsTTL too rather than asking GitHub on every call
 // through an outage. It fails only when none were ever read.
-func (c *Connections) permissions(ctx context.Context, rec *InstallationRecord) error {
+func (c *Connections) permissions(ctx context.Context, app GitHubApp, rec *InstallationRecord) error {
 	now := c.now().UTC()
 	if rec.PermissionsCheckedAt != nil && now.Sub(*rec.PermissionsCheckedAt) < PermissionsTTL {
 		return nil
 	}
-	inst, err := c.app.Installation(ctx, rec.ID)
+	inst, err := app.Installation(ctx, rec.ID)
 	if err != nil {
 		err = fmt.Errorf("read %s's GitHub App permissions: %w", rec.Account, err)
 		if rec.PermissionsCheckedAt == nil {
@@ -408,8 +428,9 @@ func (c *Connections) IssuesStatus(ctx context.Context, p security.Principal) (*
 	if err := c.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
 		return nil, err
 	}
-	st := &IssuesStatus{Configured: c.app != nil, Installations: []InstallationIssues{}}
-	if c.app == nil {
+	app := c.currentApp(ctx)
+	st := &IssuesStatus{Configured: app != nil, Installations: []InstallationIssues{}}
+	if app == nil {
 		return st, nil
 	}
 	recs, err := c.store.ListInstallations(ctx, p.OrgID)
@@ -417,7 +438,7 @@ func (c *Connections) IssuesStatus(ctx context.Context, p security.Principal) (*
 		return nil, err
 	}
 	for _, r := range recs {
-		if err := c.permissions(ctx, r); err != nil {
+		if err := c.permissions(ctx, app, r); err != nil {
 			c.warnf("refresh the Issues status of "+r.Account, err)
 			if r.PermissionsCheckedAt == nil {
 				// GitHub couldn't be asked, and nothing was ever read: the
@@ -425,7 +446,7 @@ func (c *Connections) IssuesStatus(ctx context.Context, p security.Principal) (*
 				r.Permissions = nil
 			}
 		}
-		_, manage := c.app.AccountURLs(r.Account, r.AccountType, r.ID)
+		_, manage := app.AccountURLs(r.Account, r.AccountType, r.ID)
 		st.Installations = append(st.Installations, InstallationIssues{
 			Account: r.Account, AccountType: r.AccountType, Accepted: r.Permissions[IssuesPermission] == "write",
 			ManageURL: manage, CheckedAt: r.PermissionsCheckedAt,
@@ -440,8 +461,8 @@ func (c *Connections) warnf(msg string, err error) {
 	}
 }
 
-func (c *Connections) view(r *InstallationRecord) GitHubInstallation {
-	avatar, manage := c.app.AccountURLs(r.Account, r.AccountType, r.ID)
+func view(app GitHubApp, r *InstallationRecord) GitHubInstallation {
+	avatar, manage := app.AccountURLs(r.Account, r.AccountType, r.ID)
 	return GitHubInstallation{
 		ID: strconv.FormatInt(r.ID, 10), Account: r.Account, AccountType: r.AccountType,
 		AvatarURL: avatar, ManageURL: manage, CreatedAt: r.CreatedAt.UTC(),

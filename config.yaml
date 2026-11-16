@@ -119,8 +119,10 @@ github:
   # Where people install the App and sign in to GitHub.
   web_url: "${LOOMPLANE_GITHUB_WEB_URL:-https://github.com}"
   # The GitHub App that reads private repositories (docs/github-app.md).
-  # Leave these empty to read public repositories only. Keep the private
-  # key and client secret in the environment.
+  # These win over an App saved in the instance console (Integrations),
+  # which is the alternative to setting them here. Leave them empty to use
+  # the console, or to read public repositories only. Keep the private key
+  # and client secret in the environment.
   app_id: "${LOOMPLANE_GITHUB_APP_ID:-}"
   app_slug: "${LOOMPLANE_GITHUB_APP_SLUG:-}"
   private_key: "${LOOMPLANE_GITHUB_PRIVATE_KEY:-}"
@@ -137,9 +139,10 @@ bitbucket:
   api_url: "${LOOMPLANE_BITBUCKET_API_URL:-https://api.bitbucket.org/2.0}"
   # Where Bitbucket serves repository archives.
   web_url: "${LOOMPLANE_BITBUCKET_WEB_URL:-https://bitbucket.org}"
-  # An OAuth consumer that reads private repositories. Leave both empty
-  # to read public repositories only; set both otherwise. Keep the secret
-  # in the environment.
+  # An OAuth consumer that reads private repositories. These win over a
+  # consumer saved in the instance console (Integrations). Leave both empty
+  # to use the console, or to read public repositories only; set both
+  # otherwise. Keep the secret in the environment.
   client_id: "${LOOMPLANE_BITBUCKET_CLIENT_ID:-}"
   client_secret: "${LOOMPLANE_BITBUCKET_CLIENT_SECRET:-}"
 
@@ -148,7 +151,8 @@ gitlab:
   # a test double.
   api_url: "${LOOMPLANE_GITLAB_API_URL:-https://gitlab.com}"
   # The OAuth application that reads private projects on gitlab.com
-  # (docs/gitlab.md). Set both or neither, and keep the secret in the
+  # (docs/gitlab.md). These win over one saved in the instance console
+  # (Integrations). Set both or neither, and keep the secret in the
   # environment.
   client_id: "${LOOMPLANE_GITLAB_CLIENT_ID:-}"
   client_secret: "${LOOMPLANE_GITLAB_CLIENT_SECRET:-}"
@@ -245,8 +249,8 @@ clouds:
   kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
   # in. These win over anything registered on the dashboard's Cloud sign-in
-  # page (Settings, platform owners and admins only), which is the
-  # alternative to setting them here. Leave both empty to use the page, or
+  # page (Settings, platform owners and admins only) or in the instance
+  # console's Integrations, which are the alternatives to setting them here. Leave both empty to use the page, or
   # to keep token entry only. Keep the secret in the environment.
   oauth:
     cloudflare:

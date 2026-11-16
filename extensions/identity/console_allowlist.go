@@ -33,6 +33,10 @@ var consoleCommands = func() map[consoleIntent]bool {
 		"sessions.revoke", "sessions.bulkRevoke",
 	)
 	add("waitlist", "waitlist.approve", "waitlist.reject", "waitlist.delete")
+	// The clouds' sign-in apps (extensions/connections/console.go), the same
+	// changes the platform's Cloud sign-in page makes. oauth.check sends the
+	// app's secret to the cloud's token endpoint and changes nothing.
+	add("integrations", "oauth.save", "oauth.remove", "oauth.check")
 	return out
 }()
 
