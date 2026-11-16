@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
-import { Servers } from "./servers"
+import { ServerEditor, Servers, resizable } from "./servers"
 import { Domains } from "./domains"
 
 let denied = false
@@ -633,10 +633,13 @@ function gpuFixture({
   servers = [],
   pools = [],
   operation = {},
+  capacity,
 }: {
   servers?: Record<string, unknown>[]
   pools?: Record<string, unknown>[]
   operation?: Record<string, unknown>
+  /** A capacity policy and what it has left; none means no policy. */
+  capacity?: { headroom?: Record<string, number>; fresh: boolean }
 } = {}) {
   writes.length = 0
   vi.stubGlobal(
@@ -681,8 +684,21 @@ function gpuFixture({
         })
       if (path.includes("/server-options/"))
         return Response.json({
-          regions: [{ id: "tor1", name: "Toronto 1" }],
+          regions: [
+            { id: "tor1", name: "Toronto 1" },
+            { id: "nyc3", name: "New York 3" },
+          ],
           sizes: [
+            {
+              id: "s-8vcpu-16gb",
+              cpus: 8,
+              memory_mib: 16384,
+              disk_gb: 320,
+              hourly_usd: 0.14286,
+              hourly_price_known: true,
+              monthly_usd: 96,
+              regions: ["nyc3"],
+            },
             {
               id: "s-2vcpu-4gb",
               cpus: 2,
@@ -691,7 +707,7 @@ function gpuFixture({
               hourly_usd: 0.03571,
               hourly_price_known: true,
               monthly_usd: 24,
-              regions: ["tor1"],
+              regions: ["tor1", "nyc3"],
             },
             {
               id: "s-unpriced",
@@ -727,6 +743,12 @@ function gpuFixture({
               regions: ["tor1"],
             },
             {
+              id: "ubuntu-nyc",
+              name: "ubuntu-nyc",
+              bootstrap: true,
+              regions: ["nyc3"],
+            },
+            {
               id: "gpu-h100x1-base",
               name: "gpu-h100x1-base",
               bootstrap: true,
@@ -736,6 +758,13 @@ function gpuFixture({
           ],
         })
       if (path.endsWith("/servers")) return Response.json({ servers })
+      if (path.endsWith("/capacity-usage")) return Response.json(capacity ?? {})
+      if (path.endsWith("/capacity-policy"))
+        return Response.json({
+          cloud_id: "c",
+          automatic_expansion: false,
+          ...(capacity ? { policy: { revision: 2, enabled: true } } : {}),
+        })
       if (path.endsWith("/usage"))
         return Response.json({
           workloads: [],
@@ -758,7 +787,7 @@ async function openCreate(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("option", { name: "DigitalOcean" }))
 }
 const h100Option =
-  "gpu-h100x1-80gb · 1× NVIDIA H100 80GB · 80 GiB · 20 vCPU · $3.39/hr"
+  "1× NVIDIA H100 80GB · 80 GiB each · 20 vCPU · 240 GiB memory · gpu-h100x1-80gb · $3.39/hr"
 
 it("groups GPU sizes and prices them per hour", async () => {
   gpuFixture()
@@ -772,7 +801,9 @@ it("groups GPU sizes and prices them per hour", async () => {
   ).toBeInTheDocument()
   // CPU sizes keep their line and stay out of the GPU group.
   expect(
-    screen.getByRole("option", { name: /^s-2vcpu-4gb · 2 vCPU · 4 GiB/ })
+    screen.getByRole("option", {
+      name: /^2 vCPU · 4 GiB memory · 80 GB disk · s-2vcpu-4gb/,
+    })
   ).toBeInTheDocument()
   expect(
     within(gpu).queryByRole("option", { name: /s-2vcpu-4gb/ })
@@ -1082,15 +1113,209 @@ it("prices CPU sizes the same way, unknown when the price is", async () => {
   await user.click(await screen.findByRole("combobox", { name: "Server size" }))
   expect(
     await screen.findByRole("option", {
-      name: "s-2vcpu-4gb · 2 vCPU · 4 GiB · $0.04/hr",
+      name: "2 vCPU · 4 GiB memory · 80 GB disk · s-2vcpu-4gb · $0.04/hr",
     })
   ).toBeInTheDocument()
   expect(
     screen.getByRole("option", {
-      name: "s-unpriced · 1 vCPU · 1 GiB · price unknown",
+      name: "1 vCPU · 1 GiB memory · 25 GB disk · s-unpriced · price unknown",
     })
   ).toBeInTheDocument()
   expect(screen.queryByRole("option", { name: /\$0\/h|undefined/ })).toBeNull()
+})
+
+it("clears a size and image the newly chosen region doesn't offer", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(
+    await screen.findByRole("combobox", { name: "Server region" })
+  )
+  await user.click(await screen.findByRole("option", { name: "New York 3" }))
+  await user.click(screen.getByRole("combobox", { name: "Server size" }))
+  // Toronto-only sizes are gone; the size only New York offers is listed.
+  expect(
+    screen.queryByRole("option", { name: /s-unpriced/ })
+  ).not.toBeInTheDocument()
+  await user.click(
+    screen.getByRole("option", {
+      name: /^8 vCPU · 16 GiB memory · 320 GB disk/,
+    })
+  )
+  // The only image New York offers is chosen for it.
+  expect(
+    screen.getByRole("combobox", { name: "Server image" })
+  ).toHaveTextContent("ubuntu-nyc")
+  expect(
+    within(screen.getByRole("region", { name: "Chosen size" })).getByText(
+      "8 vCPU · 16 GiB memory · 320 GB disk"
+    )
+  ).toBeInTheDocument()
+  await user.click(screen.getByRole("combobox", { name: "Server region" }))
+  await user.click(await screen.findByRole("option", { name: "Toronto 1" }))
+  expect(
+    screen.getByRole("combobox", { name: "Server size" })
+  ).toHaveTextContent("Choose size")
+  expect(
+    screen.getByRole("combobox", { name: "Server image" })
+  ).toHaveTextContent("ubuntu-24-04-x64")
+})
+
+const room = {
+  servers: 3,
+  cpu_millis: 4000,
+  memory_bytes: 8 * 2 ** 30,
+  storage_bytes: 500e9,
+}
+const overOption =
+  /^8 vCPU · 16 GiB memory · 320 GB disk · s-8vcpu-16gb · \$0\.14\/hr · over this Cloud's limit$/
+
+it("shows a size's share of the Cloud's room and warns on a stale count", async () => {
+  gpuFixture({ capacity: { headroom: room, fresh: false } })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  // A stale count marks the size but leaves it choosable.
+  expect(
+    await screen.findByRole("option", { name: overOption })
+  ).not.toHaveAttribute("aria-disabled", "true")
+  await user.click(
+    screen.getByRole("option", { name: /^2 vCPU · 4 GiB memory · 80 GB disk/ })
+  )
+  expect(
+    screen.getByText(
+      "Uses 1 of 3 servers · 2 of 4 vCPU · 4 of 8 GiB · 80 of 500 GB left · the count may be out of date"
+    )
+  ).toBeInTheDocument()
+  expect(screen.queryByText(/over the Cloud's capacity limit/)).toBeNull()
+  await user.click(screen.getByRole("combobox", { name: "Server size" }))
+  await user.click(await screen.findByRole("option", { name: overOption }))
+  expect(
+    screen.getByText("This size is over the Cloud's capacity limit")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText(/It needs 8 vCPU with 4 left, 16 GiB with 8 left\./)
+  ).toBeInTheDocument()
+})
+
+it("won't offer a size a fresh count says is over the limit", async () => {
+  gpuFixture({ capacity: { headroom: room, fresh: true } })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  expect(
+    await screen.findByRole("option", { name: overOption })
+  ).toHaveAttribute("aria-disabled", "true")
+})
+
+it("says when a Cloud has no capacity limits", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  await user.click(
+    await screen.findByRole("option", { name: /^2 vCPU · 4 GiB memory/ })
+  )
+  expect(
+    await screen.findByText(
+      "No limits set on this Cloud. Add them on the Capacity tab."
+    )
+  ).toBeInTheDocument()
+})
+
+it("says when the Cloud's capacity wasn't counted recently", async () => {
+  gpuFixture({ capacity: { fresh: false } })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  await user.click(
+    await screen.findByRole("option", { name: /^2 vCPU · 4 GiB memory/ })
+  )
+  expect(
+    await screen.findByText(
+      "Not counted recently. The review checks it before anything is created."
+    )
+  ).toBeInTheDocument()
+})
+
+it("counts only what a resize grows by", async () => {
+  gpuFixture({
+    capacity: {
+      headroom: {
+        servers: 0,
+        cpu_millis: 8000,
+        memory_bytes: 16 * 2 ** 30,
+        storage_bytes: 500e9,
+      },
+      fresh: true,
+    },
+  })
+  const user = userEvent.setup()
+  show(
+    <ServerEditor
+      cloud={cloud as never}
+      kind="resize"
+      server={
+        {
+          id: "web",
+          revision: 1,
+          name: "web",
+          connectionId: "do",
+          region: "nyc3",
+          size: "s-2vcpu-4gb",
+          ownership: "managed",
+          resourceId: "42",
+          status: "ready",
+        } as never
+      }
+      connections={[]}
+      providers={[]}
+      onClose={() => {}}
+      onChanged={() => {}}
+    />
+  )
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  // No server is added, so an exhausted server count doesn't block it.
+  const bigger = await screen.findByRole("option", { name: /s-8vcpu-16gb/ })
+  expect(bigger).not.toHaveAttribute("aria-disabled", "true")
+  await user.click(bigger)
+  expect(
+    screen.getByRole("combobox", { name: "Server size" })
+  ).toHaveTextContent("8 vCPU · 16 GiB memory · 320 GB disk")
+  expect(
+    screen.getByText("Adds 6 of 8 vCPU · 12 of 16 GiB · 240 of 500 GB left")
+  ).toBeInTheDocument()
+})
+
+it("only resizes a managed server that has a provider resource", () => {
+  const server = { ownership: "managed", resourceId: "42" } as never
+  expect(resizable(server)).toBe(true)
+  expect(resizable({ ownership: "managed", resourceId: "" } as never)).toBe(
+    false
+  )
+  expect(resizable({ ownership: "adopted", resourceId: "abc" } as never)).toBe(
+    false
+  )
+})
+
+it("says which hostname a name with spaces becomes", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Create server" }))[0]!
+  )
+  const name = screen.getByRole("textbox", { name: "Server name" })
+  await user.type(name, "Digital Ocean Droplet 1 2VPC 4GB")
+  expect(name).toHaveAccessibleDescription(
+    "32/63 characters. Providers that need a hostname will use Digital-Ocean-Droplet-1-2VPC-4GB."
+  )
+  expect(name).toHaveAttribute("maxlength", "63")
 })
 
 it("keeps a GPU budget between one and the server's GPUs", async () => {
