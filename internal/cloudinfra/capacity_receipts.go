@@ -79,7 +79,20 @@ func reconcileCapacityReservations(ctx context.Context, tx driver.Tx, org, cloud
 }
 
 func recordCapacityCleanup(ctx context.Context, tx driver.Tx, o *Operation) error {
-	if o.Input.Kind != "delete" || o.AbsenceConfirmedAt.IsZero() || o.ResourceID == "" {
+	if o.Input.Kind != "delete" {
+		return nil
+	}
+	if o.ResourceID == "" {
+		if o.Status != "succeeded" {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_refreshes SET issued_generation=issued_generation+1 WHERE org_id=$1 AND cloud_id=$2`, o.OrgID, o.CloudID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_reservations r SET cleanup_confirmed_at=$6,status='released' FROM loomplane_infrastructure_operations original WHERE r.org_id=$1 AND r.cloud_id=$2 AND original.org_id=r.org_id AND original.cloud_id=r.cloud_id AND original.id=r.id AND r.body->>'provider'=$3 AND r.body->>'account_id'=$4 AND original.server_id=$5 AND coalesce(original.body->>'resource_id','')=''`, o.OrgID, o.CloudID, o.Provider, o.AccountID, o.ServerID, o.UpdatedAt)
+		return err
+	}
+	if o.AbsenceConfirmedAt.IsZero() {
 		return nil
 	}
 	// Invalidate any collection that started before the absence was recorded.
@@ -88,7 +101,7 @@ func recordCapacityCleanup(ctx context.Context, tx driver.Tx, o *Operation) erro
 	}
 	// A provider GetServer absence receipt names one immutable server. Retained
 	// volumes have distinct identities and remain attributed until their own scan.
-	if _, err := tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_reservations r SET cleanup_confirmed_at=$6,status='released' FROM loomplane_infrastructure_operations original WHERE r.org_id=$1 AND r.cloud_id=$2 AND original.org_id=r.org_id AND original.cloud_id=r.cloud_id AND original.id=r.id AND r.body->>'provider'=$3 AND r.body->>'account_id'=$4 AND original.body->>'resource_id'=$5`, o.OrgID, o.CloudID, o.Provider, o.AccountID, o.ResourceID, o.AbsenceConfirmedAt); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_reservations r SET cleanup_confirmed_at=$6,status='released' FROM loomplane_infrastructure_operations original WHERE r.org_id=$1 AND r.cloud_id=$2 AND original.org_id=r.org_id AND original.cloud_id=r.cloud_id AND original.id=r.id AND r.body->>'provider'=$3 AND r.body->>'account_id'=$4 AND (original.body->>'resource_id'=$5 OR (original.server_id=$7 AND coalesce(original.body->>'resource_id','')=''))`, o.OrgID, o.CloudID, o.Provider, o.AccountID, o.ResourceID, o.AbsenceConfirmedAt, o.ServerID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `DELETE FROM loomplane_cloud_capacity_inventory WHERE org_id=$1 AND cloud_id=$2 AND provider=$3 AND account_id=$4 AND resource_id=$5`, o.OrgID, o.CloudID, o.Provider, o.AccountID, "server:"+o.ResourceID)
