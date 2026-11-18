@@ -92,7 +92,10 @@ func TestFleetNamespaceShutdownDrainsBeforeForgeDependencyClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("shutdown did not finish after namespace drain")
 	}
-	if err := <-stopResult; !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+	// Forge gives stop steps a fresh StopTimeout budget when the caller's
+	// context is already spent, so Stop sees a live context here and only
+	// the retained cleanup error has to come back.
+	if err := <-stopResult; !errors.Is(err, cleanupErr) {
 		t.Fatalf("shutdown lost diagnostics: %v", err)
 	}
 	select {

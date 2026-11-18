@@ -14,6 +14,7 @@ import (
 	cortexid "github.com/xraph/cortex/id"
 	"github.com/xraph/cortex/llm"
 	"github.com/xraph/grove"
+	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/sqlitedriver"
 	shieldengine "github.com/xraph/shield/engine"
 	"github.com/xraph/shield/presets"
@@ -81,7 +82,9 @@ func rtShield(t *testing.T) *shieldengine.Engine {
 	t.Helper()
 	ctx := context.Background()
 	drv := sqlitedriver.New()
-	if err := drv.Open(ctx, ":memory:"); err != nil {
+	// Each connection to :memory: gets its own empty database, so the
+	// pool is held to one connection or a second one sees no tables.
+	if err := drv.Open(ctx, ":memory:", driver.WithPoolSize(1)); err != nil {
 		t.Fatal(err)
 	}
 	db, err := grove.Open(drv)
