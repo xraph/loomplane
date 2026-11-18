@@ -18,6 +18,8 @@ import {
   canUpdateExternalTTL,
 } from "@/lib/cloud-infrastructure"
 import { useNow } from "@/lib/use-runs"
+import type { ServerSize } from "@/client/forge/loomplane/types"
+import { sizeOptions, sizeSpec } from "@/components/cloud-targets/servers"
 import type { CloudTab } from "@/components/cloud-targets/infrastructure-ui"
 import {
   CloudEmpty,
@@ -69,12 +71,37 @@ type Review = {
   size: string
   token: number
 }
+// The sizes the mock account offers, read by the same picker as a real one.
+const mockSizes: ServerSize[] = [
+  {
+    id: "s-2vcpu-4gb",
+    cpus: 2,
+    memoryMib: 4096,
+    diskGb: 80,
+    hourlyUsd: 0.03571,
+    hourlyPriceKnown: true,
+    monthlyUsd: 24,
+    regions: ["us-east"],
+  },
+  {
+    id: "s-4vcpu-8gb",
+    cpus: 4,
+    memoryMib: 8192,
+    diskGb: 160,
+    hourlyUsd: 0.07143,
+    hourlyPriceKnown: true,
+    monthlyUsd: 48,
+    regions: ["us-east"],
+  },
+]
+const sizeOf = (id: string) =>
+  mockSizes.find((s) => s.id === id) ?? mockSizes[0]!
 const initialHosts: Host[] = [
   {
     id: "us-1",
     name: "shared-us-1",
     ownership: "managed",
-    size: "2 CPU / 4 GiB",
+    size: "s-2vcpu-4gb",
     status: "ready",
     draining: false,
   },
@@ -82,7 +109,7 @@ const initialHosts: Host[] = [
     id: "us-2",
     name: "shared-us-2",
     ownership: "adopted",
-    size: "4 CPU / 8 GiB",
+    size: "s-4vcpu-8gb",
     status: "ready",
     draining: false,
   },
@@ -116,8 +143,8 @@ export function MockCloudInfrastructure({
   const [poolMembers, setPoolMembers] = useState(
     initialHosts.map((h) => ({
       serverId: h.id,
-      cpuMillis: h.size.startsWith("4") ? 4000 : 2000,
-      memoryMib: h.size.startsWith("4") ? 8192 : 4096,
+      cpuMillis: sizeOf(h.size).cpus * 1000,
+      memoryMib: sizeOf(h.size).memoryMib,
       draining: h.draining,
     }))
   )
@@ -134,7 +161,7 @@ export function MockCloudInfrastructure({
     server?: Host
   } | null>(null)
   const [name, setName] = useState("")
-  const [size, setSize] = useState("2 CPU / 4 GiB")
+  const [size, setSize] = useState("s-2vcpu-4gb")
   const [confirmed, setConfirmed] = useState(false)
   const [review, setReview] = useState<Review | null>(null)
   const [error, setError] = useState("")
@@ -196,7 +223,7 @@ export function MockCloudInfrastructure({
   const open = (kind: string, server?: Host) => {
     setEditing({ kind, server })
     setName(server?.name ?? "")
-    setSize(server?.size ?? "2 CPU / 4 GiB")
+    setSize(server?.size ?? "s-2vcpu-4gb")
     setReview(null)
     setConfirmed(false)
     setError("")
@@ -286,7 +313,7 @@ export function MockCloudInfrastructure({
                     {host.draining ? " · draining" : ""}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {host.ownership} · us-east · {host.size} ·{" "}
+                    {host.ownership} · us-east · {sizeSpec(sizeOf(host.size))} ·{" "}
                     {workloadCount(host.id)} workloads
                   </p>
                   <p className="text-xs text-muted-foreground">
@@ -300,11 +327,10 @@ export function MockCloudInfrastructure({
                   <p className="text-xs text-muted-foreground">
                     Reserved {workloadCount(host.id) * 500} mCPU /{" "}
                     {workloadCount(host.id) * 256} MiB · available{" "}
-                    {(host.size.startsWith("4") ? 4000 : 2000) -
+                    {sizeOf(host.size).cpus * 1000 -
                       workloadCount(host.id) * 500}{" "}
                     mCPU /{" "}
-                    {(host.size.startsWith("4") ? 8192 : 4096) -
-                      workloadCount(host.id) * 256}{" "}
+                    {sizeOf(host.size).memoryMib - workloadCount(host.id) * 256}{" "}
                     MiB
                   </p>
                 </div>
@@ -901,14 +927,7 @@ export function MockCloudInfrastructure({
                       >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="2 CPU / 4 GiB">
-                          2 CPU / 4 GiB
-                        </SelectItem>
-                        <SelectItem value="4 CPU / 8 GiB">
-                          4 CPU / 8 GiB
-                        </SelectItem>
-                      </SelectContent>
+                      <SelectContent>{sizeOptions(mockSizes)}</SelectContent>
                     </Select>
                   </Field>
                 )}

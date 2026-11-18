@@ -177,3 +177,40 @@ func TestInfrastructureRequestCancellationReachesHTTPClient(t *testing.T) {
 		t.Fatalf("in-flight cancellation: %v", err)
 	}
 }
+
+func TestInfrastructureServerCreateNormalizesHostname(t *testing.T) {
+	f, c := newFake(t)
+	infrastructureAccount(f)
+	var created map[string]any
+	f.on("GET /v2/droplets", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		list := []any{}
+		if created != nil {
+			list = append(list, map[string]any{"id": 42, "name": created["name"], "size_slug": created["size"], "region": map[string]any{"slug": created["region"]}, "tags": created["tags"]})
+		}
+		reply(w, 200, map[string]any{"droplets": list})
+	})
+	f.on("GET /v2/droplets/42/actions", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		reply(w, 200, map[string]any{"actions": []any{map[string]any{"id": 7, "resource_id": 42, "status": "completed", "type": "create"}}})
+	})
+	f.on("POST /v2/droplets", func(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+		if body["name"] != "Digital-Ocean-Droplet-1-2VPC-4GB" {
+			reply(w, 422, map[string]any{"id": "unprocessable_entity", "message": "Invalid hostname"})
+			return
+		}
+		created = body
+		reply(w, 202, map[string]any{
+			"droplet": map[string]any{"id": 42, "name": body["name"], "size_slug": body["size"], "region": map[string]any{"slug": body["region"]}, "tags": body["tags"]},
+			"links":   map[string]any{"actions": []any{map[string]any{"id": 7, "rel": "create"}}},
+		})
+	})
+	spec := provider.ServerSpec{OperationID: "intent-spaces", Name: "Digital Ocean Droplet 1 2VPC 4GB", Region: "ric1", Size: "s-4vcpu-8gb-intel", Image: "ubuntu-24-04-x64"}
+	result, err := c.CreateServer(t.Context(), infrastructureCredential(), spec)
+	if err != nil || result.Server.ID != "42" || result.Server.Name != "Digital-Ocean-Droplet-1-2VPC-4GB" {
+		t.Fatalf("create with spaces: %+v %v", result, err)
+	}
+	spec.ReconcileOnly = true
+	reconciled, err := c.CreateServer(t.Context(), infrastructureCredential(), spec)
+	if err != nil || !reconciled.Reconciled || reconciled.Server.ID != "42" {
+		t.Fatalf("reconcile with spaces: %+v %v", reconciled, err)
+	}
+}

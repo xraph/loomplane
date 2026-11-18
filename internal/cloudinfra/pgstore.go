@@ -145,14 +145,10 @@ func isActiveServerConflict(err error) bool {
 
 // supersedeFailedOperations cancels the failed operations a delete o takes
 // over. A failed operation still counts as open on its server, so without
-// this a server whose create failed after its droplet existed could never
-// be deleted. Only operations on the same recorded resource go: the delete
-// removes exactly that resource, and an attempt whose resource is unknown
-// stays, since what it may have made is unresolved.
+// this a server whose create failed could never be deleted. Operations on
+// the same recorded resource (or a create that failed before recording one)
+// are superseded by the accepted delete.
 func supersedeFailedOperations(ctx context.Context, tx driver.Tx, o *Operation) error {
-	if o.ResourceID == "" {
-		return nil
-	}
 	_, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations
 	SET status='cancelled', updated_at=now(),
 		body = body || jsonb_build_object('status','cancelled',
@@ -161,7 +157,7 @@ func supersedeFailedOperations(ctx context.Context, tx driver.Tx, o *Operation) 
 			'updated_at', to_jsonb(now()))
 	WHERE org_id=$1 AND cloud_id=$2 AND server_id=$3 AND id<>$4 AND status='failed'
 		AND body->'input'->>'kind' IN ('create','resize','delete')
-		AND body->>'resource_id'=$5`, o.OrgID, o.CloudID, o.ServerID, o.ID, o.ResourceID)
+		AND coalesce(body->>'resource_id','') IN ('', $5)`, o.OrgID, o.CloudID, o.ServerID, o.ID, o.ResourceID)
 	if err != nil {
 		return storeError(err)
 	}
