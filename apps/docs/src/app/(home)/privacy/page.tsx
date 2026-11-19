@@ -29,8 +29,8 @@ export default function PrivacyPage() {
         {operator} is run by Rex Raphael, an independent developer, and
         publishes the Loomplane app for iOS and Android. {operator} also runs
         Loomplane's hosted service at <code>app.loomplane.com</code> and this
-        website, <code>loomplane.dev</code>. In this policy, "we" and "us" mean{" "}
-        {operator}.
+        website, <code>www.loomplane.com</code>. In this policy, "we" and "us"
+        mean {operator}.
       </p>
       <p>
         Loomplane is also software you can run yourself. When you connect the
