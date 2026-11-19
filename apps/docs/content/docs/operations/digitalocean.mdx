@@ -105,7 +105,7 @@ Upgrades and the `.env` file work as they do for a plain Droplet.
 
 Droplets and Marketplace installs use the production Docker bundle, so you
 can run the gateway beside Loomplane and its workers on the same host.
-After the initial setup, follow [the Docker gateway setup](https://loomplane.dev/docs/operations/production-on-docker#optional-push-gateway)
+After the initial setup, follow [the Docker gateway setup](/docs/operations/production-on-docker#optional-push-gateway)
 from `/srv/loomplane`. Set `COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`
 in `.env`, provide the gateway image, hostname and key files, then run
 `docker compose up -d --wait --wait-timeout 240`.
@@ -125,7 +125,7 @@ On DigitalOcean Kubernetes (DOKS), use the Helm option with
 `push.gateway.enabled=true`. Set `push.gatewayUrl` to the gateway's public
 HTTPS hostname, create its Secret in the release namespace, and configure
 its Ingress or HTTPRoute as shown in the
-[push notifications guide](https://loomplane.dev/docs/operations/push-notifications#alongside-loomplane).
+[push notifications guide](/docs/operations/push-notifications#alongside-loomplane).
 Your ingress controller provides the public entry point; provision its load
 balancer, DNS and TLS certificate through your usual cluster setup. The
 same chart option works with other Kubernetes providers that support those
