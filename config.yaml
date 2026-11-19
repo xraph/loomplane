@@ -225,6 +225,12 @@ clouds:
   # means 22. DigitalOcean App Platform blocks outbound port 22, so set
   # 2222 there; new servers then open it beside 22 when they boot.
   managed_ssh_port: "${LOOMPLANE_MANAGED_SSH_PORT:-}"
+  # The addresses Loomplane connects out from, comma-separated CIDR ranges.
+  # Set, each server it creates gets a firewall that lets only these reach
+  # the port above, and Loomplane's user can't sign in on 22, which stays
+  # open for your own keys. Empty leaves SSH open to every address. On App
+  # Platform, turn on dedicated egress IPs first, or the addresses change.
+  managed_ssh_allowed_cidrs: "${LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS:-}"
   managed_clusters:
     management_probe:
       provider: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_PROVIDER:-}"

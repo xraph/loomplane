@@ -249,3 +249,58 @@ func TestCloudServerThatNeverEnrollsFailsWithTheReason(t *testing.T) {
 		t.Fatalf("delete: %+v", preview)
 	}
 }
+
+// With Loomplane's addresses set, a create makes the SSH firewall before the
+// server, puts the server in it, and keeps Loomplane's user off port 22.
+// A health check someone asks for brings the firewall up to date with
+// Loomplane's addresses, and an expired enrollment names the setting.
+func TestCloudServerJoinsTheSSHFirewall(t *testing.T) {
+	f := newInfraFixture(t)
+	f.svc.ManagedSSHPort = 2222
+	f.svc.ManagedSSHAllowedCIDRs = []string{"203.0.113.7/32"}
+	var spec provider.ServerSpec
+	f.provider.beforeCreate = func(s provider.ServerSpec) {
+		spec = s
+		if len(f.provider.firewalls) == 0 {
+			t.Error("the server was created before its firewall")
+		}
+	}
+	o := f.reconcile(t, f.create(t))
+	if o.Status != "waiting" || !o.SSHFirewall || o.SSHPort != 2222 {
+		t.Fatalf("after create: %+v", o)
+	}
+	if spec.FirewallTag != "loomplane-ssh-2222" || !strings.Contains(spec.UserData, "Match User loomplane LocalPort 22") {
+		t.Fatalf("spec: tag %q, user data keeps loomplane off 22: %v", spec.FirewallTag, strings.Contains(spec.UserData, "Match User loomplane"))
+	}
+	if fw := f.provider.firewalls[0]; fw.SSHPort != 2222 || len(fw.Sources) != 1 || fw.Sources[0] != "203.0.113.7/32" {
+		t.Fatalf("firewall: %+v", fw)
+	}
+
+	f.svc.ManagedSSHAllowedCIDRs = []string{"192.0.2.10/32"}
+	if _, err := f.svc.CheckServer(t.Context(), f.p, "cloud", o.ServerID); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("checking a starting server: %v", err)
+	}
+	if fw := f.provider.firewalls[len(f.provider.firewalls)-1]; len(fw.Sources) != 1 || fw.Sources[0] != "192.0.2.10/32" {
+		t.Fatalf("firewall after Loomplane's addresses changed: %+v", fw)
+	}
+
+	o.BootstrapExpiresAt = time.Now().Add(-time.Minute)
+	if err := f.store.SaveOperation(t.Context(), o); err != nil {
+		t.Fatal(err)
+	}
+	if o = f.reconcile(t, o); o.Status != "failed" || !strings.Contains(o.Message, "LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS") || !o.SSHFirewall {
+		t.Fatalf("expired enrollment: %+v", o)
+	}
+}
+
+// Without Loomplane's addresses nothing changes: no firewall, no tag.
+func TestCloudServerWithoutAllowedCIDRsHasNoFirewall(t *testing.T) {
+	f := newInfraFixture(t)
+	f.svc.ManagedSSHPort = 2222
+	var spec provider.ServerSpec
+	f.provider.beforeCreate = func(s provider.ServerSpec) { spec = s }
+	o := f.reconcile(t, f.create(t))
+	if o.Status != "waiting" || o.SSHFirewall || spec.FirewallTag != "" || len(f.provider.firewalls) != 0 || strings.Contains(spec.UserData, "Match User") {
+		t.Fatalf("create: %+v, tag %q, firewalls %v", o, spec.FirewallTag, f.provider.firewalls)
+	}
+}

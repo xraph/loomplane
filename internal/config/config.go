@@ -394,6 +394,12 @@ type CloudsConfig struct {
 	// over SSH. Zero means 22. Set another, such as 2222, where Loomplane
 	// can't connect out to port 22: DigitalOcean App Platform blocks it.
 	ManagedSSHPort int
+	// ManagedSSHAllowedCIDRs are the addresses Loomplane connects out from.
+	// Set, each server it creates joins a provider firewall that lets only
+	// them reach the managed SSH port, and Loomplane's own user can't sign
+	// in on 22. Empty leaves SSH open to every address. On App Platform the
+	// addresses are fixed only with dedicated egress IPs.
+	ManagedSSHAllowedCIDRs []netip.Prefix
 	// GoogleEndpoint replaces every Google Cloud API host.
 	GoogleEndpoint string
 	// VercelEndpoint replaces Vercel's API.
@@ -552,6 +558,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.PublicURL, "public_url")
 	r.str(&c.Clouds.EnrollmentURL, "clouds.enrollment_url")
 	r.integer(&c.Clouds.ManagedSSHPort, "clouds.managed_ssh_port")
+	r.prefixes(&c.Clouds.ManagedSSHAllowedCIDRs, "clouds.managed_ssh_allowed_cidrs")
 	r.str(&c.SecretKey, "secret_key")
 
 	r.str(&c.Database.URL, "database.url")
@@ -739,6 +746,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Clouds.ManagedSSHPort < 0 || c.Clouds.ManagedSSHPort > 65535 {
 		errs = append(errs, errors.New("clouds.managed_ssh_port must be a TCP port from 1 to 65535, or 0 for 22"))
+	}
+	// DigitalOcean takes at most 1,000 addresses in one firewall rule.
+	if len(c.Clouds.ManagedSSHAllowedCIDRs) > 1000 {
+		errs = append(errs, errors.New("clouds.managed_ssh_allowed_cidrs lists more than 1,000 ranges"))
 	}
 	if !strings.HasPrefix(c.Identity.BasePath, "/") || c.Identity.BasePath == "/" {
 		errs = append(errs, fmt.Errorf("identity.base_path must be a path below /, got %q", c.Identity.BasePath))

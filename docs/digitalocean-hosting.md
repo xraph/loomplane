@@ -55,6 +55,10 @@ The template uses a DigitalOcean Managed PostgreSQL cluster (billed separately),
 
 App Platform can't follow an image tag, so the template uses `:latest`. To upgrade, redeploy the app. To stay on one version, change the tag to a release such as `v1.2.3`. The template redirects `/_/metrics` and `/debug` to `/`, so neither is reachable from outside.
 
+App Platform blocks outbound connections to port 22, and Loomplane checks every server it creates over SSH. The template sets `LOOMPLANE_MANAGED_SSH_PORT=2222`, so new servers open SSH on 2222 as well as 22, and Loomplane reaches them there. If you made the app from an older template, add that variable yourself. Without it, a new server stays at Starting and then fails, saying it never finished enrolling. Servers created before you set it can't be fixed by setting it: delete them and create them again.
+
+To also stop anyone but Loomplane reaching that port, turn on dedicated egress IPs for the app (a paid App Platform add-on), and set `LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS` to those addresses, comma-separated. Without dedicated egress, the addresses App Platform connects out from are shared and change, and a firewall pinned to them would cut Loomplane off from its servers. With the setting, each new server joins a Cloud Firewall called `loomplane-ssh-2222` that lets only those addresses reach port 2222 and leaves every other port open, and Loomplane's own user can't sign in on port 22. If the egress addresses ever change, update the setting, then choose **Check health** on each server to bring its firewall up to date.
+
 Scratch space on App Platform is small, so the worker runs one analysis at a time. Very large repositories can fail there. If yours do, move to a Droplet.
 
 ## Droplet with cloud-init

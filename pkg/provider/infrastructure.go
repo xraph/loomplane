@@ -112,14 +112,17 @@ func (e *InfrastructureAPIError) Error() string {
 // use ReconcileOnly. Absence from a listing cannot prove a create did not run.
 // UserData is transient bootstrap material and must never enter stored intent JSON.
 type ServerSpec struct {
-	OperationID   string   `json:"operation_id"`
-	Name          string   `json:"name"`
-	Region        string   `json:"region"`
-	Size          string   `json:"size"`
-	Image         string   `json:"image"`
-	SSHKeys       []string `json:"ssh_keys,omitempty"`
-	UserData      string   `json:"-"`
-	ReconcileOnly bool     `json:"-"`
+	OperationID string   `json:"operation_id"`
+	Name        string   `json:"name"`
+	Region      string   `json:"region"`
+	Size        string   `json:"size"`
+	Image       string   `json:"image"`
+	SSHKeys     []string `json:"ssh_keys,omitempty"`
+	// FirewallTag, when set, puts the server in a ManagementFirewall from
+	// the moment it exists.
+	FirewallTag   string `json:"firewall_tag,omitempty"`
+	UserData      string `json:"-"`
+	ReconcileOnly bool   `json:"-"`
 }
 
 func (s ServerSpec) String() string { return "[server creation intent]" }
@@ -165,6 +168,27 @@ type ServerAdapter interface {
 	ResizeServer(context.Context, InfrastructureCredential, string, string) (InfrastructureAction, error)
 	DeleteServer(context.Context, InfrastructureCredential, string) error
 	GetServerAction(context.Context, InfrastructureCredential, string, string) (InfrastructureAction, error)
+}
+
+// ManagementFirewall lets only Sources reach SSHPort on the servers that
+// carry its tag. Every other port stays as open as it was without it.
+type ManagementFirewall struct {
+	SSHPort int
+	// Sources are CIDR prefixes, such as Loomplane's own outbound addresses.
+	Sources []string
+}
+
+// ManagementFirewallTag is the tag a server carries to join the management
+// firewall for its SSH port. Each port has its own, since a server keeps the
+// port it was created with.
+func ManagementFirewallTag(port int) string { return fmt.Sprintf("loomplane-ssh-%d", port) }
+
+// ServerFirewallAdapter is implemented by server adapters that can limit a
+// managed server's SSH to Loomplane. EnsureManagementFirewall creates the
+// firewall for f's port, or brings an existing one's rules up to date, and is
+// safe to repeat. Servers join it with ServerSpec.FirewallTag.
+type ServerFirewallAdapter interface {
+	EnsureManagementFirewall(context.Context, InfrastructureCredential, ManagementFirewall) error
 }
 
 // DNSZone identifies a zone in its account. Name is also the request locator on

@@ -46,11 +46,17 @@ func notCheckable(v *Server) error {
 // enrollmentExpiredError is a create whose server didn't enroll before
 // its bootstrap expired. Enrollment is checked over SSH, so the likeliest
 // cause is a port Loomplane can't reach. It is an ErrConflict.
-type enrollmentExpiredError struct{ port int }
+type enrollmentExpiredError struct {
+	port     int
+	firewall bool
+}
 
 func (e *enrollmentExpiredError) Error() string {
-	return fmt.Sprintf("The server was created but never finished enrolling: Loomplane couldn't confirm it over SSH on port %d within 45 minutes. "+
-		"Check that Loomplane can connect out to that port (DigitalOcean App Platform blocks port 22, so set LOOMPLANE_MANAGED_SSH_PORT), then delete this server and create it again.", e.port)
+	check := "Check that Loomplane can connect out to that port (DigitalOcean App Platform blocks port 22, so set LOOMPLANE_MANAGED_SSH_PORT)"
+	if e.firewall {
+		check += ", and that LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS lists the addresses Loomplane connects from, since the server's firewall lets only those reach the port"
+	}
+	return fmt.Sprintf("The server was created but never finished enrolling: Loomplane couldn't confirm it over SSH on port %d within 45 minutes. %s, then delete this server and create it again.", e.port, check)
 }
 func (e *enrollmentExpiredError) Unwrap() error { return ErrConflict }
 
@@ -659,16 +665,28 @@ func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a p
 		resumed := o.Attempted
 		var userData string
 		if !resumed {
+			o.SSHFirewall = len(s.ManagedSSHAllowedCIDRs) > 0
 			data, err := s.prepareBootstrap(ctx, o)
 			if err != nil {
 				return err
 			}
 			userData = data
+		}
+		// The firewall exists before the server does, so the server is
+		// never reachable on its SSH port by anyone else.
+		if err := s.ensureSSHFirewall(ctx, o, a, c); err != nil {
+			return err
+		}
+		if !resumed {
 			if checkErr := s.checkpointCreateAttempt(ctx, o); checkErr != nil {
 				return checkErr
 			}
 		}
-		result, err := a.CreateServer(ctx, c, provider.ServerSpec{OperationID: o.ID, Name: o.Input.Name, Region: o.Input.Region, Size: o.Input.Size, Image: o.Input.Image, UserData: userData, ReconcileOnly: resumed})
+		spec := provider.ServerSpec{OperationID: o.ID, Name: o.Input.Name, Region: o.Input.Region, Size: o.Input.Size, Image: o.Input.Image, UserData: userData, ReconcileOnly: resumed}
+		if o.SSHFirewall {
+			spec.FirewallTag = provider.ManagementFirewallTag(o.SSHPort)
+		}
+		result, err := a.CreateServer(ctx, c, spec)
 		if err != nil {
 			return err
 		}
@@ -710,12 +728,29 @@ func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a p
 			if port == 0 {
 				port = 22
 			}
-			return &enrollmentExpiredError{port: port}
+			return &enrollmentExpiredError{port: port, firewall: o.SSHFirewall}
 		}
 		return ErrPending
 	}
 	return s.readyRuntime(ctx, o, v)
 }
+
+// ensureSSHFirewall makes sure the firewall a create's server joins exists
+// and lets in Loomplane's current addresses. It runs on every attempt, so a
+// retried create also picks up addresses that changed since.
+func (s *Service) ensureSSHFirewall(ctx context.Context, o *Operation, a provider.ServerAdapter, c provider.InfrastructureCredential) error {
+	// Emptied since, the firewall is left as it is: there are no addresses
+	// to replace its own with.
+	if !o.SSHFirewall || len(s.ManagedSSHAllowedCIDRs) == 0 {
+		return nil
+	}
+	firewall, ok := a.(provider.ServerFirewallAdapter)
+	if !ok {
+		return &conflictSentenceError{text: fmt.Sprintf("LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS limits SSH to Loomplane's addresses, and Loomplane can't set a firewall at %s. Empty the setting to create servers there.", o.Provider)}
+	}
+	return firewall.EnsureManagementFirewall(ctx, c, provider.ManagementFirewall{SSHPort: o.SSHPort, Sources: s.ManagedSSHAllowedCIDRs})
+}
+
 func (s *Service) actionsComplete(ctx context.Context, o *Operation, a provider.ServerAdapter, c provider.InfrastructureCredential) (bool, error) {
 	for i, action := range o.Actions {
 		if action.ID == "" || action.ResourceID != o.ResourceID {

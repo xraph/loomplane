@@ -187,7 +187,7 @@ for attempt in range(180):
 	if o.SSHPort != 22 {
 		// SSH opens the other port before the server enrolls, since
 		// enrollment is checked over it.
-		runcmd = append([]any{[]string{"bash", "-c", sshPortScript(o.SSHPort)}}, runcmd...)
+		runcmd = append([]any{[]string{"bash", "-c", sshPortScript(o.SSHPort, o.SSHFirewall)}}, runcmd...)
 	}
 	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": packages, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": runcmd}
 	encoded, err := json.Marshal(document)
@@ -208,12 +208,24 @@ func (s *Service) managedSSHPort() int {
 // server and says so in Loomplane's log. Ubuntu 22.10 and later start SSH
 // from a socket whose ports come from sshd_config, so that socket is
 // rebuilt rather than the service restarted. An active ufw lets the port in.
-func sshPortScript(port int) string {
+//
+// With onlyThere, the loomplane user can sign in on port alone, since a
+// firewall lets only Loomplane reach port and 22 stays open to everyone.
+// The Match block ends with Match all, so the settings that follow the
+// Include in sshd_config stay global.
+func sshPortScript(port int, onlyThere bool) string {
+	match := ""
+	if onlyThere {
+		match = `
+  echo 'Match User loomplane LocalPort 22'
+  echo '  AuthorizedKeysFile none'
+  echo 'Match all'`
+	}
 	return strings.ReplaceAll(`conf=/etc/ssh/sshd_config.d/10-loomplane-port.conf
 mkdir -p /etc/ssh/sshd_config.d
 {
   grep -qsiE '^[[:space:]]*Port[[:space:]]' /etc/ssh/sshd_config || echo 'Port 22'
-  echo 'Port PORT'
+  echo 'Port PORT'`+match+`
 } > "$conf"
 grep -qsiE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config || sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
 if ! /usr/sbin/sshd -t; then

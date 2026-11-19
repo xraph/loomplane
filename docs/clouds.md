@@ -260,6 +260,10 @@ To review a resize, disconnect or deletion, supply `kind`, `server_id`, `cloud_r
 
 Provider creation acceptance does not mean runtime readiness. Follow the operation's provider actions and bootstrap expiry, then use `cloud-servers check cloud_... server_...` to refresh the pinned SSH and Docker health. `--wait` stops at success, failure, cancellation or a waiting checkpoint and returns the latest persisted record on timeout. A waiting checkpoint still needs your attention.
 
+A new server shows Starting until it enrolls. When it boots, it calls Loomplane back, and Loomplane checks it over SSH as the `loomplane` user. If that hasn't happened within 45 minutes, the create fails and the server shows Failed with the reason; delete it and create it again. Health can only be checked on a server that's ready or unhealthy, and asking earlier says why.
+
+Loomplane reaches the servers it creates on port 22. Where its own host can't connect out to port 22, as on DigitalOcean App Platform, set `LOOMPLANE_MANAGED_SSH_PORT` to another port, such as `2222`. New servers then open that port beside 22 when they boot, so your own SSH keeps working. A server keeps the port it was created with. To let only Loomplane reach that port, set `LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS` to the addresses Loomplane connects out from. New servers then join a provider firewall that allows only those addresses on the managed port, and Loomplane's own user can't sign in on 22. Checking a server's health also brings its firewall up to date with the setting.
+
 ```sh
 loomctl cloud-servers usage cloud_... server_...
 loomctl cloud-servers drain cloud_... server_...

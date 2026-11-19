@@ -104,6 +104,12 @@ type infraProvider struct {
 	seenReconcile             bool
 	beforeCreate              func(provider.ServerSpec)
 	actionKind                string
+	firewalls                 []provider.ManagementFirewall
+}
+
+func (f *infraProvider) EnsureManagementFirewall(_ context.Context, _ provider.InfrastructureCredential, fw provider.ManagementFirewall) error {
+	f.firewalls = append(f.firewalls, fw)
+	return nil
 }
 
 func (f *infraProvider) ListServers(context.Context, provider.InfrastructureCredential) ([]provider.InfrastructureServer, error) {

@@ -70,6 +70,8 @@ Start with `loomctl clouds create --organization --name Shared`, then run `loomc
 
 DigitalOcean compute and DNS capabilities are checked independently. Your App Platform token scopes do not establish Droplet or DNS permissions: the selected operation must have the required account permission, and unsupported or denied operations fail before new effects. Keep credentials in Integrations.
 
+When `LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS` is set, creating a Droplet also needs firewall and tag access (`firewall:create`, `firewall:read`, `firewall:update`, `tag:create` and `tag:read` on a custom-scoped token). Loomplane keeps one firewall per SSH port, named `loomplane-ssh-<port>`, and the Droplets join it through a tag of the same name. Don't change its rules: Loomplane puts them back the next time it creates a server or checks one.
+
 For a managed DNS zone, use `loomctl dns-zones create --file zone.json` with `mode: "managed"`, the zone name, your DNS connection ID and allowed project IDs. You can use a different account for compute and DNS. An external zone instead returns an ownership proof and manual record instructions. Neither mode buys a domain or changes registrar nameservers.
 
 Routes use reviewed server ingress and retain exact provider DNS receipts. DNS, TLS and backend status are reported independently. Follow route history and any drain deadline before removing old capacity, and supply the maximum previously served external TTL when you manage DNS yourself. The new record's TTL does not tell you what clients still have cached.
