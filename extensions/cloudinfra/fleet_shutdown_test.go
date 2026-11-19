@@ -92,13 +92,31 @@ func TestFleetNamespaceShutdownDrainsBeforeForgeDependencyClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("shutdown did not finish after namespace drain")
 	}
-	if err := <-stopResult; !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+	// Forge gives Stop a fresh budget when the caller's context is already
+	// cancelled, so only the finalizer's error comes back from it.
+	if err := <-stopResult; !errors.Is(err, cleanupErr) {
 		t.Fatalf("shutdown lost diagnostics: %v", err)
 	}
 	select {
 	case <-closed:
 	default:
 		t.Fatal("dependency did not close after namespace drain")
+	}
+}
+
+// Stop called directly with a cancelled context still waits for the drain,
+// and reports the cancellation alongside the finalizer's error.
+func TestFleetNamespaceStopReportsCallerCancellation(t *testing.T) {
+	cleanupErr := errors.New("synthetic cleanup diagnostic")
+	drain := &namespaceDrainProbe{closing: make(chan struct{}), done: make(chan struct{}), err: cleanupErr}
+	close(drain.done)
+	workerDone := make(chan struct{})
+	close(workerDone)
+	e := &Extension{cancel: func() {}, done: workerDone, namespaces: drain}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := e.Stop(ctx); !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("Stop lost diagnostics: %v", err)
 	}
 }
 

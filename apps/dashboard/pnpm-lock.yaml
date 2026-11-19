@@ -12,14 +12,14 @@ importers:
         specifier: 4.0.163
         version: 4.0.163(react@19.3.0)(zod@4.6.5)
       '@authsome/ui-components':
-        specifier: 1.12.0
-        version: 1.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 1.12.2
+        version: 1.12.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@authsome/ui-core':
-        specifier: 1.12.0
-        version: 1.12.0
+        specifier: 1.12.2
+        version: 1.12.2
       '@authsome/ui-react':
-        specifier: 1.12.0
-        version: 1.12.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 1.12.2
+        version: 1.12.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@base-ui/react':
         specifier: ^1.9.0
         version: 1.9.0(@date-fns/tz@1.5.0)(@types/react@19.3.0)(date-fns@4.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -30,11 +30,11 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@forge-go/client-core':
-        specifier: 1.13.7
-        version: 1.13.7
+        specifier: 1.14.1
+        version: 1.14.1
       '@forge-go/client-react':
-        specifier: 1.13.7
-        version: 1.13.7(@forge-go/client-core@1.13.7)(react@19.3.0)
+        specifier: 1.14.1
+        version: 1.14.1(@forge-go/client-core@1.14.1)(react@19.3.0)
       '@forge-go/dashboard-host':
         specifier: 0.3.0
         version: 0.3.0(@forge-go/dashboard-kit@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@17.0.2)(react@19.3.0)(redux@5.0.1))(@forge-go/dashboard-plugin@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@forge-go/dashboard-runtime@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react-router@8.5.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)
@@ -243,17 +243,17 @@ packages:
     resolution: {integrity: sha512-YnVzxDxLaqL0t7Q4wfcgHZjg55Wm6y5EaO7Bhu3q9J7wq/8iw3PhsnWiOQhYekx4VexnbkgWpTT6n+QIV7kczw==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@authsome/ui-components@1.12.0':
-    resolution: {integrity: sha512-u2ffhtqlZ7KgrOpvz/R+8CJltO/6FY1u4uMiWdy6NpvRxlSGJm1oPovaxK1+zMwBnROiQVyRIZf20Jg/iI5yAw==}
+  '@authsome/ui-components@1.12.2':
+    resolution: {integrity: sha512-ta4Fs6qGgOWmnZOHIoyqtYieTY+AQJWoc+5MpCuix+/A7jiXHiWvO3/eFhWkperH5SAw7SPlH1BjwLAySw/w+A==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
 
-  '@authsome/ui-core@1.12.0':
-    resolution: {integrity: sha512-P9cZIgGHjdiBBHv6FtaC5/k6FMB6rKUV2EqsgK1otdbpxEtrNRgXd4wFl1vIRjb5Ff8Q0xB26ggBrphvDh9dIQ==}
+  '@authsome/ui-core@1.12.2':
+    resolution: {integrity: sha512-WQV9JLrSOD0FlxbE2uGh8K83bRZ9i7TqCVFROVMxMHuf5PLw7jdEyoo6KQJnpdZCCxYdJN4FDsJE5asbaLMscg==}
 
-  '@authsome/ui-react@1.12.0':
-    resolution: {integrity: sha512-a5FBaLNBdSMPJY9EyWYSL6RxgKW+2XW104s3IS/xQoi2duV1cQq53AAhUyVjiz6yVDK1ngDSVVFsKzE5DM3ZQQ==}
+  '@authsome/ui-react@1.12.2':
+    resolution: {integrity: sha512-0U447hNLNBCmCG2B20pHvsmu2JpBAA5TdbzScSu8lRYsf7frOfmr3lKPq8Ey+o2hxI1K9dvnXHwIw/DyYsigLw==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
@@ -619,13 +619,13 @@ packages:
   '@fontsource-variable/inter@5.3.0':
     resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
 
-  '@forge-go/client-core@1.13.7':
-    resolution: {integrity: sha512-qqisEC3hi4xB8bjqgk17IZjUSOvrXb3oMAxtl1vQb/P2nkKdQ/5dvc5paSpFInr7IlVCry1rgROuXoZ1SWkfUA==}
+  '@forge-go/client-core@1.14.1':
+    resolution: {integrity: sha512-6ME+v22QJDnO/Cig00+9qZRnbWG3gq4TiuXhKsR6KktZJMX2HMYJfLN35FDmAQrQFT6w5Tb7hqnGD/X6Qq66fA==}
 
-  '@forge-go/client-react@1.13.7':
-    resolution: {integrity: sha512-ynTulrsLz3feFZpFTnR65Qzf1xz3scobP34YnPIfuMggPje14MAK7Ic1vkY1288ZzffqdwWCA10Irr6811iV2Q==}
+  '@forge-go/client-react@1.14.1':
+    resolution: {integrity: sha512-StMigj+P7kLKqQjv1nGwjFPdvMZ5ga9rA/GAWbNi3etXqTyu8+EPngJdrslA+bKSRdqSgBc4T1wB4Rbr6GOLWA==}
     peerDependencies:
-      '@forge-go/client-core': ^1.13.7
+      '@forge-go/client-core': ^1.14.1
       react: ^18.0.0 || ^19.0.0
 
   '@forge-go/dashboard-host@0.3.0':
@@ -4422,10 +4422,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@authsome/ui-components@1.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@authsome/ui-components@1.12.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.12.0
-      '@authsome/ui-react': 1.12.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@authsome/ui-core': 1.12.2
+      '@authsome/ui-react': 1.12.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-avatar': 1.2.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-checkbox': 1.3.12(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-dialog': 1.2.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -4449,11 +4449,11 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@authsome/ui-core@1.12.0': {}
+  '@authsome/ui-core@1.12.2': {}
 
-  '@authsome/ui-react@1.12.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@authsome/ui-react@1.12.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.12.0
+      '@authsome/ui-core': 1.12.2
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 
@@ -4922,11 +4922,11 @@ snapshots:
 
   '@fontsource-variable/inter@5.3.0': {}
 
-  '@forge-go/client-core@1.13.7': {}
+  '@forge-go/client-core@1.14.1': {}
 
-  '@forge-go/client-react@1.13.7(@forge-go/client-core@1.13.7)(react@19.3.0)':
+  '@forge-go/client-react@1.14.1(@forge-go/client-core@1.14.1)(react@19.3.0)':
     dependencies:
-      '@forge-go/client-core': 1.13.7
+      '@forge-go/client-core': 1.14.1
       react: 19.3.0
 
   '@forge-go/dashboard-host@0.3.0(@forge-go/dashboard-kit@0.3.0(@date-fns/tz@1.5.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react-is@17.0.2)(react@19.3.0)(redux@5.0.1))(@forge-go/dashboard-plugin@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@forge-go/dashboard-runtime@0.3.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react-router@8.5.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react@19.3.0)':

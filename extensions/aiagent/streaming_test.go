@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/cortex/safety"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
+	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/sqlitedriver"
 	"github.com/xraph/nexus/guard"
 	"github.com/xraph/nexus/provider"
@@ -38,7 +39,9 @@ func libraries(t *testing.T, ai config.AIConfig) *Extension {
 	t.Helper()
 	ctx := context.Background()
 	drv := sqlitedriver.New()
-	if err := drv.Open(ctx, ":memory:"); err != nil {
+	// One connection: each connection to ":memory:" is its own empty
+	// database, and the libraries query from more than one goroutine.
+	if err := drv.Open(ctx, ":memory:", driver.WithPoolSize(1)); err != nil {
 		t.Fatal(err)
 	}
 	db, err := grove.Open(drv)

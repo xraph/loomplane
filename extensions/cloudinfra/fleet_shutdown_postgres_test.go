@@ -67,7 +67,9 @@ func TestFleetNamespaceShutdownRetainsPostgresUntilFinalizerReturns(t *testing.T
 	case <-time.After(2 * time.Second):
 		t.Fatal("shutdown did not finish after finalizer release")
 	}
-	if err := <-stopResult; !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+	// Forge gives Stop a fresh budget when the caller's context is already
+	// cancelled, so only the finalizer's error comes back from it.
+	if err := <-stopResult; !errors.Is(err, cleanupErr) {
 		t.Fatalf("shutdown lost diagnostics: %v", err)
 	}
 	select {
