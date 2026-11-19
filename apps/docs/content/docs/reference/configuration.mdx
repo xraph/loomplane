@@ -144,6 +144,8 @@ The setting `clouds.enrollment_url` (set it in `config.local.yaml`) is the reach
 
 `LOOMPLANE_MANAGED_SSH_PORT` is the port Loomplane reaches the servers it creates on over SSH. Empty means 22. Set another, such as `2222`, where Loomplane can't connect out to port 22, as on DigitalOcean App Platform. New servers then open that port beside 22 when they boot, so your own SSH on 22 keeps working. A server keeps the port it was created with.
 
+`LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS` is the list of addresses Loomplane connects out from, as comma-separated CIDR ranges such as `203.0.113.7/32,203.0.113.8/32`. A bare address counts as one address. Set it and each server Loomplane creates joins a DigitalOcean Cloud Firewall that lets only these addresses reach the managed SSH port. Every other port stays open as before, 22 included, and the server refuses Loomplane's own user on 22, so your own keys still work there. Empty, the default, leaves SSH open to every address. The addresses have to stay fixed: on App Platform that means dedicated egress IPs.
+
 ## Cloud capacity
 
 <Callout type="warn">

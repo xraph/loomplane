@@ -46,6 +46,9 @@ func newService(cfg config.CloudsConfig, d cloudinfra.Deps) *cloudinfra.Service 
 	d.ClusterCapacity = cfg.ClusterCapacity
 	d.ManagedClusters = cfg.ManagedClusters
 	d.EnableAutomaticCapacity = cfg.AutomaticCapacity.Enabled
+	for _, p := range cfg.ManagedSSHAllowedCIDRs {
+		d.ManagedSSHAllowedCIDRs = append(d.ManagedSSHAllowedCIDRs, p.String())
+	}
 	return cloudinfra.NewService(d)
 }
 

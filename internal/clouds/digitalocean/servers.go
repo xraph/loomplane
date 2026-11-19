@@ -205,7 +205,7 @@ func serverSpecTag(spec provider.ServerSpec) (string, error) {
 // tags. A lost response is ambiguous even when a follow-up listing is empty.
 func (c *Client) CreateServer(ctx context.Context, credential provider.InfrastructureCredential, spec provider.ServerSpec) (provider.ServerResult, error) {
 	var result provider.ServerResult
-	if strings.TrimSpace(spec.OperationID) == "" || len(spec.OperationID) > 256 || spec.Name == "" || spec.Region == "" || spec.Size == "" || spec.Image == "" {
+	if strings.TrimSpace(spec.OperationID) == "" || len(spec.OperationID) > 256 || spec.Name == "" || spec.Region == "" || spec.Size == "" || spec.Image == "" || (spec.FirewallTag != "" && !firewallTagPattern.MatchString(spec.FirewallTag)) {
 		return result, provider.ErrInfrastructureInvalid
 	}
 	if err := c.infrastructureIdentity(ctx, credential); err != nil {
@@ -249,6 +249,9 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 		Backups  bool     `json:"backups"`
 		IPv6     bool     `json:"ipv6"`
 	}{Name: hostname, Region: spec.Region, Size: spec.Size, Image: spec.Image, SSHKeys: spec.SSHKeys, UserData: spec.UserData, Tags: []string{tag, specTag}, IPv6: true}
+	if spec.FirewallTag != "" {
+		in.Tags = append(in.Tags, spec.FirewallTag)
+	}
 	var out struct {
 		Droplet droplet             `json:"droplet"`
 		Links   infrastructureLinks `json:"links"`

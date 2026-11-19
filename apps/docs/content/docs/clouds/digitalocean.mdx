@@ -105,6 +105,8 @@ GPU Droplets work too, with a GPU-ready image and the NVIDIA Container Toolkit s
 
 DigitalOcean's compute and DNS capabilities are checked independently. Your App Platform token scopes don't establish Droplet or DNS permissions, so an operation without the permission it needs fails before any new effects. For a managed DNS zone you can use a different account than the one for compute.
 
+When `LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS` is set, creating a Droplet also needs firewall and tag access (`firewall:create`, `firewall:read`, `firewall:update`, `tag:create` and `tag:read` on a custom-scoped token). Loomplane keeps one firewall per SSH port, named `loomplane-ssh-<port>`, and the Droplets join it through a tag of the same name. Don't change its rules: Loomplane puts them back the next time it creates a server or checks one.
+
 <Callout type="warn">
   Fixture-backed provider and ACME checks don't qualify your DigitalOcean account, DNS propagation or public certificate issuance. Verify those with your own authorized live scope before a production move.
 </Callout>

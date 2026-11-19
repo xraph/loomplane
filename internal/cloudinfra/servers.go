@@ -137,7 +137,10 @@ type Operation struct {
 	HostKey              string                          `json:"host_key,omitempty"`
 	// SSHPort is the port the server's bootstrap opened for Loomplane.
 	// Zero, on operations recorded before it, means 22.
-	SSHPort            int       `json:"ssh_port,omitempty"`
+	SSHPort int `json:"ssh_port,omitempty"`
+	// SSHFirewall records that the server joined the firewall that lets
+	// only ManagedSSHAllowedCIDRs reach its SSHPort.
+	SSHFirewall        bool      `json:"ssh_firewall,omitempty"`
 	Enrolled           bool      `json:"enrolled"`
 	BootstrapExpiresAt time.Time `json:"bootstrap_expires_at"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -219,6 +222,11 @@ type Deps struct {
 	// server boots, for hosts that can't connect out to port 22, such as
 	// DigitalOcean App Platform.
 	ManagedSSHPort int
+	// ManagedSSHAllowedCIDRs are Loomplane's own outbound addresses, as CIDR
+	// prefixes. Set, a new managed server joins a provider firewall that
+	// lets only them reach its managed SSH port, and the loomplane user
+	// can't sign in on 22. Empty leaves SSH open to every address.
+	ManagedSSHAllowedCIDRs []string
 	// Warn reports a failure the service works around, such as a price it
 	// couldn't save. Nil drops the report.
 	Warn func(string, error)
@@ -345,7 +353,41 @@ func (s *Service) CheckServer(ctx context.Context, p security.Principal, cloud, 
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
+	if err := s.refreshSSHFirewall(ctx, p.OrgID, cloud, id); err != nil {
+		return nil, err
+	}
 	return s.checkServer(ctx, p.OrgID, cloud, id)
+}
+
+// refreshSSHFirewall brings a managed server's SSH firewall up to date with
+// Loomplane's addresses before it's checked, so a check after they changed
+// can reach it again. Only a check someone asks for does this; the regular
+// inventory checks don't call the provider.
+func (s *Service) refreshSSHFirewall(ctx context.Context, org, cloud, id string) error {
+	v, err := s.Store.GetServer(ctx, org, cloud, id)
+	if err != nil || v.Ownership != "managed" || v.CreationOperationID == "" || len(s.ManagedSSHAllowedCIDRs) == 0 {
+		return err
+	}
+	o, err := s.Store.OperationByID(ctx, org, v.CreationOperationID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil || !o.SSHFirewall {
+		return err
+	}
+	conn, raw, err := s.validateConnection(ctx, o)
+	if err != nil {
+		return err
+	}
+	credential, err := Credential(conn, raw)
+	if err != nil {
+		return err
+	}
+	adapter, err := s.Adapters.Server(o.Provider)
+	if err != nil {
+		return err
+	}
+	return s.ensureSSHFirewall(ctx, o, adapter, credential)
 }
 func (s *Service) checkServer(ctx context.Context, org, cloud, id string) (*Server, error) {
 	v, err := s.Store.GetServer(ctx, org, cloud, id)

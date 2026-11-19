@@ -152,3 +152,42 @@ func TestHealthCheckSaysWhyAServerCantBeChecked(t *testing.T) {
 		}
 	}
 }
+
+// Behind the SSH firewall, the loomplane user can sign in on the managed
+// port only, and port 22 stays open for the owner's own keys.
+func TestBootstrapKeepsLoomplaneOffPort22BehindTheFirewall(t *testing.T) {
+	for _, firewall := range []bool{false, true} {
+		script := sshPortScript(2222, firewall)
+		match := strings.Contains(script, "echo 'Match User loomplane LocalPort 22'") && strings.Contains(script, "AuthorizedKeysFile none") && strings.Contains(script, "echo 'Match all'")
+		if match != firewall || !strings.Contains(script, "echo 'Port 2222'") {
+			t.Fatalf("firewall %v:\n%s", firewall, script)
+		}
+		// The Match block comes after the ports, which can't go in one.
+		if firewall && strings.Index(script, "Match User") < strings.Index(script, "Port 2222") {
+			t.Fatalf("Match before Port:\n%s", script)
+		}
+	}
+}
+
+func TestSSHFirewallNeedsAProviderThatCanSetOne(t *testing.T) {
+	s := NewService(Deps{ManagedSSHAllowedCIDRs: []string{"203.0.113.7/32"}})
+	o := &Operation{Provider: "elsewhere", SSHPort: 2222, SSHFirewall: true}
+	err := s.ensureSSHFirewall(t.Context(), o, &uncreatedServerAdapter{}, provider.InfrastructureCredential{})
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "can't set a firewall at elsewhere") {
+		t.Fatalf("a provider without firewalls: %v", err)
+	}
+	// Emptied since, the firewall that exists is left alone.
+	s.ManagedSSHAllowedCIDRs = nil
+	if err = s.ensureSSHFirewall(t.Context(), o, &uncreatedServerAdapter{}, provider.InfrastructureCredential{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpiredEnrollmentBehindTheFirewallNamesTheAddresses(t *testing.T) {
+	for _, firewall := range []bool{false, true} {
+		message := (&enrollmentExpiredError{port: 2222, firewall: firewall}).Error()
+		if strings.Contains(message, "LOOMPLANE_MANAGED_SSH_ALLOWED_CIDRS") != firewall {
+			t.Fatalf("firewall %v: %s", firewall, message)
+		}
+	}
+}
