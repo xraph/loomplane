@@ -114,6 +114,13 @@ export function supports(
  * resizable holds for a managed server with a provider resource. One whose
  * create the provider rejected has none, and can only be deleted.
  */
+/**
+ * checkable is whether a server has health to check: it's running its
+ * runtime. One that's starting, or failed to start, has none yet.
+ */
+export const checkable = (server: Server) =>
+  server.status === "ready" || server.status === "unhealthy"
+
 export const resizable = (server: Server) =>
   server.ownership === "managed" && !!server.resourceId
 
@@ -514,7 +521,11 @@ function ServerRow({
           {via?.node && ["offline", "revoked"].includes(via.node.status) ? (
             <NodeStatus node={via.node} />
           ) : (
-            <StatePill status={server.draining ? "draining" : server.status} />
+            <span title={server.message || undefined}>
+              <StatePill
+                status={server.draining ? "draining" : server.status}
+              />
+            </span>
           )}
           {problem && (
             <span title={problem}>
@@ -533,9 +544,11 @@ function ServerRow({
           Open
         </Button>
         <RowMenu label={`More actions for ${server.name}`}>
-          <DropdownMenuItem onClick={() => onOpen("check")}>
-            Check health
-          </DropdownMenuItem>
+          {checkable(server) && (
+            <DropdownMenuItem onClick={() => onOpen("check")}>
+              Check health
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={() => onOpen("preview")}>
             Review drain
           </DropdownMenuItem>
@@ -1436,6 +1449,12 @@ function ServerDetails({
             )}
           </p>
         )}
+        {server.status === "failed" && (
+          <CloudCallout title="This server failed to start">
+            {server.message ||
+              "Its create didn't finish. Delete it and create it again."}
+          </CloudCallout>
+        )}
         {gpuCount(server) > 0 && (
           <div className="grid gap-2 text-[13px]">
             <p>
@@ -1491,13 +1510,15 @@ function ServerDetails({
                 Resize
               </Button>
             )}
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => void act("check")}
-          >
-            Check health
-          </Button>
+          {checkable(server) && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => void act("check")}
+            >
+              Check health
+            </Button>
+          )}
           <Button
             variant={drain ? "default" : "outline"}
             disabled={busy}

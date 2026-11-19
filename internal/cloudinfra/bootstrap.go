@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,6 +146,7 @@ func (s *Service) prepareBootstrap(ctx context.Context, o *Operation) (string, e
 		return "", err
 	}
 	o.BootstrapExpiresAt = s.now().UTC().Add(45 * time.Minute)
+	o.SSHPort = s.managedSSHPort()
 	// JSON is valid YAML. User data contains a public client key and the one-use
 	// enrollment token, never the private SSH key. Cloud-init deletes its token file.
 	endpoint := strings.TrimRight(s.EnrollmentURL, "/") + "/api/v1/infrastructure/enroll/" + url.PathEscape(o.OrgID) + "/" + url.PathEscape(o.ID)
@@ -155,7 +157,7 @@ body = json.dumps({'host_key': key}).encode()
 for attempt in range(180):
     try:
         request = urllib.request.Request(ENDPOINT, data=body, headers={'Authorization': 'Bearer '+TOKEN, 'Content-Type':'application/json'})
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=90) as response:
             if response.status == 204:
                 pathlib.Path(__file__).unlink(missing_ok=True)
                 break
@@ -182,9 +184,52 @@ for attempt in range(180):
 		packages = []string{"python3", "iproute2", "ca-certificates", "curl", "gnupg"}
 		runcmd = []any{[]string{"bash", "-c", NVIDIAToolkitScript}, []string{"systemctl", "enable", "--now", "docker"}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
 	}
+	if o.SSHPort != 22 {
+		// SSH opens the other port before the server enrolls, since
+		// enrollment is checked over it.
+		runcmd = append([]any{[]string{"bash", "-c", sshPortScript(o.SSHPort)}}, runcmd...)
+	}
 	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": packages, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": runcmd}
 	encoded, err := json.Marshal(document)
 	return "#cloud-config\n" + string(encoded), err
+}
+
+// managedSSHPort is the port a new managed server opens for Loomplane's SSH.
+func (s *Service) managedSSHPort() int {
+	if s.ManagedSSHPort > 0 && s.ManagedSSHPort <= 65535 {
+		return s.ManagedSSHPort
+	}
+	return 22
+}
+
+// sshPortScript makes SSH listen on port as well as wherever it listens
+// already, so the owner's own access on 22 stays. A config sshd refuses is
+// taken out again, leaving SSH as it was; enrollment then can't reach the
+// server and says so in Loomplane's log. Ubuntu 22.10 and later start SSH
+// from a socket whose ports come from sshd_config, so that socket is
+// rebuilt rather than the service restarted. An active ufw lets the port in.
+func sshPortScript(port int) string {
+	return strings.ReplaceAll(`conf=/etc/ssh/sshd_config.d/10-loomplane-port.conf
+mkdir -p /etc/ssh/sshd_config.d
+{
+  grep -qsiE '^[[:space:]]*Port[[:space:]]' /etc/ssh/sshd_config || echo 'Port 22'
+  echo 'Port PORT'
+} > "$conf"
+grep -qsiE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config || sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+if ! /usr/sbin/sshd -t; then
+  rm -f "$conf"
+  exit 1
+fi
+if systemctl is-enabled --quiet ssh.socket 2>/dev/null; then
+  systemctl daemon-reload
+  systemctl restart ssh.socket
+else
+  systemctl restart ssh 2>/dev/null || systemctl restart sshd
+fi
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  ufw allow PORT/tcp
+fi
+`, "PORT", strconv.Itoa(port))
 }
 
 // NVIDIAToolkitScript prepares a GPU-ready image for containers. It installs
@@ -300,7 +345,11 @@ func runtimeSettings(o *Operation) (map[string]string, error) {
 	if len(o.PublicIPv4) == 0 || net.ParseIP(o.PublicIPv4[0]) == nil || o.HostKey == "" {
 		return nil, ErrPending
 	}
-	return map[string]string{"host": o.PublicIPv4[0], "port": "22", "user": "loomplane", "host_key": o.HostKey, "docker_socket": "/var/run/docker.sock"}, nil
+	port := o.SSHPort
+	if port == 0 {
+		port = 22
+	}
+	return map[string]string{"host": o.PublicIPv4[0], "port": strconv.Itoa(port), "user": "loomplane", "host_key": o.HostKey, "docker_socket": "/var/run/docker.sock"}, nil
 }
 
 // Enroll accepts one verified callback bound to a persisted provider resource.
@@ -444,7 +493,7 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 		priceServer(v, o)
 	}
 	v.Health = health
-	v.Status = "ready"
+	v.Status, v.Message = "ready", ""
 	v.UpdatedAt = s.now().UTC()
 	if o.Input.Kind == "resize" {
 		v.Revision = o.Input.ServerRevision + 1

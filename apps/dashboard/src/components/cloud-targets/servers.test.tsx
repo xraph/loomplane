@@ -30,7 +30,7 @@ const health = {
   effective_memory_bytes: 32 * 2 ** 30,
 }
 
-function fixture(nodeStatus = "online") {
+function fixture(nodeStatus = "online", extra: object[] = []) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const path = new URL(String(input), "http://localhost").pathname
     if (path.endsWith("/usage"))
@@ -54,6 +54,7 @@ function fixture(nodeStatus = "online") {
             connection_id: "conn_ssh",
             health,
           },
+          ...extra,
         ],
       })
     if (path.endsWith("/connections"))
@@ -131,4 +132,58 @@ it("never offers to delete a server that belongs to a node", async () => {
   ).toBeInTheDocument()
   expect(screen.queryByText(/Review deletion/)).toBeNull()
   expect(screen.queryByText(/Delete/)).toBeNull()
+})
+
+const failed = {
+  id: "s_failed",
+  name: "droplet-1",
+  status: "failed",
+  message:
+    "The server was created but never finished enrolling: Loomplane couldn't confirm it over SSH on port 22 within 45 minutes.",
+  ownership: "managed",
+  provider: "digitalocean",
+  connection_id: "conn_ssh",
+  resource_id: "998877",
+  health: {},
+}
+
+it("says why a server failed to start, and offers no health check", async () => {
+  fixture("online", [failed])
+  const user = userEvent.setup()
+  wrap(<Servers cloud={cloud as never} />)
+  const row = (await screen.findByText("droplet-1")).closest("tr, [role=row]")!
+  const pill = within(row as HTMLElement).getByText("Failed")
+  expect(pill.closest("[title]")).toHaveAttribute("title", failed.message)
+
+  await user.click(
+    screen.getByRole("button", { name: "More actions for droplet-1" })
+  )
+  expect(
+    await screen.findByRole("menuitem", { name: "Review drain" })
+  ).toBeInTheDocument()
+  expect(screen.queryByRole("menuitem", { name: "Check health" })).toBeNull()
+  await user.keyboard("{Escape}")
+
+  await user.click(screen.getByRole("button", { name: "Open droplet-1" }))
+  const dialog = await screen.findByRole("dialog")
+  expect(
+    within(dialog).getByText("This server failed to start")
+  ).toBeInTheDocument()
+  expect(within(dialog).getByText(failed.message)).toBeInTheDocument()
+  expect(
+    within(dialog).queryByRole("button", { name: "Check health" })
+  ).toBeNull()
+})
+
+it("still offers a health check on a ready server", async () => {
+  fixture()
+  const user = userEvent.setup()
+  wrap(<Servers cloud={cloud as never} />)
+  await screen.findByText("rack-1")
+  await user.click(
+    screen.getByRole("button", { name: "More actions for rack-1" })
+  )
+  expect(
+    await screen.findByRole("menuitem", { name: "Check health" })
+  ).toBeInTheDocument()
 })

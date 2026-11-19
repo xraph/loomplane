@@ -6065,6 +6065,7 @@ export interface Server {
   hourlyPriceKnown?: boolean;
   hourlyUsd?: number;
   id: string;
+  message?: string;
   name: string;
   orgId: string;
   ownership: string;

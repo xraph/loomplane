@@ -30,6 +30,30 @@ type conflictSentenceError struct{ text string }
 func (e *conflictSentenceError) Error() string { return e.text }
 func (e *conflictSentenceError) Unwrap() error { return ErrConflict }
 
+// notCheckable says why a server's health can't be checked: only a server
+// that's running its runtime has health to check.
+func notCheckable(v *Server) error {
+	switch v.Status {
+	case "provisioning", "enrolling":
+		return &conflictSentenceError{text: "This server is still starting, so there's no health to check yet. It's checked when it's ready."}
+	case "failed":
+		return &conflictSentenceError{text: "This server failed to start, so there's no health to check. Delete it and create it again."}
+	default:
+		return &conflictSentenceError{text: fmt.Sprintf("This server is %s, so its health can't be checked.", strings.ReplaceAll(v.Status, "_", " "))}
+	}
+}
+
+// enrollmentExpiredError is a create whose server didn't enroll before
+// its bootstrap expired. Enrollment is checked over SSH, so the likeliest
+// cause is a port Loomplane can't reach. It is an ErrConflict.
+type enrollmentExpiredError struct{ port int }
+
+func (e *enrollmentExpiredError) Error() string {
+	return fmt.Sprintf("The server was created but never finished enrolling: Loomplane couldn't confirm it over SSH on port %d within 45 minutes. "+
+		"Check that Loomplane can connect out to that port (DigitalOcean App Platform blocks port 22, so set LOOMPLANE_MANAGED_SSH_PORT), then delete this server and create it again.", e.port)
+}
+func (e *enrollmentExpiredError) Unwrap() error { return ErrConflict }
+
 // MaxServerNameLength bounds a server's name. Providers that need a
 // hostname derive one from it, so it fits one DNS label.
 const MaxServerNameLength = 63
@@ -475,6 +499,11 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 			if s.Warn != nil {
 				s.Warn(fmt.Sprintf("infrastructure operation %s (%s %s) failed", o.ID, o.Input.Kind, o.ServerID), err)
 			}
+			if o.Input.Kind == "create" {
+				if failErr := s.failCreatedServer(ctx, o); failErr != nil && s.Warn != nil {
+					s.Warn(fmt.Sprintf("couldn't mark server %s failed after its create failed", o.ServerID), failErr)
+				}
+			}
 		default:
 			o.Status = "succeeded"
 			o.Message = ""
@@ -494,9 +523,31 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 // policy stopped in execute; the block's Summary follows it.
 const CapacityBlockedPrefix = "The cloud's capacity policy blocked this server before it was created: "
 
+// failCreatedServer marks the server a failed create made, so it reads as
+// failed, with the reason, rather than starting forever. A retry that
+// succeeds makes it ready.
+func (s *Service) failCreatedServer(ctx context.Context, o *Operation) error {
+	v, err := s.Store.GetServer(ctx, o.OrgID, o.CloudID, o.ServerID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if v.CreationOperationID != o.ID || v.Status != "provisioning" {
+		return nil
+	}
+	v.Status, v.Message, v.UpdatedAt = "failed", o.Message, s.now().UTC()
+	return s.Store.SaveServer(ctx, v)
+}
+
 func safeFailure(err error) string {
 	var blocked *CapacityAdmissionError
+	var expired *enrollmentExpiredError
 	switch {
+	// Before ErrConflict, which an expired enrollment also matches.
+	case errors.As(err, &expired):
+		return expired.Error()
 	// Before ErrConflict, which a capacity block also matches.
 	case errors.As(err, &blocked):
 		return CapacityBlockedPrefix + blocked.Block.Summary() + ". Change the policy or free capacity, then retry."
@@ -600,6 +651,10 @@ func (s *Service) execute(ctx context.Context, o *Operation) error {
 }
 
 func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a provider.ServerAdapter, c provider.InfrastructureCredential) error {
+	// A retried create starts again from where it failed.
+	if v.Status == "failed" {
+		v.Status, v.Message = "provisioning", ""
+	}
 	if o.ResourceID == "" {
 		resumed := o.Attempted
 		var userData string
@@ -651,7 +706,11 @@ func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a p
 	}
 	if !o.Enrolled {
 		if !s.now().Before(o.BootstrapExpiresAt) {
-			return ErrConflict
+			port := o.SSHPort
+			if port == 0 {
+				port = 22
+			}
+			return &enrollmentExpiredError{port: port}
 		}
 		return ErrPending
 	}
