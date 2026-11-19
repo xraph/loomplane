@@ -71,11 +71,11 @@ require (
 	github.com/xraph/cortex v1.10.8
 	github.com/xraph/cortex/extension v1.10.8
 	github.com/xraph/ctrlplane v1.8.3
-	github.com/xraph/dispatch v1.9.10
+	github.com/xraph/dispatch v1.9.11
 	github.com/xraph/forge v1.14.1
 	github.com/xraph/forge/extensions/conduit v1.14.1
 	github.com/xraph/go-utils v1.5.1
-	github.com/xraph/grove v1.10.5
+	github.com/xraph/grove v1.10.6
 	github.com/xraph/grove/drivers/pgdriver v1.10.5
 	github.com/xraph/grove/drivers/sqlitedriver v1.10.5
 	github.com/xraph/grove/extension v1.10.5
