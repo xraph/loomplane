@@ -40454,6 +40454,9 @@
             "type": "string",
             "x-forge-id": true
           },
+          "message": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
