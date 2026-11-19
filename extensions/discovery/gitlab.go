@@ -216,9 +216,9 @@ func (e *Extension) gitlabRepositories(c forge.Context) error {
 
 // gitlabConnections builds the organizations' GitLab connections and the
 // registry of hosts they read through. gitlab.com is a host of the
-// operator's whenever its OAuth application is set, and so is each of
-// gitlab.hosts.
-func gitlabConnections(cfg config.Config, db *grove.DB, pg *pgdriver.PgDB, authz repositories.Authorizer, audit repositories.GitLabAuditor) (*repositories.GitLabConnections, *repositories.GitLabRegistry, error) {
+// operator's whenever its OAuth application is set, in configuration or
+// for the platform, and so is each of gitlab.hosts.
+func gitlabConnections(cfg config.Config, db *grove.DB, pg *pgdriver.PgDB, apps *repositories.PlatformApps, authz repositories.Authorizer, audit repositories.GitLabAuditor) (*repositories.GitLabConnections, *repositories.GitLabRegistry, error) {
 	// GitLab's credentials get a key of their own, derived from secret_key.
 	key, err := security.DeriveKey(cfg.SecretKey, repositories.GitLabVaultKeyLabel)
 	if err != nil {
@@ -234,6 +234,11 @@ func gitlabConnections(cfg config.Config, db *grove.DB, pg *pgdriver.PgDB, authz
 	}
 	registry := &repositories.GitLabRegistry{
 		Instance: instance, Store: repositories.NewGitLabPgStore(pg), AllowOrganizationHosts: cfg.GitLab.AllowOrganizationHosts,
+	}
+	// Without gitlab.com's application in configuration, the one saved for
+	// the platform makes gitlab.com an operator host while it's there.
+	if cfg.GitLab.ClientID == "" && apps != nil {
+		registry.Managed = apps.GitLabSource(cfg.GitLab.APIURL)
 	}
 	webhookBase := cfg.GitLab.WebhookURL
 	if webhookBase == "" {

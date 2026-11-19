@@ -98,6 +98,14 @@ resources:
 
 Add `assets` to your application's `needs` to use it. Native bindings require a Worker in the bucket's account, with Workers deployment permissions on its connection. The R2 OAuth selection grants bucket management access only. Removing an existing-resource attachment disconnects it from the project and keeps the provider bucket.
 
+## Manage apps in the instance console
+
+The instance console has an **Integrations** section for the same apps, at your public URL followed by `/__console/@integrations` (the console's path is `LOOMPLANE_CONSOLE_PATH`, and only platform owners and admins can open it). It lists every cloud's app with the GitHub App, GitLab and Bitbucket, and orders them with the ones that need attention first. For each cloud it walks through registering the app: a link to the cloud's developer settings, the callback URL and scopes to copy, and the client ID and secret to paste back.
+
+Before you save, **Check with the cloud** redeems a made-up code with the values you typed. The cloud checks the client before the code, so its answer says whether it knows the client ID and secret, without signing anyone in. You can run the same check on an app that's already saved, or one set in config.
+
+**Sign-in health** lists every connection made by signing in, in every organization, with the ones that need someone to sign in again first. That includes connections signed in with an app you've since replaced, which can't renew. Only someone in the connection's organization can sign it in again, so each problem has a message you can copy and send them.
+
 ## Sign in to your cloud
 
 Open **Integrations**, choose the cloud and pick **Sign in with** followed by the cloud's name, or **Use a token instead** underneath if you'd rather paste a token or key. You finish on the cloud's page and land back in Loomplane with the connection ready. Be quick. The sign-in Loomplane starts expires after ten minutes.

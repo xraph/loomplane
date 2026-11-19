@@ -64,9 +64,9 @@ require (
 	github.com/vishvananda/netns v0.0.5
 	github.com/xraph/authsome v1.12.4
 	github.com/xraph/bastion v1.4.4
-	github.com/xraph/chronicle v1.11.1
+	github.com/xraph/chronicle v1.11.2
 	github.com/xraph/chronicle/extension v1.11.2
-	github.com/xraph/chronicle/store/postgres v1.11.1
+	github.com/xraph/chronicle/store/postgres v1.11.2
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/cortex v1.10.8
 	github.com/xraph/cortex/extension v1.10.8
@@ -75,23 +75,23 @@ require (
 	github.com/xraph/forge v1.14.1
 	github.com/xraph/forge/extensions/conduit v1.14.1
 	github.com/xraph/go-utils v1.5.1
-	github.com/xraph/grove v1.10.4
-	github.com/xraph/grove/drivers/pgdriver v1.10.4
-	github.com/xraph/grove/drivers/sqlitedriver v1.10.4
+	github.com/xraph/grove v1.10.5
+	github.com/xraph/grove/drivers/pgdriver v1.10.5
+	github.com/xraph/grove/drivers/sqlitedriver v1.10.5
 	github.com/xraph/grove/extension v1.10.5
 	github.com/xraph/herald v1.10.5
-	github.com/xraph/herald/drivers/apns v1.10.4
+	github.com/xraph/herald/drivers/apns v1.10.5
 	github.com/xraph/keysmith v1.9.3
 	github.com/xraph/ledger v1.9.5
 	github.com/xraph/nexus v1.9.5
-	github.com/xraph/nexus/providers/anthropic v1.9.4
-	github.com/xraph/nexus/providers/openai v1.9.4
-	github.com/xraph/nexus/providers/opencompat v1.9.4
+	github.com/xraph/nexus/providers/anthropic v1.9.5
+	github.com/xraph/nexus/providers/openai v1.9.5
+	github.com/xraph/nexus/providers/opencompat v1.9.5
 	github.com/xraph/relay v1.8.4
 	github.com/xraph/shield v1.10.4
 	github.com/xraph/shield/integrations/nexusguard v1.10.4
-	github.com/xraph/trove v1.8.3
-	github.com/xraph/trove/drivers/s3driver v1.8.3
+	github.com/xraph/trove v1.8.4
+	github.com/xraph/trove/drivers/s3driver v1.8.4
 	github.com/xraph/trove/extension v1.8.4
 	github.com/xraph/vault v1.8.4
 	github.com/xraph/warden v1.8.5
@@ -295,16 +295,16 @@ require (
 	github.com/xdg-go/scram v1.4.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xlab/treeprint v1.2.0 // indirect
-	github.com/xraph/chronicle/store/sqlite v1.11.1 // indirect
+	github.com/xraph/chronicle/store/sqlite v1.11.2 // indirect
 	github.com/xraph/cortex/optimization v1.10.8 // indirect
 	github.com/xraph/cortex/sentinel v1.10.8 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
 	github.com/xraph/forge/extensions/auth v1.14.1 // indirect
 	github.com/xraph/forge/extensions/discovery v1.14.1 // indirect
-	github.com/xraph/grove/drivers/mongodriver v1.10.4 // indirect
-	github.com/xraph/grove/kv v1.10.4 // indirect
-	github.com/xraph/grove/kv/drivers/redisdriver v1.10.4 // indirect
+	github.com/xraph/grove/drivers/mongodriver v1.10.5 // indirect
+	github.com/xraph/grove/kv v1.10.5 // indirect
+	github.com/xraph/grove/kv/drivers/redisdriver v1.10.5 // indirect
 	github.com/xraph/sentinel v1.10.3 // indirect
 	github.com/xraph/vessel v1.0.8 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

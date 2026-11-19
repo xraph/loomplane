@@ -30,6 +30,8 @@ The Helm values also have `gitlab.apiURL`, `gitlab.allowOrganizationHosts` and `
 
 `gitlab.api_url` (`LOOMPLANE_GITLAB_API_URL`) is the address Loomplane reaches gitlab.com at, for reading projects and for signing in, and it defaults to `https://gitlab.com`. You'd change it only to point at a test double. Sources keep the host name either way, so they're still written `gitlab.com/<group>/<project>`.
 
+You can set gitlab.com's application in the instance console instead, under **Integrations** at `/__console/@integrations`, if you're a platform owner or admin. It's live in `loomplane` at once and in `loomplane-worker` within 30 seconds, with no restart, and **Check with GitLab** says whether GitLab knows the Application ID and Secret. The variables win while they're set. Self-managed GitLabs from `gitlab.hosts` show there too, and can be checked, but change only in config.
+
 ## A self-managed GitLab
 
 There are two ways in, and they can live side by side.

@@ -39,6 +39,10 @@ Create it, then on its page:
 2. Generate a **client secret**.
 3. Generate a **private key**. GitHub downloads a `.pem` file.
 
+## Or set it in the instance console
+
+A platform owner or admin can paste the App's ID, slug, client ID, client secret, private key and webhook secret into the instance console instead, under **Integrations** at `/__console/@integrations`. It's live in `loomplane` at once and in `loomplane-worker` within 30 seconds, with no restart, and **Check with GitHub** confirms GitHub takes the App ID and key as a pair and knows the client. The variables below win while they're set. Changing the App ID later means each organization installs the new App and connects it again.
+
 ## Configure Loomplane
 
 Set these for both `loomplane` and `loomplane-worker`. Keep the secret and the key out of any file you commit:

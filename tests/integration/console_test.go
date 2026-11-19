@@ -389,6 +389,100 @@ func TestConsole(t *testing.T) {
 		}
 	})
 
+	t.Run("managing a cloud's sign-in app", func(t *testing.T) {
+		type integrations struct {
+			Data struct {
+				Integrations []struct {
+					Key      string `json:"key"`
+					Source   string `json:"source"`
+					ClientID string `json:"clientId"`
+					Editable bool   `json:"editable"`
+				} `json:"integrations"`
+			} `json:"data"`
+		}
+		source := func() (string, string) {
+			t.Helper()
+			got := consoleCall(owner, http.MethodPost, consoleAPI, envelope(t, "query", "integrations", "oauth.integrations", map[string]any{}, ""))
+			var list integrations
+			if got.status != http.StatusOK || json.Unmarshal([]byte(got.body), &list) != nil {
+				t.Fatalf("oauth.integrations: %+v", got)
+			}
+			for _, it := range list.Data.Integrations {
+				if it.Key == "digitalocean" {
+					if !it.Editable {
+						t.Fatalf("digitalocean isn't editable: %+v", it)
+					}
+					return it.Source, it.ClientID
+				}
+			}
+			t.Fatalf("no digitalocean in %s", got.body)
+			return "", ""
+		}
+		if src, _ := source(); src != "none" {
+			t.Fatalf("digitalocean starts from %q, want none", src)
+		}
+		save := envelope(t, "command", "integrations", "oauth.save", map[string]string{"key": "digitalocean", "clientId": "do-console", "clientSecret": "do-secret"}, csrf)
+		if got := consoleCall(owner, http.MethodPost, consoleAPI, save); got.status != http.StatusOK || strings.Contains(got.body, "do-secret") {
+			t.Fatalf("oauth.save: %+v", got)
+		}
+		if src, id := source(); src != "platform" || id != "do-console" {
+			t.Fatalf("after saving: %s %s", src, id)
+		}
+		remove := envelope(t, "command", "integrations", "oauth.remove", map[string]string{"key": "digitalocean"}, csrf)
+		if got := consoleCall(owner, http.MethodPost, consoleAPI, remove); got.status != http.StatusOK {
+			t.Fatalf("oauth.remove: %+v", got)
+		}
+		if src, _ := source(); src != "none" {
+			t.Fatalf("after removing: %s", src)
+		}
+		// The GitHub App's form refuses a key that isn't one.
+		gh := envelope(t, "command", "integrations", "oauth.save", map[string]string{
+			"key": "github", "clientId": "x", "clientSecret": "y", "appId": "1", "slug": "lp", "privateKey": "not a key",
+		}, csrf)
+		if got := consoleCall(owner, http.MethodPost, consoleAPI, gh); got.status == http.StatusOK {
+			t.Fatalf("saved a GitHub App without a key: %+v", got)
+		}
+	})
+
+	t.Run("a repository app saved here is live at once", func(t *testing.T) {
+		configured := func(path string) bool {
+			t.Helper()
+			status, raw, _ := owner.send(http.MethodGet, path, nil)
+			var st struct {
+				Configured bool `json:"configured"`
+			}
+			if status != http.StatusOK || json.Unmarshal(raw, &st) != nil {
+				t.Fatalf("GET %s: %d %s", path, status, raw)
+			}
+			return st.Configured
+		}
+		if configured("/api/v1/bitbucket") {
+			t.Fatal("Bitbucket is configured before anything was saved")
+		}
+		save := envelope(t, "command", "integrations", "oauth.save", map[string]string{"key": "bitbucket", "clientId": "bb-console", "clientSecret": "bb-secret"}, csrf)
+		if got := consoleCall(owner, http.MethodPost, consoleAPI, save); got.status != http.StatusOK || strings.Contains(got.body, "bb-secret") {
+			t.Fatalf("oauth.save bitbucket: %+v", got)
+		}
+		// No restart: the API's own connections use it on the next call.
+		if !configured("/api/v1/bitbucket") {
+			t.Fatal("the saved consumer isn't live")
+		}
+		list := consoleCall(owner, http.MethodPost, consoleAPI, envelope(t, "query", "integrations", "oauth.integrations", map[string]any{}, ""))
+		if !strings.Contains(list.body, `"clientId":"bb-console"`) || strings.Contains(list.body, "bb-secret") {
+			t.Fatalf("oauth.integrations: %+v", list)
+		}
+		remove := envelope(t, "command", "integrations", "oauth.remove", map[string]string{"key": "bitbucket"}, csrf)
+		if got := consoleCall(owner, http.MethodPost, consoleAPI, remove); got.status != http.StatusOK {
+			t.Fatalf("oauth.remove bitbucket: %+v", got)
+		}
+		if configured("/api/v1/bitbucket") {
+			t.Fatal("the removed consumer is still live")
+		}
+		if configured("/api/v1/github") {
+			t.Fatal("GitHub is configured with no App")
+		}
+	})
+
 	t.Run("hidden from someone without a platform role", func(t *testing.T) {
 		// Approved, Grace signs up and signs in like anyone else.
 		if status, why := signUp(anon, "grace@example.com"); status != http.StatusCreated {

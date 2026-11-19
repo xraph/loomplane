@@ -56,6 +56,12 @@ LOOMPLANE_GITHUB_PRIVATE_KEY_FILE=/run/secrets/github-app.pem
 
 For GitHub Enterprise Server, also set `LOOMPLANE_GITHUB_API_URL` to `https://<host>/api/v3` and `LOOMPLANE_GITHUB_WEB_URL` to `https://<host>`.
 
+### Or set it in the instance console
+
+Instead of the variables, a platform owner or admin can paste the App's ID, slug, client ID, client secret, private key and webhook secret into the instance console, under **Integrations** at `/__console/@integrations`. It's live in `loomplane` at once and in `loomplane-worker` within 30 seconds, with no restart. **Check with GitHub** first asks GitHub whether it takes the App ID and private key as a pair and knows the client, so a typo shows before anyone tries to connect.
+
+The variables win while they're set, and the console then only shows them. Keep the App in one place: changing its App ID later means each organization installs the new App and connects it again.
+
 ## Connect an account
 
 An owner or admin opens **Integrations** and chooses **Install on GitHub**. GitHub asks which account to install on and which repositories to allow, then sends them back. From then on, any project in the organization whose repository that installation can see is analyzed with access to it. Choose repositories later in the App's settings on GitHub.

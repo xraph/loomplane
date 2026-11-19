@@ -19,6 +19,10 @@ Save it, then open the consumer to copy its **Key** and **Secret**.
 
 Account Read is how Loomplane learns who signed in and checks they belong to the workspace. Repositories Read is the only access to code. Webhooks is for push events, which the Webhooks section covers. Loomplane never asks for write access to your code.
 
+## Or set it in the instance console
+
+A platform owner or admin can paste the consumer's key and secret into the instance console instead, under **Integrations** at `/__console/@integrations`. It's live in `loomplane` at once and in `loomplane-worker` within 30 seconds, with no restart, and **Check with Bitbucket** says whether Bitbucket knows them. The variables below win while they're set. Workspace sign-ins belong to their consumer, so with a different one each workspace has to be connected again.
+
 ## Configure Loomplane
 
 Set both variables for `loomplane` and `loomplane-worker`, and keep the secret out of any file you commit:

@@ -59,6 +59,33 @@ it("shows the page to a platform admin", async () => {
   expect(await screen.findByText("https://loomplane.example/cb")).toBeTruthy()
 })
 
+it("points a platform admin at the console's Integrations", async () => {
+  setInstance({
+    setupPending: false,
+    waitlist: false,
+    setupTokenRequired: false,
+    platformAdmin: true,
+    consolePath: "/__console/",
+  })
+  renderPage()
+  expect(
+    screen.getByRole("link", { name: "Open Integrations in the console" })
+  ).toHaveAttribute("href", "/__console/@integrations")
+  expect(await screen.findByText("https://loomplane.example/cb")).toBeTruthy()
+})
+
+it("shows no pointer without a console", async () => {
+  setInstance({
+    setupPending: false,
+    waitlist: false,
+    setupTokenRequired: false,
+    platformAdmin: true,
+  })
+  renderPage()
+  expect(screen.queryByText("Also in the instance console")).toBeNull()
+  expect(await screen.findByText("https://loomplane.example/cb")).toBeTruthy()
+})
+
 it("shows anyone else the not-found view", () => {
   renderPage()
   expect(screen.getByText("Page not found")).toBeTruthy()

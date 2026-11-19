@@ -164,6 +164,9 @@ herald templates.detail@1 query read open
 herald templates.list@1 query read open
 herald templates.render@1 query read open
 herald templates.resolve@1 query read open
+integrations connections.list@1 query read open
+integrations oauth.integration@1 query read open
+integrations oauth.integrations@1 query read open
 keysmith keys.detail@1 query read open
 keysmith keys.list@1 query read open
 keysmith overview@1 query read open

@@ -164,8 +164,11 @@ type cachedToken struct {
 // with. A workspace's refresh token is in Vault; its access token is only
 // ever in memory here.
 type BitbucketConnections struct {
-	store        BitbucketStore
+	store BitbucketStore
+	// api is the consumer from configuration, or nil. source, when set,
+	// says which consumer to use on each call instead.
 	api          BitbucketAPI
+	source       func(context.Context) BitbucketAPI
 	secrets      Secrets
 	authz        Authorizer
 	audit        BitbucketAuditor
@@ -183,6 +186,9 @@ type BitbucketConnections struct {
 	// every organization and every process, and each one finds out on its
 	// own next renewal or connect.
 	consumerRejected time.Time
+	// lastSourced is the consumer source last gave, so a new one starts
+	// with a clean slate.
+	lastSourced BitbucketAPI
 }
 
 // NewBitbucketConnections returns BitbucketConnections. api is nil when
@@ -206,14 +212,35 @@ func (c *BitbucketConnections) SetOnDisconnect(fn func(ctx context.Context, orgI
 // error it's given holds a token.
 func (c *BitbucketConnections) SetWarn(fn func(msg string, err error)) { c.warn = fn }
 
+// UseConsumer makes each call use the consumer fn returns then, nil meaning
+// none: the one saved for the platform, which can change while Loomplane
+// runs. fn returns the same value until the consumer changes.
+func (c *BitbucketConnections) UseConsumer(fn func(context.Context) BitbucketAPI) { c.source = fn }
+
+// consumer is the consumer this call uses, or nil. A consumer other than
+// the last one forgets that Bitbucket turned the last one down.
+func (c *BitbucketConnections) consumer(ctx context.Context) BitbucketAPI {
+	if c.source == nil {
+		return c.api
+	}
+	api := c.source(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if api != c.lastSourced {
+		c.lastSourced, c.consumerRejected = api, time.Time{}
+	}
+	return api
+}
+
 // Status returns the organization's workspaces, and whether the caller may
 // connect another.
 func (c *BitbucketConnections) Status(ctx context.Context, p security.Principal) (*BitbucketStatus, error) {
 	if err := c.authz.Require(ctx, p, security.ProjectRead, ""); err != nil {
 		return nil, err
 	}
-	st := &BitbucketStatus{Configured: c.api != nil, Workspaces: []BitbucketWorkspaceView{}, Problems: []string{}}
-	if c.api == nil {
+	api := c.consumer(ctx)
+	st := &BitbucketStatus{Configured: api != nil, Workspaces: []BitbucketWorkspaceView{}, Problems: []string{}}
+	if api == nil {
 		return st, nil
 	}
 	rows, err := c.store.ListBitbucketWorkspaces(ctx, p.OrgID)
@@ -242,7 +269,8 @@ func (c *BitbucketConnections) Authorize(ctx context.Context, p security.Princip
 	if err := c.authz.Require(ctx, p, security.RepositoryConnect, ""); err != nil {
 		return "", err
 	}
-	if c.api == nil {
+	api := c.consumer(ctx)
+	if api == nil {
 		return "", ErrBitbucketNotConfigured
 	}
 	// Slugs are lowercase, and an address names one in any case, so the
@@ -255,7 +283,7 @@ func (c *BitbucketConnections) Authorize(ctx context.Context, p security.Princip
 	if err != nil {
 		return "", err
 	}
-	return c.api.AuthorizeURL(state), nil
+	return api.AuthorizeURL(state), nil
 }
 
 // Connect links a workspace to the caller's organization once Bitbucket's
@@ -267,7 +295,8 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 	if err := c.authz.Require(ctx, p, security.RepositoryConnect, ""); err != nil {
 		return nil, err
 	}
-	if c.api == nil {
+	api := c.consumer(ctx)
+	if api == nil {
 		return nil, ErrBitbucketNotConfigured
 	}
 	// A callback missing either half proves nothing, so Bitbucket isn't
@@ -282,7 +311,7 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 	if st.OrgID != p.OrgID || st.UserID != p.UserID || st.Workspace == "" {
 		return nil, ErrBadState
 	}
-	grant, err := c.api.Exchange(ctx, in.Code)
+	grant, err := api.Exchange(ctx, in.Code)
 	if errors.Is(err, ErrBitbucketConsumerRejected) {
 		c.consumerRejectedNow()
 	}
@@ -296,7 +325,7 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 		return nil, ErrBitbucketRefused
 	}
 	// Not a member: the grant is dropped here, and nothing is kept.
-	ws, err := c.api.Membership(ctx, grant.AccessToken, st.Workspace)
+	ws, err := api.Membership(ctx, grant.AccessToken, st.Workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +334,7 @@ func (c *BitbucketConnections) Connect(ctx context.Context, p security.Principal
 		// one can't be kept apart from another.
 		return nil, errors.New("Bitbucket didn't say which workspace that is; try connecting again")
 	}
-	user, err := c.api.CurrentUser(ctx, grant.AccessToken)
+	user, err := api.CurrentUser(ctx, grant.AccessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +482,8 @@ func (c *BitbucketConnections) Repositories(ctx context.Context, p security.Prin
 		return nil, err
 	}
 	out := &BitbucketRepositoryList{Repositories: []ConnectedBitbucketRepository{}, Problems: []string{}}
-	if c.api == nil {
+	api := c.consumer(ctx)
+	if api == nil {
 		return out, nil
 	}
 	rows, err := c.store.ListBitbucketWorkspaces(ctx, p.OrgID)
@@ -477,7 +507,7 @@ func (c *BitbucketConnections) Repositories(ctx context.Context, p security.Prin
 			out.Problems = append(out.Problems, fmt.Sprintf("%s needs connecting again: %s", cur.WorkspaceSlug, cur.Message))
 			continue
 		}
-		repos, err := c.api.Repositories(ctx, tok, cur.WorkspaceSlug)
+		repos, err := api.Repositories(ctx, tok, cur.WorkspaceSlug)
 		if err != nil {
 			out.Problems = append(out.Problems, fmt.Sprintf("Bitbucket didn't list the repositories in %s: %v", cur.WorkspaceSlug, err))
 			continue
@@ -501,7 +531,7 @@ func (c *BitbucketConnections) Repositories(ctx context.Context, p security.Prin
 // repositories can't be read until the operator fixes it, and public ones
 // still are.
 func (c *BitbucketConnections) Token(ctx context.Context, orgID string, repo Repository) (string, error) {
-	if c.api == nil || !strings.EqualFold(repo.Host, HostBitbucket) || repo.Owner == "" {
+	if !strings.EqualFold(repo.Host, HostBitbucket) || repo.Owner == "" || c.consumer(ctx) == nil {
 		return "", nil
 	}
 	row, err := c.find(ctx, orgID, repo.Owner, true)
@@ -529,7 +559,7 @@ func (c *BitbucketConnections) Token(ctx context.Context, orgID string, repo Rep
 // needs connecting again, or was renamed away from that slug. No
 // connection is ErrWorkspaceNotFound.
 func (c *BitbucketConnections) ConnectionFor(ctx context.Context, orgID, workspace string) (*BitbucketConnection, string, error) {
-	if c.api == nil {
+	if c.consumer(ctx) == nil {
 		return nil, "", ErrBitbucketNotConfigured
 	}
 	row, err := c.find(ctx, orgID, workspace, false)
@@ -559,7 +589,7 @@ func (c *BitbucketConnections) ConnectionFor(ctx context.Context, orgID, workspa
 // stored, without renewing its sign-in. No connection is
 // ErrWorkspaceNotFound.
 func (c *BitbucketConnections) Connection(ctx context.Context, orgID, id string) (*BitbucketConnection, error) {
-	if c.api == nil {
+	if c.consumer(ctx) == nil {
 		return nil, ErrBitbucketNotConfigured
 	}
 	return c.store.GetBitbucketWorkspace(ctx, orgID, id)
@@ -569,7 +599,7 @@ func (c *BitbucketConnections) Connection(ctx context.Context, orgID, id string)
 // (a slug) as it's stored, without renewing its sign-in. None, or only one
 // that needs connecting again, is ErrWorkspaceNotFound.
 func (c *BitbucketConnections) ReadyConnection(ctx context.Context, orgID, workspace string) (*BitbucketConnection, error) {
-	if c.api == nil {
+	if c.consumer(ctx) == nil {
 		return nil, ErrBitbucketNotConfigured
 	}
 	row, err := c.find(ctx, orgID, workspace, true)
@@ -695,9 +725,15 @@ func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnecti
 	// Bitbucket may spend the refresh token before its answer is read, so
 	// a caller giving up must not cut the answer off, or stop the new
 	// refresh token being kept.
+	api := c.consumer(ctx)
+	if api == nil {
+		// The consumer went while this was in flight: nothing to renew with,
+		// and nothing wrong with the sign-in itself.
+		return "", ErrBitbucketNotConfigured
+	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bitbucketRenewTimeout)
 	defer cancel()
-	g, err := c.api.Refresh(rctx, held.RefreshToken)
+	g, err := api.Refresh(rctx, held.RefreshToken)
 	if errors.Is(err, ErrBitbucketRefused) {
 		return "", c.needReconnect(ctx, cur, bitbucketRefusedMessage)
 	}
@@ -716,7 +752,7 @@ func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnecti
 			return "", err
 		}
 	}
-	if !c.followRename(rctx, cur, g.AccessToken) {
+	if !c.followRename(rctx, api, cur, g.AccessToken) {
 		return "", c.needReconnect(ctx, cur, bitbucketAccountLeftMessage)
 	}
 	c.remember(cur, g)
@@ -728,8 +764,8 @@ func (c *BitbucketConnections) renew(ctx context.Context, cur *BitbucketConnecti
 // per renewal. It reports false when the account that signed in is no
 // longer a member of the workspace. Failing to ask doesn't fail the
 // renewal.
-func (c *BitbucketConnections) followRename(ctx context.Context, cur *BitbucketConnection, token string) (member bool) {
-	ws, err := c.api.Workspace(ctx, token, cur.WorkspaceUUID)
+func (c *BitbucketConnections) followRename(ctx context.Context, api BitbucketAPI, cur *BitbucketConnection, token string) (member bool) {
+	ws, err := api.Workspace(ctx, token, cur.WorkspaceUUID)
 	if errors.Is(err, ErrNotAMember) {
 		return false
 	}

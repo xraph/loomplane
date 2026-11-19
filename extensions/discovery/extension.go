@@ -105,17 +105,21 @@ func (e *Extension) Register(fapp forge.App) error {
 		return errors.New("discovery needs the dispatch extension to have registered")
 	}
 	pg := pgdriver.Unwrap(db)
-	e.svc = discovery.NewService(discovery.NewPgStore(pg), projects.NewPgStore(pg), authz,
-		orchestration.NewEnqueuer(eng), projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()))
-	if e.github, err = connections(e.cfg, pg, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
+	apps, err := platformApps(e.cfg, db, e.Logger())
+	if err != nil {
 		return err
 	}
-	if e.bitbucket, err = bitbucketConnections(e.cfg, db, authz,
+	e.svc = discovery.NewService(discovery.NewPgStore(pg), projects.NewPgStore(pg), authz,
+		orchestration.NewEnqueuer(eng), projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()))
+	if e.github, err = connections(e.cfg, pg, apps, authz, connectionAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
+		return err
+	}
+	if e.bitbucket, err = bitbucketConnections(e.cfg, db, apps, authz,
 		bitbucketAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}, e.Logger()); err != nil {
 		return err
 	}
 	var registry *repositories.GitLabRegistry
-	e.gitlab, registry, err = gitlabConnections(e.cfg, db, pg, authz, gitlabAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	e.gitlab, registry, err = gitlabConnections(e.cfg, db, pg, apps, authz, gitlabAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
 	if err != nil {
 		return err
 	}
@@ -156,6 +160,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, registry); err != nil {
 		return fmt.Errorf("provide the GitLab hosts: %w", err)
 	}
+	// The instance console saves the platform's repository apps through the
+	// same cache, so a save is live in this process at once.
+	if err := forge.ProvideValue(c, apps); err != nil {
+		return fmt.Errorf("provide the platform's repository apps: %w", err)
+	}
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the discovery service: %w", err)
 	}
@@ -174,12 +183,19 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.gitlabRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
-	if err := e.webhookRoute(fapp.Router(), &discovery.Webhooks{
+	hooks := &discovery.Webhooks{
 		Secret:        []byte(e.cfg.GitHub.WebhookSecret),
 		Installations: repositories.NewPgStore(pg).InstallationOrgs,
 		Sources:       discovery.NewPgStore(pg).SourcesByRepository,
 		Start:         e.svc.StartFromPush,
-	}); err != nil {
+	}
+	// Configuration's webhook secret wins. Without one, or an App, in
+	// configuration, deliveries are checked with the webhook secret of the
+	// App saved for the platform.
+	if e.cfg.GitHub.WebhookSecret == "" && !e.cfg.GitHub.AppConfigured() {
+		hooks.SecretFor = apps.GitHubWebhookSecret
+	}
+	if err := e.webhookRoute(fapp.Router(), hooks); err != nil {
 		return err
 	}
 	return e.gitlabWebhookRoute(fapp.Router(), &discovery.GitLabWebhooks{
@@ -195,7 +211,7 @@ func (e *Extension) Register(fapp forge.App) error {
 // connections builds the organization GitHub connections, over the
 // configured GitHub App or none. What fails without failing a call goes
 // to log.
-func connections(cfg config.Config, pg *pgdriver.PgDB, authz repositories.Authorizer, audit repositories.Auditor, log forge.Logger) (*repositories.Connections, error) {
+func connections(cfg config.Config, pg *pgdriver.PgDB, apps *repositories.PlatformApps, authz repositories.Authorizer, audit repositories.Auditor, log forge.Logger) (*repositories.Connections, error) {
 	stateKey, err := security.DeriveKey(cfg.SecretKey, repositories.StateKeyLabel)
 	if err != nil {
 		return nil, err
@@ -210,6 +226,11 @@ func connections(cfg config.Config, pg *pgdriver.PgDB, authz repositories.Author
 		app = a
 	}
 	conns := repositories.NewConnections(repositories.NewPgStore(pg), app, authz, audit, stateKey)
+	// Configuration's App wins; without one, the App saved for the
+	// platform is used, whichever it is at the time.
+	if app == nil && apps != nil {
+		conns.UseApp(apps.GitHubAppSource(cfg.GitHub.APIURL, cfg.GitHub.WebURL))
+	}
 	conns.SetWarn(func(msg string, err error) {
 		if log != nil && err != nil {
 			log.Warn("github: "+msg, forge.F("error", err.Error()))
@@ -339,16 +360,20 @@ func (w *Worker) Register(fapp forge.App) error {
 	pg := pgdriver.Unwrap(db)
 	// The worker mints repository tokens; it never decides who may, so
 	// its Connections get no Authorizer or auditor.
-	conns, err := connections(w.cfg, pg, nil, nil, w.Logger())
+	apps, err := platformApps(w.cfg, db, w.Logger())
+	if err != nil {
+		return err
+	}
+	conns, err := connections(w.cfg, pg, apps, nil, nil, w.Logger())
 	if err != nil {
 		return err
 	}
 	// Likewise Bitbucket's and GitLab's: no Authorizer or auditor.
-	bitbucket, err := bitbucketConnections(w.cfg, db, nil, nil, w.Logger())
+	bitbucket, err := bitbucketConnections(w.cfg, db, apps, nil, nil, w.Logger())
 	if err != nil {
 		return err
 	}
-	glConns, registry, err := gitlabConnections(w.cfg, db, pg, nil, nil)
+	glConns, registry, err := gitlabConnections(w.cfg, db, pg, apps, nil, nil)
 	if err != nil {
 		return err
 	}

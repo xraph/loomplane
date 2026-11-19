@@ -216,7 +216,7 @@ Leave these empty and Loomplane reads public repositories only.
 
 ### Clouds
 
-People can always connect a cloud by pasting a token. To let them sign in instead, register Loomplane's app at that cloud and set its client ID and secret here, or on the dashboard's Cloud sign-in page (Settings, platform owners and admins only). The variables win over the page.
+People can always connect a cloud by pasting a token. To let them sign in instead, register Loomplane's app at that cloud and set its client ID and secret here, or on the dashboard's Cloud sign-in page (Settings, platform owners and admins only), or in the instance console's Integrations section at `/__console/@integrations`. The console also holds the GitHub App, gitlab.com's application and Bitbucket's consumer, and checks an app with its provider before you save it. The variables win over both.
 
 | Variable | |
 |---|---|

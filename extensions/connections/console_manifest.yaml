@@ -1,0 +1,49 @@
+schemaVersion: 1
+contributor:
+  # The console's plugin for this contributor is named "integrations" too
+  # (apps/dashboard/src/console/integrations): a plugin, its URL segment and
+  # its contributor share one name.
+  name: integrations
+  envelope:
+    supports: [v1]
+    preferred: v1
+  capabilities: [integrations.read, integrations.write]
+  app:
+    displayName: Integrations
+    slug: integrations
+    icon: plug
+    priority: 30
+    home: /
+
+# The identity extension's console gate (extensions/identity/console.go) lets
+# only platform owners and admins reach any of these, and only the commands on
+# its consoleCommands list. The handlers refuse a request with no signed-in
+# user as well.
+intents:
+  # Every OAuth integration: the clouds people sign in to, and the
+  # repository hosts set in configuration, with where each app comes from
+  # and how its signed-in connections are doing.
+  - { name: oauth.integrations, kind: query, version: 1, capability: read }
+  # One integration: the above, plus what to register with the provider and
+  # the variables that would set it instead.
+  - { name: oauth.integration, kind: query, version: 1, capability: read }
+  # Signed-in cloud connections in every organization, filtered by health,
+  # cloud and search.
+  - { name: connections.list, kind: query, version: 1, capability: read }
+  - { name: oauth.save, kind: command, version: 1, capability: write, invalidates: [oauth.integrations, oauth.integration, connections.list] }
+  - { name: oauth.remove, kind: command, version: 1, capability: write, invalidates: [oauth.integrations, oauth.integration, connections.list] }
+  # Asks the cloud's token endpoint whether it knows the app. Writes
+  # nothing, but it calls out with a secret, so it's a command the gate
+  # lists by name.
+  - { name: oauth.check, kind: command, version: 1, capability: write }
+
+queries:
+  integrations:
+    intent: oauth.integrations
+    cache: { staleTime: 15s }
+  integration:
+    intent: oauth.integration
+    cache: { staleTime: 15s }
+  connections:
+    intent: connections.list
+    cache: { staleTime: 15s }

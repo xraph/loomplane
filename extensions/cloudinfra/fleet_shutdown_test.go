@@ -105,6 +105,22 @@ func TestFleetNamespaceShutdownDrainsBeforeForgeDependencyClose(t *testing.T) {
 	}
 }
 
+// Stop called directly with a cancelled context still waits for the drain,
+// and reports the cancellation alongside the finalizer's error.
+func TestFleetNamespaceStopReportsCallerCancellation(t *testing.T) {
+	cleanupErr := errors.New("synthetic cleanup diagnostic")
+	drain := &namespaceDrainProbe{closing: make(chan struct{}), done: make(chan struct{}), err: cleanupErr}
+	close(drain.done)
+	workerDone := make(chan struct{})
+	close(workerDone)
+	e := &Extension{cancel: func() {}, done: workerDone, namespaces: drain}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := e.Stop(ctx); !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("Stop lost diagnostics: %v", err)
+	}
+}
+
 func (p *fleetStopProbe) Dependencies() []string         { return p.dependencies }
 func (p *fleetStopProbe) Stop(ctx context.Context) error { return p.stop(ctx) }
 

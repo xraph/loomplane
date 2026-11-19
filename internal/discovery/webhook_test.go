@@ -250,3 +250,22 @@ func TestStartTracking(t *testing.T) {
 		t.Fatalf("a mixed-case key started %d %v, %v", n, started, err)
 	}
 }
+
+// With SecretFor, each delivery is checked with the secret of the moment:
+// none turns webhooks off, and a new one takes over from the old at once.
+func TestWebhooksSecretOfTheMoment(t *testing.T) {
+	var current []byte
+	w := &Webhooks{Secret: []byte("ignored"), SecretFor: func(context.Context) []byte { return current }}
+	body := push("refs/heads/main", 7, true)
+	if len(w.CurrentSecret(t.Context())) != 0 || !errors.Is(w.VerifyNow(t.Context(), sign([]byte("ignored"), body), body), ErrBadSignature) {
+		t.Fatal("no secret should turn webhooks off, whatever Secret holds")
+	}
+	current = []byte("one")
+	if err := w.VerifyNow(t.Context(), sign([]byte("one"), body), body); err != nil {
+		t.Fatal(err)
+	}
+	current = []byte("two")
+	if err := w.VerifyNow(t.Context(), sign([]byte("one"), body), body); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("the old secret still works: %v", err)
+	}
+}

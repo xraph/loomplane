@@ -272,7 +272,7 @@ func (c *GitLabConnections) AddHost(ctx context.Context, p security.Principal, i
 	if clientID == "" || in.ClientSecret == "" {
 		return nil, ErrGitLabHostIncomplete
 	}
-	if _, ok := c.cfg.Registry.instance(host); ok {
+	if _, ok := c.cfg.Registry.instance(ctx, host); ok {
 		return nil, ErrGitLabHostExists
 	}
 	h := &GitLabHost{
@@ -618,11 +618,10 @@ func gitlabRepository(host, connectionID string, pr GitLabProject) (GitLabReposi
 // with an OAuth application, then the organization's own when those are on.
 func (c *GitLabConnections) signInHosts(ctx context.Context, orgID string) ([]GitLabHost, error) {
 	var out []GitLabHost
-	for _, h := range c.cfg.Registry.Instance {
+	for _, h := range c.cfg.Registry.instances(ctx) {
 		if h.ClientID == "" {
 			continue
 		}
-		h.Instance = true
 		h.Host = canonicalGitLabHost(h.Host)
 		out = append(out, h)
 	}
@@ -644,7 +643,7 @@ func (c *GitLabConnections) signInHosts(ctx context.Context, orgID string) ([]Gi
 // organizations.
 func (c *GitLabConnections) hostByID(ctx context.Context, orgID, id string) (GitLabHost, error) {
 	if name, ok := strings.CutPrefix(id, instanceHostPrefix); ok {
-		h, ok := c.cfg.Registry.instance(name)
+		h, ok := c.cfg.Registry.instance(ctx, name)
 		if !ok || h.ClientID == "" {
 			return GitLabHost{}, ErrGitLabHostNotFound
 		}
@@ -696,8 +695,11 @@ func (c *GitLabConnections) app(ctx context.Context, h GitLabHost) (oauth.App, e
 		for host, secret := range c.cfg.InstanceSecrets {
 			if canonicalGitLabHost(host) == canonicalGitLabHost(h.Host) {
 				app.ClientSecret = secret
-				break
+				return app, nil
 			}
+		}
+		if secret, ok := c.cfg.Registry.managedSecret(ctx, h.Host); ok {
+			app.ClientSecret = secret
 		}
 		return app, nil
 	}
