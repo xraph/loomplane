@@ -600,8 +600,10 @@ func TestKeyless_offWithoutAUsableIssuer(t *testing.T) {
 	if enabled, iss, reason := keylessState(a); enabled || iss != "http://loomplane.example.com" || reason != "public_url isn't HTTPS" {
 		t.Fatalf("keyless state: enabled %t, issuer %q, reason %q", enabled, iss, reason)
 	}
+	// Forge redacts 5xx bodies outside development, so the refusal is the
+	// status; the reason reaches the UI through the keyless state above.
 	got, body := a.request(http.MethodPost, "/api/v1/connections/keyless/prepare", map[string]string{"cloud": "gcp"}, true)
-	if got != http.StatusServiceUnavailable || !strings.Contains(body, "public_url isn't HTTPS") {
+	if got != http.StatusServiceUnavailable {
 		t.Fatalf("prepare without a usable issuer: %d %s", got, body)
 	}
 }

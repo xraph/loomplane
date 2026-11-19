@@ -39,8 +39,8 @@ func libraries(t *testing.T, ai config.AIConfig) *Extension {
 	t.Helper()
 	ctx := context.Background()
 	drv := sqlitedriver.New()
-	// One connection: each connection to ":memory:" is its own empty
-	// database, and the libraries query from more than one goroutine.
+	// Each connection to :memory: gets its own empty database, so the
+	// pool is held to one connection or a second one sees no tables.
 	if err := drv.Open(ctx, ":memory:", driver.WithPoolSize(1)); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,9 @@ func seededShield(t *testing.T) *shieldengine.Engine {
 	t.Helper()
 	ctx := context.Background()
 	drv := sqlitedriver.New()
-	if err := drv.Open(ctx, ":memory:"); err != nil {
+	// Each connection to :memory: gets its own empty database, so the
+	// pool is held to one connection or a second one sees no tables.
+	if err := drv.Open(ctx, ":memory:", driver.WithPoolSize(1)); err != nil {
 		t.Fatal(err)
 	}
 	db, err := grove.Open(drv)

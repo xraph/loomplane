@@ -36,6 +36,9 @@ import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useRef, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
+  CapacityPolicyView,
+  CapacityResources,
+  CapacityUsage,
   Profile,
   Server,
   ServerInputBody,
@@ -107,6 +110,13 @@ export function supports(
     )
   )
 }
+/**
+ * resizable holds for a managed server with a provider resource. One whose
+ * create the provider rejected has none, and can only be deleted.
+ */
+export const resizable = (server: Server) =>
+  server.ownership === "managed" && !!server.resourceId
+
 /** The lists Servers can show; with none it shows both. */
 export type ServersView = "servers" | "pools"
 
@@ -272,7 +282,7 @@ function ServerContent({
                     via={nodeOf(server)}
                     pool={poolOf(server.id)}
                     canResize={
-                      server.ownership === "managed" &&
+                      resizable(server) &&
                       supports(capabilities, connection, "server:resize")
                     }
                     canRemove={
@@ -688,14 +698,19 @@ export function ServerEditor({
         {!accepted && (
           <div className="grid gap-3">
             {server && <LifecycleUsage cloudId={cloud.id} server={server} />}
-            <Field label="Server name">
-              <Input
-                aria-label="Server name"
-                value={input.name ?? ""}
-                disabled={busy || !!server}
-                onChange={(e) => update({ name: e.target.value })}
-              />
-            </Field>
+            <div className="grid gap-1">
+              <Field label="Server name">
+                <Input
+                  aria-label="Server name"
+                  aria-describedby={server ? undefined : "server-name-hint"}
+                  value={input.name ?? ""}
+                  maxLength={serverNameLimit}
+                  disabled={busy || !!server}
+                  onChange={(e) => update({ name: e.target.value })}
+                />
+              </Field>
+              {!server && <NameHint name={input.name ?? ""} />}
+            </div>
             {!server && (
               <Field label="Server account">
                 {!accounts.length && (
@@ -751,6 +766,7 @@ export function ServerEditor({
                 cloudId={cloud.id}
                 connectionId={input.connectionId}
                 input={input}
+                currentSize={server?.size}
                 update={update}
               />
             )}
@@ -902,145 +918,419 @@ export function ServerEditor({
     </Dialog>
   )
 }
+/** The longest server name the API takes: one DNS label. */
+const serverNameLimit = 63
+
+/**
+ * hostnameOf is the hostname a provider that needs one makes from a name:
+ * letters, digits and hyphens, so "My web 1" runs as "My-web-1".
+ */
+export function hostnameOf(name: string) {
+  return (
+    name
+      .replace(/[^A-Za-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, serverNameLimit)
+      .replace(/-+$/, "") || "loomplane-server"
+  )
+}
+
+function NameHint({ name }: { name: string }) {
+  const valid = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(name)
+  return (
+    <p id="server-name-hint" className="text-[12px] text-muted-foreground">
+      {name.length}/{serverNameLimit} characters.{" "}
+      {name.trim() && !valid
+        ? `Providers that need a hostname will use ${hostnameOf(name)}.`
+        : "Shown in Loomplane and used as the server's hostname."}
+    </p>
+  )
+}
+
+// ServerOptions picks where a server runs, how big it is and what it boots,
+// from any provider's catalog. Region comes first because sizes and images
+// are offered per region, and a choice the region doesn't offer is cleared
+// rather than refused at review.
 function ServerOptions({
   cloudId,
   connectionId,
   input,
+  currentSize,
   update,
 }: {
   cloudId: string
   connectionId: string
   input: ServerInputBody
+  /** The size a resized server has now; a resize spends only its growth. */
+  currentSize?: string
   update: (p: Partial<ServerInputBody>) => void
 }) {
   const options = useQuery(api.useCloudServersOptions, {
     path: { cloudId, connectionId },
   })
+  const policy = useQuery(api.useCloudCapacityGetPolicy, { path: { cloudId } })
+  const usage = useQuery(api.useCloudCapacityUsage, { path: { cloudId } })
+  const base =
+    input.kind === "resize"
+      ? (options.data?.sizes.find((s) => s.id === currentSize) ?? null)
+      : undefined
+  const room = roomOf(policy.data, usage.data, base)
   const sizes =
     options.data?.sizes.filter(
       (s) => !input.region || s.regions.includes(input.region)
     ) ?? []
-  return options.status === "error" ? (
-    <QueryError
-      error={options.error}
-      fallback="Server options couldn't be loaded."
-      retry={options.refetch}
-    />
-  ) : !options.data ? (
-    <CloudLoading>Loading provider options...</CloudLoading>
-  ) : (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {input.kind === "create" && (
-        <Field label="Server region">
-          <Select
-            value={input.region ?? ""}
-            onValueChange={(e) => update({ region: e ?? "" })}
-          >
-            <SelectTrigger
-              aria-label="Server region"
-              className={"w-full min-w-0"}
+  const chosen = options.data?.sizes.find((s) => s.id === input.size)
+  const images = imagesFor(options.data?.images ?? [], chosen, input.region)
+  const pickRegion = (region: string) => {
+    const size = chosen?.regions.includes(region) ? chosen : undefined
+    const fit = imagesFor(options.data?.images ?? [], size, region)
+    update({
+      region,
+      ...(size ? {} : { size: "" }),
+      ...(input.kind === "create" && !fit.some((i) => i.id === input.image)
+        ? { image: defaultImage(fit, size) }
+        : {}),
+    })
+  }
+  const pickSize = (id: string) => {
+    const size = sizes.find((s) => s.id === id)
+    const fit = imagesFor(options.data?.images ?? [], size, input.region)
+    update({
+      size: id,
+      ...(input.kind === "create" && !fit.some((i) => i.id === input.image)
+        ? { image: defaultImage(fit, size) }
+        : {}),
+    })
+  }
+  if (options.status === "error")
+    return (
+      <QueryError
+        error={options.error}
+        fallback="Server options couldn't be loaded."
+        retry={options.refetch}
+      />
+    )
+  if (!options.data)
+    return <CloudLoading>Loading provider options...</CloudLoading>
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {input.kind === "create" && (
+          <Field label="Server region">
+            <Select
+              value={input.region ?? ""}
+              onValueChange={(e) => pickRegion(e ?? "")}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">Choose region</SelectItem>
-              {options.data.regions.map((r) => (
-                <SelectItem key={r.id} value={r.id}>
-                  {r.name}
+              <SelectTrigger
+                aria-label="Server region"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Choose region</SelectItem>
+                {options.data.regions.map((r) => (
+                  <SelectItem key={r.id} value={r.id} aria-label={r.name}>
+                    <span>{r.name}</span>
+                    {r.name !== r.id && (
+                      <span className="text-muted-foreground">{r.id}</span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
+        {input.kind === "create" && (
+          <Field label="Server image">
+            <Select
+              value={input.image ?? ""}
+              onValueChange={(e) => update({ image: e ?? "" })}
+            >
+              <SelectTrigger
+                aria-label="Server image"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">
+                  {images.length ? "Choose image" : "No image fits this choice"}
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-      )}
+                {images.map((i) => (
+                  <SelectItem key={i.id} value={i.id}>
+                    {i.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        )}
+      </div>
       <Field label="Server size">
         <Select
           value={input.size ?? ""}
-          onValueChange={(e) => {
-            const size = sizes.find((s) => s.id === e)
-            const fit = imagesFor(options.data?.images ?? [], size)
-            update({
-              size: e ?? "",
-              ...(input.kind === "create" &&
-              !fit.some((i) => i.id === input.image)
-                ? { image: size?.accelerator ? (fit[0]?.id ?? "") : "" }
-                : {}),
-            })
-          }}
+          onValueChange={(e) => pickSize(e ?? "")}
         >
           <SelectTrigger aria-label="Server size" className={"w-full min-w-0"}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">Choose size</SelectItem>
-            {sizes
-              .filter((s) => !s.accelerator)
-              .map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {`${s.id} · ${s.cpus} vCPU · ${Number((s.memoryMib / 1024).toFixed(1))} GiB · ${hourlyOrUnknown(s.hourlyUsd, s.hourlyPriceKnown)}`}
-                </SelectItem>
-              ))}
-            {sizes.some((s) => s.accelerator) && (
-              <SelectGroup>
-                <SelectLabel>GPU</SelectLabel>
-                {sizes
-                  .filter((s) => s.accelerator)
-                  .map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {gpuSizeLabel(s)}
-                    </SelectItem>
-                  ))}
-              </SelectGroup>
-            )}
+            <SelectItem value="">
+              {sizes.length
+                ? "Choose size"
+                : "This region offers no sizes on this account"}
+            </SelectItem>
+            {sizeOptions(sizes, room)}
           </SelectContent>
         </Select>
       </Field>
-      {input.kind === "create" && (
-        <Field label="Server image">
-          <Select
-            value={input.image ?? ""}
-            onValueChange={(e) => update({ image: e ?? "" })}
-          >
-            <SelectTrigger
-              aria-label="Server image"
-              className={"w-full min-w-0"}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">Choose image</SelectItem>
-              {imagesFor(
-                options.data.images,
-                sizes.find((s) => s.id === input.size)
-              ).map((i) => (
-                <SelectItem key={i.id} value={i.id}>
-                  {i.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+      {!input.region && input.kind === "create" && (
+        <p className="text-[12px] text-muted-foreground">
+          Choose a region first to see only the sizes and images it offers.
+        </p>
       )}
+      {chosen && <SizeSummary size={chosen} room={room} resize={!!base} />}
     </div>
   )
 }
-// A GPU size reads "gpu-h100x1-80gb · 1× NVIDIA H100 80GB · 80 GiB · 20 vCPU ·
-// $3.39/hr", with the memory each GPU has.
-function gpuSizeLabel(s: ServerSize) {
-  const a = s.accelerator!
-  return `${s.id} · ${acceleratorLabel(a)} · ${a.memoryGib} GiB · ${s.cpus} vCPU · ${hourlyOrUnknown(s.hourlyUsd, s.hourlyPriceKnown)}`
+
+/** A memory size in GiB, trimmed: 512 MiB reads "0.5 GiB". */
+const memoryGib = (mib: number) => `${Number((mib / 1024).toFixed(1))} GiB`
+
+/** "4 vCPU · 8 GiB memory · 160 GB disk", what a size gives one server. */
+export function sizeSpec(s: ServerSize) {
+  return `${s.cpus} vCPU · ${memoryGib(s.memoryMib)} memory · ${s.diskGb} GB disk`
 }
-// A GPU size boots only an image that ships its vendor's drivers, and a CPU
-// size never needs one.
-function imagesFor(images: ServerImage[], size?: ServerSize) {
+
+// A GPU size leads with its GPUs and the memory each one has.
+function gpuSpec(s: ServerSize) {
+  const a = s.accelerator!
+  return `${acceleratorLabel(a)} · ${a.memoryGib} GiB each · ${s.cpus} vCPU · ${memoryGib(s.memoryMib)} memory`
+}
+
+// Sizes group by how big they are, not by a provider's family names, so any
+// provider's catalog reads the same. Within a group the cheapest comes first.
+export function sizeGroups(sizes: ServerSize[]) {
+  const groups = [
+    { label: "Small · up to 2 vCPU", fits: (s: ServerSize) => s.cpus <= 2 },
+    { label: "Medium · 3 to 8 vCPU", fits: (s: ServerSize) => s.cpus <= 8 },
+    { label: "Large · over 8 vCPU", fits: () => true },
+  ]
+  const price = (s: ServerSize) =>
+    priceKnown(s.hourlyUsd, s.hourlyPriceKnown) ? s.hourlyUsd : Infinity
+  const order = (a: ServerSize, b: ServerSize) =>
+    price(a) - price(b) ||
+    a.cpus - b.cpus ||
+    a.memoryMib - b.memoryMib ||
+    a.id.localeCompare(b.id)
+  const cpu = sizes.filter((s) => !s.accelerator).sort(order)
+  const out = groups.map((g) => ({ label: g.label, sizes: [] as ServerSize[] }))
+  for (const s of cpu) out[groups.findIndex((g) => g.fits(s))]!.sizes.push(s)
+  out.push({
+    label: "GPU",
+    sizes: sizes.filter((s) => s.accelerator).sort(order),
+  })
+  return out.filter((g) => g.sizes.length)
+}
+
+/**
+ * Room is what the form knows of the Cloud's capacity limits: none are set,
+ * they're set but the servers weren't counted recently, or how much is left.
+ * A resize carries the size it grows from. Undefined while it's read, or
+ * when it can't be.
+ */
+type Room =
+  | { kind: "none" }
+  | { kind: "unknown" }
+  | {
+      kind: "known"
+      headroom: CapacityResources
+      fresh: boolean
+      base?: ServerSize
+    }
+
+// Without a policy nothing is limited. A resize whose current size isn't in
+// the catalog (base null) can't say what it grows by.
+function roomOf(
+  view: CapacityPolicyView | undefined,
+  usage: CapacityUsage | undefined,
+  base: ServerSize | null | undefined
+): Room | undefined {
+  if (!view) return undefined
+  if (!view.policy?.revision) return { kind: "none" }
+  const h = usage?.headroom
+  if (
+    !usage ||
+    !h ||
+    base === null ||
+    ![h.servers, h.cpuMillis, h.memoryBytes, h.storageBytes].some(
+      (v) => typeof v === "number"
+    )
+  )
+    return { kind: "unknown" }
+  return { kind: "known", headroom: h, fresh: usage.fresh, base }
+}
+
+const roomNumber = (n: number) => Number(n.toFixed(2)).toLocaleString("en-US")
+
+// What one server of a size takes from each limited dimension, beside what
+// is left. A resize takes only what it grows by and adds no server, as the
+// review counts it. A dimension whose room is unknown is left out.
+function sizeRoom(s: ServerSize, room: Room | undefined) {
+  if (room?.kind !== "known") return undefined
+  const { headroom: h, base: b } = room
+  const scaled = (v: number | null | undefined, by: number) =>
+    typeof v === "number" ? v / by : undefined
+  const rows = [
+    { left: h.servers, need: b ? 0 : 1, unit: "servers" },
+    {
+      left: scaled(h.cpuMillis, 1000),
+      need: s.cpus - (b?.cpus ?? 0),
+      unit: "vCPU",
+    },
+    {
+      left: scaled(h.memoryBytes, 2 ** 30),
+      need: (s.memoryMib - (b?.memoryMib ?? 0)) / 1024,
+      unit: "GiB",
+    },
+    {
+      left: scaled(h.storageBytes, 1e9),
+      need: s.diskGb - (b?.diskGb ?? 0),
+      unit: "GB",
+    },
+  ]
+  return rows.flatMap((r) =>
+    typeof r.left === "number" && r.need > 0
+      ? [
+          {
+            text: `${roomNumber(r.need)} of ${roomNumber(r.left)} ${r.unit}`,
+            short: `${roomNumber(r.need)} ${r.unit} with ${roomNumber(r.left)} left`,
+            over: r.need > r.left,
+          },
+        ]
+      : []
+  )
+}
+
+/**
+ * sizeOptions lists sizes for a size Select, grouped by scale, each reading
+ * what it gives, its provider ID and its hourly price. It returns elements
+ * rather than being a component, so CloudSelect finds each SelectItem and
+ * the trigger shows the chosen size.
+ */
+export function sizeOptions(sizes: ServerSize[], room?: Room) {
+  return sizeGroups(sizes).map((g) => (
+    <SelectGroup key={g.label}>
+      <SelectLabel>{g.label}</SelectLabel>
+      {g.sizes.map((s) => sizeItem(s, room))}
+    </SelectGroup>
+  ))
+}
+
+function sizeItem(size: ServerSize, room?: Room) {
+  const spec = size.accelerator ? gpuSpec(size) : sizeSpec(size)
+  const price = hourlyOrUnknown(size.hourlyUsd, size.hourlyPriceKnown)
+  const over = sizeRoom(size, room)?.some((r) => r.over) ?? false
+  // A fresh count means the review would refuse it, so it can't be picked.
+  // A stale one only warns: servers may have gone since.
+  const blocked = over && room?.kind === "known" && room.fresh
+  return (
+    <SelectItem
+      key={size.id}
+      value={size.id}
+      disabled={blocked}
+      aria-label={`${spec} · ${size.id} · ${price}${over ? " · over this Cloud's limit" : ""}`}
+    >
+      <span>{spec}</span>
+      <span className="text-muted-foreground">{size.id}</span>
+      {over && <span className="text-weld-ink">Over limit</span>}
+      <span className="ml-auto pl-3 tabular-nums">{price}</span>
+    </SelectItem>
+  )
+}
+
+// roomText says what the size does to the Cloud's capacity, or why that
+// isn't known.
+function roomText(
+  room: Room | undefined,
+  needs: ReturnType<typeof sizeRoom>,
+  resize: boolean
+) {
+  if (!room) return undefined
+  if (room.kind === "none")
+    return "No limits set on this Cloud. Add them on the Capacity tab."
+  if (room.kind === "unknown")
+    return "Not counted recently. The review checks it before anything is created."
+  const stale = room.fresh ? "" : " · the count may be out of date"
+  if (!needs?.length) return `${resize ? "Adds" : "Uses"} nothing${stale}`
+  return `${resize ? "Adds" : "Uses"} ${needs.map((r) => r.text).join(" · ")} left${stale}`
+}
+
+// SizeSummary spells out the chosen size: what the server gets, what it
+// costs, and what it does to the Cloud's capacity.
+function SizeSummary({
+  size,
+  room,
+  resize,
+}: {
+  size: ServerSize
+  room?: Room
+  resize: boolean
+}) {
+  const needs = sizeRoom(size, room)
+  const over = needs?.filter((r) => r.over) ?? []
+  const capacity = roomText(room, needs, resize)
+  const known = priceKnown(size.hourlyUsd, size.hourlyPriceKnown)
+  return (
+    <section className="grid gap-2" aria-label="Chosen size">
+      <FactList
+        facts={[
+          { label: "Each server gets", value: sizeSpec(size) },
+          ...(size.accelerator
+            ? [
+                {
+                  label: "GPUs",
+                  value: `${acceleratorLabel(size.accelerator)}, ${size.accelerator.memoryGib} GiB each`,
+                },
+              ]
+            : []),
+          {
+            label: "Cost while it runs",
+            value: known ? hourlyCost(size.hourlyUsd) : "Price unknown",
+          },
+          ...(capacity ? [{ label: "Cloud capacity", value: capacity }] : []),
+        ]}
+      />
+      {over.length > 0 && (
+        <CloudCallout title="This size is over the Cloud's capacity limit">
+          {`It needs ${over.map((r) => r.short).join(", ")}. Choose a smaller size, or raise the limit on the Capacity tab.`}
+        </CloudCallout>
+      )}
+    </section>
+  )
+}
+
+// An image fits when it can run a Loomplane server in the region and on the
+// size's disk. A GPU size boots only an image that ships its vendor's
+// drivers, and a CPU size never needs one.
+function imagesFor(images: ServerImage[], size?: ServerSize, region?: string) {
   const vendor = size?.accelerator?.vendor
   return images.filter(
     (i) =>
       i.bootstrap &&
+      (!region || i.regions.includes(region)) &&
+      (!size || (i.minDiskGb ?? 0) <= size.diskGb) &&
       (vendor
         ? (i.accelerators ?? []).includes(vendor)
         : !i.accelerators?.length)
   )
+}
+
+// A GPU size takes the first image with its drivers, and any size takes the
+// only image that fits; otherwise the person chooses.
+function defaultImage(fit: ServerImage[], size?: ServerSize) {
+  return (size?.accelerator || fit.length === 1 ? fit[0]?.id : "") ?? ""
 }
 function estimatedCost(o: Operation) {
   const known = priceKnown(o.estimatedHourlyUsd, o.hourlyPriceKnown)
@@ -1195,7 +1485,7 @@ function ServerDetails({
                 : "Review deletion"}
             </Button>
           )}
-          {server.ownership === "managed" &&
+          {resizable(server) &&
             supports(capabilities, connection, "server:resize") && (
               <Button variant="outline" onClick={() => onEdit("resize")}>
                 Resize

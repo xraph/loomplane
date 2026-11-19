@@ -283,9 +283,9 @@ it("uses shared controls with keyboard selection and clickable checkbox labels",
   expect(size).toHaveAttribute("data-slot", "select-trigger")
   size.focus()
   await user.keyboard("{ArrowDown}")
-  await screen.findByRole("option", { name: "4 CPU / 8 GiB" })
+  await screen.findByRole("option", { name: /^4 vCPU · 8 GiB memory/ })
   await user.keyboard("{End}{Enter}")
-  expect(size).toHaveTextContent("4 CPU / 8 GiB")
+  expect(size).toHaveTextContent("4 vCPU · 8 GiB memory · 160 GB disk")
   await user.click(screen.getByRole("button", { name: "Close" }))
   await user.click(
     screen.getByRole("button", { name: "Connect existing server" })

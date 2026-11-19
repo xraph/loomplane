@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +17,22 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
+
+// ErrNoProviderResource refuses a change to a managed server whose create
+// never recorded a provider resource, such as one the provider rejected.
+// Only deletion can act on it. It is an ErrConflict, so it answers 409.
+var ErrNoProviderResource error = &conflictSentenceError{text: "This server never got a provider resource, so it can't be resized. Delete it and create it again."}
+
+// conflictSentenceError is an ErrConflict whose text is a full sentence for the
+// person reviewing the change, shown as written.
+type conflictSentenceError struct{ text string }
+
+func (e *conflictSentenceError) Error() string { return e.text }
+func (e *conflictSentenceError) Unwrap() error { return ErrConflict }
+
+// MaxServerNameLength bounds a server's name. Providers that need a
+// hostname derive one from it, so it fits one DNS label.
+const MaxServerNameLength = 63
 
 func randomID(prefix string) (string, error) {
 	v, err := typeid.Generate(prefix)
@@ -57,8 +74,14 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 	}
 	var existing *Server
 	if in.Kind == "create" || in.Kind == "adopt" {
-		if in.ServerID != "" || strings.TrimSpace(in.Name) == "" || len(in.Name) > 63 || strings.ContainsAny(in.Name, "\r\n\x00") {
+		if in.ServerID != "" {
 			return nil, ErrInvalid
+		}
+		if strings.TrimSpace(in.Name) == "" {
+			return nil, invalidSentence("Give the server a name.")
+		}
+		if len(in.Name) > MaxServerNameLength || strings.ContainsAny(in.Name, "\r\n\x00") {
+			return nil, invalidSentence("A server name is one line of at most %d characters.", MaxServerNameLength)
 		}
 	} else {
 		existing, err = s.Store.GetServer(ctx, p.OrgID, cloud, in.ServerID)
@@ -137,11 +160,26 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 				return nil, provider.ErrInfrastructureIdentity
 			}
 			o.ResourceID = existing.ResourceID
-			if _, err = adapter.GetServer(ctx, credential, o.ResourceID); err != nil && !errors.Is(err, provider.ErrInfrastructureNotFound) {
-				return nil, err
-			}
-			if err != nil && in.Kind != "delete" {
-				return nil, err
+			if o.ResourceID == "" {
+				if in.Kind != "delete" {
+					return nil, ErrNoProviderResource
+				}
+				servers, listErr := adapter.ListServers(ctx, credential)
+				if listErr != nil {
+					return nil, listErr
+				}
+				id, findErr := creationServerID(existing, servers)
+				if findErr != nil {
+					return nil, findErr
+				}
+				o.ResourceID = id
+			} else {
+				if _, err = adapter.GetServer(ctx, credential, o.ResourceID); err != nil && !errors.Is(err, provider.ErrInfrastructureNotFound) {
+					return nil, err
+				}
+				if err != nil && in.Kind != "delete" {
+					return nil, err
+				}
 			}
 		}
 		if in.Kind == "create" {
@@ -149,7 +187,7 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 				return nil, checkErr
 			}
 			if in.Region == "" || in.Size == "" || in.Image == "" {
-				return nil, ErrInvalid
+				return nil, invalidSentence("Choose a region, a size and an image.")
 			}
 			if _, err = adapter.ListServers(ctx, credential); err != nil {
 				return nil, err
@@ -686,12 +724,65 @@ func (s *Service) resizeServer(ctx context.Context, o *Operation, v *Server, a p
 	v.Size = o.Input.Size
 	return s.readyRuntime(ctx, o, v)
 }
+func creationServerID(v *Server, servers []provider.InfrastructureServer) (string, error) {
+	if v == nil || v.CreationOperationID == "" {
+		return "", nil
+	}
+	tag := provider.ServerOperationTag(v.CreationOperationID)
+	var id string
+	for _, s := range servers {
+		if !slices.Contains(s.Tags, tag) {
+			continue
+		}
+		if s.ID == "" || s.AccountID != v.AccountID {
+			return "", provider.ErrInfrastructureIdentity
+		}
+		if id != "" && id != s.ID {
+			return "", provider.ErrInfrastructureDrift
+		}
+		id = s.ID
+	}
+	return id, nil
+}
 func (s *Service) deleteServer(ctx context.Context, o *Operation, v *Server, a provider.ServerAdapter, c provider.InfrastructureCredential) error {
-	if v.Ownership != "managed" || v.ResourceID != o.ResourceID || v.AccountID != o.AccountID {
+	if v.Ownership != "managed" || (v.ResourceID != "" && v.ResourceID != o.ResourceID) || v.AccountID != o.AccountID {
 		return ErrConflict
 	}
 	if v.RuntimeConnectionID != "" && v.Status != "deleted" {
 		if checkErr := s.ensureUnused(ctx, v); checkErr != nil {
+			return checkErr
+		}
+	}
+	if o.ResourceID == "" {
+		if v.ResourceID != "" {
+			return ErrConflict
+		}
+		servers, listErr := a.ListServers(ctx, c)
+		if listErr != nil {
+			return listErr
+		}
+		id, findErr := creationServerID(v, servers)
+		if findErr != nil {
+			return findErr
+		}
+		if id == "" {
+			v.Status = "deleted"
+			v.Revision++
+			v.UpdatedAt = s.now().UTC()
+			if checkErr := s.Store.SaveServer(ctx, v); checkErr != nil {
+				return checkErr
+			}
+			return s.removeRuntime(ctx, o, v)
+		}
+		o.ResourceID = id
+		if checkErr := s.checkpoint(ctx, o); checkErr != nil {
+			return checkErr
+		}
+	}
+	if v.ResourceID == "" {
+		v.ResourceID = o.ResourceID
+		v.UpdatedAt = s.now().UTC()
+		if checkErr := s.Store.SaveServer(ctx, v); checkErr != nil {
 			return checkErr
 		}
 	}

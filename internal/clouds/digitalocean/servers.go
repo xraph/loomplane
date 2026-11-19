@@ -216,6 +216,7 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 	if err != nil {
 		return result, provider.ErrInfrastructureInvalid
 	}
+	hostname := provider.Hostname(spec.Name)
 	list, err := c.listInfrastructureServers(ctx, credential, tag)
 	if err != nil {
 		return result, err
@@ -224,7 +225,7 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 		if !slices.Contains(s.Tags, tag) {
 			return result, provider.ErrInfrastructureDrift
 		}
-		if !slices.Contains(s.Tags, specTag) || s.Name != spec.Name || s.Region != spec.Region || s.Size != spec.Size || result.Server.ID != "" {
+		if !slices.Contains(s.Tags, specTag) || (s.Name != spec.Name && s.Name != hostname) || s.Region != spec.Region || s.Size != spec.Size || result.Server.ID != "" {
 			return provider.ServerResult{}, provider.ErrInfrastructureDrift
 		}
 		result.Server = s
@@ -247,7 +248,7 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 		Tags     []string `json:"tags"`
 		Backups  bool     `json:"backups"`
 		IPv6     bool     `json:"ipv6"`
-	}{Name: spec.Name, Region: spec.Region, Size: spec.Size, Image: spec.Image, SSHKeys: spec.SSHKeys, UserData: spec.UserData, Tags: []string{tag, specTag}, IPv6: true}
+	}{Name: hostname, Region: spec.Region, Size: spec.Size, Image: spec.Image, SSHKeys: spec.SSHKeys, UserData: spec.UserData, Tags: []string{tag, specTag}, IPv6: true}
 	var out struct {
 		Droplet droplet             `json:"droplet"`
 		Links   infrastructureLinks `json:"links"`

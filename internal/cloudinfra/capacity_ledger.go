@@ -750,9 +750,10 @@ func capacityInventoryIncomplete(ctx context.Context, tx driver.Tx, org, cloud s
  WHERE r.org_id=s.org_id AND r.cloud_id=s.cloud_id AND r.body->>'server_id'=s.id AND r.servers=1 AND r.status='reserved')
  AND NOT EXISTS(SELECT 1 FROM loomplane_infrastructure_operations o
  WHERE o.org_id=s.org_id AND o.cloud_id=s.cloud_id AND o.server_id=s.id
- AND o.body->'input'->>'kind'='delete' AND s.resource_id<>''
- AND o.body->>'provider'=s.provider AND o.body->>'account_id'=s.account_id AND o.body->>'resource_id'=s.resource_id
- AND coalesce(o.body->>'absence_confirmed_at','') NOT IN ('','0001-01-01T00:00:00Z'))
+ AND o.body->'input'->>'kind'='delete'
+ AND o.body->>'provider'=s.provider AND o.body->>'account_id'=s.account_id
+ AND ((s.resource_id<>'' AND o.body->>'resource_id'=s.resource_id AND coalesce(o.body->>'absence_confirmed_at','') NOT IN ('','0001-01-01T00:00:00Z'))
+  OR (s.resource_id='' AND coalesce(o.body->>'resource_id','')='' AND o.status='succeeded')))
  ) OR EXISTS(SELECT 1 FROM loomplane_managed_resources r LEFT JOIN loomplane_cluster_capacity_inventory c ON c.org_id=r.org_id AND c.resource_id=r.id
  WHERE r.org_id=$1 AND r.cloud_id=$2 AND r.deleted_at IS NULL AND r.kind='cluster'
  AND (r.body->>'status' IN ('missing','identity_changed') OR c.body IS NULL OR NOT c.complete OR c.checked_at<now()-interval '2 minutes' OR c.checked_at>now()))`, org, cloud).Scan(&missing)

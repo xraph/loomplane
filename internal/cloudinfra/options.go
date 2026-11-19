@@ -117,16 +117,18 @@ func (s *Service) readServerOptions(ctx context.Context, conn *connections.Conne
 	}
 	return catalog.ServerOptions(ctx, credential)
 }
+
+// validateOptions checks a region, size and image against the account's
+// catalog. Each refusal is a sentence naming what to change, since the
+// review shows it as written.
 func validateOptions(options provider.ServerOptions, in ServerInput) error {
 	region := false
 	for _, v := range options.Regions {
 		region = region || v.ID == in.Region
 	}
-	size := false
 	disk := 0
 	var chosen *provider.ServerSize
 	for i, v := range options.Sizes {
-		size = size || (v.ID == in.Size && slices.Contains(v.Regions, in.Region))
 		if v.ID == in.Size {
 			disk = v.DiskGB
 			chosen = &options.Sizes[i]
@@ -142,12 +144,28 @@ func validateOptions(options provider.ServerOptions, in ServerInput) error {
 			return gpuImageError(options, in.Region, *chosen)
 		}
 	}
-	image := false
-	for _, v := range options.Images {
-		image = image || (v.ID == in.Image && v.Bootstrap && v.MinDiskGB >= 0 && v.MinDiskGB <= disk && slices.Contains(v.Regions, in.Region))
+	if !region {
+		return invalidSentence("Region %q isn't available on this account. Choose another region.", in.Region)
 	}
-	if !region || !size || !image {
-		return ErrInvalid
+	if chosen == nil {
+		return invalidSentence("Size %q isn't offered on this account. Choose another size.", in.Size)
+	}
+	if !slices.Contains(chosen.Regions, in.Region) {
+		return invalidSentence("Size %s isn't offered in %s. Choose another size or region.", in.Size, in.Region)
+	}
+	var image *provider.ServerImage
+	for i, v := range options.Images {
+		if v.ID == in.Image {
+			image = &options.Images[i]
+		}
+	}
+	switch {
+	case image == nil || !image.Bootstrap:
+		return invalidSentence("Image %q can't run a Loomplane server. Choose one of the listed images.", in.Image)
+	case !slices.Contains(image.Regions, in.Region):
+		return invalidSentence("Image %s isn't available in %s. Choose another image or region.", image.Name, in.Region)
+	case image.MinDiskGB < 0 || image.MinDiskGB > disk:
+		return invalidSentence("Image %s needs at least %d GB of disk, and size %s has %d GB. Choose a larger size.", image.Name, image.MinDiskGB, in.Size, disk)
 	}
 	return nil
 }
