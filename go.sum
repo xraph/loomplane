@@ -806,8 +806,8 @@ github.com/xraph/cortex/sentinel v1.10.8 h1:D2OwFHiR9Ls1/jY6jj9U/uRrizWwSg0tkdya
 github.com/xraph/cortex/sentinel v1.10.8/go.mod h1:lDuubVf1Veo7QlEJ+tYmYJPgu+QsyGcZi8h1Mv9ElN8=
 github.com/xraph/ctrlplane v1.8.3 h1:tPIzG1pKfNIUrbIkFUhcWHg3offzObXLJmJycXrrFzw=
 github.com/xraph/ctrlplane v1.8.3/go.mod h1:qC3PrgwDAwZ5EX8gLTQmmTOrICNO67bWg7pp4UZiHSo=
-github.com/xraph/dispatch v1.9.10 h1:zb+KgPGjy45pWt3WKa1347kzJbK+2U9UgPMXsv3BbLw=
-github.com/xraph/dispatch v1.9.10/go.mod h1:oQvQPOREbvKUEMgNEtfr8WW5v5+8z4RrHk2m99We/NM=
+github.com/xraph/dispatch v1.9.11 h1:LfAm+N+pSnnNSv2Wd2yXzMR2wDusdGHZdPBzfigaK0E=
+github.com/xraph/dispatch v1.9.11/go.mod h1:oQvQPOREbvKUEMgNEtfr8WW5v5+8z4RrHk2m99We/NM=
 github.com/xraph/farp v1.3.1 h1:Dlcpo+gPqfx5SKFd67shPD9pl9aZqMO4txyAPFV59Y0=
 github.com/xraph/farp v1.3.1/go.mod h1:Nlli8WUsxvQL5wXiJqcAn6OsUHBzKJxrl9JLJ9J6Wqo=
 github.com/xraph/farp/discovery v1.3.1 h1:mwwBC++ftbGDlMds6IGA/kof4dAprfV2WjdMZJf3fi4=
@@ -822,8 +822,8 @@ github.com/xraph/forge/extensions/discovery v1.14.1 h1:7x4/aKfXKij7QSpaE17NPzkKt
 github.com/xraph/forge/extensions/discovery v1.14.1/go.mod h1:sok2LQnnnH58dUuSlGwLl+uh66Ey/mofPcbgUm0e8Sw=
 github.com/xraph/go-utils v1.5.1 h1:W7i+bOTsEQVP6yMritH5IL5Y188eIUJtPUdSLRvWbzo=
 github.com/xraph/go-utils v1.5.1/go.mod h1:fMahP6kPUjJP5UmzVje2GSL7OGT9+xpYkukK2dLjSMM=
-github.com/xraph/grove v1.10.5 h1:YxLosbsfmYIdzyB9X0E8L18qG4Asp4gJzbrM66X2gOg=
-github.com/xraph/grove v1.10.5/go.mod h1:oQ5d+MiSDkDxiRCKBOlmieJmzFXvanY/kk9VfvQO40w=
+github.com/xraph/grove v1.10.6 h1:PBxKLWG7iER2ypmKk7fu1BWlKBny/DbN1mKXzOQdKVU=
+github.com/xraph/grove v1.10.6/go.mod h1:oQ5d+MiSDkDxiRCKBOlmieJmzFXvanY/kk9VfvQO40w=
 github.com/xraph/grove/drivers/mongodriver v1.10.5 h1:m4OvmDh2rEqB/hUzW5v9sYOo0G3rW4zASgh6CqqB3HU=
 github.com/xraph/grove/drivers/mongodriver v1.10.5/go.mod h1:x/t82VUmjCAuUluOHHfDrJCHdGKtd3M2pnKvBnUxvwU=
 github.com/xraph/grove/drivers/pgdriver v1.10.5 h1:RdpgaL2D34FsfY8PFWruvUhuFDdT32f3JY0PvjtcCzE=

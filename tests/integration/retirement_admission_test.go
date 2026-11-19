@@ -264,7 +264,9 @@ func TestRetirementFinalWorkerLossIsVisibleAndKeepsAdmissionBlocked(t *testing.T
 func TestConcurrentRetirementAndRestoreHaveExactlyOneWinner(t *testing.T) {
 	conn, store := retirementFixture(t)
 	for i := range 12 {
-		if _, err := conn.Exec(t.Context(), `DELETE FROM loomplane_backup_retirements; DELETE FROM loomplane_service_restores; UPDATE loomplane_service_backups SET status='succeeded' WHERE id='b'`); err != nil {
+		// A retirement that won the last round left its "requested" event,
+		// and history holds its retirement (ON DELETE RESTRICT): clear it first.
+		if _, err := conn.Exec(t.Context(), `DELETE FROM loomplane_backup_retirement_events; DELETE FROM loomplane_backup_retirements; DELETE FROM loomplane_service_restores; UPDATE loomplane_service_backups SET status='succeeded' WHERE id='b'`); err != nil {
 			t.Fatal(err)
 		}
 		start := make(chan struct{})
