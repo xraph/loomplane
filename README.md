@@ -222,6 +222,7 @@ People can always connect a cloud by pasting a token. To let them sign in instea
 |---|---|
 | `LOOMPLANE_<CLOUD>_OAUTH_CLIENT_ID`, `_CLIENT_SECRET` | `<CLOUD>` is `CLOUDFLARE`, `DIGITALOCEAN`, `VERCEL`, `GCP` or `AZURE`. Vercel also needs `LOOMPLANE_VERCEL_OAUTH_SLUG` |
 | `LOOMPLANE_KUBERNETES_IN_CLUSTER` | Lets people connect the cluster Loomplane runs in, as Loomplane's own service account. Every organization on the instance shares it, so turn it on only where they all may deploy there |
+| `LOOMPLANE_MANAGED_SSH_PORT` | The port Loomplane reaches the servers it creates on over SSH. Empty means 22. Set another, such as `2222`, where Loomplane's host can't connect out to port 22, as on DigitalOcean App Platform. New servers open it beside 22 when they boot, and keep the port they were created with |
 | `LOOMPLANE_PAUSED_PROVIDERS` | Targets whose plans can be reviewed but not carried out, such as `render,cloud-run` ([docs/operations.md](docs/operations.md)) |
 
 ### Everything else
