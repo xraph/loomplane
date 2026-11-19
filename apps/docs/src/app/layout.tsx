@@ -12,7 +12,7 @@ const description =
   "A self-hosted deployment platform for the monorepos you already have.";
 
 // Set NEXT_PUBLIC_SITE_URL where the site is served, so social previews get absolute URLs.
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://loomplane.dev";
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.loomplane.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
