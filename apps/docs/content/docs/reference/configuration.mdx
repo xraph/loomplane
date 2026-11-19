@@ -142,6 +142,8 @@ These exist so tests can stand fakes in for real clouds. Leave them empty in a l
 
 The setting `clouds.enrollment_url` (set it in `config.local.yaml`) is the reachable HTTPS callback base that managed servers use to enroll. Empty uses the public URL, and a local address can't provision remote servers.
 
+`LOOMPLANE_MANAGED_SSH_PORT` is the port Loomplane reaches the servers it creates on over SSH. Empty means 22. Set another, such as `2222`, where Loomplane can't connect out to port 22, as on DigitalOcean App Platform. New servers then open that port beside 22 when they boot, so your own SSH on 22 keeps working. A server keeps the port it was created with.
+
 ## Cloud capacity
 
 <Callout type="warn">

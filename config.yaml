@@ -221,6 +221,10 @@ clouds:
   cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
   acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
   acme_roots_file: "${LOOMPLANE_ACME_ROOTS_FILE:-}"
+  # The port Loomplane reaches the servers it creates on over SSH. Empty
+  # means 22. DigitalOcean App Platform blocks outbound port 22, so set
+  # 2222 there; new servers then open it beside 22 when they boot.
+  managed_ssh_port: "${LOOMPLANE_MANAGED_SSH_PORT:-}"
   managed_clusters:
     management_probe:
       provider: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_PROVIDER:-}"

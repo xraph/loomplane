@@ -203,3 +203,49 @@ func TestCloudServerFailedCreateWithoutResourceIDCanBeDeleted(t *testing.T) {
 		})
 	}
 }
+
+// A create whose server never enrolls before its bootstrap expires fails
+// with the reason, and so does its server, rather than starting forever.
+// Health can't be checked while it starts or once it failed, and says so.
+func TestCloudServerThatNeverEnrollsFailsWithTheReason(t *testing.T) {
+	f := newInfraFixture(t)
+	f.svc.ManagedSSHPort = 2222
+	o := f.reconcile(t, f.create(t))
+	if o.Status != "waiting" || o.SSHPort != 2222 {
+		t.Fatalf("after create: %+v", o)
+	}
+	_, err := f.svc.CheckServer(t.Context(), f.p, "cloud", o.ServerID)
+	if !errors.Is(err, cloudinfra.ErrConflict) || !strings.Contains(err.Error(), "still starting") {
+		t.Fatalf("checking a starting server: %v", err)
+	}
+
+	o.BootstrapExpiresAt = time.Now().Add(-time.Minute)
+	if err = f.store.SaveOperation(t.Context(), o); err != nil {
+		t.Fatal(err)
+	}
+	o = f.reconcile(t, o)
+	if o.Status != "failed" || !strings.Contains(o.Message, "SSH on port 2222") {
+		t.Fatalf("expired enrollment: %+v", o)
+	}
+	server, err := f.store.GetServer(t.Context(), "org", "cloud", o.ServerID)
+	if err != nil || server.Status != "failed" || server.Message != o.Message {
+		t.Fatalf("server after its create failed: %+v %v", server, err)
+	}
+	_, err = f.svc.CheckServer(t.Context(), f.p, "cloud", o.ServerID)
+	if !errors.Is(err, cloudinfra.ErrConflict) || !strings.Contains(err.Error(), "failed to start") {
+		t.Fatalf("checking a failed server: %v", err)
+	}
+
+	// The failed server can still be deleted.
+	f.provider.remote.ID = ""
+	preview, err := f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "delete", ServerID: server.ID, CloudRevision: 1, ServerRevision: server.Revision})
+	if err != nil {
+		t.Fatalf("preview delete: %v", err)
+	}
+	if _, err = f.svc.ApplyServerOperation(t.Context(), f.p, "cloud", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatalf("apply delete: %v", err)
+	}
+	if preview = f.reconcile(t, preview); preview.Status != "succeeded" {
+		t.Fatalf("delete: %+v", preview)
+	}
+}

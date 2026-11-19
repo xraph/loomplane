@@ -48,6 +48,11 @@ spec:
     - key: LOOMPLANE_DATABASE_POOL_SIZE
       value: "5"
       scope: RUN_TIME
+    # App Platform blocks outbound port 22, so servers Loomplane creates also
+    # open SSH on 2222, and Loomplane reaches them there.
+    - key: LOOMPLANE_MANAGED_SSH_PORT
+      value: "2222"
+      scope: RUN_TIME
     - key: LOOMPLANE_AI_ENABLED
       value: "true"
       scope: RUN_TIME

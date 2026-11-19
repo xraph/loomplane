@@ -58,6 +58,8 @@ The template uses App Platform's dev database, which is fine for a trial and not
 
 App Platform can't follow an image tag, so the template uses `:latest`. To upgrade, redeploy the app. To stay on one version, change the tag to a release such as `v1.2.3`. The template redirects `/_/metrics` and `/debug` to `/`, so neither is reachable from outside.
 
+App Platform blocks outbound connections to port 22, and Loomplane checks every server it creates over SSH. The template sets `LOOMPLANE_MANAGED_SSH_PORT=2222`, so new servers open SSH on 2222 as well as 22, and Loomplane reaches them there. If you made the app from an older template, add that variable yourself. Without it, a new server stays at Starting and then fails, saying it never finished enrolling. Servers created before you set it can't be fixed by setting it: delete them and create them again.
+
 Scratch space on App Platform is small, so the worker runs one analysis at a time. Very large repositories can fail there. If yours do, move to a Droplet.
 
 ## Droplet with cloud-init

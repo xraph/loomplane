@@ -38,26 +38,28 @@ func (directApplyRunningError) Is(target error) bool { return target == ErrBusy 
 
 // Server is organization capacity, independent of project release access.
 type Server struct {
-	Draining            bool          `json:"draining"`
-	StateRevision       int64         `json:"state_revision"`
-	ID                  string        `json:"id" forge:"id"`
-	OrgID               string        `json:"org_id"`
-	CloudID             string        `json:"cloud_id"`
-	Name                string        `json:"name"`
-	Ownership           string        `json:"ownership"`
-	Provider            string        `json:"provider"`
-	ConnectionID        string        `json:"connection_id"`
-	AccountID           string        `json:"account_id"`
-	ResourceID          string        `json:"resource_id"`
-	CreationOperationID string        `json:"creation_operation_id"`
-	RuntimeConnectionID string        `json:"runtime_connection_id"`
-	Region              string        `json:"region"`
-	Size                string        `json:"size"`
-	Status              string        `json:"status"`
-	Revision            int64         `json:"revision"`
-	Health              RuntimeHealth `json:"health"`
-	CreatedAt           time.Time     `json:"created_at"`
-	UpdatedAt           time.Time     `json:"updated_at"`
+	Draining            bool   `json:"draining"`
+	StateRevision       int64  `json:"state_revision"`
+	ID                  string `json:"id" forge:"id"`
+	OrgID               string `json:"org_id"`
+	CloudID             string `json:"cloud_id"`
+	Name                string `json:"name"`
+	Ownership           string `json:"ownership"`
+	Provider            string `json:"provider"`
+	ConnectionID        string `json:"connection_id"`
+	AccountID           string `json:"account_id"`
+	ResourceID          string `json:"resource_id"`
+	CreationOperationID string `json:"creation_operation_id"`
+	RuntimeConnectionID string `json:"runtime_connection_id"`
+	Region              string `json:"region"`
+	Size                string `json:"size"`
+	Status              string `json:"status"`
+	// Message says why a server is failed. Empty otherwise.
+	Message   string        `json:"message,omitempty"`
+	Revision  int64         `json:"revision"`
+	Health    RuntimeHealth `json:"health"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
 	// Accelerator and the hourly price come from the catalog size the server
 	// was bought or resized to, so a GPU's cost stays on screen while it runs.
 	Accelerator      *provider.Accelerator `json:"accelerator,omitempty"`
@@ -133,11 +135,14 @@ type Operation struct {
 	Actions              []provider.InfrastructureAction `json:"actions"`
 	PublicIPv4           []string                        `json:"public_ipv4"`
 	HostKey              string                          `json:"host_key,omitempty"`
-	Enrolled             bool                            `json:"enrolled"`
-	BootstrapExpiresAt   time.Time                       `json:"bootstrap_expires_at"`
-	CreatedAt            time.Time                       `json:"created_at"`
-	ExpiresAt            time.Time                       `json:"expires_at"`
-	UpdatedAt            time.Time                       `json:"updated_at"`
+	// SSHPort is the port the server's bootstrap opened for Loomplane.
+	// Zero, on operations recorded before it, means 22.
+	SSHPort            int       `json:"ssh_port,omitempty"`
+	Enrolled           bool      `json:"enrolled"`
+	BootstrapExpiresAt time.Time `json:"bootstrap_expires_at"`
+	CreatedAt          time.Time `json:"created_at"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 	// Principal is private persisted approval identity, rechecked before new work.
 	Principal security.Principal `json:"-"`
 }
@@ -209,6 +214,11 @@ type Deps struct {
 	Audit                projects.Auditor
 	EnrollmentURL        string
 	AllowLocalEnrollment bool
+	// ManagedSSHPort is the port Loomplane reaches a new managed server's
+	// SSH on. Zero means 22. Another port is opened beside 22 when the
+	// server boots, for hosts that can't connect out to port 22, such as
+	// DigitalOcean App Platform.
+	ManagedSSHPort int
 	// Warn reports a failure the service works around, such as a price it
 	// couldn't save. Nil drops the report.
 	Warn func(string, error)
@@ -343,7 +353,7 @@ func (s *Service) checkServer(ctx context.Context, org, cloud, id string) (*Serv
 		return nil, err
 	}
 	if v.Status != "ready" && v.Status != "unhealthy" {
-		return nil, ErrConflict
+		return nil, notCheckable(v)
 	}
 	conn, raw, err := s.Connections.Credential(ctx, org, v.RuntimeConnectionID)
 	if err != nil {

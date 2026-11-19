@@ -502,3 +502,29 @@ func TestFromSource_rejectsPasskeySettings(t *testing.T) {
 		})
 	}
 }
+
+// LOOMPLANE_MANAGED_SSH_PORT reaches the config through config.yaml, and a
+// port out of range is refused at startup.
+func TestLoad_managedSSHPort(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err = os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+	c, err := Load(dir)
+	if err != nil || c.Clouds.ManagedSSHPort != 0 {
+		t.Fatalf("unset: port %d, %v", c.Clouds.ManagedSSHPort, err)
+	}
+	t.Setenv("LOOMPLANE_MANAGED_SSH_PORT", "2222")
+	if c, err = Load(dir); err != nil || c.Clouds.ManagedSSHPort != 2222 {
+		t.Fatalf("2222: port %d, %v", c.Clouds.ManagedSSHPort, err)
+	}
+	t.Setenv("LOOMPLANE_MANAGED_SSH_PORT", "70000")
+	if _, err = Load(dir); err == nil || !strings.Contains(err.Error(), "clouds.managed_ssh_port must be a TCP port") {
+		t.Fatalf("70000: %v", err)
+	}
+}

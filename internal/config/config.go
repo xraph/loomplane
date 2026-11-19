@@ -390,6 +390,10 @@ type CloudsConfig struct {
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
 	EnrollmentURL string
+	// ManagedSSHPort is the port Loomplane reaches the servers it creates on
+	// over SSH. Zero means 22. Set another, such as 2222, where Loomplane
+	// can't connect out to port 22: DigitalOcean App Platform blocks it.
+	ManagedSSHPort int
 	// GoogleEndpoint replaces every Google Cloud API host.
 	GoogleEndpoint string
 	// VercelEndpoint replaces Vercel's API.
@@ -547,6 +551,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.HTTPAddr, "http_addr")
 	r.str(&c.PublicURL, "public_url")
 	r.str(&c.Clouds.EnrollmentURL, "clouds.enrollment_url")
+	r.integer(&c.Clouds.ManagedSSHPort, "clouds.managed_ssh_port")
 	r.str(&c.SecretKey, "secret_key")
 
 	r.str(&c.Database.URL, "database.url")
@@ -731,6 +736,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Database.PoolSize < 0 {
 		errs = append(errs, errors.New("database.pool_size can't be negative"))
+	}
+	if c.Clouds.ManagedSSHPort < 0 || c.Clouds.ManagedSSHPort > 65535 {
+		errs = append(errs, errors.New("clouds.managed_ssh_port must be a TCP port from 1 to 65535, or 0 for 22"))
 	}
 	if !strings.HasPrefix(c.Identity.BasePath, "/") || c.Identity.BasePath == "/" {
 		errs = append(errs, fmt.Errorf("identity.base_path must be a path below /, got %q", c.Identity.BasePath))
