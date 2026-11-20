@@ -207,7 +207,9 @@ func (s *Service) managedSSHPort() int {
 // taken out again, leaving SSH as it was; enrollment then can't reach the
 // server and says so in Loomplane's log. Ubuntu 22.10 and later start SSH
 // from a socket whose ports come from sshd_config, so that socket is
-// rebuilt rather than the service restarted. An active ufw lets the port in.
+// rebuilt rather than the service restarted. Until someone first connects,
+// that leaves no /run/sshd, and sshd -t refuses every config without it, so
+// the script makes it first. An active ufw lets the port in.
 //
 // With onlyThere, the loomplane user can sign in on port alone, since a
 // firewall lets only Loomplane reach port and 22 stays open to everyone.
@@ -228,6 +230,7 @@ mkdir -p /etc/ssh/sshd_config.d
   echo 'Port PORT'`+match+`
 } > "$conf"
 grep -qsiE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config || sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+install -d -m 0755 /run/sshd
 if ! /usr/sbin/sshd -t; then
   rm -f "$conf"
   exit 1
