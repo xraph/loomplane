@@ -316,7 +316,7 @@ func TestDeploymentCapacityWaitRemainsActive(t *testing.T) {
 	if _, e := st.CreateDeployment(t.Context(), next); e == nil {
 		t.Fatal("database accepted a release over paused work")
 	}
-	preview, snapshot, sync := persistAssignmentPreview(t, clouds, "wait-replacement", "cloud", 0)
+	preview, snapshot, sync := persistDefaultCloudPreview(t, clouds, "wait-replacement", "cloud")
 	if _, e := clouds.Accept(t.Context(), preview, snapshot, sync, "wait-replacement"); !errors.Is(e, cloudprofiles.ErrBusy) {
 		t.Fatalf("paused allowed replacement: %v", e)
 	}

@@ -853,18 +853,19 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held, Only: loaded.only})
 	// A composed resource on one of the Cloud's targets is placed there too.
 	composed := composedResources(rev.Manifest, plan.Environment, s.kinds)
-	var assignment *cloudprofiles.Assignment
+	var assignment *cloudprofiles.ProjectCloud
 	// composedLookup says only composed resources asked for the Cloud.
 	composedLookup := false
 	if resolutionErr == nil && (needs.Explicit || needs.Fallback || len(composed) > 0) && s.cloudProfiles != nil {
 		composedLookup = !needs.Explicit && !needs.Fallback
-		assignment, resolutionErr = s.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+		// Every environment resolves through the project's default Cloud.
+		assignment, resolutionErr = s.cloudProfiles.ResolveCloud(ctx, plan.OrgID, plan.ProjectID, "")
 		// A revoked grant only matters to services that ask for the Cloud.
 		if !needs.Explicit && errors.Is(resolutionErr, cloudprofiles.ErrNotFound) {
 			assignment, resolutionErr = nil, nil
 		}
-		if resolutionErr == nil && assignment != nil && (assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID) {
-			resolutionErr = fmt.Errorf("cloud assignment is outside this organization, project or environment scope")
+		if resolutionErr == nil && assignment != nil && (assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID) {
+			resolutionErr = fmt.Errorf("the project's default Cloud is outside this organization or project")
 		}
 	}
 	intents := map[string]*CapacityIntent{}

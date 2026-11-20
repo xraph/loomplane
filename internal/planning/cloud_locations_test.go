@@ -10,7 +10,7 @@ import (
 )
 
 func TestCloudLocationLegacyTarget(t *testing.T) {
-	p := targetPlacement(&cloudprofiles.Assignment{}, cloudprofiles.Target{Name: "eu-independent"}, ConnectionOption{}, "", "", "")
+	p := targetPlacement(&cloudprofiles.ProjectCloud{}, cloudprofiles.Target{Name: "eu-independent"}, ConnectionOption{}, "", "", "")
 	raw, err := json.Marshal(p)
 	if err != nil {
 		t.Fatal(err)
@@ -18,7 +18,7 @@ func TestCloudLocationLegacyTarget(t *testing.T) {
 	if strings.Contains(string(raw), "location_id") || strings.Contains(string(raw), "managed_resource_id") {
 		t.Fatalf("legacy wire shape changed: %s", raw)
 	}
-	p = targetPlacement(&cloudprofiles.Assignment{}, cloudprofiles.Target{LocationID: "location_1", ManagedResourceID: "resource_1"}, ConnectionOption{}, "", "", "")
+	p = targetPlacement(&cloudprofiles.ProjectCloud{}, cloudprofiles.Target{LocationID: "location_1", ManagedResourceID: "resource_1"}, ConnectionOption{}, "", "", "")
 	if p.LocationID != "location_1" || p.ManagedResourceID != "resource_1" {
 		t.Fatal("explicit target membership lost")
 	}

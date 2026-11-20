@@ -24,13 +24,10 @@ it("adopts one environment while retaining effective defaults, unrelated entries
     { id: "p", name: "production" },
     { id: "s", name: "staging" },
   ] as Environment[]
-  const result = adoptServiceTarget(
-    original,
-    environments,
-    "production",
-    "web",
-    "frontend"
-  )
+  const result = adoptServiceTarget(original, "web", "frontend", {
+    environment: "production",
+    environments: environments,
+  })
   const settings = (m: Manifest, env: string) =>
     placementSettings(
       m,
@@ -68,13 +65,10 @@ it("preserves placement in saved overrides before an environment is registered",
       web: { source: "web", environments: { future: { port: 9000 } } },
     },
   }
-  const result = adoptServiceTarget(
-    manifest,
-    [{ name: "production" }] as Environment[],
-    "production",
-    "web",
-    "frontend"
-  )
+  const result = adoptServiceTarget(manifest, "web", "frontend", {
+    environment: "production",
+    environments: [{ name: "production" }] as Environment[],
+  })
   expect(
     placementSettings(
       result,
@@ -107,13 +101,14 @@ it("retains inherited endpoints when another environment adopts a target", () =>
       },
     },
   }
-  const result = adoptServiceTarget(
-    manifest,
-    [{ name: "production" }, { name: "staging" }] as Environment[],
-    "production",
-    "web",
-    "frontend"
-  )
+  const result = adoptServiceTarget(manifest, "web", "frontend", {
+    environment: "production",
+    environments: [
+      { name: "production" },
+      { name: "staging" },
+    ] as Environment[],
+  })
+
   expect(result.services!.web.environments.staging.endpoint).toEqual({
     hostname: "staging.example",
     host_port: 8080,
@@ -143,4 +138,70 @@ it("retains inherited endpoints when another environment adopts a target", () =>
       "staging"
     ).endpoint
   )
+})
+
+it("puts a service on a target in every environment, clearing environment placement", () => {
+  const original: Manifest = {
+    version: 1,
+    defaults: { provider: "vercel", region: "iad1" },
+    services: {
+      web: {
+        source: "apps/web",
+        target: "conn_a",
+        environments: {
+          staging: { provider: "cloud-run", region: "us-central1", port: 8080 },
+          preview: { cloud_tags: ["small"] },
+        },
+      },
+      api: { source: "cmd/api" },
+    },
+  }
+  const result = adoptServiceTarget(original, "web", "frontend")
+  const settings = (env: string) =>
+    placementSettings(
+      result,
+      {
+        section: "services",
+        name: "web",
+        kind: "",
+        entry: result.services!.web,
+      },
+      env
+    )
+  for (const env of ["production", "staging", "preview"])
+    expect(settings(env)).toMatchObject({
+      provider: "",
+      cloudTarget: "frontend",
+    })
+  // What an environment set besides placement stays.
+  expect(result.services!.web.environments).toEqual({
+    staging: { region: "us-central1", port: 8080 },
+  })
+  // Other entries keep the default they inherited.
+  expect(result.services!.api).toMatchObject({
+    provider: "vercel",
+    region: "iad1",
+  })
+  expect(original.services!.web.target).toBe("conn_a")
+})
+
+it("selects a target by tags in every environment", () => {
+  const result = adoptServiceTarget(
+    {
+      version: 1,
+      services: {
+        web: {
+          source: "web",
+          cloud_target: "old",
+          environments: { staging: { cloud_target: "edge" } },
+        },
+      },
+    },
+    "web",
+    { tags: ["eu", "web"] }
+  )
+  expect(result.services!.web).toEqual({
+    source: "web",
+    cloud_tags: ["eu", "web"],
+  })
 })

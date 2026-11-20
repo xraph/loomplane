@@ -290,9 +290,9 @@ type grantingStore struct {
 	grants int
 }
 
-func (g *grantingStore) SetProjectGrant(context.Context, string, string, string, []string, bool) (int64, error) {
+func (g *grantingStore) SetProjectGrant(_ context.Context, org, cloud, project string, targets []string, revoked bool) (*ProjectGrant, error) {
 	g.grants++
-	return int64(g.grants), nil
+	return &ProjectGrant{OrgID: org, CloudID: cloud, ProjectID: project, TargetIDs: targets, Revision: int64(g.grants), Revoked: revoked, Default: !revoked && g.grants == 1}, nil
 }
 func (g *grantingStore) GetProjectGrant(context.Context, string, string, string) (*ProjectGrant, error) {
 	return nil, ErrNotFound

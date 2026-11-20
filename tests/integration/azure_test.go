@@ -12,7 +12,6 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
 	"github.com/xraph/loomplane/internal/planning"
-	apiclient "github.com/xraph/loomplane/pkg/client"
 )
 
 // TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget connects an
@@ -119,19 +118,7 @@ func TestDeploy_anAPIOnAzureContainerAppsThroughACloudTarget(t *testing.T) {
 		cloudprofiles.CreateTargetInput{Name: "backend", Provider: "azure-container-apps", ConnectionID: conn.ID, Region: "westeurope"}, &target)
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets",
 		cloudprofiles.CreateTargetInput{Name: "data", Provider: "azure-database", ConnectionID: conn.ID, Region: "westeurope"}, &data)
-	var envs struct{ Environments []struct{ ID, Name string } }
-	c.must(http.StatusOK, http.MethodGet, base+"/environments", nil, &envs)
-	env := ""
-	for _, e := range envs.Environments {
-		if e.Name == "production" {
-			env = e.ID
-		}
-	}
-	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, base+"/environments/"+env+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
-	if got := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign-azure").ID); got.Status != cloudprofiles.SyncSucceeded {
-		t.Fatalf("assignment %+v", got)
-	}
+	makeDefaultCloudAPI(t, c, base, cloud.ID, "assign-azure")
 
 	// A manifest places a resource by its provider, not a Cloud target, so
 	// db names the data target's provider and region.

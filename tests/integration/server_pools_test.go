@@ -59,7 +59,7 @@ func newPoolFixture(t *testing.T) *poolFixture {
 	if err := clouds.CreateTarget(t.Context(), &cloudprofiles.Target{ID: "pool-target", OrgID: "org", ProjectID: "proj", CloudID: "cloud", Name: "shared", DisplayName: "Shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	for _, query := range []string{`INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1),('org','proj','stage','cloud',1)`, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('second','org','Second','second','ready','usr',now(),now())`, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('second-env','org','second','production','production',now(),now())`, `INSERT INTO loomplane_cloud_project_grants(org_id,cloud_id,project_id) VALUES('org','cloud','second')`, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','second','second-env','cloud',1)`} {
+	for _, query := range []string{defaultCloudSQL("org", "proj", "cloud"), `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('second','org','Second','second','ready','usr',now(),now())`, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('second-env','org','second','production','production',now(),now())`, `INSERT INTO loomplane_cloud_project_grants(org_id,cloud_id,project_id) VALUES('org','cloud','second')`, defaultCloudSQL("org", "second", "cloud")} {
 		if _, err := sql.Exec(t.Context(), query); err != nil {
 			t.Fatal(err)
 		}
@@ -73,14 +73,19 @@ func newPoolFixture(t *testing.T) *poolFixture {
 }
 func (f *poolFixture) request(env, name string) cloudinfra.PlacementRequest {
 	project := "proj"
-	if env == "second-env" {
+	switch env {
+	case "second-env":
 		project = "second"
+	case "side":
+		// A project of its own with no Cloud, so nothing reviewed on the
+		// Cloud reaches it.
+		project = "side"
 	}
 	return cloudinfra.PlacementRequest{OrgID: "org", ProjectID: project, EnvironmentID: env, CloudID: "cloud", TargetID: "pool-target", TargetRevision: 1, PoolID: "pool", Service: name, CPUMillis: 1000, MemoryBytes: 512 << 20, Replicas: 1, Architecture: "amd64"}
 }
 func (f *poolFixture) plan(t *testing.T, id string, r cloudinfra.PlacementRequest, p *cloudinfra.Placement) *planning.CloudPlacement {
 	t.Helper()
-	pin := &planning.CloudPlacement{Allocation: p.Allocation, CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, AssignmentRevision: 1, TargetID: "pool-target", TargetRevision: 1, TargetName: "shared", Provider: "server", ConnectionID: p.ConnectionID, AccountIdentity: connections.AccountIdentity("server", p.ConnectionID, map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}), PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes, GPUKind: p.GPUKind, GPUs: p.GPUs}
+	pin := &planning.CloudPlacement{Allocation: p.Allocation, CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, TargetID: "pool-target", TargetRevision: 1, TargetName: "shared", Provider: "server", ConnectionID: p.ConnectionID, AccountIdentity: connections.AccountIdentity("server", p.ConnectionID, map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}), PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes, GPUKind: p.GPUKind, GPUs: p.GPUs}
 	size := &manifest.Size{CPU: float64(r.CPUMillis) / 1000, Memory: int(r.MemoryBytes >> 20)}
 	if r.GPUs > 0 {
 		size.GPU = &manifest.GPU{Kind: r.GPUKind, Count: int(r.GPUs)}

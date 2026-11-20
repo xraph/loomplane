@@ -13,9 +13,9 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-func intentFixture() (*Plan, *cloudprofiles.Assignment, cloudprofiles.Target, cloudinfra.PlacementRequest, *cloudinfra.CapacityPolicy) {
+func intentFixture() (*Plan, *cloudprofiles.ProjectCloud, cloudprofiles.Target, cloudinfra.PlacementRequest, *cloudinfra.CapacityPolicy) {
 	p := &Plan{ID: "plan", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Sources: []PlanSource{{Alias: "app", CommitSHA: "commit"}}}
-	a := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", Revision: 2, CloudRevision: 3, GrantRevision: 4}
+	a := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 3, GrantRevision: 4}
 	target := cloudprofiles.Target{ID: "target", OrgID: "org", CloudID: "cloud", PoolID: "pool", Revision: 5, Provider: "server"}
 	req := cloudinfra.PlacementRequest{PlanID: p.ID, OrgID: p.OrgID, ProjectID: p.ProjectID, EnvironmentID: p.EnvironmentID, CloudID: a.CloudID, TargetID: target.ID, PoolID: target.PoolID, Service: "web", CPUMillis: 1000, MemoryBytes: 512 << 20, Replicas: 1}
 	policy := &cloudinfra.CapacityPolicy{Enabled: true, Revision: 1, Pools: []cloudinfra.PoolExpansionPolicy{{PoolID: "pool", ConnectionID: "provider", Region: "region", Architecture: "amd64", Image: "image", AllowedSizes: []string{"size"}, MaxServers: 3}}}
@@ -27,7 +27,7 @@ func TestCapacityIntentApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommitSHA != "commit" || got.Demand.Resources.CPUMillis != 1000 || got.TemplateHash == "" || got.Demand.IntentHash == "" || got.AssignmentRevision != 2 {
+	if got.CommitSHA != "commit" || got.Demand.Resources.CPUMillis != 1000 || got.TemplateHash == "" || got.Demand.IntentHash == "" || got.GrantRevision != a.GrantRevision {
 		t.Fatalf("unbounded intent: %+v", got)
 	}
 	policy.Enabled = false
@@ -160,6 +160,9 @@ func TestStoredCPUIntentDigestUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh.ProviderPin = cloudinfra.CapacityTemplatePin{AccountID: "account", ConnectionGeneration: 1}
+	// The stored intent predates per-project Clouds and pinned an
+	// assignment revision; a fresh one leaves it zero.
+	fresh.AssignmentRevision = 2
 	fresh.Demand.IntentHash = ""
 	if hash, hashErr := Digest(fresh); hashErr != nil || hash != saved {
 		t.Fatalf("fresh CPU intent digest moved: %s, want %s (%v)", hash, saved, hashErr)

@@ -331,13 +331,13 @@ func TestManagedClusterTargetAttachmentScope(t *testing.T) {
 	}
 	for _, sql := range []string{
 		`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('env','org','proj','production','production',now(),now())`,
-		`INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`,
+		defaultCloudSQL("org", "proj", "cloud"),
 	} {
 		if _, err := db.Exec(t.Context(), sql); err != nil {
 			t.Fatal(err)
 		}
 	}
-	assignment, err := clouds.Resolve(t.Context(), "org", "proj", "env")
+	assignment, err := clouds.ResolveCloud(t.Context(), "org", "proj", "")
 	if err != nil || len(assignment.Targets) != 1 {
 		t.Fatalf("active target missing: %v %v", assignment, err)
 	}
@@ -346,7 +346,7 @@ func TestManagedClusterTargetAttachmentScope(t *testing.T) {
 	if err = store.SaveRuntimeAttachment(t.Context(), attachment, 1); err != nil {
 		t.Fatal(err)
 	}
-	assignment, err = clouds.Resolve(t.Context(), "org", "proj", "env")
+	assignment, err = clouds.ResolveCloud(t.Context(), "org", "proj", "")
 	if err != nil || len(assignment.Targets) != 0 {
 		t.Fatalf("deleted attachment remains eligible: %v %v", assignment, err)
 	}

@@ -20,7 +20,6 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
-	apiclient "github.com/xraph/loomplane/pkg/client"
 )
 
 func TestServerPoolSizingPublicPlanApproval(t *testing.T) {
@@ -92,11 +91,7 @@ func TestServerPoolSizingPublicPlanApproval(t *testing.T) {
 			if env == "" {
 				t.Fatal("production environment missing")
 			}
-			var preview cloudprofiles.Preview
-			c.must(http.StatusOK, http.MethodPost, base+"/environments/"+env+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
-			if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "sizing-assignment").ID); result.Status != cloudprofiles.SyncSucceeded {
-				t.Fatalf("assignment: %+v", result)
-			}
+			makeDefaultCloudAPI(t, c, base, cloud.ID, "sizing-assignment")
 			// A pooled host can't build untrusted source (build isolation), so
 			// the service ships a pinned image and the test stays on sizing.
 			manifest := fmt.Sprintf("version: 1\nservices:\n  api:\n    source: go:services/api\n    cloud_target: %s\n    public: false\n    build: {image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab}\n%signore:\n  resources: [postgres, redis]\n", target.Name, tc.size)

@@ -33,7 +33,7 @@ type locationCapacityReview struct {
 
 type locationEvidenceStore interface {
 	LocationPolicy(context.Context, string, string) (*cloudprofiles.LocationPolicy, error)
-	LocationCandidate(context.Context, *Plan, *cloudprofiles.Assignment, cloudprofiles.Target, manifest.Settings, cloudinfra.PlacementRequest, cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error)
+	LocationCandidate(context.Context, *Plan, *cloudprofiles.ProjectCloud, cloudprofiles.Target, manifest.Settings, cloudinfra.PlacementRequest, cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error)
 }
 
 func (s *PgStore) LocationPolicy(ctx context.Context, org, cloud string) (*cloudprofiles.LocationPolicy, error) {
@@ -42,7 +42,7 @@ func (s *PgStore) LocationPolicy(ctx context.Context, org, cloud string) (*cloud
 
 // LocationCandidate loads authoritative location and scheduler evidence. Pool
 // previews retain the same cumulative workload accounting as ordinary planning.
-func (s *PgStore) LocationCandidate(ctx context.Context, plan *Plan, a *cloudprofiles.Assignment, t cloudprofiles.Target, set manifest.Settings, request cloudinfra.PlacementRequest, cumulative cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
+func (s *PgStore) LocationCandidate(ctx context.Context, plan *Plan, a *cloudprofiles.ProjectCloud, t cloudprofiles.Target, set manifest.Settings, request cloudinfra.PlacementRequest, cumulative cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
 	c := PlacementCandidate{TargetID: t.ID, LocationID: t.LocationID, OrgID: t.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Provider: t.Provider, Runtime: t.Runtime, TargetRevision: t.Revision, GrantRevision: a.GrantRevision, Granted: true}
 	if t.Runtime == platformRuntime {
 		// Location policy doesn't apply to Loomplane Cloud, which chooses
@@ -191,7 +191,7 @@ func (s *PgStore) LocationCandidate(ctx context.Context, plan *Plan, a *cloudpro
 	return c, nil
 }
 
-func (s *Service) selectLocation(ctx context.Context, plan *Plan, a *cloudprofiles.Assignment, set manifest.Settings, name string, bindings []*Binding, options []ConnectionOption, planned []cloudinfra.PlannedPlacement, repo string, prior map[string]locationSelection, reviewed *locationCapacityReview, requirements locationRequirements) (*cloudprofiles.Target, locationSelection, error) {
+func (s *Service) selectLocation(ctx context.Context, plan *Plan, a *cloudprofiles.ProjectCloud, set manifest.Settings, name string, bindings []*Binding, options []ConnectionOption, planned []cloudinfra.PlannedPlacement, repo string, prior map[string]locationSelection, reviewed *locationCapacityReview, requirements locationRequirements) (*cloudprofiles.Target, locationSelection, error) {
 	selected := locationSelection{}
 	reader, ok := s.store.(locationEvidenceStore)
 	if !ok || a == nil {

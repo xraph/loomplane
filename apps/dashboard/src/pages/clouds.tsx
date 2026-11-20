@@ -714,21 +714,14 @@ function NewCloudDialog({
 }
 
 /**
- * CloudsWorkspace is a project's Cloud tab: pick one of its environments and
- * a Cloud, edit targets, review assignments and syncs. Environments belong to
- * a project, so this is the one place an environment takes a Cloud.
+ * CloudsWorkspace is a project's Clouds tab: the Clouds granted to it, its
+ * default Cloud, targets, where each service runs, and syncs. None of it is
+ * per environment.
  */
-export function CloudsWorkspace({
-  projectId,
-  environment,
-}: {
-  projectId: string
-  /** The environment to open on by name, from ?environment=. */
-  environment?: string
-}) {
+export function CloudsWorkspace({ projectId }: { projectId: string }) {
   const { can } = useOrganization()
   return can("cloud_account:read") ? (
-    <CloudWorkspace projectId={projectId} environment={environment} />
+    <CloudWorkspace projectId={projectId} />
   ) : (
     <EmptyClouds
       kind="notice"

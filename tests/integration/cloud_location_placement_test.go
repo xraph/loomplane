@@ -175,7 +175,7 @@ func TestCloudLocationPlacementPolicyPersistence(t *testing.T) {
 func TestCloudLocationPlacementAcceptanceGrantChanged(t *testing.T) {
 	f := newSyncFixture(t)
 	ctx := t.Context()
-	a, err := f.store.Resolve(ctx, "org", "proj", "env")
+	a, err := f.store.ResolveCloud(ctx, "org", "proj", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestCloudLocationPlacementEvidenceAndRevalidation(t *testing.T) {
 	if err := st.SaveLocation(ctx, &l, 1, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, `UPDATE loomplane_cloud_targets SET location_id='location',region='iad1',revision=revision+1 WHERE id='target'; INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+	if _, err := conn.Exec(ctx, `UPDATE loomplane_cloud_targets SET location_id='location',region='iad1',revision=revision+1 WHERE id='target'; `+defaultCloudSQL("org", "proj", "cloud")); err != nil {
 		t.Fatal(err)
 	}
 	svc := cloudprofiles.NewService(cloudprofiles.Deps{Store: st, Authz: &infraAuth{}, Connections: &syncAccounts{store: connections.NewPgStore(db)}, Providers: providers.Registry()})
@@ -215,7 +215,7 @@ func TestCloudLocationPlacementEvidenceAndRevalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignment, err := st.Resolve(ctx, "org", "proj", "env")
+	assignment, err := st.ResolveCloud(ctx, "org", "proj", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestCloudLocationPlacementCapacityStalePolicyAndGrant(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			f, _, in, _ := clusterWorkloadFixture(t)
 			ctx := t.Context()
-			a, err := f.clouds.Resolve(ctx, "org", "proj", "env")
+			a, err := f.clouds.ResolveCloud(ctx, "org", "proj", "cloud")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -302,7 +302,7 @@ func TestCloudLocationPlacementCapacityStalePolicyAndGrant(t *testing.T) {
 func TestCloudLocationPlacementQualifiedClusterCPU(t *testing.T) {
 	f, _, plan, _, _ := managedDemandFixture(t)
 	ctx := t.Context()
-	a, err := f.clouds.Resolve(ctx, "org", "proj", "env")
+	a, err := f.clouds.ResolveCloud(ctx, "org", "proj", "cloud")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestCloudLocationPlacementPoolStickyAndCumulative(t *testing.T) {
 	if err = f.plans.PutBinding(ctx, &planning.Binding{ID: "binding-location", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Subject: planning.ServiceSubject, Name: "api", Provider: "server", ConnectionID: placed.ConnectionID, Config: raw, PlanID: "applied", CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := f.clouds.Resolve(ctx, "org", "proj", "env")
+	a, err := f.clouds.ResolveCloud(ctx, "org", "proj", "cloud")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -269,18 +269,18 @@ func (edgeClouds) All(context.Context, string) ([]*connections.Connection, error
 	return out, nil
 }
 
-// failingResolver can't read the environment's assignment.
+// failingResolver can't read the project's Clouds.
 type failingResolver struct{}
 
-func (failingResolver) Resolve(context.Context, string, string, string) (*cloudprofiles.Assignment, error) {
-	return nil, errors.New("cloud assignments are unavailable")
+func (failingResolver) ResolveCloud(context.Context, string, string, string) (*cloudprofiles.ProjectCloud, error) {
+	return nil, errors.New("project Clouds are unavailable")
 }
 
 // edgeService plans doc as a catalog plan in an environment assigned
 // cloud_1, whose one target is reached through targets.
 func edgeService(t *testing.T, doc string, targets ...cloudprofiles.Target) (*Service, *Plan, *targetResolver) {
 	t.Helper()
-	resolver := &targetResolver{assignment: &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud_1", CloudRevision: 2, Revision: 3, GrantRevision: 4, Targets: targets}}
+	resolver := &targetResolver{assignment: &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud_1", CloudRevision: 2, GrantRevision: 4, Targets: targets}}
 	service := NewService(Deps{
 		Store: catalogStore{}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}}, Providers: providers.Registry(),
 		Connections: edgeClouds{}, Kinds: recipestest.Registry(t), CloudProfiles: resolver,
@@ -300,7 +300,7 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 	if resolver.calls != 1 {
 		t.Fatalf("resolved the assignment %d times", resolver.calls)
 	}
-	want := CloudPlacement{GrantRevision: 4, CloudID: "cloud_1", CloudRevision: 2, AssignmentRevision: 3, TargetID: "t1", TargetRevision: 5, TargetName: "edge-host", Provider: "server", ConnectionID: targetA,
+	want := CloudPlacement{GrantRevision: 4, CloudID: "cloud_1", CloudRevision: 2, TargetID: "t1", TargetRevision: 5, TargetName: "edge-host", Provider: "server", ConnectionID: targetA,
 		AccountIdentity: connections.AccountIdentity(connections.Server, "", edgeDetails(targetA)), RegionSource: "default"}
 	if want.AccountIdentity == "" {
 		t.Fatal("fixture account isn't verified")
@@ -399,7 +399,7 @@ func TestCreatePlanReportsACloudLookupFailureOnTheComposedResource(t *testing.T)
 	if result.Executable || len(result.Problems) != 1 {
 		t.Fatalf("lookup failure: %+v", result)
 	}
-	if f := result.Problems[0]; f.Code != "cloud-target" || f.Subject != ResourceSubject || f.Name != "edge" || f.Path != "resources.edge.target" || f.Message != "cloud assignments are unavailable" {
+	if f := result.Problems[0]; f.Code != "cloud-target" || f.Subject != ResourceSubject || f.Name != "edge" || f.Path != "resources.edge.target" || f.Message != "project Clouds are unavailable" {
 		t.Fatalf("finding: %+v", f)
 	}
 

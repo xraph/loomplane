@@ -13,7 +13,7 @@ import (
 
 func TestCloudMetadataRetainedSyncGuard(t *testing.T) {
 	st, _, _ := cloudSyncDatabase(t)
-	p, snap, s := persistAssignmentPreview(t, st, "metadata", "cloud", 0)
+	p, snap, s := persistDefaultCloudPreview(t, st, "metadata", "cloud")
 	accepted, err := st.Accept(t.Context(), p, snap, s, "metadata")
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestCloudMetadataAcceptanceRace(t *testing.T) {
 		for i := range 5 {
 			t.Run(fmt.Sprintf("%s/%d", kind, i), func(t *testing.T) {
 				st, conn, _ := cloudSyncDatabase(t)
-				p, snap, s := persistAssignmentPreview(t, st, "race", "cloud", 0)
+				p, snap, s := persistDefaultCloudPreview(t, st, "race", "cloud")
 				snap.ProfileRevisions = map[string]int64{"cloud": 1}
 				snap.TargetRevisions = map[string]int64{"target": 1}
 				target, err := st.GetTarget(t.Context(), "org", "proj", "cloud", "target")

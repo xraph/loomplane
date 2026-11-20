@@ -501,18 +501,18 @@ func (s *Service) DeleteTarget(ctx context.Context, p security.Principal, projec
 	return nil
 }
 
-// EnvironmentCloud returns the assignment and generation, including tombstones.
-func (s *Service) EnvironmentCloud(ctx context.Context, p security.Principal, projectID, environmentID string) (*Assignment, int64, error) {
+// DefaultCloud returns the project's default Cloud as the project sees it,
+// or nil when it has none. Its GrantRevision is the token a reviewed change
+// of the default compares against.
+func (s *Service) DefaultCloud(ctx context.Context, p security.Principal, projectID string) (*ProjectCloud, error) {
 	if err := s.scope(ctx, p, projectID, security.CloudAccountRead); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	reader, ok := s.store.(interface {
-		EnvironmentCloud(context.Context, string, string, string) (*Assignment, int64, error)
-	})
+	resolver, ok := s.store.(Resolver)
 	if !ok {
-		return nil, 0, fmt.Errorf("%w: assignment storage unavailable", ErrInvalid)
+		return nil, fmt.Errorf("%w: Cloud resolution unavailable", ErrInvalid)
 	}
-	return reader.EnvironmentCloud(ctx, p.OrgID, projectID, environmentID)
+	return resolver.ResolveCloud(ctx, p.OrgID, projectID, "")
 }
 
 // refusePlatformProvider refuses a Loomplane Cloud target or default on a

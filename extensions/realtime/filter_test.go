@@ -41,7 +41,7 @@ func TestFilter_requiresDeploymentReadForLogsAndLimitsSelectedProjects(t *testin
 }
 
 func TestFilterCloudEventsRequireTheirResourcePermissions(t *testing.T) {
-	input := []store.Event{{ProjectID: "proj_a", Type: "cloud.updated"}, {ProjectID: "proj_a", Type: "cloud_target.updated"}, {ProjectID: "proj_a", Type: "environment_cloud.updated"}, {ProjectID: "proj_a", Type: "cloud_sync.updated"}, {ProjectID: "proj_b", Type: "cloud_sync.updated"}}
+	input := []store.Event{{ProjectID: "proj_a", Type: "cloud.updated"}, {ProjectID: "proj_a", Type: "cloud_target.updated"}, {ProjectID: "proj_a", Type: "project_cloud.updated"}, {ProjectID: "proj_a", Type: "cloud_sync.updated"}, {ProjectID: "proj_b", Type: "cloud_sync.updated"}}
 	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
 	sub := Subscription{ProjectIDs: []string{"proj_a"}}
 	for denied, want := range map[security.Permission]int{security.CloudAccountRead: 1, security.DeploymentRead: 3} {

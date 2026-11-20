@@ -139,7 +139,7 @@ Recovery commands that wait take `--wait` and `--timeout` (45 minutes by default
 | Command | What it does |
 |---|---|
 | `clouds [PROJECT] [--organization]`, `clouds create`, `show`, `update`, `delete` | Manage Clouds. With `--organization` no project argument is needed |
-| `clouds assignment`, `assign`, `switch-default` | Assign a Cloud to an environment and change its default placement |
+| `clouds default`, `make-default`, `switch-default` | Show or change the project's default Cloud, and change a Cloud's default placement |
 | `cloud-targets`, `show`, `create`, `update`, `delete`, `switch` | Manage targets within a Cloud |
 | `cloud-grants CLOUD`, `grant CLOUD PROJECT [--targets IDS]`, `revoke CLOUD PROJECT` | Project access to a Cloud |
 | `cloud-syncs`, `show`, `wait`, `retry`, `revert`, `routing`, `apply` | Follow and recover a placement change |

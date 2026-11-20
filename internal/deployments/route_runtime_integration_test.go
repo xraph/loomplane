@@ -163,8 +163,8 @@ func (releaseCloudAuthority) ValidateCloudSyncSourceCleanup(context.Context, *pl
 
 type retainedRuntimeCloud struct{ *cloudResolver }
 
-func (c retainedRuntimeCloud) RetainedAssignment(ctx context.Context, org, project, env string) (*cloudprofiles.Assignment, error) {
-	return c.Resolve(ctx, org, project, env)
+func (c retainedRuntimeCloud) RetainedCloud(ctx context.Context, org, project, cloud string) (*cloudprofiles.ProjectCloud, error) {
+	return c.ResolveCloud(ctx, org, project, cloud)
 }
 
 func testRetainedRuntime(t *testing.T, shared bool) {
@@ -194,7 +194,7 @@ func testRetainedRuntime(t *testing.T, shared bool) {
 	cfg := &planning.ServiceConfig{Provider: "server", Target: "runtime", Service: "api", Port: 80, Workload: provider.Worker, BuildTarget: &planning.BuildTarget{Image: image}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud"}}
 	conn := &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Status: "ready", Account: "fixture", Details: map[string]string{"docker_id": client.Config.Details["docker_id"]}}
 	cfg.TargetSettings = planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)
-	cfg.CloudPlacement = &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "runtime", Provider: "server", ConnectionID: "runtime", AccountIdentity: connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details)}
+	cfg.CloudPlacement = &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "runtime", Provider: "server", ConnectionID: "runtime", AccountIdentity: connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details)}
 	job := &Job{Deployment: &Deployment{ID: "source-deployment", StartedBy: "usr", PlanID: "source", OrgID: "org", ProjectID: "proj", EnvironmentID: "env"}, Plan: &planning.Plan{ID: "source"}, Connection: &connections.Connection{ID: "runtime"}, Action: planning.Action{ID: "service:api", Name: "api", Subject: planning.ServiceSubject, Provider: "server", ConnectionID: "runtime", Service: cfg}, Progress: func(string, string) {}}
 	var checkpoint []byte
 	job.Checkpoint = func(raw []byte) error { checkpoint = append([]byte(nil), raw...); return nil }
@@ -258,7 +258,7 @@ func testRetainedRuntime(t *testing.T, shared bool) {
 		consumer.Replaced = nil
 		plans.bindings["service:consumer"] = &consumer
 		runner.cloudSyncAuth = releaseCloudAuthority{}
-		runner.cloudProfiles = retainedRuntimeCloud{&cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "runtime", Provider: "server", ConnectionID: "runtime", Revision: 1}}}}}
+		runner.cloudProfiles = retainedRuntimeCloud{&cloudResolver{assignment: &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "proj", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "runtime", Provider: "server", ConnectionID: "runtime", Revision: 1}}}}}
 		finalize = func() error {
 			if routeErr := runner.ReconcileCloudPlanRoutes(ctx, "org", plan.ID, nil, nil); routeErr != nil {
 				return routeErr

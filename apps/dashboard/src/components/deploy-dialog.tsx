@@ -408,10 +408,7 @@ function DeployScreen({
     query: { environment },
   })
   const scope = useDeploymentScope(project.id, environment)
-  const ctx = usePlacementContext(
-    project.id,
-    environments.find((e) => e.name === environment)?.id
-  )
+  const ctx = usePlacementContext(project.id)
   const manifest = current.data?.manifest
   const graph = view.data?.graph
   const rows =

@@ -39,7 +39,7 @@ func TestSharedCloudGrantIsolationAndProjectRemoval(t *testing.T) {
 		}
 	}
 	grants, ok := any(st).(interface {
-		SetProjectGrant(context.Context, string, string, string, []string, bool) (int64, error)
+		SetProjectGrant(context.Context, string, string, string, []string, bool) (*cloudprofiles.ProjectGrant, error)
 	})
 	if !ok {
 		t.Fatal("organization Cloud grant persistence is missing")
@@ -47,9 +47,10 @@ func TestSharedCloudGrantIsolationAndProjectRemoval(t *testing.T) {
 	if _, err := st.GetProfile(ctx, "org", "second", "cloud"); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Fatalf("ungranted Cloud: %v", err)
 	}
-	revision, err := grants.SetProjectGrant(ctx, "org", "cloud", "second", []string{"target"}, false)
-	if err != nil || revision != 1 {
-		t.Fatalf("grant: %d %v", revision, err)
+	// The project's first grant becomes its default Cloud.
+	grant, err := grants.SetProjectGrant(ctx, "org", "cloud", "second", []string{"target"}, false)
+	if err != nil || grant.Revision != 1 || !grant.Default {
+		t.Fatalf("grant: %+v %v", grant, err)
 	}
 	if _, err = st.GetTarget(ctx, "org", "second", "cloud", "target"); err != nil {
 		t.Fatal(err)
@@ -73,23 +74,26 @@ func TestSharedCloudGrantIsolationAndProjectRemoval(t *testing.T) {
 	if _, err = grants.SetProjectGrant(ctx, "org", "cloud", "foreign", nil, false); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Fatalf("cross organization grant: %v", err)
 	}
-	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','second','second-env','cloud',1)`); err != nil {
-		t.Fatal(err)
+	assignment, err := st.ResolveCloud(ctx, "org", "second", "")
+	if err != nil || assignment == nil || assignment.CloudID != "cloud" || !assignment.Default || len(assignment.Targets) != 1 {
+		t.Fatalf("shared default Cloud: %+v %v", assignment, err)
 	}
-	assignment, err := st.Resolve(ctx, "org", "second", "second-env")
-	if err != nil || assignment == nil || len(assignment.Targets) != 1 {
-		t.Fatalf("shared assignment: %+v %v", assignment, err)
+	grant, err = grants.SetProjectGrant(ctx, "org", "cloud", "second", nil, true)
+	if err != nil || grant.Revision != 2 || grant.Default {
+		t.Fatalf("revoke: %+v %v", grant, err)
 	}
-	revision, err = grants.SetProjectGrant(ctx, "org", "cloud", "second", nil, true)
-	if err != nil || revision != 2 {
-		t.Fatalf("revoke: %d %v", revision, err)
-	}
-	if _, err = st.Resolve(ctx, "org", "second", "second-env"); !errors.Is(err, cloudprofiles.ErrNotFound) {
+	if _, err = st.ResolveCloud(ctx, "org", "second", "cloud"); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Fatalf("revoked placement resolved: %v", err)
 	}
-	var count int
-	if err = conn.QueryRow(ctx, `SELECT count(*) FROM loomplane_cloud_assignments WHERE project_id='second'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("revocation removed assignment: %d %v", count, err)
+	if assignment, err = st.ResolveCloud(ctx, "org", "second", ""); err != nil || assignment != nil {
+		t.Fatalf("revoked grant stayed the default: %+v %v", assignment, err)
+	}
+	// Revocation keeps the grant row, so retained cleanup still reaches it.
+	if kept, keptErr := st.GetProjectGrant(ctx, "org", "cloud", "second"); keptErr != nil || !kept.Revoked || kept.Default || kept.Revision != 2 {
+		t.Fatalf("revocation removed the grant: %+v %v", kept, keptErr)
+	}
+	if retained, retainedErr := st.RetainedCloud(ctx, "org", "second", "cloud"); retainedErr != nil || retained == nil || retained.CloudID != "cloud" {
+		t.Fatalf("revocation lost the retained Cloud: %+v %v", retained, retainedErr)
 	}
 	if _, err = conn.Exec(ctx, `DELETE FROM loomplane_projects WHERE id='proj'`); err != nil {
 		t.Fatal(err)
@@ -110,10 +114,11 @@ func TestSharedCloudPreviewParticipantsAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.SetProjectGrant(ctx, "org", "cloud", "second", []string{"target"}, false); err != nil {
-		t.Fatal(err)
+	// The second project's first grant makes the Cloud its default.
+	if grant, err := st.SetProjectGrant(ctx, "org", "cloud", "second", []string{"target"}, false); err != nil || !grant.Default {
+		t.Fatalf("grant: %+v %v", grant, err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1),('org','second','second-env','cloud',1)`); err != nil {
+	if _, err := conn.Exec(ctx, defaultCloudSQL("org", "proj", "cloud")); err != nil {
 		t.Fatal(err)
 	}
 	service := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: &syncAccounts{store: connections.NewPgStore(db)}, Providers: providers.Registry(), Authz: &syncAuth{}})
@@ -122,7 +127,8 @@ func TestSharedCloudPreviewParticipantsAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Environments) != 2 || preview.Environments[0].ProjectID != "proj" || preview.Environments[1].ProjectID != "second" {
+	// Every environment of each project whose default the Cloud is takes part.
+	if len(preview.Environments) != 3 || preview.Environments[0].EnvironmentID != "env" || preview.Environments[1].EnvironmentID != "stage" || preview.Environments[2].ProjectID != "second" {
 		t.Fatalf("participants: %+v", preview.Environments)
 	}
 	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "second", []string{"target"}, false); err != nil {
@@ -139,11 +145,17 @@ func TestSharedCloudPreviewParticipantsAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, assignErr := conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','stage','cloud',1)`); assignErr == nil || !strings.Contains(assignErr.Error(), "unfinished migration") {
+	// No project can make the Cloud its default, and so join the change,
+	// while the accepted change is unfinished.
+	if _, assignErr := conn.Exec(ctx, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('third','org','Third','third','ready','usr',now(),now())`); assignErr != nil {
+		t.Fatal(assignErr)
+	}
+	if _, assignErr := conn.Exec(ctx, defaultCloudSQL("org", "third", "cloud")); assignErr == nil || !strings.Contains(assignErr.Error(), "unfinished migration") {
 		t.Fatalf("new participant joined accepted sync: %v", assignErr)
 	}
 	_, snapshot, err := st.GetSync(ctx, "org", "", sync.ID)
-	if err != nil || !snapshot.Shared || len(snapshot.Grants) != 2 {
+	// One grant pin per participant environment.
+	if err != nil || !snapshot.Shared || len(snapshot.Grants) != 3 {
 		t.Fatalf("stored scope: %+v %v", snapshot, err)
 	}
 	for _, env := range []struct{ project, id string }{{"proj", "env"}, {"second", "second-env"}} {
@@ -165,7 +177,7 @@ func TestSharedCloudPreviewParticipantsAndRevocation(t *testing.T) {
 func TestSharedCloudLegacySyncScope(t *testing.T) {
 	st, _, _ := cloudSyncDatabase(t)
 	ctx := t.Context()
-	p, snapshot, sync := persistAssignmentPreview(t, st, "legacy", "cloud", 0)
+	p, snapshot, sync := persistDefaultCloudPreview(t, st, "legacy", "cloud")
 	accepted, err := st.Accept(ctx, p, snapshot, sync, "legacy")
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +340,7 @@ func TestSharedCloudProjectCannotManageSharedInfrastructure(t *testing.T) {
 	if _, err := service.PreviewCloudChange(t.Context(), actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"}); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("project member changed shared target: %v", err)
 	}
-	if _, err := service.PreviewCloudChange(t.Context(), actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", EnvironmentID: "env", Revision: 0}); err != nil {
+	if _, err := service.PreviewCloudChange(t.Context(), actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", ProjectDefault: true, Revision: 0}); err != nil {
 		t.Fatalf("project release authority rejected: %v", err)
 	}
 }
@@ -347,46 +359,44 @@ func TestSharedCloudRevokedPreviewKeepsTargetsPrivate(t *testing.T) {
 	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", []string{"target"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+	if _, err = conn.Exec(ctx, defaultCloudSQL("org", "proj", "cloud")); err != nil {
+		t.Fatal(err)
+	}
+	_, grantRevision, err := st.DefaultCloud(ctx, "org", "proj")
+	if err != nil {
 		t.Fatal(err)
 	}
 	service := planning.NewService(planning.Deps{Store: planning.NewPgStore(db), Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: &syncAccounts{store: connections.NewPgStore(db)}, Providers: providers.Registry(), Authz: sharedProjectAuthorizer{}})
 	actor := security.Principal{OrgID: "org", UserID: "developer"}
-	authorizedPreview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
+	authorizedPreview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{ProjectDefault: true, Revision: grantRevision})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorizedPreview.BeforeAssignment == nil || len(authorizedPreview.BeforeAssignment.Targets) != 1 || authorizedPreview.BeforeAssignment.Targets[0].ID != "target" {
-		t.Fatalf("allowed preview target missing: %+v", authorizedPreview.BeforeAssignment)
+	if authorizedPreview.BeforeCloud == nil || len(authorizedPreview.BeforeCloud.Targets) != 1 || authorizedPreview.BeforeCloud.Targets[0].ID != "target" {
+		t.Fatalf("allowed preview target missing: %+v", authorizedPreview.BeforeCloud)
 	}
 	if _, err = st.SetProjectGrant(ctx, "org", "cloud", "proj", nil, true); err != nil {
 		t.Fatal(err)
 	}
-	preview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
-	if err != nil {
-		t.Fatal(err)
+	// Revocation ended the default, and a revoked Cloud can't become one.
+	if _, err = service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: "cloud", Revision: 0}); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Fatalf("revoked Cloud reviewed as the default: %v", err)
 	}
 	check := func(preview *cloudprofiles.Preview) {
 		t.Helper()
-		if preview.BeforeAssignment == nil || preview.BeforeAssignment.CloudID != "cloud" {
-			t.Fatalf("retained assignment reference missing: %+v", preview.BeforeAssignment)
+		if preview.BeforeCloud == nil || preview.BeforeCloud.CloudID != "cloud" {
+			t.Fatalf("retained Cloud reference missing: %+v", preview.BeforeCloud)
 		}
-		if len(preview.BeforeAssignment.Targets) != 0 {
-			t.Errorf("revoked preview exposed target configurations: %+v", preview.BeforeAssignment.Targets)
+		if len(preview.BeforeCloud.Targets) != 0 {
+			t.Errorf("revoked preview exposed target configurations: %+v", preview.BeforeCloud.Targets)
 		}
 	}
-	check(preview)
-	stored, err := service.CloudPreview(ctx, actor, "proj", preview.ID)
+	stored, err := service.CloudPreview(ctx, actor, "proj", authorizedPreview.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	check(stored)
-	stored, err = service.CloudPreview(ctx, actor, "proj", authorizedPreview.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	check(stored)
-	retained, err := st.RetainedAssignment(ctx, "org", "proj", "env")
+	retained, err := st.RetainedCloud(ctx, "org", "proj", "cloud")
 	if err != nil || len(retained.Targets) != 2 {
 		t.Fatalf("private retained comparison state lost: %+v %v", retained, err)
 	}
@@ -589,14 +599,14 @@ func TestSharedCloudPreviewDefaultFollowsCurrentGrant(t *testing.T) {
 	if _, err := conn.Exec(ctx, `UPDATE loomplane_cloud_profiles SET default_provider='vercel',default_connection_id='old',default_region='private-region',revision=revision+1 WHERE id='cloud'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+	if _, err := conn.Exec(ctx, defaultCloudSQL("org", "proj", "cloud")); err != nil {
 		t.Fatal(err)
 	}
-	assignment, err := st.RetainedAssignment(ctx, "org", "proj", "env")
+	assignment, err := st.RetainedCloud(ctx, "org", "proj", "cloud")
 	if err != nil {
 		t.Fatal(err)
 	}
-	preview := &cloudprofiles.Preview{ID: "default-review", OrgID: "org", ProjectID: "proj", Revision: "immutable-review", BeforeAssignment: assignment, AfterAssignment: assignment, Input: cloudprofiles.ChangeInput{EnvironmentID: "env"}, CreatedAt: time.Now().UTC()}
+	preview := &cloudprofiles.Preview{ID: "default-review", OrgID: "org", ProjectID: "proj", Revision: "immutable-review", BeforeCloud: assignment, AfterCloud: assignment, Input: cloudprofiles.ChangeInput{ProjectDefault: true}, CreatedAt: time.Now().UTC()}
 	snapshot := &cloudprofiles.Snapshot{Connections: []string{"old"}}
 	if err = st.SavePreview(ctx, preview, snapshot); err != nil {
 		t.Fatal(err)
@@ -625,25 +635,26 @@ func TestSharedCloudPreviewDefaultFollowsCurrentGrant(t *testing.T) {
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			for _, a := range []*cloudprofiles.Assignment{public.BeforeAssignment, public.AfterAssignment} {
+			for _, a := range []*cloudprofiles.ProjectCloud{public.BeforeCloud, public.AfterCloud} {
 				if a == nil || (a.DefaultPlacement != nil) != tc.wantDefault || len(a.Targets) != tc.wantTargets {
 					t.Fatalf("grant leaked placement: %+v", a)
 				}
 			}
 			if tc.revoked {
-				removal, removalErr := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: 1})
-				if removalErr != nil {
-					t.Fatal(removalErr)
+				// Revocation ended the default, so nothing is left to remove,
+				// and the revoked Cloud can't be reviewed back in.
+				if current, _, defaultErr := st.DefaultCloud(ctx, "org", "proj"); defaultErr != nil || current != "" {
+					t.Fatalf("revoked grant stayed the default: %q %v", current, defaultErr)
 				}
-				if removal.BeforeAssignment == nil || removal.BeforeAssignment.DefaultPlacement != nil || len(removal.BeforeAssignment.Targets) != 0 {
-					t.Fatalf("removal leaked retained placement: %+v", removal.BeforeAssignment)
+				if _, removalErr := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: "cloud"}); !errors.Is(removalErr, cloudprofiles.ErrNotFound) {
+					t.Fatalf("revoked Cloud reviewed as the default: %v", removalErr)
 				}
 			}
 		})
 	}
 	manager := planning.NewService(planning.Deps{Projects: projects.NewPgStore(db), CloudProfiles: st, Authz: &syncAuth{}})
 	public, err := manager.CloudPreview(ctx, security.Principal{OrgID: "org", UserID: "manager"}, "proj", preview.ID)
-	if err != nil || public.BeforeAssignment.DefaultPlacement == nil || public.AfterAssignment.DefaultPlacement == nil {
+	if err != nil || public.BeforeCloud.DefaultPlacement == nil || public.AfterCloud.DefaultPlacement == nil {
 		t.Fatalf("manager lost full view: %+v %v", public, err)
 	}
 	after, afterSnapshot, err := st.GetPreview(ctx, "org", "proj", preview.ID)

@@ -46,8 +46,6 @@ for (const [, op] of reads) {
 // Tags known to reach nothing today, each with why. Shrink this list; never
 // grow it without a reason a reviewer would accept.
 const known: Record<string, string> = {
-  EnvironmentCloud:
-    "the environment Cloud read has no identity; it goes when Clouds stop being per environment",
   "Watch[]": "release watches are only read one at a time, by deployment",
   "Collection[]":
     "build output collections are delivered to the log view, not listed",

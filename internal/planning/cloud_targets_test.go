@@ -16,8 +16,8 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-func cloudTargetFixture() (*cloudprofiles.Assignment, []ConnectionOption) {
-	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 3, Revision: 4, Targets: []cloudprofiles.Target{
+func cloudTargetFixture() (*cloudprofiles.ProjectCloud, []ConnectionOption) {
+	return &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 3, GrantRevision: 4, Targets: []cloudprofiles.Target{
 		{ID: "target-a", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "frontend", Provider: "vercel", ConnectionID: "a", Revision: 5},
 		{ID: "target-b", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "preview", Provider: "vercel", ConnectionID: "b", Revision: 6},
 	}}, []ConnectionOption{
@@ -85,19 +85,19 @@ func TestCloudTargetsTwoManagedAccountsAndMetadataAdoption(t *testing.T) {
 func TestCloudTargetsResolutionFailuresAndOverrides(t *testing.T) {
 	for _, tc := range []struct {
 		name, doc, message string
-		mutate             func(*cloudprofiles.Assignment, []ConnectionOption) *cloudprofiles.Assignment
+		mutate             func(*cloudprofiles.ProjectCloud, []ConnectionOption) *cloudprofiles.ProjectCloud
 	}{
-		{name: "missing assignment", message: "assigned", mutate: func(_ *cloudprofiles.Assignment, _ []ConnectionOption) *cloudprofiles.Assignment { return nil }},
+		{name: "no default cloud", message: "default cloud", mutate: func(_ *cloudprofiles.ProjectCloud, _ []ConnectionOption) *cloudprofiles.ProjectCloud { return nil }},
 		{name: "missing target", doc: "cloud_target: missing", message: "missing"},
-		{name: "wrong scope", message: "scope", mutate: func(a *cloudprofiles.Assignment, _ []ConnectionOption) *cloudprofiles.Assignment {
+		{name: "wrong scope", message: "scope", mutate: func(a *cloudprofiles.ProjectCloud, _ []ConnectionOption) *cloudprofiles.ProjectCloud {
 			a.Targets[0].OrgID = "other"
 			return a
 		}},
-		{name: "unready", message: "ready", mutate: func(a *cloudprofiles.Assignment, c []ConnectionOption) *cloudprofiles.Assignment {
+		{name: "unready", message: "ready", mutate: func(a *cloudprofiles.ProjectCloud, c []ConnectionOption) *cloudprofiles.ProjectCloud {
 			c[0].Ready = false
 			return a
 		}},
-		{name: "unverified", message: "verif", mutate: func(a *cloudprofiles.Assignment, c []ConnectionOption) *cloudprofiles.Assignment {
+		{name: "unverified", message: "verif", mutate: func(a *cloudprofiles.ProjectCloud, c []ConnectionOption) *cloudprofiles.ProjectCloud {
 			c[0].Details = nil
 			return a
 		}},
@@ -152,10 +152,10 @@ func TestCloudTargetsResolvedCopyDoesNotShareSettings(t *testing.T) {
 
 func TestCloudTargetsRejectMissingRevisions(t *testing.T) {
 	a, c := cloudTargetFixture()
-	a.Revision = 0
+	a.GrantRevision = 0
 	_, _, err := ResolveCloudTargets(parse(t, "version: 1\nservices:\n  web: {source: cmd/api, cloud_target: frontend}\n"), "production", a, c)
 	if err == nil {
-		t.Fatal("unversioned assignment produced an unexecutable pin")
+		t.Fatal("an unreviewed grant produced an unexecutable pin")
 	}
 }
 
@@ -266,7 +266,7 @@ func TestServerGPUs(t *testing.T) {
 // reservation holds them, so planning neither fits them against the
 // connection's own GPUs nor gives the service a node selector.
 func TestPoolPinCarriesServiceGPUs(t *testing.T) {
-	assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
+	assigned := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
 	options := []ConnectionOption{{ID: "runtime", Cloud: "server", Ready: true, Pooled: true, Details: map[string]string{"docker_id": "daemon", "architecture": "amd64"}}}
 	m := parse(t, "version: 1\nservices:\n  web: {source: cmd/api, cloud_target: shared, size: {cpu: 4, memory: 16384, gpu: {kind: nvidia-l4, count: 1}}}\n")
 	pool := &cloudinfra.Placement{PoolID: "pool", PoolRevision: 3, ServerID: "host", ServerRevision: 2, ConnectionID: "runtime", ConnectionGeneration: 1, CPUMillis: 4000, MemoryBytes: 16384 << 20, GPUKind: "nvidia-l4", GPUs: 1}
@@ -299,7 +299,7 @@ func TestPoolPinCarriesServiceGPUs(t *testing.T) {
 // pooledGPUBinding is a deployed service that ran on a GPU server with the
 // given size, holding a server GPU placement with a node selector that a
 // pool placement can't use.
-func pooledGPUBinding(t *testing.T, size *manifest.Size) (*Binding, *cloudprofiles.Assignment, []ConnectionOption) {
+func pooledGPUBinding(t *testing.T, size *manifest.Size) (*Binding, *cloudprofiles.ProjectCloud, []ConnectionOption) {
 	t.Helper()
 	binding := appliedTestBinding(t, "api", "original")
 	var cfg ServiceConfig
@@ -344,7 +344,7 @@ func TestCloudSyncOntoAPoolRecomputesGPUs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pin := CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 2, TargetName: "frontend", Provider: "server", ConnectionID: "new", AccountIdentity: "server:new", PoolID: "pool", ServerID: "host-new", CPUMillis: cpu, MemoryBytes: mem, GPUKind: kind, GPUs: gpus}
+			pin := CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 2, TargetName: "frontend", Provider: "server", ConnectionID: "new", AccountIdentity: "server:new", PoolID: "pool", ServerID: "host-new", CPUMillis: cpu, MemoryBytes: mem, GPUKind: kind, GPUs: gpus}
 			result := appliedCloudPlan([]*Binding{binding}, assigned, "", options, providers.Registry(), map[string]CloudPlacement{"api": pin})
 			moved := action(t, result, "service:api")
 			if !reflect.DeepEqual(moved.Service.GPU, tc.want) {
@@ -435,7 +435,7 @@ func TestAcceptedPoolMoveReservesTheNewGPURequest(t *testing.T) {
 // A pooled service whose reservation holds a different GPU count or kind
 // from its runtime request can't be applied.
 func TestPoolGPUMismatchIsAProblem(t *testing.T) {
-	assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
+	assigned := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
 	options := []ConnectionOption{{ID: "runtime", Cloud: "server", Ready: true, Pooled: true, Details: map[string]string{"docker_id": "daemon", "architecture": "amd64"}}}
 	for name, tc := range map[string]struct {
 		manifest  string

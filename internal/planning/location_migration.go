@@ -11,7 +11,7 @@ import (
 
 // appliedPoolMoves supplies only the unconstrained services changing hosts.
 // Their source, variables and runtime settings retain the existing move contract.
-func appliedPoolMoves(bindings []*Binding, assignment *cloudprofiles.Assignment, options []ConnectionOption, registry *provider.Registry, placements map[string]CloudPlacement, routes []cloudinfra.Route, selections map[string]locationSelection) (map[string]Action, []Finding) {
+func appliedPoolMoves(bindings []*Binding, assignment *cloudprofiles.ProjectCloud, options []ConnectionOption, registry *provider.Registry, placements map[string]CloudPlacement, routes []cloudinfra.Route, selections map[string]locationSelection) (map[string]Action, []Finding) {
 	names := map[string]bool{}
 	for _, b := range bindings {
 		if b.Subject != ServiceSubject {

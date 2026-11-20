@@ -84,7 +84,7 @@ func setupDemandForAttachment(t *testing.T, f *poolFixture, r *cloudinfra.Manage
 	auth := &capacityPlanAuth{}
 	svc := planning.NewService(planning.Deps{Store: f.plans, Authz: auth, Capacity: managedDemandAuthority{policy: policy}})
 	plan := &planning.Plan{ID: "managed-plan", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", CreatedBy: "usr"}
-	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: connection, TargetSettings: map[string]string{"managed_attachment_id": attachment, "managed_project_id": "proj", "managed_resource_id": "cluster", "architecture": arch}, Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 4}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: target, TargetRevision: 1, GrantRevision: 1, ConnectionID: connection, Provider: "kubernetes"}}
+	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: connection, TargetSettings: map[string]string{"managed_attachment_id": attachment, "managed_project_id": "proj", "managed_resource_id": "cluster", "architecture": arch}, Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 4}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: target, TargetRevision: 1, GrantRevision: 1, ConnectionID: connection, Provider: "kubernetes"}}
 	result := &planning.Result{Executable: true, Connections: map[string]string{"kubernetes": connection}, Actions: []planning.Action{{ID: "service:api", Subject: planning.ServiceSubject, Name: "api", Op: planning.Create, Provider: "kubernetes", Service: cfg}}}
 	return f, svc, plan, result, auth
 }

@@ -111,7 +111,7 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 	if _, checkErr := application.Issue(t.Context(), f.scope, f.request); checkErr == nil {
 		t.Fatal("application scope reopened")
 	}
-	if _, checkErr := f.sql.Exec(t.Context(), `DELETE FROM loomplane_cloud_assignments WHERE org_id='org' AND project_id='proj' AND environment_id='env'`); checkErr != nil {
+	if _, checkErr := f.sql.Exec(t.Context(), clearDefaultCloudSQL("org", "proj")); checkErr != nil {
 		t.Fatal(checkErr)
 	}
 	j := f.store.Journal("org", g.ID)
@@ -241,7 +241,7 @@ func TestManagedCleanupIssuerCurrentAuthorization(t *testing.T) {
 				"unresolved-application": `INSERT INTO loomplane_managed_workload_issuances(id,org_id,release_id,epoch,scope,request) SELECT 'unknown-late-app',org_id,release_id,epoch,scope,request FROM loomplane_managed_workload_issuances WHERE cleanup_grant_id IS NULL LIMIT 1`,
 			}
 			if change == "target" {
-				if _, checkErr := f.sql.Exec(t.Context(), `DELETE FROM loomplane_cloud_assignments WHERE org_id='org'`); checkErr != nil {
+				if _, checkErr := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_project_grants SET is_default=false,revision=revision+1 WHERE org_id='org' AND is_default`); checkErr != nil {
 					t.Fatal(checkErr)
 				}
 				historicalCleanupBindingLoss(t.Context(), t, f.sql, "org", "cleanup-binding")

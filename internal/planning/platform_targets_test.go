@@ -31,8 +31,8 @@ func (f *fakePlacer) Preview(_ context.Context, req platformcloud.Request) (*pla
 
 // platformAssignment is an environment assigned to the platform-owned
 // Loomplane Cloud with one region target, fra.
-func platformAssignment() *cloudprofiles.Assignment {
-	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud_platform", CloudRevision: 1, Revision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{
+func platformAssignment() *cloudprofiles.ProjectCloud {
+	return &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud_platform", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{
 		{ID: "target_fra", OrgID: "org", CloudID: "cloud_platform", Name: "fra", DisplayName: "Frankfurt", Runtime: platformcloud.RuntimePlatform, Provider: platformcloud.RuntimePlatform, Region: "fra", Revision: 1},
 	}}
 }

@@ -581,12 +581,12 @@ func TestManagedClusterSecondNamespaceTrustAndCredentials(t *testing.T) {
 			if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('proj-two','org','Two','two','ready','usr',now(),now())`); err != nil {
 				t.Fatal(err)
 			}
-			grantRevision, err := f.clouds.SetProjectGrant(t.Context(), "org", "cloud", "proj-two", nil, false)
+			grant, err := f.clouds.SetProjectGrant(t.Context(), "org", "cloud", "proj-two", nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			attachment.ProjectID = "proj-two"
-			attachment.GrantRevision = grantRevision
+			attachment.GrantRevision = grant.Revision
 			t.Cleanup(func() {
 				_ = f.bootstrap.Kube.CoreV1().Namespaces().Delete(context.Background(), attachment.Namespace, metav1.DeleteOptions{})
 			})

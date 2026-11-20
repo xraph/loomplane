@@ -43,19 +43,67 @@ export function matchCloudTags(targets: Target[], tags: string[]): TagMatch {
   return { kind: "many", targets: found }
 }
 
-/** Adopt only the selected environment and preserve effective placement elsewhere. */
+/**
+ * adoptServiceTarget puts a service on a Cloud target, or on the one its
+ * tags select, through the project's default Cloud.
+ *
+ * Without `only`, it does so in every environment: the service's direct
+ * placement goes, and so does any placement an environment set for it, so
+ * every environment resolves the same way.
+ *
+ * With `only`, just that environment moves. A service's base placement can't
+ * be unset by an override, so every other environment's effective placement
+ * is written into its own override first and the base is cleared.
+ */
 export function adoptServiceTarget(
   manifest: Manifest,
-  environments: Environment[],
-  environment: string,
   service: string,
-  choice: CloudChoice
+  choice: CloudChoice,
+  only?: { environment: string; environments: Environment[] }
 ): Manifest {
+  if (only)
+    return adoptInEnvironment(
+      manifest,
+      only.environments,
+      only.environment,
+      service,
+      choice
+    )
   const next = structuredClone(manifest)
-  if (!next.services?.[service])
+  const entry = next.services?.[service]
+  if (!entry)
     throw new Error("This service no longer exists. Refresh the manifest.")
-  // A default provider would also apply to a named target. Materialize it before
-  // removing that inheritance, including resources and gateways.
+  // A default provider would also apply to a named target. Give every other
+  // entry its own before the default goes.
+  materializeDefaults(manifest, next)
+  for (const key of placementKeys) delete entry[key]
+  if (typeof choice === "string") entry.cloud_target = choice
+  else entry.cloud_tags = [...choice.tags]
+  for (const [name, override] of Object.entries(entry.environments ?? {})) {
+    const rest: Record<string, unknown> = {
+      ...(override as Record<string, unknown>),
+    }
+    for (const key of placementKeys) delete rest[key]
+    if (Object.keys(rest).length) entry.environments![name] = rest
+    else delete entry.environments![name]
+  }
+  if (entry.environments && !Object.keys(entry.environments).length)
+    delete entry.environments
+  return next
+}
+
+// placementKeys are the fields that say where a service runs, in both the
+// wire and the client spelling a manifest may carry.
+const placementKeys = [
+  "provider",
+  "target",
+  "cloud_target",
+  "cloudTarget",
+  "cloud_tags",
+  "cloudTags",
+] as const
+
+function materializeDefaults(manifest: Manifest, next: Manifest) {
   for (const section of ["services", "resources", "gateways"] as const) {
     for (const [name, entry] of Object.entries(next[section] ?? {})) {
       const effective = placementSettings(
@@ -72,6 +120,19 @@ export function adoptServiceTarget(
     delete next.defaults.provider
     delete next.defaults.region
   }
+}
+
+function adoptInEnvironment(
+  manifest: Manifest,
+  environments: Environment[],
+  environment: string,
+  service: string,
+  choice: CloudChoice
+): Manifest {
+  const next = structuredClone(manifest)
+  if (!next.services?.[service])
+    throw new Error("This service no longer exists. Refresh the manifest.")
+  materializeDefaults(manifest, next)
   const entry = next.services![service]
   const previous = manifest.services![service]
   entry.environments = { ...entry.environments }
@@ -142,7 +203,7 @@ export function cloudDeletionError(
   kind: "Cloud" | "target"
 ): string {
   return statusOf(error) === 409
-    ? `This ${kind} is protected while environments, deployments, syncs or recent previews reference it. Preview references expire after 24 hours.`
+    ? `This ${kind} is protected while projects, deployments, syncs or recent previews use it. Preview references expire after 24 hours.`
     : messageOf(
         error,
         `The ${kind} couldn't be deleted. Remove its references first.`

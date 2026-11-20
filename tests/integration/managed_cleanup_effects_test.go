@@ -46,7 +46,7 @@ func managedCleanupEffectsRealAPI(t *testing.T, shared bool, modes ...string) {
 	f := &poolFixture{sql: e.sql, db: e.pg, store: e.store, plans: planning.NewPgStore(e.pg), clouds: e.clouds}
 	for _, stmt := range []string{
 		`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('env','org','proj','production','production',now(),now())`,
-		`INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`,
+		defaultCloudSQL("org", "proj", "cloud"),
 		`INSERT INTO loomplane_manifests(id,org_id,project_id,revision,body,digest,created_by,created_at) VALUES('pool-manifest-proj','org','proj',1,'version: 1','pool','usr',now())`,
 	} {
 		if _, err := f.sql.Exec(t.Context(), stmt); err != nil {

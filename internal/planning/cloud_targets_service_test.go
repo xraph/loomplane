@@ -25,11 +25,11 @@ func (c targetOptions) All(context.Context, string) ([]*connections.Connection, 
 }
 
 type targetResolver struct {
-	assignment *cloudprofiles.Assignment
+	assignment *cloudprofiles.ProjectCloud
 	calls      int
 }
 
-func (c *targetResolver) Resolve(context.Context, string, string, string) (*cloudprofiles.Assignment, error) {
+func (c *targetResolver) ResolveCloud(context.Context, string, string, string) (*cloudprofiles.ProjectCloud, error) {
 	c.calls++
 	return c.assignment, nil
 }
@@ -48,7 +48,7 @@ func targetPlanningService(t *testing.T, doc string) (*Service, *Plan, *targetRe
 }
 
 func TestCloudTargetServiceScopeAndRevisionDigest(t *testing.T) {
-	for _, scope := range []string{"org", "project", "environment"} {
+	for _, scope := range []string{"org", "project"} {
 		t.Run(scope, func(t *testing.T) {
 			s, p, r := targetPlanningService(t, "version: 1\nservices:\n  web: {source: cmd/api, cloud_target: frontend}\n")
 			switch scope {
@@ -56,8 +56,6 @@ func TestCloudTargetServiceScopeAndRevisionDigest(t *testing.T) {
 				r.assignment.OrgID = "another"
 			case "project":
 				r.assignment.ProjectID = "another"
-			case "environment":
-				r.assignment.EnvironmentID = "another"
 			}
 			result, _, err := s.compute(t.Context(), p)
 			if err != nil || result.Executable || len(result.Problems) == 0 {

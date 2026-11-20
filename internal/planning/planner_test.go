@@ -320,7 +320,7 @@ func TestCompute_azureAppsCantReachPrivateAppsElsewhere(t *testing.T) {
 		{"another resource group", "other", "east"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{
+			assigned := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{
 				{ID: "t-east", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "east", Provider: "azure-container-apps", ConnectionID: "conn_a", Region: "eastus", Revision: 1},
 				{ID: "t-west", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "west", Provider: "azure-container-apps", ConnectionID: "conn_a", Region: "westeurope", Revision: 1},
 				{ID: "t-other", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "other", Provider: "azure-container-apps", ConnectionID: "conn_b", Region: "eastus", Revision: 1},

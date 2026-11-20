@@ -72,15 +72,45 @@ func cloudSyncDatabase(t *testing.T) (*cloudprofiles.PgStore, *pgx.Conn, *pgdriv
 	}
 	return st, conn, db
 }
-func persistAssignmentPreview(t *testing.T, st *cloudprofiles.PgStore, id, cloud string, revision int64) (*cloudprofiles.Preview, *cloudprofiles.Snapshot, *cloudprofiles.Sync) {
+
+// defaultCloudSQL makes cloud the project's default Cloud and clears the
+// project's previous default, as a reviewed default change does: both
+// grants advance their revision. A project with no default whose grant on
+// cloud is untouched (revision 1, whole Cloud) instead gets the state a
+// project's first grant has: the default, still at revision 1, so fixtures
+// that pin grant revision 1 stay current.
+func defaultCloudSQL(org, project, cloud string) string {
+	return fmt.Sprintf(`DELETE FROM loomplane_cloud_project_grants WHERE org_id='%[1]s' AND project_id='%[2]s' AND cloud_id='%[3]s' AND revision=1 AND NOT revoked AND NOT is_default AND cardinality(target_ids)=0
+ AND NOT EXISTS(SELECT 1 FROM loomplane_cloud_project_grants WHERE org_id='%[1]s' AND project_id='%[2]s' AND is_default);
+WITH cleared AS (UPDATE loomplane_cloud_project_grants SET is_default=false,revision=revision+1,updated_at=now() WHERE org_id='%[1]s' AND project_id='%[2]s' AND is_default AND cloud_id<>'%[3]s' RETURNING 1)
+INSERT INTO loomplane_cloud_project_grants(org_id,cloud_id,project_id,target_ids,revoked,is_default) SELECT '%[1]s','%[3]s','%[2]s','{}',false,true FROM (SELECT count(*) FROM cleared) n
+ON CONFLICT(org_id,cloud_id,project_id) DO UPDATE SET is_default=true,revision=loomplane_cloud_project_grants.revision+1,updated_at=now() WHERE NOT loomplane_cloud_project_grants.is_default`, org, project, cloud)
+}
+
+// clearDefaultCloudSQL leaves the project without a default Cloud.
+func clearDefaultCloudSQL(org, project string) string {
+	return fmt.Sprintf(`UPDATE loomplane_cloud_project_grants SET is_default=false,revision=revision+1,updated_at=now() WHERE org_id='%s' AND project_id='%s' AND is_default`, org, project)
+}
+
+// persistDefaultCloudPreview stores a reviewed change of the project's
+// default Cloud to cloud, "" for none, against the default as it is now.
+func persistDefaultCloudPreview(t *testing.T, st *cloudprofiles.PgStore, id, cloud string) (*cloudprofiles.Preview, *cloudprofiles.Snapshot, *cloudprofiles.Sync) {
 	t.Helper()
 	now := time.Now().UTC()
-	p := &cloudprofiles.Preview{ID: "preview-" + id, OrgID: "org", ProjectID: "proj", Revision: "digest-" + id, Input: cloudprofiles.ChangeInput{EnvironmentID: "env", CloudID: cloud, Revision: revision}, CreatedAt: now}
+	current, revision, err := st.DefaultCloud(t.Context(), "org", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := st.ResolveCloud(t.Context(), "org", "proj", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &cloudprofiles.Preview{ID: "preview-" + id, OrgID: "org", ProjectID: "proj", Revision: "digest-" + id, Input: cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: cloud, Revision: revision}, BeforeCloud: before, CreatedAt: now}
 	raw, err := st.SnapshotBindings(t.Context(), "org", "env")
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap := &cloudprofiles.Snapshot{Environments: []cloudprofiles.EnvironmentSnapshot{{EnvironmentID: "env", AssignmentRevision: revision, Bindings: raw, Plan: json.RawMessage(`{}`)}}, Connections: []string{"old", "new"}}
+	snap := &cloudprofiles.Snapshot{Environments: []cloudprofiles.EnvironmentSnapshot{{EnvironmentID: "env", DefaultCloud: current, Bindings: raw, Plan: json.RawMessage(`{}`)}}, Connections: []string{"old", "new"}}
 	if err = st.SavePreview(t.Context(), p, snap); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +120,7 @@ func persistAssignmentPreview(t *testing.T, st *cloudprofiles.PgStore, id, cloud
 func TestCloudSyncAtomicAcceptanceRecoveryAndABA(t *testing.T) {
 	st, conn, _ := cloudSyncDatabase(t)
 	ctx := t.Context()
-	p, snap, sync := persistAssignmentPreview(t, st, "assign", "cloud", 0)
+	p, snap, sync := persistDefaultCloudPreview(t, st, "assign", "cloud")
 	accepted, err := st.Accept(ctx, p, snap, sync, "request")
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +133,12 @@ func TestCloudSyncAtomicAcceptanceRecoveryAndABA(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("commit without enqueue lost durable work: %v %v", pending, err)
 	}
-	otherP, otherSnap, otherSync := persistAssignmentPreview(t, st, "blocked", "cloud", 1)
+	// Reviewed against the default as it is now: the Cloud, at its current
+	// grant revision.
+	otherP, otherSnap, otherSync := persistDefaultCloudPreview(t, st, "blocked", "")
+	if otherP.BeforeCloud == nil || otherP.BeforeCloud.CloudID != "cloud" {
+		t.Fatalf("default change was not applied: %+v", otherP.BeforeCloud)
+	}
 	if _, err = st.Accept(ctx, otherP, otherSnap, otherSync, "other"); !errors.Is(err, cloudprofiles.ErrBusy) {
 		t.Fatalf("second change passed guard: %v", err)
 	}
@@ -121,25 +156,42 @@ func TestCloudSyncAtomicAcceptanceRecoveryAndABA(t *testing.T) {
 	if err = st.SaveSync(ctx, accepted, snap); err != nil {
 		t.Fatal(err)
 	}
-	unassign, unsnap, unsync := persistAssignmentPreview(t, st, "unassign", "", 1)
+	unassign, unsnap, unsync := persistDefaultCloudPreview(t, st, "unassign", "")
 	removed, err := st.Accept(ctx, unassign, unsnap, unsync, "remove")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := st.Resolve(ctx, "org", "proj", "env")
+	resolved, err := st.ResolveCloud(ctx, "org", "proj", "")
 	if err != nil || resolved != nil {
-		t.Fatalf("unassignment: %+v %v", resolved, err)
+		t.Fatalf("default cleared: %+v %v", resolved, err)
 	}
-	generation, err := st.AssignmentGeneration(ctx, "org", "proj", "env")
-	if err != nil || generation != 2 {
-		t.Fatalf("lost tombstone: %d %v", generation, err)
+	// The grant keeps its row and advances, so a review against the old
+	// default can never match again.
+	if grant, grantErr := st.GetProjectGrant(ctx, "org", "cloud", "proj"); grantErr != nil || grant.Default || grant.Revision != unassign.Input.Revision+1 {
+		t.Fatalf("lost tombstone: %+v %v", grant, grantErr)
 	}
 	removed.Status = cloudprofiles.SyncSucceeded
 	if err = st.SaveSync(ctx, removed, unsnap); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = st.Accept(ctx, otherP, otherSnap, otherSync, "stale"); !errors.Is(err, cloudprofiles.ErrConflict) {
-		t.Fatalf("old assignment generation resurrected: %v", err)
+		t.Fatalf("review of a cleared default accepted: %v", err)
+	}
+	// ABA: the same Cloud becomes the default again, at a later revision.
+	back, backSnap, backSync := persistDefaultCloudPreview(t, st, "reassign", "cloud")
+	restored, err := st.Accept(ctx, back, backSnap, backSync, "reassign")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.Status = cloudprofiles.SyncSucceeded
+	if err = st.SaveSync(ctx, restored, backSnap); err != nil {
+		t.Fatal(err)
+	}
+	if current, _, defaultErr := st.DefaultCloud(ctx, "org", "proj"); defaultErr != nil || current != "cloud" {
+		t.Fatalf("default restored: %q %v", current, defaultErr)
+	}
+	if _, err = st.Accept(ctx, otherP, otherSnap, otherSync, "stale"); !errors.Is(err, cloudprofiles.ErrConflict) {
+		t.Fatalf("old default revision resurrected: %v", err)
 	}
 	if _, _, err = st.GetPreview(ctx, "other", "proj", p.ID); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Fatalf("preview scope leak: %v", err)
@@ -332,7 +384,7 @@ func newSyncFixture(t *testing.T) *syncFixture {
 	ctx := t.Context()
 	for _, sql := range []string{
 		`UPDATE loomplane_cloud_connections SET details=jsonb_build_object('team_id',id)`,
-		`INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1),('org','proj','stage','cloud',1)`,
+		defaultCloudSQL("org", "proj", "cloud"),
 		`INSERT INTO loomplane_manifests(id,org_id,project_id,revision,body,digest,created_by,created_at) VALUES('manifest','org','proj',1,'version: 1','digest','usr',now())`,
 	} {
 		if _, err := conn.Exec(ctx, sql); err != nil {
@@ -353,7 +405,7 @@ func newSyncFixture(t *testing.T) *syncFixture {
 			key := deployments.SourceKey("org", "proj", "app", commit)
 			secrets[ref] = []byte(`{"values":{"SECRET_TOKEN":"applied-secret","BASE_VERSION":"applied-base"},"secrets":{"SECRET_TOKEN":true}}`)
 			sources[key] = name + "-exact-original-artifact"
-			cfg := planning.ServiceConfig{Provider: "vercel", Repo: "app", CommitSHA: commit, Service: name, Public: true, Workload: provider.WebApp, Execution: provider.Serverless, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "frontend", Provider: "vercel", ConnectionID: "old", AccountIdentity: connections.AccountIdentity("vercel", "old", map[string]string{"team_id": "old"})}, AppliedInputs: &planning.AppliedInputs{Variables: ref, Source: &planning.PlanSource{Alias: "app", Repository: "owner/app", CommitSHA: commit}, ArtifactKey: key}}
+			cfg := planning.ServiceConfig{Provider: "vercel", Repo: "app", CommitSHA: commit, Service: name, Public: true, Workload: provider.WebApp, Execution: provider.Serverless, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "frontend", Provider: "vercel", ConnectionID: "old", AccountIdentity: connections.AccountIdentity("vercel", "old", map[string]string{"team_id": "old"})}, AppliedInputs: &planning.AppliedInputs{Variables: ref, Source: &planning.PlanSource{Alias: "app", Repository: "owner/app", CommitSHA: commit}, ArtifactKey: key}}
 			if name == "web" {
 				cfg.Env = []planning.EnvLink{{Key: "API_URL", Subject: planning.ServiceSubject, From: "api"}}
 			}
@@ -616,7 +668,7 @@ func TestCloudSyncDatabaseReleaseSerialization(t *testing.T) {
 		}
 	}
 	insertPlan("approved", "approved")
-	p, snap, sync := persistAssignmentPreview(t, st, "serialized", "cloud", 0)
+	p, snap, sync := persistDefaultCloudPreview(t, st, "serialized", "cloud")
 	if _, err := st.Accept(ctx, p, snap, sync, "switch"); !errors.Is(err, cloudprofiles.ErrBusy) {
 		t.Fatalf("approved release overtaken: %v", err)
 	}
@@ -724,9 +776,9 @@ func TestCloudSyncEmptyAssignmentAndEnqueueRecovery(t *testing.T) {
 	service := planning.NewService(planning.Deps{Store: plans, Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: accounts, Providers: providers.Registry(), Authz: &syncAuth{}, CloudSyncWorkflow: workflow})
 	runner := deployments.NewRunner(deployments.RunnerDeps{Store: deployments.NewPgStore(db), Plans: plans, Credentials: accounts, CloudProfiles: st, CloudSyncAuth: service, Capacity: service})
 	service.BindCloudSyncRunner(runner, runner)
-	preview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", CloudID: "cloud", Revision: 0})
+	preview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: "cloud", Revision: 0})
 	if err != nil || len(preview.Blockers) > 0 {
-		t.Fatalf("initial assignment: %+v %v", preview, err)
+		t.Fatalf("initial default Cloud: %+v %v", preview, err)
 	}
 	sync, err := service.ApplyCloudChange(ctx, actor, "proj", preview.ID, preview.Revision, "empty-assign")
 	if err != nil {
@@ -765,6 +817,7 @@ func TestCloudSyncEmptyAssignmentAndEnqueueRecovery(t *testing.T) {
 func TestCloudSyncAssignmentMigrationAndMetadataAdoption(t *testing.T) {
 	t.Run("assignment", func(t *testing.T) {
 		f := newSyncFixture(t)
+		f.executor.failStage = false
 		ctx := orchestration.CapacityContext(t.Context())
 		actor := security.Principal{OrgID: "org", UserID: "usr"}
 		now := time.Now().UTC()
@@ -774,12 +827,17 @@ func TestCloudSyncAssignmentMigrationAndMetadataAdoption(t *testing.T) {
 		if err := f.store.CreateTarget(ctx, &cloudprofiles.Target{ID: "target-b", OrgID: "org", ProjectID: "proj", CloudID: "cloud-b", Name: "frontend", DisplayName: "Frontend", Provider: "vercel", ConnectionID: "new", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 			t.Fatal(err)
 		}
-		preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", CloudID: "cloud-b", Revision: 1})
-		if err != nil || len(preview.Blockers) > 0 {
-			t.Fatalf("assignment preview: %+v %v", preview, err)
+		_, revision, err := f.store.DefaultCloud(ctx, "org", "proj")
+		if err != nil {
+			t.Fatal(err)
 		}
-		if len(preview.Environments) != 1 || preview.Environments[0].Summary.Replace != 2 {
-			t.Fatalf("assignment summary: %+v", preview.Environments)
+		preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: "cloud-b", Revision: revision})
+		if err != nil || len(preview.Blockers) > 0 {
+			t.Fatalf("default Cloud preview: %+v %v", preview, err)
+		}
+		// Changing the project's default moves every environment.
+		if len(preview.Environments) != 2 || preview.Environments[0].Summary.Replace != 2 || preview.Environments[1].Summary.Replace != 2 {
+			t.Fatalf("default Cloud summary: %+v", preview.Environments)
 		}
 		sync, err := f.service.ApplyCloudChange(ctx, actor, "proj", preview.ID, preview.Revision, "assignment")
 		if err != nil {
@@ -788,15 +846,16 @@ func TestCloudSyncAssignmentMigrationAndMetadataAdoption(t *testing.T) {
 		if err = f.service.ReconcileCloudSync(ctx, "org", "proj", sync.ID, func([]byte) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
-		assignment, err := f.store.Resolve(ctx, "org", "proj", "env")
-		if err != nil || assignment.CloudID != "cloud-b" || assignment.Revision != 2 {
-			t.Fatalf("assignment not persisted: %+v %v", assignment, err)
+		assignment, err := f.store.ResolveCloud(ctx, "org", "proj", "")
+		if err != nil || assignment == nil || assignment.CloudID != "cloud-b" || !assignment.Default {
+			t.Fatalf("default Cloud not persisted: %+v %v", assignment, err)
 		}
-		if f.executor.calls["stage/api"] != 0 || f.executor.calls["env/api"] != 1 {
-			t.Fatalf("assignment crossed environments: %v", f.executor.calls)
+		// Both grants advanced, so plans resolved against the old default are stale.
+		if old, oldErr := f.store.GetProjectGrant(ctx, "org", "cloud", "proj"); oldErr != nil || old.Default || old.Revision != revision+1 {
+			t.Fatalf("old default grant: %+v %v", old, oldErr)
 		}
-		if _, err = f.conn.Exec(ctx, `DELETE FROM loomplane_cloud_assignments WHERE environment_id='stage'`); err != nil {
-			t.Fatal(err)
+		if f.executor.calls["stage/api"] != 1 || f.executor.calls["env/api"] != 1 {
+			t.Fatalf("default Cloud change missed an environment: %v", f.executor.calls)
 		}
 		if _, err = f.conn.Exec(ctx, `UPDATE loomplane_cloud_previews SET created_at=now()-interval '25 hours'`); err != nil {
 			t.Fatal(err)
@@ -918,11 +977,15 @@ func TestCloudSyncApprovalAcceptanceRace(t *testing.T) {
 		if _, err = conn.Exec(ctx, `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,manifest_id,manifest_revision,created_by,created_at) VALUES($1,'org','proj','env','production','ready','manifest',1,'usr',now())`, id); err != nil {
 			t.Fatal(err)
 		}
-		revision, e := st.AssignmentGeneration(ctx, "org", "proj", "env")
+		current, revision, e := st.DefaultCloud(ctx, "org", "proj")
 		if e != nil {
 			t.Fatal(e)
 		}
-		p, snap, sync := persistAssignmentPreview(t, st, id, "cloud", revision)
+		next := "cloud"
+		if current == next {
+			next = ""
+		}
+		p, snap, sync := persistDefaultCloudPreview(t, st, id, next)
 		start, done := make(chan struct{}), make(chan error, 1)
 		go func() {
 			<-start
@@ -945,9 +1008,9 @@ func TestCloudSyncApprovalAcceptanceRace(t *testing.T) {
 				t.Fatal(err)
 			}
 		case errors.Is(e, cloudprofiles.ErrBusy):
-			generation, generationErr := st.AssignmentGeneration(ctx, "org", "proj", "env")
-			if generationErr != nil || generation != revision {
-				t.Fatalf("blocked switch mutated desired assignment: %d %v", generation, generationErr)
+			cloud, generation, generationErr := st.DefaultCloud(ctx, "org", "proj")
+			if generationErr != nil || cloud != current || generation != revision {
+				t.Fatalf("blocked switch mutated the default Cloud: %q %d %v", cloud, generation, generationErr)
 			}
 		default:
 			t.Fatalf("race acceptance: %v", e)

@@ -379,5 +379,6 @@ const fleetSchemaSourceJSON = `{
   "20261223001100_fleet_scaling_policy_journal.go": "6587066485d751fcb3b4a842f4f49a00c0ebdaf30095c98ebd5d48c94fb76daa",
   "20261223001300_fleet_metric_history.go": "13515507f71ebc40dce21d5ab5948a16dbc889d186ff2aa83c47bba38d28ca8b",
   "20261223001600_fleet_adoption_journal.go": "72f33bcad9eb8eb2aae16827cac73dcb9e75c0a64aec054df241f4eed6bb1c36",
-  "20261225000500_provider_environments.go": "2d94baf8102cd013ba1cc31d915bbb046378098f8bc812ff85f28cb5b2726760"
+  "20261225000500_provider_environments.go": "2d94baf8102cd013ba1cc31d915bbb046378098f8bc812ff85f28cb5b2726760",
+  "20261228000100_project_default_cloud.go": "757c6dfe7dc847ea21077f3a099826bcd64d4797b34c0107ba8e654373d8460f"
 }`

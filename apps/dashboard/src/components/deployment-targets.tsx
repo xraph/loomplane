@@ -7,8 +7,9 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useCloudsList,
   useConnectionsList,
-  useEnvironmentCloudsGet,
+  useDefaultCloudGet,
   useEnvironmentConnectionsChoose,
   useEnvironmentConnectionsGet,
   useManifestsCurrent,
@@ -147,8 +148,8 @@ export function usePlacementSave(projectId: string) {
   }
 }
 
-// placedManifest applies one edit in memory. A Cloud target choice rewrites
-// the service across environments first, as adopting one on its own does.
+// placedManifest applies one edit in memory. A Cloud target choice made here
+// is for this environment only; the others keep where they run.
 function placedManifest(
   m: Manifest,
   environments: Environment[],
@@ -157,13 +158,10 @@ function placedManifest(
   const choice = cloudChoice(e.changes)
   if (!choice || e.row.section !== "services")
     return applyPlacement(m, e.row, e.environment, e.changes)
-  const adopted = adoptServiceTarget(
-    m,
+  const adopted = adoptServiceTarget(m, e.row.name, choice, {
+    environment: e.environment,
     environments,
-    e.environment,
-    e.row.name,
-    choice
-  )
+  })
   const rest = { ...e.changes }
   for (const key of cloudOwnedFields) delete rest[key]
   return applyPlacement(adopted, e.row, e.environment, rest)
@@ -171,24 +169,25 @@ function placedManifest(
 
 /**
  * usePlacementContext loads what a "Runs on" cell names: the provider
- * catalog, the environment's Cloud targets and the organization's accounts.
+ * catalog, the project's default Cloud and its targets, and the
+ * organization's accounts. Every environment shares the default Cloud.
  */
-export function usePlacementContext(projectId: string, environmentId?: string) {
+export function usePlacementContext(projectId: string) {
   const providers = useQuery(useProvidersList)
   const connections = useQuery(useConnectionsList)
-  // The assignment changes on the Clouds page, not here, and its read has no
-  // cache identity, so read it fresh each time a placement panel opens.
-  const cloud = useQuery(
-    useEnvironmentCloudsGet,
-    { path: { id: projectId, environmentId: environmentId ?? "" } },
-    { staleTime: 0 }
-  )
+  const cloud = useQuery(useDefaultCloudGet, { path: { id: projectId } })
+  const clouds = useQuery(useCloudsList, { path: { id: projectId } })
+  const id = cloud.data?.cloud?.cloudId
   return {
     providers,
     catalog: providers.data?.providers ?? [],
     connections: connections.data?.connections ?? [],
-    cloudAssigned: !!cloud.data?.assignment,
-    cloudTargets: (cloud.data?.assignment?.targets ?? []).filter(
+    /** cloudName names the default Cloud; undefined when there is none. */
+    cloudName: id
+      ? (clouds.data?.clouds?.find((c) => c?.id === id)?.name ??
+        "Default Cloud")
+      : undefined,
+    cloudTargets: (cloud.data?.cloud?.targets ?? []).filter(
       (t): t is Target => !!t
     ),
   }
@@ -321,11 +320,7 @@ function PlacementForm({
   onClose: () => void
   onPendingChange?: (pending: boolean) => void
 }) {
-  const environmentId = environments.find((e) => e.name === environment)?.id
-  const { providers, cloudTargets, cloudAssigned } = usePlacementContext(
-    projectId,
-    environmentId
-  )
+  const { providers, cloudTargets, cloudName } = usePlacementContext(projectId)
   return (
     <>
       <SheetHeader className="border-b">
@@ -357,11 +352,10 @@ function PlacementForm({
           revision={revision}
           row={row}
           environment={environment}
-          environmentId={environmentId}
           environments={environments}
           catalog={providers.data.providers}
           cloudTargets={cloudTargets}
-          cloudAssigned={cloudAssigned}
+          cloudName={cloudName}
           mode={mode}
           pending={pending}
           onUse={onUse}
@@ -382,11 +376,10 @@ function PlacementChoices({
   revision,
   row,
   environment,
-  environmentId,
   environments,
   catalog,
   cloudTargets,
-  cloudAssigned,
+  cloudName,
   mode,
   pending,
   onUse,
@@ -399,11 +392,10 @@ function PlacementChoices({
   revision: number
   row: PlacementRow
   environment: string
-  environmentId?: string
   environments: Environment[]
   catalog: Provider[]
   cloudTargets: Target[]
-  cloudAssigned: boolean
+  cloudName?: string
   mode: "pending" | "save"
   pending?: PendingPlacement
   onUse?: (change: PendingPlacement) => void
@@ -411,7 +403,7 @@ function PlacementChoices({
   onClose: () => void
   onPendingChange?: (pending: boolean) => void
 }) {
-  const { can, session } = useOrganization()
+  const { can } = useOrganization()
   const placement = usePlacementSave(projectId)
   const connections = useQuery(useConnectionsList)
   const settings = placementSettings(manifest, row, environment)
@@ -509,17 +501,11 @@ function PlacementChoices({
       onPendingChange?.(false)
     }
   }
-  const manageCloud = () => {
-    window.localStorage.setItem(
-      `loomplane.clouds.project.${session.orgId}`,
-      projectId
-    )
-    if (environmentId)
-      window.localStorage.setItem(
-        `loomplane.clouds.environment.${session.orgId}.${projectId}`,
-        environmentId
-      )
-  }
+  const projectClouds = {
+    to: "/projects/$id",
+    params: { id: projectId },
+    search: { tab: "cloud" },
+  } as const
 
   return (
     <form
@@ -608,7 +594,7 @@ function PlacementChoices({
                   ) : null}
                   {cloudChoices.length > 0 && (
                     <SelectGroup>
-                      <SelectLabel>Cloud targets</SelectLabel>
+                      <SelectLabel>{cloudName ?? "Cloud targets"}</SelectLabel>
                       {cloudChoices.map((t) => (
                         <SelectItem key={t.id} value={`cloud:${t.name}`}>
                           {t.displayName || t.name}
@@ -723,25 +709,23 @@ function PlacementChoices({
             )}
             {row.section === "services" && cloudTargets.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                {cloudAssigned
-                  ? `The Cloud ${environment} uses has no targets this project may use yet.`
-                  : `No Cloud is assigned to ${environment}, so no Cloud targets are listed.`}{" "}
+                {cloudName
+                  ? `${cloudName} has no targets this project may use yet.`
+                  : "This project has no Cloud yet."}{" "}
                 <Link
-                  to="/clouds"
-                  onClick={manageCloud}
+                  {...projectClouds}
                   className="underline underline-offset-4"
                 >
-                  {cloudAssigned ? "Add a target" : "Assign a Cloud"}
+                  {cloudName ? "Add a target" : "Add a Cloud"}
                 </Link>
               </p>
             )}
             {cloudChosen && (
               <Link
-                to="/clouds"
-                onClick={manageCloud}
+                {...projectClouds}
                 className="w-fit text-xs underline underline-offset-4"
               >
-                Manage Cloud target
+                Manage {cloudName ?? "Cloud"} targets
               </Link>
             )}
             {targets.length === 0 && cloudChoices.length === 0 && (

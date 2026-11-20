@@ -16,9 +16,9 @@ import (
 	"github.com/xraph/loomplane/internal/providers"
 )
 
-type cloudResolver struct{ assignment *cloudprofiles.Assignment }
+type cloudResolver struct{ assignment *cloudprofiles.ProjectCloud }
 
-func (c *cloudResolver) Resolve(context.Context, string, string, string) (*cloudprofiles.Assignment, error) {
+func (c *cloudResolver) ResolveCloud(context.Context, string, string, string) (*cloudprofiles.ProjectCloud, error) {
 	return c.assignment, nil
 }
 
@@ -29,13 +29,13 @@ func cloudRunner(t *testing.T) (*Runner, *planning.Plan, *fakePlans, *recorder, 
 	a := &plan.Actions[0]
 	a.Service.Public = false
 	a.ConnectionID = "cloud-account"
-	a.Service.CloudPlacement = &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, AssignmentRevision: 3, TargetID: "target", TargetRevision: 4, TargetName: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID}
+	a.Service.CloudPlacement = &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, TargetID: "target", TargetRevision: 4, TargetName: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID}
 	c := &connections.Connection{ID: a.ConnectionID, Cloud: "vercel", Status: connections.StatusReady, Details: map[string]string{"team_id": "team-a"}}
 	a.Service.CloudPlacement.AccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
 	exec := &recorder{}
 	r, _, plans := newRunner(t, plan, exec, nil)
 	r.credentials = targetCredentials{a.ConnectionID: c}
-	resolved := &cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, Revision: 3, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID, Revision: 4}}}}
+	resolved := &cloudResolver{assignment: &cloudprofiles.ProjectCloud{OrgID: plan.OrgID, ProjectID: plan.ProjectID, GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "frontend", Provider: a.Provider, ConnectionID: a.ConnectionID, Revision: 4}}}}
 	r.cloudProfiles = resolved
 	return r, plan, plans, exec, resolved
 }
@@ -46,11 +46,10 @@ func TestRunnerCloudTargetRevalidatesBeforeStartAndRun(t *testing.T) {
 		change func(*Runner, *cloudResolver)
 	}{
 		{"grant", func(_ *Runner, c *cloudResolver) { c.assignment.GrantRevision++ }},
-		{"assignment", func(_ *Runner, c *cloudResolver) { c.assignment.Revision++ }},
+		{"another cloud", func(_ *Runner, c *cloudResolver) { c.assignment.CloudID = "other" }},
 		{"cloud", func(_ *Runner, c *cloudResolver) { c.assignment.CloudRevision++ }},
 		{"target", func(_ *Runner, c *cloudResolver) { c.assignment.Targets[0].Revision++ }},
 		{"project scope", func(_ *Runner, c *cloudResolver) { c.assignment.ProjectID = "other" }},
-		{"environment scope", func(_ *Runner, c *cloudResolver) { c.assignment.EnvironmentID = "other" }},
 		{"target scope", func(_ *Runner, c *cloudResolver) { c.assignment.Targets[0].OrgID = "other" }},
 		{"account identity", func(r *Runner, _ *cloudResolver) {
 			r.credentials.(targetCredentials)["cloud-account"].Details["team_id"] = "team-b"
@@ -407,14 +406,14 @@ func componentAdoptionRunner(t *testing.T) (*Runner, *planning.Plan, *fakePlans,
 	t.Helper()
 	plan := webAndAPI()
 	c := &connections.Connection{ID: "conn_s", Cloud: "server", Status: connections.StatusReady, Details: map[string]string{"host": "edge.example.com", "user": "deploy", "docker_socket": "/var/run/docker.sock", "docker_id": "daemon-a"}}
-	pin := &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, AssignmentRevision: 3, TargetID: "target", TargetRevision: 4, TargetName: "edge-host", Provider: "server", ConnectionID: c.ID, AccountIdentity: connections.AccountIdentity(c.Cloud, c.Account, c.Details), RegionSource: "default"}
+	pin := &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, TargetID: "target", TargetRevision: 4, TargetName: "edge-host", Provider: "server", ConnectionID: c.ID, AccountIdentity: connections.AccountIdentity(c.Cloud, c.Account, c.Details), RegionSource: "default"}
 	cfg := &planning.ResourceConfig{Provider: "server", Target: c.ID, TargetSettings: planning.ReviewedConnectionSettings(c.Cloud, c.Details), Kind: "sample", CloudPlacement: pin}
 	plan.Actions = []planning.Action{{ID: "resource:edge--api", Op: planning.Keep, Subject: planning.ResourceSubject, Name: "edge--api", Provider: "server", ConnectionID: c.ID, Engine: "loomplane", Step: 1, Resource: cfg, AdoptCloudPlacement: true}}
 	exec := &recorder{}
 	r, _, plans := newRunner(t, plan, exec, nil)
 	r.providers = providers.Registry()
 	r.credentials = targetCredentials{c.ID: c}
-	r.cloudProfiles = &cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, Revision: 3, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "edge-host", Provider: "server", ConnectionID: c.ID, Revision: 4}}}}
+	r.cloudProfiles = &cloudResolver{assignment: &cloudprofiles.ProjectCloud{OrgID: plan.OrgID, ProjectID: plan.ProjectID, GrantRevision: 1, CloudID: "cloud", CloudRevision: 2, Targets: []cloudprofiles.Target{{ID: "target", OrgID: plan.OrgID, ProjectID: plan.ProjectID, CloudID: "cloud", Name: "edge-host", Provider: "server", ConnectionID: c.ID, Revision: 4}}}}
 	applied := *cfg
 	applied.CloudPlacement = nil
 	raw, err := json.Marshal(applied)

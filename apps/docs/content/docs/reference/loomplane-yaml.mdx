@@ -41,7 +41,7 @@ Names (of services, resources, gateways, links and environments in overrides) ma
 | `provider` | string | Where it runs, by the provider's name |
 | `region` | string | The provider's region |
 | `target` | `conn_...` | The checked server or Kubernetes connection to run on |
-| `cloud_target` | string | A named target in the environment's assigned Cloud. Can't be set with `cloud_tags` |
+| `cloud_target` | string | A named target in the project's default Cloud, the same in every environment unless an environment override names another. Can't be set with `cloud_tags` |
 | `cloud_tags` | array | Up to 8 tags. Selects the one target that carries every tag. Can't be set with `cloud_target` |
 | `endpoint` | object | See [endpoint](#endpoint) |
 | `health_path` | string | A readiness path, such as `/_/health`. Starts with `/` |

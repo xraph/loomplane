@@ -192,16 +192,23 @@ func TestServerAdmissionDirectApplyLetsApprovalThrough(t *testing.T) {
 // after the organization lock. A direct apply on one of those daemons
 // mustn't hold it up. The direct plan was approved and started before the
 // server joined the pool, as in TestGPUAdmissionSerializesPooledAfterDirect,
-// and runs in an environment outside the Cloud, so the sync has no reason
-// of its own to wait for it.
+// and runs in a project that doesn't use the Cloud, so the sync has no
+// reason of its own to wait for it. (Every environment of a project whose
+// default Cloud this is takes part in the sync.)
 func TestServerAdmissionDirectApplyLetsCloudSyncThrough(t *testing.T) {
 	// Only the executor pause: the server rejoins the pool during the pause,
 	// so a run paused before its pool check would just be refused.
 	for _, pause := range []directPause{inExecutor} {
 		t.Run(string(pause), func(t *testing.T) {
 			f, svc := sharedAcceptanceFixture(t)
-			if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('side','org','proj','side','staging',now(),now())`); err != nil {
-				t.Fatal(err)
+			for _, query := range []string{
+				`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('side','org','Side','side','ready','usr',now(),now())`,
+				`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('side','org','side','side','staging',now(),now())`,
+				`INSERT INTO loomplane_manifests(id,org_id,project_id,revision,body,digest,created_by,created_at) VALUES('pool-manifest-side','org','side',1,'version: 1','pool','usr',now())`,
+			} {
+				if _, err := f.sql.Exec(t.Context(), query); err != nil {
+					t.Fatal(err)
+				}
 			}
 			p := reviewPoolChange(t, svc)
 			var listed bool

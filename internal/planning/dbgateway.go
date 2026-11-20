@@ -502,7 +502,7 @@ func (p *planner) isDatabaseGateway(b *Binding) bool {
 // target the way a service's is: the target its Cloud tags select, or
 // the Cloud's default when nothing else places it. The manifest it
 // rewrites is resolveCloudPlacements' copy.
-func resolveDatabaseGatewayPlacement(out *manifest.Manifest, env string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, placements map[string]CloudPlacement) error {
+func resolveDatabaseGatewayPlacement(out *manifest.Manifest, env string, assignment *cloudprofiles.ProjectCloud, options []ConnectionOption, pools map[string]*cloudinfra.Placement, placements map[string]CloudPlacement) error {
 	set, ok := dbGatewayToPlace(out, env)
 	if !ok {
 		return nil

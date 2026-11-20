@@ -33,10 +33,10 @@ type Servers interface {
 	ListServers(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Server, error)
 }
 
-// Clouds says which cloud an environment deploys to, with its targets.
+// Clouds says which Cloud a project deploys to by default, with its targets.
 // *cloudprofiles.Service is the real one.
 type Clouds interface {
-	EnvironmentCloud(ctx context.Context, p security.Principal, projectID, environmentID string) (*cloudprofiles.Assignment, int64, error)
+	DefaultCloud(ctx context.Context, p security.Principal, projectID string) (*cloudprofiles.ProjectCloud, error)
 }
 
 var (
@@ -253,19 +253,19 @@ func (s *Service) reviewServer(ctx context.Context, p security.Principal, projec
 	name := serverNameFor(project.Slug, pv.Resource, env.Name)
 	pv.TargetName = name
 
-	assignment, _, err := s.d.Clouds.EnvironmentCloud(ctx, p, projectID, env.ID)
+	assignment, err := s.d.Clouds.DefaultCloud(ctx, p, projectID)
 	switch {
 	case errors.Is(err, cloudprofiles.ErrNotFound) || err == nil && assignment == nil:
-		problem(ProblemNoCloud, "Add this DigitalOcean account to %s's cloud first.", env.Name)
+		problem(ProblemNoCloud, "Add this DigitalOcean account to the project's Cloud first.")
 		return
 	case err != nil:
-		problem(ProblemTarget, "Loomplane couldn't read %s's cloud. Try again.", env.Name)
+		problem(ProblemTarget, "Loomplane couldn't read the project's Cloud. Try again.")
 		return
 	}
 	if !slices.ContainsFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
 		return t.Provider == connections.DigitalOcean && t.ConnectionID == in.Target.ConnectionID
 	}) {
-		problem(ProblemNoCloud, "Add this DigitalOcean account to %s's cloud first.", env.Name)
+		problem(ProblemNoCloud, "Add this DigitalOcean account to the project's Cloud first.")
 		return
 	}
 	// A model moving off a server Loomplane made for it, or a name the

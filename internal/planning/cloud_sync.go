@@ -73,17 +73,12 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 	if err := s.authorizeCloudSync(ctx, p, project); err != nil {
 		return nil, err
 	}
-	if in.EnvironmentID != "" {
-		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, in.EnvironmentID); guardErr != nil {
-			return nil, guardErr
-		}
-	}
 	st, err := s.syncStore()
 	if err != nil {
 		return nil, err
 	}
 	selected := 0
-	for _, set := range []bool{in.TargetID != "", in.EnvironmentID != "", in.Default} {
+	for _, set := range []bool{in.TargetID != "", in.ProjectDefault, in.Default} {
 		if set {
 			selected++
 		}
@@ -116,7 +111,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		}
 		snapshot.Shared = true
 	}
-	var desired *cloudprofiles.Assignment
+	var desired *cloudprofiles.ProjectCloud
 	switch {
 	case in.TargetID != "":
 		before, e := st.GetTarget(ctx, p.OrgID, "", in.CloudID, in.TargetID)
@@ -148,29 +143,50 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if switchErr := s.previewDefaultSwitch(ctx, st, p, in, preview, snapshot, options); switchErr != nil {
 			return nil, switchErr
 		}
-	case in.CloudID != "":
-		profile, e := st.GetProfile(ctx, p.OrgID, project, in.CloudID)
+	case in.ProjectDefault:
+		// The token is the current default's grant revision, zero for none.
+		current, revision, e := st.DefaultCloud(ctx, p.OrgID, project)
 		if e != nil {
 			return nil, e
 		}
-		targets, e := st.ListTargets(ctx, p.OrgID, project, in.CloudID)
-		if e != nil {
+		if revision != in.Revision {
+			return nil, cloudprofiles.ErrConflict
+		}
+		if current == in.CloudID {
+			return nil, fmt.Errorf("%w: that is already the project's default Cloud", cloudprofiles.ErrInvalid)
+		}
+		if preview.BeforeCloud, e = st.ResolveCloud(ctx, p.OrgID, project, ""); e != nil {
 			return nil, e
 		}
-		desired = &cloudprofiles.Assignment{OrgID: p.OrgID, ProjectID: project, EnvironmentID: in.EnvironmentID, CloudID: profile.ID, CloudRevision: profile.Revision, Revision: in.Revision + 1, DefaultPlacement: profile.DefaultPlacement}
-		for _, t := range targets {
-			desired.Targets = append(desired.Targets, *t)
+		if in.CloudID != "" {
+			// Only a Cloud granted to the project can become its default.
+			if desired, e = st.ResolveCloud(ctx, p.OrgID, project, in.CloudID); e != nil {
+				return nil, e
+			}
+			desired.Default = true
+		}
+		preview.AfterCloud = desired
+		// Acceptance compares both grants as reviewed. Making a Cloud the
+		// default advances its grant's revision, and the plans this review
+		// materializes run after that, so they pin the revision they'll find.
+		for _, c := range []*cloudprofiles.ProjectCloud{preview.BeforeCloud, desired} {
+			if c != nil {
+				snapshot.Grants = append(snapshot.Grants, cloudprofiles.ProjectGrant{OrgID: p.OrgID, CloudID: c.CloudID, ProjectID: project, Revision: c.GrantRevision})
+			}
+		}
+		if desired != nil {
+			desired.GrantRevision++
 		}
 	}
 	var environments []*projects.Environment
 	if snapshot.Shared {
 		shared, ok := st.(interface {
-			AssignedEnvironments(context.Context, string, string) ([]*projects.Environment, error)
+			EnvironmentsUsing(context.Context, string, string) ([]*projects.Environment, error)
 		})
 		if !ok {
 			return nil, cloudprofiles.ErrInvalid
 		}
-		environments, err = shared.AssignedEnvironments(ctx, p.OrgID, in.CloudID)
+		environments, err = shared.EnvironmentsUsing(ctx, p.OrgID, in.CloudID)
 	} else {
 		environments, err = s.projects.ListEnvironments(ctx, p.OrgID, project)
 	}
@@ -190,27 +206,30 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		environments = slices.DeleteFunc(environments, func(e *projects.Environment) bool { return !allowed[e.ProjectID+"/"+e.ID] })
 	}
 	var planned []cloudinfra.PlannedPlacement
-	found := in.EnvironmentID == ""
 	for _, env := range environments {
 		project := env.ProjectID
-		assignment, e := st.Resolve(ctx, p.OrgID, project, env.ID)
-		if e != nil && in.TargetID == "" {
-			if retained, ok := st.(interface {
-				RetainedAssignment(context.Context, string, string, string) (*cloudprofiles.Assignment, error)
-			}); ok {
-				assignment, e = retained.RetainedAssignment(ctx, p.OrgID, project, env.ID)
+		// assignment is the Cloud the change is about, as this project sees
+		// it: the changed Cloud for a shared change, the current default for
+		// a project default change.
+		assignment := preview.BeforeCloud
+		if in.Shared() {
+			var e error
+			assignment, e = st.ResolveCloud(ctx, p.OrgID, project, in.CloudID)
+			if e != nil && in.TargetID == "" {
+				// A project whose grant was revoked still runs what it placed.
+				if retained, ok := st.(interface {
+					RetainedCloud(context.Context, string, string, string) (*cloudprofiles.ProjectCloud, error)
+				}); ok {
+					assignment, e = retained.RetainedCloud(ctx, p.OrgID, project, in.CloudID)
+				}
+			}
+			if e != nil {
+				return nil, e
 			}
 		}
-		if e != nil {
-			return nil, e
-		}
-		if in.Shared() && (assignment == nil || assignment.CloudID != in.CloudID) {
+		if in.Shared() && assignment == nil {
 			continue
 		}
-		if in.EnvironmentID != "" && env.ID != in.EnvironmentID {
-			continue
-		}
-		found = true
 		if guardErr := s.requireUnmanagedEnvironmentID(ctx, p.OrgID, project, env.ID); guardErr != nil {
 			if errors.Is(guardErr, projects.ErrFleetManaged) {
 				preview.Blockers = append(preview.Blockers, "Manage instance placement through its fleet.")
@@ -218,7 +237,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 			}
 			return nil, guardErr
 		}
-		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env.ID)
+		defaultCloud, _, e := st.DefaultCloud(ctx, p.OrgID, project)
 		if e != nil {
 			return nil, e
 		}
@@ -243,13 +262,9 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				copyAssignment.DefaultPlacement = &proposed
 			}
 			after = &copyAssignment
-		default:
-			if generation != in.Revision {
-				return nil, cloudprofiles.ErrConflict
-			}
-			preview.BeforeAssignment, preview.AfterAssignment = assignment, after
 		}
-		if after != nil {
+		// A project default change pinned its grants above, once.
+		if after != nil && !in.ProjectDefault {
 			if grants, ok := st.(cloudprofiles.GrantStore); ok {
 				g, grantErr := grants.GetProjectGrant(ctx, p.OrgID, after.CloudID, project)
 				if grantErr != nil {
@@ -275,7 +290,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				snapshot.Grants = append(snapshot.Grants, *g)
 			}
 		}
-		for _, pin := range []*cloudprofiles.Assignment{assignment, after} {
+		for _, pin := range []*cloudprofiles.ProjectCloud{assignment, after} {
 			if pin == nil {
 				continue
 			}
@@ -538,11 +553,8 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if string(routeSnapshot) == "null" {
 			routeSnapshot = []byte("[]")
 		}
-		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{LocationReviews: locationReviews, Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, AssignmentRevision: generation, Bindings: raw, Plan: encoded})
+		snapshot.Environments = append(snapshot.Environments, cloudprofiles.EnvironmentSnapshot{LocationReviews: locationReviews, Routes: routeSnapshot, ProjectID: project, EnvironmentID: env.ID, DefaultCloud: defaultCloud, Bindings: raw, Plan: encoded})
 		preview.Environments = append(preview.Environments, change)
-	}
-	if !found {
-		return nil, cloudprofiles.ErrNotFound
 	}
 	snapshot.ConnectionIdentities = map[string]string{}
 	for _, id := range snapshot.Connections {
@@ -956,14 +968,15 @@ func (s *Service) CloudPreview(ctx context.Context, p security.Principal, projec
 	return preview, err
 }
 
-// Assignment references survive revocation for removal and compensation. Target
-// configuration is visible only through the current grant; retained full state
-// stays in the private comparison snapshot and cleanup resolver.
+// The default Cloud either side of a change survives revocation for removal
+// and compensation. Target configuration is visible only through the
+// current grant; retained full state stays in the private comparison
+// snapshot and cleanup resolver.
 func (s *Service) filterCloudPreviewAssignments(ctx context.Context, p security.Principal, preview *cloudprofiles.Preview) error {
 	if s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID) == nil {
 		return nil
 	}
-	for _, field := range []**cloudprofiles.Assignment{&preview.BeforeAssignment, &preview.AfterAssignment} {
+	for _, field := range []**cloudprofiles.ProjectCloud{&preview.BeforeCloud, &preview.AfterCloud} {
 		if *field == nil {
 			continue
 		}

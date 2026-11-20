@@ -161,6 +161,37 @@ func applyCloudAPI(t *testing.T, c *client, base string, preview *cloudprofiles.
 	c.must(http.StatusAccepted, http.MethodPost, base+"/cloud-changes/apply", apiclient.ApplyCloudInput{PreviewID: preview.ID, Revision: preview.Revision, IdempotencyKey: key}, &result)
 	return &result
 }
+
+// makeDefaultCloudAPI makes cloud the project's default Cloud through a
+// reviewed change and waits for it to settle. A project's first grant is
+// already its default, and then there is nothing to review: it returns nil.
+// makeDefaultCloudAPI makes cloud the project's default through the reviewed
+// API change, unless it already is.
+func makeDefaultCloudAPI(t *testing.T, c *client, base, cloud, key string) {
+	t.Helper()
+	var current apiclient.DefaultCloud
+	c.must(http.StatusOK, http.MethodGet, base+"/default-cloud", nil, &current)
+	if current.Cloud != nil && current.Cloud.CloudID == cloud {
+		return
+	}
+	var preview cloudprofiles.Preview
+	c.must(http.StatusOK, http.MethodPost, base+"/default-cloud/preview", apiclient.DefaultCloudInput{CloudID: cloud, Revision: current.Revision}, &preview)
+	result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, key).ID)
+	if result.Status != cloudprofiles.SyncSucceeded {
+		t.Fatalf("default Cloud change: %+v", result)
+	}
+}
+
+// cloudPreviewEnvironment finds one environment's reviewed change.
+func cloudPreviewEnvironment(preview *cloudprofiles.Preview, env string) *cloudprofiles.EnvironmentChange {
+	for i := range preview.Environments {
+		if preview.Environments[i].EnvironmentID == env {
+			return &preview.Environments[i]
+		}
+	}
+	return nil
+}
+
 func TestCloudAPIActualReleaseSwitchAndNextRelease(t *testing.T) {
 	provider := newCloudAPIVercel(t)
 	cfg, r, c, org, project := cloudAPISetup(t)
@@ -198,14 +229,15 @@ func TestCloudAPIActualReleaseSwitchAndNextRelease(t *testing.T) {
 	if env == "" {
 		t.Fatal("production missing")
 	}
-	assignment := base + "/environments/" + env + "/cloud"
-	var initial apiclient.EnvironmentCloud
+	// Creating a Cloud inside the project grants it without making it the default.
+	assignment := base + "/default-cloud"
+	var initial apiclient.DefaultCloud
 	c.must(http.StatusOK, http.MethodGet, assignment, nil, &initial)
-	if initial.Assignment != nil || initial.Revision != 0 {
-		t.Fatalf("unassigned: %+v", initial)
+	if initial.Cloud != nil || initial.Revision != 0 {
+		t.Fatalf("no default Cloud: %+v", initial)
 	}
 	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
+	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: cloud.ID}, &preview)
 	first := applyCloudAPI(t, c, base, &preview, "initial-assignment")
 	if got := waitCloudAPI(t, c, base, first.ID); got.Status != cloudprofiles.SyncSucceeded {
 		t.Fatalf("initial: %+v", got)
@@ -231,7 +263,9 @@ ignore:
 	}
 	input := cloudprofiles.ChangeInput{CloudID: cloud.ID, TargetID: target.ID, Revision: 1, Provider: "vercel", ConnectionID: newAccount.ID}
 	c.must(http.StatusOK, http.MethodPost, base+"/cloud-changes/preview", input, &preview)
-	if len(preview.Blockers) != 0 || len(preview.Environments) != 1 || preview.Environments[0].Summary.Replace != 1 {
+	// Every environment of the project uses its default Cloud; only
+	// production runs anything on the target.
+	if production := cloudPreviewEnvironment(&preview, env); len(preview.Blockers) != 0 || len(preview.Environments) != 2 || production == nil || production.Summary.Replace != 1 {
 		t.Fatalf("switch review: %+v", preview)
 	}
 	// A private snapshot must never appear in the preview or read API.
@@ -370,10 +404,15 @@ ignore:
 	otherBase := "/api/v1/projects/" + other.ID
 	c.must(http.StatusNotFound, http.MethodGet, otherBase+"/clouds/"+cloud.ID, nil, nil)
 	c.must(http.StatusNotFound, http.MethodGet, otherBase+"/cloud-syncs/"+operation.ID, nil, nil)
-	c.must(http.StatusNotFound, http.MethodGet, otherBase+"/environments/"+env+"/cloud", nil, nil)
+	c.must(http.StatusNotFound, http.MethodPost, otherBase+"/default-cloud/preview", apiclient.DefaultCloudInput{CloudID: cloud.ID}, nil)
 	var foreignCloud cloudprofiles.Profile
 	c.must(http.StatusCreated, http.MethodPost, otherBase+"/clouds", cloudprofiles.CreateInput{Name: "Foreign"}, &foreignCloud)
-	c.must(http.StatusNotFound, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: foreignCloud.ID, Revision: 1}, nil)
+	var standing apiclient.DefaultCloud
+	c.must(http.StatusOK, http.MethodGet, assignment, nil, &standing)
+	if standing.Cloud == nil || standing.Cloud.CloudID != cloud.ID {
+		t.Fatalf("default Cloud: %+v", standing)
+	}
+	c.must(http.StatusNotFound, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: foreignCloud.ID, Revision: standing.Revision}, nil)
 	c.must(http.StatusBadRequest, http.MethodGet, base+"/cloud-syncs?before=bad-cursor", nil, nil)
 	input.Revision = 1
 	c.must(http.StatusConflict, http.MethodPost, base+"/cloud-changes/preview", input, nil)
@@ -458,7 +497,7 @@ func TestCloudAPIStartupAndPeriodicOutboxRecovery(t *testing.T) {
 		ID string `json:"id"`
 	}
 	c.must(http.StatusCreated, http.MethodPost, base+"/environments", map[string]string{"name": "recovery"}, &env)
-	assignment := base + "/environments/" + env.ID + "/cloud"
+	assignment := base + "/default-cloud"
 	db := pgdriver.New()
 	if err := db.Open(t.Context(), cfg.Database.URL); err != nil {
 		t.Fatal(err)
@@ -480,7 +519,11 @@ func TestCloudAPIStartupAndPeriodicOutboxRecovery(t *testing.T) {
 		return sync
 	}
 	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID, Revision: 0}, &preview)
+	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: cloud.ID, Revision: 0}, &preview)
+	// The change covers every environment of the project, the new one too.
+	if cloudPreviewEnvironment(&preview, env.ID) == nil {
+		t.Fatalf("default Cloud review missed an environment: %+v", preview.Environments)
+	}
 	r.stop()
 	pending := acceptWithoutEnqueue("startup-outbox", &preview)
 	r = start(t, cfg)
@@ -488,17 +531,30 @@ func TestCloudAPIStartupAndPeriodicOutboxRecovery(t *testing.T) {
 	if got := waitCloudAPI(t, c, base, pending.ID); got.Status != cloudprofiles.SyncSucceeded {
 		t.Fatalf("startup: %+v", got)
 	}
-	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: "", Revision: 1}, &preview)
+	var assigned apiclient.DefaultCloud
+	c.must(http.StatusOK, http.MethodGet, assignment, nil, &assigned)
+	if assigned.Cloud == nil || assigned.Cloud.CloudID != cloud.ID || assigned.Revision == 0 {
+		t.Fatalf("default Cloud: %+v", assigned)
+	}
+	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: "", Revision: assigned.Revision}, &preview)
 	pending = acceptWithoutEnqueue("periodic-outbox", &preview)
 	if got := waitCloudAPI(t, c, base, pending.ID); got.Status != cloudprofiles.SyncSucceeded {
 		t.Fatalf("periodic: %+v", got)
 	}
-	var tombstone apiclient.EnvironmentCloud
+	var tombstone apiclient.DefaultCloud
 	c.must(http.StatusOK, http.MethodGet, assignment, nil, &tombstone)
-	if tombstone.Assignment != nil || tombstone.Revision != 2 {
-		t.Fatalf("unassignment generation lost: %+v", tombstone)
+	if tombstone.Cloud != nil || tombstone.Revision != 0 {
+		t.Fatalf("default Cloud not cleared: %+v", tombstone)
 	}
-	c.must(http.StatusConflict, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID, Revision: 0}, nil)
+	// The grant keeps advancing, so a review against the old default is stale.
+	var grants struct {
+		Grants []apiclient.CloudProjectGrant `json:"grants"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/clouds/"+cloud.ID+"/projects", nil, &grants)
+	if len(grants.Grants) != 1 || grants.Grants[0].Default || grants.Grants[0].Revision != assigned.Revision+1 {
+		t.Fatalf("cleared default lost its grant revision: %+v", grants)
+	}
+	c.must(http.StatusConflict, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: cloud.ID, Revision: assigned.Revision}, nil)
 	c.must(http.StatusConflict, http.MethodPost, base+"/cloud-syncs/"+pending.ID+"/retry", nil, nil)
 	c.must(http.StatusOK, http.MethodPost, base+"/cloud-syncs/"+pending.ID+"/revert/preview", nil, &preview)
 	if preview.Reverts != pending.ID {
@@ -509,9 +565,9 @@ func TestCloudAPIStartupAndPeriodicOutboxRecovery(t *testing.T) {
 	if got := waitCloudAPI(t, c, base, compensation.ID); got.Status != cloudprofiles.SyncSucceeded {
 		t.Fatalf("compensation %+v", got)
 	}
-	var restored apiclient.EnvironmentCloud
+	var restored apiclient.DefaultCloud
 	c.must(http.StatusOK, http.MethodGet, assignment, nil, &restored)
-	if restored.Assignment == nil || restored.Assignment.CloudID != cloud.ID || restored.Revision != 3 {
+	if restored.Cloud == nil || restored.Cloud.CloudID != cloud.ID || restored.Revision != assigned.Revision+2 {
 		t.Fatalf("restored %+v", restored)
 	}
 }
@@ -535,14 +591,14 @@ func assertCloudAPISchemas(t *testing.T, c *client) {
 			found[op.OperationID] = true
 		}
 	}
-	for _, operation := range []string{"clouds.list", "clouds.create", "clouds.get", "clouds.update", "clouds.delete", "cloudTargets.list", "cloudTargets.get", "cloudTargets.create", "cloudTargets.update", "cloudTargets.delete", "cloudChanges.preview", "cloudChanges.getPreview", "cloudChanges.apply", "environmentClouds.get", "environmentClouds.preview", "cloudSyncs.list", "cloudSyncs.get", "cloudSyncs.retry", "cloudSyncs.previewRevert", "cloudSyncs.applyRevert", "cloudSyncs.completeRouting"} {
+	for _, operation := range []string{"clouds.list", "clouds.create", "clouds.get", "clouds.update", "clouds.delete", "cloudTargets.list", "cloudTargets.get", "cloudTargets.create", "cloudTargets.update", "cloudTargets.delete", "cloudChanges.preview", "cloudChanges.getPreview", "cloudChanges.apply", "defaultCloud.get", "defaultCloud.preview", "cloudSyncs.list", "cloudSyncs.get", "cloudSyncs.retry", "cloudSyncs.previewRevert", "cloudSyncs.applyRevert", "cloudSyncs.completeRouting"} {
 		if !found[operation] {
 			t.Errorf("missing operation %s", operation)
 		}
 	}
-	assignmentSchema := document.Components.Schemas["EnvironmentCloud"]
-	if !strings.Contains(string(assignmentSchema.Properties["assignment"]), "nullable") {
-		t.Error("assignment schema does not admit explicit null")
+	assignmentSchema := document.Components.Schemas["DefaultCloud"]
+	if !strings.Contains(string(assignmentSchema.Properties["cloud"]), "nullable") {
+		t.Error("default Cloud schema does not admit explicit null")
 	}
 	for _, name := range []string{"Sync", "Preview"} {
 		schema, ok := document.Components.Schemas[name]

@@ -126,7 +126,7 @@ func TestCloudCommandsRejectInvalidTimeoutBeforeMutation(t *testing.T) {
 		t.Fatal("contacted API before timeout validation")
 	}
 }
-func TestCloudAssignmentRevertAndRoutingRequestContracts(t *testing.T) {
+func TestCloudDefaultRevertAndRoutingRequestContracts(t *testing.T) {
 	var path string
 	var body map[string]any
 	var out bytes.Buffer
@@ -146,7 +146,7 @@ func TestCloudAssignmentRevertAndRoutingRequestContracts(t *testing.T) {
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"id":"compensation","status":"pending"}`))
 		default:
-			_, _ = w.Write([]byte(`{"assignment":null,"revision":2}`))
+			_, _ = w.Write([]byte(`{"project_id":"p","cloud":null,"revision":2}`))
 		}
 	}))
 	defer srv.Close()
@@ -156,11 +156,17 @@ func TestCloudAssignmentRevertAndRoutingRequestContracts(t *testing.T) {
 		}
 		return "lp_test"
 	}})
-	if err := app.Run([]string{"clouds", "assign", "app", "env", "--cloud", "cloud", "--revision", "2"}); err != nil {
+	if err := app.Run([]string{"clouds", "make-default", "app", "cloud", "--revision", "2"}); err != nil {
 		t.Fatal(err)
 	}
-	if path != "/api/v1/projects/p/environments/env/cloud/preview" || body["revision"] != float64(2) || body["cloud_id"] != "cloud" {
-		t.Fatalf("assignment %s %#v", path, body)
+	if path != "/api/v1/projects/p/default-cloud/preview" || body["revision"] != float64(2) || body["cloud_id"] != "cloud" {
+		t.Fatalf("make-default %s %#v", path, body)
+	}
+	if err := app.Run([]string{"clouds", "make-default", "app", "none", "--revision", "2"}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/v1/projects/p/default-cloud/preview" || body["cloud_id"] != "" {
+		t.Fatalf("make-default none %s %#v", path, body)
 	}
 	if err := app.Run([]string{"cloud-syncs", "revert", "app", "original", "--yes", "--request-id", "compensate"}); err != nil {
 		t.Fatal(err)

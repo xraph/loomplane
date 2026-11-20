@@ -11,7 +11,7 @@ import (
 )
 
 // taggedFixture has two Vercel targets: frontend (web, eu) and preview (web, us).
-func taggedFixture() (*cloudprofiles.Assignment, []ConnectionOption) {
+func taggedFixture() (*cloudprofiles.ProjectCloud, []ConnectionOption) {
 	a, c := cloudTargetFixture()
 	a.Targets[0].Tags = []string{"eu", "web"}
 	a.Targets[1].Tags = []string{"us", "web"}
@@ -117,7 +117,7 @@ func TestCloudTagsSkipHeldServices(t *testing.T) {
 	}
 }
 
-func cloudDefaultFixture() (*cloudprofiles.Assignment, []ConnectionOption) {
+func cloudDefaultFixture() (*cloudprofiles.ProjectCloud, []ConnectionOption) {
 	a, c := cloudTargetFixture()
 	a.Targets = nil
 	a.DefaultPlacement = &cloudprofiles.DefaultPlacement{Provider: "vercel", ConnectionID: "b", Region: "iad1"}
@@ -204,7 +204,7 @@ func TestAppliedCloudPlanMovesDefaultPlacedServicesToTheNewDefault(t *testing.T)
 	b := appliedTestBinding(t, "web", "commit")
 	var cfg ServiceConfig
 	_ = json.Unmarshal(b.Config, &cfg)
-	cfg.CloudPlacement = &CloudPlacement{Default: true, CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, Provider: "vercel", ConnectionID: "old", AccountIdentity: "vercel:old"}
+	cfg.CloudPlacement = &CloudPlacement{Default: true, CloudID: "cloud", CloudRevision: 1, Provider: "vercel", ConnectionID: "old", AccountIdentity: "vercel:old"}
 	b.Config, _ = json.Marshal(cfg)
 	options := []ConnectionOption{{ID: "new", Cloud: "vercel", Ready: true, Account: "new", Details: map[string]string{"team_id": "new"}}}
 

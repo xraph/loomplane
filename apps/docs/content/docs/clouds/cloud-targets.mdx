@@ -1,9 +1,9 @@
 ---
 title: Cloud targets
-description: Group accounts into an organization Cloud, name targets, grant them to projects, and place services by name or tag.
+description: Group accounts into an organization Cloud, name targets, grant them to projects, and place services by name or tag in every environment.
 ---
 
-Create an organization Cloud before you create a project. Add named targets, grant a project access, then assign the Cloud to an environment. A Cloud belongs to one organization. A target selects either a managed provider account or a server pool. Your manifest can then say `frontend` without carrying an account ID.
+Create an organization Cloud, add named targets, and grant a project access. A project's first Cloud becomes its default Cloud, and every environment of the project deploys through it. A Cloud belongs to one organization. A target selects either a managed provider account or a server pool. Your manifest can then say `frontend` without carrying an account ID, and the same name works in production, staging and every preview.
 
 ```yaml
 version: 1
@@ -22,14 +22,12 @@ loomctl clouds create --organization --name Production
 loomctl cloud-targets create cloud_... --organization \
   --name frontend --provider vercel --connection conn_...
 # Once your project exists, grant all targets or select them with --targets.
+# A project's first grant makes that Cloud its default.
 loomctl cloud-grants grant cloud_... project_... --targets target_...
-loomctl clouds assignment my-project env_...
-loomctl clouds assign my-project env_... --cloud cloud_... --revision 0
-loomctl clouds assign my-project env_... --cloud cloud_... --revision 0 \
-  --yes --request-id assign-production --wait --timeout 10m
+loomctl clouds default my-project
 ```
 
-You can list, create, rename and delete organization Clouds with `--organization` and no project argument. The same flag works on `cloud-targets` and `cloud-syncs`. The project forms still work too, such as `clouds create my-project --name Production`. Assignment always needs a project.
+You can list, create, rename and delete organization Clouds with `--organization` and no project argument. The same flag works on `cloud-targets` and `cloud-syncs`. The project forms still work too, such as `clouds create my-project --name Production`. A project's default Cloud always needs a project.
 
 ```bash
 loomctl clouds --organization
@@ -41,7 +39,20 @@ loomctl cloud-syncs --organization
 
 An empty `--targets` grants the whole Cloud, including its default placement. A target list grants only those. Revoking prevents fresh placement but keeps the authority needed to clean up work you already accepted. Sharing capacity doesn't grant another project's releases, variables, logs or routes.
 
-The first assignment uses revision `0`. Read `clouds assignment` before later changes, because unassigning keeps the generation. An unassigned environment can have a nonzero revision, and you need it to assign again. An environment from another project returns a scoped error, never an empty assignment.
+## Change the default Cloud
+
+Environments don't pick Clouds. To move a project to another Cloud, make that Cloud its default. It's a reviewed change, because services already running move with it:
+
+```bash
+loomctl clouds default my-project            # shows the Cloud and its revision
+loomctl clouds make-default my-project cloud_... --revision 3
+loomctl clouds make-default my-project cloud_... --revision 3 \
+  --yes --request-id move-to-eu --wait --timeout 10m
+```
+
+`--revision` is the current default's revision from `clouds default`, or `0` when the project has none. The review covers every environment of the project and moves only the services that run on the old default. Pass `none` instead of a Cloud ID to leave the project without a default. Only a Cloud granted to the project can become its default, and revoking a grant ends its default without moving anything.
+
+Environments still differ where your manifest says so. Give staging its own target with an environment override, as `trainer` does below.
 
 ## Pick a target by tags
 
@@ -88,4 +99,4 @@ You can also pass `default_placement` when you create the Cloud, and send `"defa
 
 The default reaches a project only when its grant covers the whole Cloud. If an admin granted a chosen set of targets, your services can use those targets but not the default.
 
-You can set a first default at any time. Once an environment uses the Cloud, `default-placement` refuses to replace or clear it (HTTP 409). Change it with a reviewed switch, described in [Adopting and moving services](/docs/clouds/adopting-and-moving#switch-a-default).
+You can set a first default at any time. Once the Cloud is a project's default Cloud, or runs a service its default placed, `default-placement` refuses to replace or clear it (HTTP 409). Change it with a reviewed switch, described in [Adopting and moving services](/docs/clouds/adopting-and-moving#switch-a-default).

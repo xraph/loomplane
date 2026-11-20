@@ -38,10 +38,10 @@ func TestSelectsPlacement(t *testing.T) {
 
 func TestRepinCloudPlacement(t *testing.T) {
 	a := appliedAssignment("old")
-	a.CloudRevision, a.Revision, a.GrantRevision = 7, 3, 2
+	a.CloudRevision, a.GrantRevision = 7, 2
 	a.DefaultPlacement = &cloudprofiles.DefaultPlacement{Provider: "vercel", ConnectionID: "default"}
 	pin, ok := repinCloudPlacement(CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 1, Provider: "vercel", ConnectionID: "old"}, a)
-	if !ok || pin.CloudRevision != 7 || pin.AssignmentRevision != 3 || pin.GrantRevision != 2 || pin.TargetRevision != 2 || pin.TargetName != "frontend" {
+	if !ok || pin.CloudRevision != 7 || pin.GrantRevision != 2 || pin.TargetRevision != 2 || pin.TargetName != "frontend" {
 		t.Fatalf("target pin: %+v %v", pin, ok)
 	}
 	if pin, ok = repinCloudPlacement(CloudPlacement{Default: true, CloudID: "cloud", Provider: "vercel", ConnectionID: "default"}, a); !ok || pin.CloudRevision != 7 {
@@ -65,7 +65,7 @@ func TestAppliedCloudPlanDefaultSwitchRepinsDependents(t *testing.T) {
 	api := appliedTestBinding(t, "api", "commit")
 	var cfg ServiceConfig
 	_ = json.Unmarshal(api.Config, &cfg)
-	cfg.CloudPlacement = &CloudPlacement{Default: true, CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, Provider: "vercel", ConnectionID: "old", AccountIdentity: "vercel:old"}
+	cfg.CloudPlacement = &CloudPlacement{Default: true, CloudID: "cloud", CloudRevision: 1, Provider: "vercel", ConnectionID: "old", AccountIdentity: "vercel:old"}
 	api.Config, _ = json.Marshal(cfg)
 	web := appliedTestBinding(t, "web", "commit")
 	var webCfg ServiceConfig
@@ -98,7 +98,7 @@ func platformBinding(t *testing.T) *Binding {
 	t.Helper()
 	cfg := ServiceConfig{Provider: "platform", Region: "fra", Repo: "app", CommitSHA: "commit", Service: "web", Ecosystem: "go", Image: "Dockerfile", Workload: provider.WebApp, Execution: provider.Container, Public: true,
 		BuildTarget:    &BuildTarget{BuilderCloud: platformBuilder, Builder: platformBuilder},
-		CloudPlacement: &CloudPlacement{CloudID: "cloud_platform", CloudRevision: 1, AssignmentRevision: 1, GrantRevision: 1, TargetID: "target_fra", TargetRevision: 1, TargetName: "fra", Provider: "platform", Region: "fra", RegionSource: "default", Platform: &platformcloud.Ref{Region: "fra", VCPUs: 1, MemoryMiB: 512, DiskMiB: platformServiceDiskMiB}},
+		CloudPlacement: &CloudPlacement{CloudID: "cloud_platform", CloudRevision: 1, GrantRevision: 1, TargetID: "target_fra", TargetRevision: 1, TargetName: "fra", Provider: "platform", Region: "fra", RegionSource: "default", Platform: &platformcloud.Ref{Region: "fra", VCPUs: 1, MemoryMiB: 512, DiskMiB: platformServiceDiskMiB}},
 		AppliedInputs:  &AppliedInputs{Variables: "org/env/applied-inputs/dep/web", Source: &PlanSource{SourceID: "src", Alias: "app", Repository: "owner/app", CommitSHA: "commit"}, ArtifactKey: "sources/org/project/app/commit.tar.gz"}}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -114,7 +114,7 @@ func platformBinding(t *testing.T) *Binding {
 func TestDefaultSwitchOffPlatformCloud(t *testing.T) {
 	registry := providers.Registry()
 	options := []ConnectionOption{{ID: "new", Cloud: "vercel", Ready: true, Account: "new", Details: map[string]string{"team_id": "new"}}}
-	mine := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 2, DefaultPlacement: &cloudprofiles.DefaultPlacement{Provider: "vercel", ConnectionID: "new"}}
+	mine := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 2, DefaultPlacement: &cloudprofiles.DefaultPlacement{Provider: "vercel", ConnectionID: "new"}}
 
 	off := AppliedCloudPlan([]*Binding{platformBinding(t)}, mine, "", options, registry)
 	if !off.Executable {
@@ -129,7 +129,7 @@ func TestDefaultSwitchOffPlatformCloud(t *testing.T) {
 	var cfg ServiceConfig
 	_ = json.Unmarshal(platformBinding(t).Config, &cfg)
 	cfg.Provider, cfg.Execution, cfg.BuildTarget = "vercel", provider.Serverless, nil
-	cfg.CloudPlacement = &CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 2, TargetID: "target_mine", TargetRevision: 1, TargetName: "fra", Provider: "vercel", ConnectionID: "new", AccountIdentity: "vercel:new"}
+	cfg.CloudPlacement = &CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target_mine", TargetRevision: 1, TargetName: "fra", Provider: "vercel", ConnectionID: "new", AccountIdentity: "vercel:new"}
 	back := platformBinding(t)
 	back.Provider, back.ConnectionID, back.Region = "vercel", "new", ""
 	back.Config, _ = json.Marshal(cfg)

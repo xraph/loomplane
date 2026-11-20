@@ -3015,6 +3015,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly defaultCloud = {
+    /**
+     * defaultCloud.get
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DefaultCloud> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/default-cloud`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DefaultCloud"],
+      };
+
+      return this.request<types.DefaultCloud>(config);
+    },
+
+    /**
+     * defaultCloud.preview
+     */
+    preview: async (id: string, body: types.DefaultCloudInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Preview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/default-cloud/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DefaultCloudInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Preview"],
+      };
+
+      return this.request<types.Preview>(config);
+    },
+
+  };
+
   public readonly deployed = {
     /**
      * The commit of each of the project's repositories deployed in the environment; one with nothing deployed there isn't listed, and a plan can't hold it
@@ -3944,43 +3981,6 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectDomainList>(config);
-    },
-
-  };
-
-  public readonly environmentClouds = {
-    /**
-     * environmentClouds.get
-     */
-    get: async (id: string, environmentId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EnvironmentCloud> => {
-      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environmentId))}/cloud`;
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["EnvironmentCloud"],
-      };
-
-      return this.request<types.EnvironmentCloud>(config);
-    },
-
-    /**
-     * environmentClouds.preview
-     */
-    preview: async (id: string, environmentId: string, body: types.EnvironmentCloudInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Preview> => {
-      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environmentId))}/cloud/preview`;
-      const config: RequestConfig = {
-        method: 'POST',
-        url: __path,
-        body,
-        bodyCodec: CODECS["EnvironmentCloudInputBody"],
-        signal: options?.signal,
-        retry: options?.retry,
-        responseCodec: CODECS["Preview"],
-      };
-
-      return this.request<types.Preview>(config);
     },
 
   };

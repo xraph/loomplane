@@ -13,7 +13,7 @@ var (
 	ErrInvalid  = errors.New("invalid cloud configuration")
 	ErrExists   = errors.New("a cloud or target with that name already exists")
 	ErrConflict = errors.New("cloud configuration changed; reload and try again")
-	ErrInUse    = errors.New("this cloud or target is assigned to an environment")
+	ErrInUse    = errors.New("this Cloud or target is in use by a project or a running service")
 	// ErrPlatformOwned refuses any change to the Loomplane Cloud an instance
 	// projects into a workspace. Only the platform control plane writes it.
 	ErrPlatformOwned = errors.New("Loomplane Cloud is run by this instance and can't be changed here.") //nolint:revive,staticcheck // the message is shown as written
@@ -74,23 +74,30 @@ type Target struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Assignment resolves an environment's desired Cloud and all of its targets.
-type Assignment struct {
-	GrantRevision int64    `json:"grant_revision"`
-	CloudRevision int64    `json:"cloud_revision"`
-	OrgID         string   `json:"org_id"`
-	ProjectID     string   `json:"project_id"`
-	EnvironmentID string   `json:"environment_id"`
-	CloudID       string   `json:"cloud_id"`
-	Revision      int64    `json:"revision"`
-	Targets       []Target `json:"targets"`
+// ProjectCloud is one Cloud as one project may use it: the targets the
+// project's grant allows and, when the grant covers the whole Cloud, the
+// Cloud's default placement. Every environment of the project sees the same
+// view; environments differ only in what their manifest asks for.
+type ProjectCloud struct {
+	GrantRevision int64  `json:"grant_revision"`
+	CloudRevision int64  `json:"cloud_revision"`
+	OrgID         string `json:"org_id"`
+	ProjectID     string `json:"project_id"`
+	CloudID       string `json:"cloud_id"`
+	// Default marks the project's default Cloud, the one a manifest reaches
+	// without naming a Cloud.
+	Default bool     `json:"default"`
+	Targets []Target `json:"targets"`
 	// DefaultPlacement is the Cloud's default when the project's grant covers
 	// the whole Cloud. A grant limited to chosen targets never reaches it.
 	DefaultPlacement *DefaultPlacement `json:"default_placement,omitempty"`
 }
 
-// Resolver reads placement without changing it. A valid unassigned environment
-// returns nil; an environment outside the requested scope returns ErrNotFound.
+// Resolver reads placement without changing it.
 type Resolver interface {
-	Resolve(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, error)
+	// ResolveCloud reads the project's view of cloud, or of the project's
+	// default Cloud when cloud is "". A project with no default Cloud
+	// returns nil for "". A Cloud the project holds no live grant on, or a
+	// project outside the organization, returns ErrNotFound.
+	ResolveCloud(ctx context.Context, orgID, projectID, cloudID string) (*ProjectCloud, error)
 }

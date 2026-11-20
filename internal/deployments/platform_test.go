@@ -874,13 +874,13 @@ func platformRunner(t *testing.T) (*Runner, *planning.Plan, *fakePlans, *recorde
 	a.Provider, a.Region, a.ConnectionID = "platform", "fra", ""
 	a.Service.Provider, a.Service.Region, a.Service.Public = "platform", "fra", false
 	a.Service.BuildTarget = &planning.BuildTarget{BuilderCloud: "platform", Builder: "platform", Image: platformImage}
-	a.Service.CloudPlacement = &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud_platform", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target_fra", TargetRevision: 1, TargetName: "fra",
+	a.Service.CloudPlacement = &planning.CloudPlacement{GrantRevision: 1, CloudID: "cloud_platform", CloudRevision: 1, TargetID: "target_fra", TargetRevision: 1, TargetName: "fra",
 		Provider: "platform", Region: "fra", RegionSource: "default", Platform: &platformcloud.Ref{Region: "fra", VCPUs: 1, MemoryMiB: 512, DiskMiB: 4096}}
 	exec := &recorder{}
 	r, _, plans := newRunner(t, plan, exec, nil)
 	r.executors["platform"] = exec
 	r.credentials = failingCredentials{t}
-	resolved := &cloudResolver{assignment: &cloudprofiles.Assignment{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, GrantRevision: 1, CloudID: "cloud_platform", CloudRevision: 1, Revision: 1,
+	resolved := &cloudResolver{assignment: &cloudprofiles.ProjectCloud{OrgID: plan.OrgID, ProjectID: plan.ProjectID, GrantRevision: 1, CloudID: "cloud_platform", CloudRevision: 1,
 		Targets: []cloudprofiles.Target{{ID: "target_fra", OrgID: plan.OrgID, CloudID: "cloud_platform", Name: "fra", Runtime: "platform", Provider: "platform", Region: "fra", Revision: 1}}}}
 	r.cloudProfiles = resolved
 	return r, plan, plans, exec, resolved
@@ -907,7 +907,7 @@ func TestRunnerRevalidatesPlatformTarget(t *testing.T) {
 		"target revision":   func(_ *planning.Plan, c *cloudResolver) { c.assignment.Targets[0].Revision++ },
 		"target runtime":    func(_ *planning.Plan, c *cloudResolver) { c.assignment.Targets[0].Runtime = "managed" },
 		"target region":     func(_ *planning.Plan, c *cloudResolver) { c.assignment.Targets[0].Region = "ams" },
-		"assignment":        func(_ *planning.Plan, c *cloudResolver) { c.assignment.Revision++ },
+		"grant":             func(_ *planning.Plan, c *cloudResolver) { c.assignment.GrantRevision++ },
 		"named connection":  func(p *planning.Plan, _ *cloudResolver) { p.Actions[0].ConnectionID = "conn_v" },
 		"room in elsewhere": func(p *planning.Plan, _ *cloudResolver) { p.Actions[0].Service.CloudPlacement.Platform.Region = "ams" },
 	} {

@@ -15,7 +15,7 @@ import (
 func appliedTestBinding(t *testing.T, name, commit string) *Binding {
 	t.Helper()
 	cfg := ServiceConfig{Provider: "vercel", Repo: "app", CommitSHA: commit, Service: name, Workload: provider.WebApp, Execution: provider.Serverless, Public: true,
-		CloudPlacement: &CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "frontend", Provider: "vercel", ConnectionID: "old", AccountIdentity: "vercel:old"},
+		CloudPlacement: &CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "frontend", Provider: "vercel", ConnectionID: "old", AccountIdentity: "vercel:old"},
 		AppliedInputs:  &AppliedInputs{Variables: "org/env/applied-inputs/dep/" + name, Source: &PlanSource{SourceID: "src", Alias: "app", Repository: "owner/app", CommitSHA: commit}, ArtifactKey: "sources/org/project/app/" + commit + ".tar.gz"}}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -23,8 +23,8 @@ func appliedTestBinding(t *testing.T, name, commit string) *Binding {
 	}
 	return &Binding{ID: "bind_" + name, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Name: name, Subject: ServiceSubject, Provider: "vercel", ConnectionID: "old", CommitSHA: commit, Config: raw, ExternalID: "ext_" + name, PlanID: "plan_" + name}
 }
-func appliedAssignment(connection string) *cloudprofiles.Assignment {
-	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "frontend", Provider: "vercel", ConnectionID: connection, Revision: 2}}}
+func appliedAssignment(connection string) *cloudprofiles.ProjectCloud {
+	return &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "frontend", Provider: "vercel", ConnectionID: connection, Revision: 2}}}
 }
 func TestAppliedCloudPlanMixedSourceAndDependents(t *testing.T) {
 	registry := providers.Registry()

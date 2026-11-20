@@ -20,16 +20,19 @@ import (
 // CapacityIntent pins the workload you approve before a runtime exists.
 // The admitted CloudPlacement is persisted separately from this review.
 type CapacityIntent struct {
-	Demand             cloudinfra.CapacityDemand      `json:"demand"`
-	ProviderPin        cloudinfra.CapacityTemplatePin `json:"provider_pin"`
-	Template           cloudinfra.PoolExpansionPolicy `json:"template"`
-	TemplateHash       string                         `json:"template_hash"`
-	CommitSHA          string                         `json:"commit_sha"`
-	AssignmentRevision int64                          `json:"assignment_revision"`
-	CloudRevision      int64                          `json:"cloud_revision"`
-	TargetRevision     int64                          `json:"target_revision"`
-	GrantRevision      int64                          `json:"grant_revision"`
-	TargetName         string                         `json:"target_name"`
+	Demand       cloudinfra.CapacityDemand      `json:"demand"`
+	ProviderPin  cloudinfra.CapacityTemplatePin `json:"provider_pin"`
+	Template     cloudinfra.PoolExpansionPolicy `json:"template"`
+	TemplateHash string                         `json:"template_hash"`
+	CommitSHA    string                         `json:"commit_sha"`
+	// AssignmentRevision pinned the environment's Cloud assignment before
+	// Clouds became per project. Nothing checks it now and new intents leave
+	// it zero, but stored intents are re-hashed on load, so it stays.
+	AssignmentRevision int64  `json:"assignment_revision"`
+	CloudRevision      int64  `json:"cloud_revision"`
+	TargetRevision     int64  `json:"target_revision"`
+	GrantRevision      int64  `json:"grant_revision"`
+	TargetName         string `json:"target_name"`
 }
 
 type capacityPolicyReader interface {
@@ -46,7 +49,7 @@ func capacityTemplateHash(p cloudinfra.PoolExpansionPolicy) (string, error) {
 	return Digest(p)
 }
 
-func newCapacityIntent(plan *Plan, a *cloudprofiles.Assignment, target cloudprofiles.Target, req cloudinfra.PlacementRequest, policy *cloudinfra.CapacityPolicy, repo string) (*CapacityIntent, error) {
+func newCapacityIntent(plan *Plan, a *cloudprofiles.ProjectCloud, target cloudprofiles.Target, req cloudinfra.PlacementRequest, policy *cloudinfra.CapacityPolicy, repo string) (*CapacityIntent, error) {
 	if policy == nil || !policy.Enabled || policy.Revision < 1 || req.LocalData || req.StickyServerID != "" || req.Replicas != 1 || req.CPUMillis <= 0 || req.MemoryBytes <= 0 {
 		return nil, fmt.Errorf("%w: future capacity needs an enabled pool and one bounded stateless replica", ErrInvalid)
 	}
@@ -75,7 +78,7 @@ func newCapacityIntent(plan *Plan, a *cloudprofiles.Assignment, target cloudprof
 	if err != nil {
 		return nil, err
 	}
-	intent := &CapacityIntent{Template: template, Demand: cloudinfra.CapacityDemand{OrgID: plan.OrgID, CloudID: a.CloudID, PoolID: target.PoolID, TargetID: target.ID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: req.Service, Architecture: template.Architecture, Resources: cloudinfra.ResourceVector{CPUMillis: req.CPUMillis, MemoryBytes: req.MemoryBytes, GPUKind: req.GPUKind, GPUs: req.GPUs}, PolicyRevision: policy.Revision}, TemplateHash: hash, CommitSHA: commit, AssignmentRevision: a.Revision, CloudRevision: a.CloudRevision, TargetRevision: target.Revision, GrantRevision: a.GrantRevision, TargetName: target.Name}
+	intent := &CapacityIntent{Template: template, Demand: cloudinfra.CapacityDemand{OrgID: plan.OrgID, CloudID: a.CloudID, PoolID: target.PoolID, TargetID: target.ID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: req.Service, Architecture: template.Architecture, Resources: cloudinfra.ResourceVector{CPUMillis: req.CPUMillis, MemoryBytes: req.MemoryBytes, GPUKind: req.GPUKind, GPUs: req.GPUs}, PolicyRevision: policy.Revision}, TemplateHash: hash, CommitSHA: commit, CloudRevision: a.CloudRevision, TargetRevision: target.Revision, GrantRevision: a.GrantRevision, TargetName: target.Name}
 	intent.Demand.IntentHash, err = Digest(intent)
 	return intent, err
 }
@@ -95,7 +98,7 @@ func templateTakesGPUs(poolKind, kind string, gpus int64) error {
 	return nil
 }
 
-func (s *Service) futureCapacity(ctx context.Context, plan *Plan, a *cloudprofiles.Assignment, target cloudprofiles.Target, req cloudinfra.PlacementRequest, repo string, original error) (*CapacityIntent, error) {
+func (s *Service) futureCapacity(ctx context.Context, plan *Plan, a *cloudprofiles.ProjectCloud, target cloudprofiles.Target, req cloudinfra.PlacementRequest, repo string, original error) (*CapacityIntent, error) {
 	reader, ok := s.store.(capacityPolicyReader)
 	// Loomplane Cloud adds hosts itself; a workspace never asks it for
 	// future capacity, so a refusal there stays a refusal.
@@ -398,7 +401,7 @@ func (s *PgStore) admitCapacityPlacement(ctx context.Context, plan *Plan, a Acti
 	if identity == "" || details["architecture"] != d.Architecture {
 		return capacityReview(d)
 	}
-	pin := CloudPlacement{LocationReview: d.LocationReview, Allocation: candidate.Allocation, PoolID: candidate.PoolID, PoolRevision: candidate.PoolRevision, ServerID: candidate.ServerID, ServerRevision: candidate.ServerRevision, ConnectionID: candidate.ConnectionID, ConnectionGeneration: candidate.ConnectionGeneration, CPUMillis: candidate.CPUMillis, MemoryBytes: candidate.MemoryBytes, GPUKind: candidate.GPUKind, GPUs: candidate.GPUs, CloudID: d.CloudID, CloudRevision: intent.CloudRevision, AssignmentRevision: intent.AssignmentRevision, GrantRevision: intent.GrantRevision, TargetID: d.TargetID, TargetRevision: intent.TargetRevision, TargetName: intent.TargetName, Provider: "server", AccountIdentity: identity}
+	pin := CloudPlacement{LocationReview: d.LocationReview, Allocation: candidate.Allocation, PoolID: candidate.PoolID, PoolRevision: candidate.PoolRevision, ServerID: candidate.ServerID, ServerRevision: candidate.ServerRevision, ConnectionID: candidate.ConnectionID, ConnectionGeneration: candidate.ConnectionGeneration, CPUMillis: candidate.CPUMillis, MemoryBytes: candidate.MemoryBytes, GPUKind: candidate.GPUKind, GPUs: candidate.GPUs, CloudID: d.CloudID, CloudRevision: intent.CloudRevision, GrantRevision: intent.GrantRevision, TargetID: d.TargetID, TargetRevision: intent.TargetRevision, TargetName: intent.TargetName, Provider: "server", AccountIdentity: identity}
 	if d.LocationReview != nil {
 		for _, reviewed := range d.LocationReview.Candidates {
 			if reviewed.TargetID == d.TargetID {

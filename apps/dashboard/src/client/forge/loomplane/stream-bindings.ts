@@ -238,11 +238,11 @@ export const streams = [
   {
     kind: 'entity',
     channel: '/api/v1/realtime/events',
-    message: 'environment_cloud.updated',
-    entity: 'EnvironmentCloudEvent',
+    message: 'project_cloud.updated',
+    entity: 'ProjectCloudEvent',
     intent: 'patch',
-    invalidates: ['EnvironmentCloud'],
-    decode: (payload: unknown) => decode(payload, CODECS['EnvironmentCloudEvent']),
+    invalidates: ['DefaultCloud:{projectId}'],
+    decode: (payload: unknown) => decode(payload, CODECS['ProjectCloudEvent']),
   },
   {
     kind: 'entity',
@@ -250,7 +250,7 @@ export const streams = [
     message: 'cloud_sync.updated',
     entity: 'CloudSyncEvent',
     intent: 'patch',
-    invalidates: ['Sync:{id}', 'Sync[]', 'EnvironmentCloud'],
+    invalidates: ['Sync:{id}', 'Sync[]', 'DefaultCloud:{projectId}'],
     decode: (payload: unknown) => decode(payload, CODECS['CloudSyncEvent']),
   },
   {
@@ -616,11 +616,11 @@ export const streams = [
   {
     kind: 'entity',
     channel: '/api/v1/realtime/ws',
-    message: 'environment_cloud.updated',
-    entity: 'EnvironmentCloudEvent',
+    message: 'project_cloud.updated',
+    entity: 'ProjectCloudEvent',
     intent: 'patch',
-    invalidates: ['EnvironmentCloud'],
-    decode: (payload: unknown) => decode(payload, CODECS['EnvironmentCloudEvent']),
+    invalidates: ['DefaultCloud:{projectId}'],
+    decode: (payload: unknown) => decode(payload, CODECS['ProjectCloudEvent']),
   },
   {
     kind: 'entity',
@@ -628,7 +628,7 @@ export const streams = [
     message: 'cloud_sync.updated',
     entity: 'CloudSyncEvent',
     intent: 'patch',
-    invalidates: ['Sync:{id}', 'Sync[]', 'EnvironmentCloud'],
+    invalidates: ['Sync:{id}', 'Sync[]', 'DefaultCloud:{projectId}'],
     decode: (payload: unknown) => decode(payload, CODECS['CloudSyncEvent']),
   },
   {

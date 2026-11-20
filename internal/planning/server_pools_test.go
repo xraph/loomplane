@@ -26,7 +26,7 @@ func TestPoolServerResourceDefaultsAndBounds(t *testing.T) {
 	}
 }
 func TestPoolTargetSelectsRuntimeAndRemainsStable(t *testing.T) {
-	assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
+	assigned := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
 	options := []ConnectionOption{{ID: "runtime", Cloud: "server", Ready: true, Pooled: true, Details: map[string]string{"docker_id": "daemon", "architecture": "amd64"}}}
 	m := parse(t, "version: 1\nservices:\n  web: {source: cmd/api, cloud_target: shared}\n")
 	pool := &cloudinfra.Placement{PoolID: "pool", PoolRevision: 3, ServerID: "host", ServerRevision: 2, ConnectionID: "runtime", ConnectionGeneration: 1, CPUMillis: 1000, MemoryBytes: 512 << 20}

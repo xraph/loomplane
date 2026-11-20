@@ -170,7 +170,6 @@ type CloudPlacement struct {
 	GrantRevision        int64  `json:"grant_revision,omitempty"`
 	CloudID              string `json:"cloud_id"`
 	CloudRevision        int64  `json:"cloud_revision"`
-	AssignmentRevision   int64  `json:"assignment_revision"`
 	Default              bool   `json:"default,omitempty"`
 	TargetID             string `json:"target_id"`
 	TargetRevision       int64  `json:"target_revision"`
@@ -244,15 +243,14 @@ type CapacityDemand struct {
 }
 
 type CapacityIntent struct {
-	Demand             CapacityDemand                 `json:"demand"`
-	Template           cloudinfra.PoolExpansionPolicy `json:"template"`
-	TemplateHash       string                         `json:"template_hash"`
-	CommitSHA          string                         `json:"commit_sha"`
-	AssignmentRevision int64                          `json:"assignment_revision"`
-	CloudRevision      int64                          `json:"cloud_revision"`
-	TargetRevision     int64                          `json:"target_revision"`
-	GrantRevision      int64                          `json:"grant_revision"`
-	TargetName         string                         `json:"target_name"`
+	Demand         CapacityDemand                 `json:"demand"`
+	Template       cloudinfra.PoolExpansionPolicy `json:"template"`
+	TemplateHash   string                         `json:"template_hash"`
+	CommitSHA      string                         `json:"commit_sha"`
+	CloudRevision  int64                          `json:"cloud_revision"`
+	TargetRevision int64                          `json:"target_revision"`
+	GrantRevision  int64                          `json:"grant_revision"`
+	TargetName     string                         `json:"target_name"`
 }
 
 type CloudCompensation struct {
@@ -308,7 +306,7 @@ func projectCloudPlacement(v *planning.CloudPlacement) *CloudPlacement {
 	if v == nil {
 		return nil
 	}
-	return &CloudPlacement{AccountIdentity: v.AccountIdentity, Allocation: v.Allocation, PoolID: v.PoolID, PoolRevision: v.PoolRevision, ServerID: v.ServerID, ServerRevision: v.ServerRevision, ConnectionGeneration: v.ConnectionGeneration, CPUMillis: v.CPUMillis, MemoryBytes: v.MemoryBytes, GPUKind: v.GPUKind, GPUs: v.GPUs, GrantRevision: v.GrantRevision, CloudID: v.CloudID, CloudRevision: v.CloudRevision, AssignmentRevision: v.AssignmentRevision, Default: v.Default, TargetID: v.TargetID, TargetRevision: v.TargetRevision, TargetName: v.TargetName, Provider: v.Provider, ConnectionID: v.ConnectionID, Region: v.Region, RegionSource: v.RegionSource}
+	return &CloudPlacement{AccountIdentity: v.AccountIdentity, Allocation: v.Allocation, PoolID: v.PoolID, PoolRevision: v.PoolRevision, ServerID: v.ServerID, ServerRevision: v.ServerRevision, ConnectionGeneration: v.ConnectionGeneration, CPUMillis: v.CPUMillis, MemoryBytes: v.MemoryBytes, GPUKind: v.GPUKind, GPUs: v.GPUs, GrantRevision: v.GrantRevision, CloudID: v.CloudID, CloudRevision: v.CloudRevision, Default: v.Default, TargetID: v.TargetID, TargetRevision: v.TargetRevision, TargetName: v.TargetName, Provider: v.Provider, ConnectionID: v.ConnectionID, Region: v.Region, RegionSource: v.RegionSource}
 }
 
 func projectExistingResourceConfig(v *planning.ExistingResourceConfig) *ExistingResourceConfig {
@@ -352,7 +350,7 @@ func projectCapacityIntent(v *planning.CapacityIntent) *CapacityIntent {
 	}
 	d := v.Demand
 	demand := CapacityDemand{OrgID: d.OrgID, CloudID: d.CloudID, PoolID: d.PoolID, TargetID: d.TargetID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, PlanID: d.PlanID, Service: d.Service, Architecture: d.Architecture, StickyServerID: d.StickyServerID, Resources: d.Resources, LocalData: d.LocalData, PolicyRevision: d.PolicyRevision, IntentHash: d.IntentHash}
-	return &CapacityIntent{Demand: demand, Template: v.Template, TemplateHash: v.TemplateHash, CommitSHA: v.CommitSHA, AssignmentRevision: v.AssignmentRevision, CloudRevision: v.CloudRevision, TargetRevision: v.TargetRevision, GrantRevision: v.GrantRevision, TargetName: v.TargetName}
+	return &CapacityIntent{Demand: demand, Template: v.Template, TemplateHash: v.TemplateHash, CommitSHA: v.CommitSHA, CloudRevision: v.CloudRevision, TargetRevision: v.TargetRevision, GrantRevision: v.GrantRevision, TargetName: v.TargetName}
 }
 
 func projectCloudCompensation(v *planning.CloudCompensation) *CloudCompensation {

@@ -655,15 +655,6 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
-        this.eventSource.addEventListener("environment_cloud.updated", (event: MessageEvent) => {
-          try {
-            const data: types.EnvironmentCloudEvent = decode(JSON.parse(event.data), "EnvironmentCloudEvent");
-            this.emit("environment_cloud.updated", data);
-          } catch (error) {
-            this.emit('error', error);
-          }
-        });
-
         this.eventSource.addEventListener("forge.gap", (event: MessageEvent) => {
           try {
             const data: types.RealtimeForgeGap = decode(JSON.parse(event.data), "RealtimeForgeGap");
@@ -749,6 +740,15 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           try {
             const data: types.Project = decode(JSON.parse(event.data), "Project");
             this.emit("project.updated", data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener("project_cloud.updated", (event: MessageEvent) => {
+          try {
+            const data: types.ProjectCloudEvent = decode(JSON.parse(event.data), "ProjectCloudEvent");
+            this.emit("project_cloud.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
@@ -1271,22 +1271,6 @@ export class RealtimeEventsSSEClient extends EventEmitter {
   }
 
   /**
-   * Register a handler for environment_cloud.updated events.
-   * @param handler - Function to call when environment_cloud.updated event is received
-   */
-  onEnvironmentCloudUpdated(handler: (data: types.EnvironmentCloudEvent) => void): void {
-    this.on("environment_cloud.updated", handler);
-  }
-
-  /**
-   * Remove a handler for environment_cloud.updated events.
-   * @param handler - The handler to remove
-   */
-  offEnvironmentCloudUpdated(handler: (data: types.EnvironmentCloudEvent) => void): void {
-    this.off("environment_cloud.updated", handler);
-  }
-
-  /**
    * Register a handler for forge.gap events.
    * @param handler - Function to call when forge.gap event is received
    */
@@ -1444,6 +1428,22 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offProjectUpdated(handler: (data: types.Project) => void): void {
     this.off("project.updated", handler);
+  }
+
+  /**
+   * Register a handler for project_cloud.updated events.
+   * @param handler - Function to call when project_cloud.updated event is received
+   */
+  onProjectCloudUpdated(handler: (data: types.ProjectCloudEvent) => void): void {
+    this.on("project_cloud.updated", handler);
+  }
+
+  /**
+   * Remove a handler for project_cloud.updated events.
+   * @param handler - The handler to remove
+   */
+  offProjectCloudUpdated(handler: (data: types.ProjectCloudEvent) => void): void {
+    this.off("project_cloud.updated", handler);
   }
 
   /**

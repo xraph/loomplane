@@ -29,7 +29,6 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/planning"
-	apiclient "github.com/xraph/loomplane/pkg/client"
 )
 
 type combinedHost struct {
@@ -435,11 +434,7 @@ func TestAcceptanceSharedCloudCombined(t *testing.T) {
 		var target cloudprofiles.Target
 		c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: fmt.Sprintf("app%d", index), Provider: "server", Runtime: "server", PoolID: pools[roles[index]].ID}, &target)
 		targets[project] = target
-		var preview cloudprofiles.Preview
-		c.must(http.StatusOK, http.MethodPost, base+"/environments/"+environments[project]+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
-		if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign-"+project).ID); result.Status != cloudprofiles.SyncSucceeded {
-			t.Fatalf("assignment: %+v", result)
-		}
+		makeDefaultCloudAPI(t, c, base, cloud.ID, "assign-"+project)
 		marker := state.RunID + "-" + project + "-release-one"
 		markers[project] = marker
 		var variable struct{ ID string }

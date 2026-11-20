@@ -5,7 +5,7 @@ import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Sync } from "@/client/forge/loomplane/types"
-import { useMutation, useQuery } from "@/client/hooks"
+import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
 import { messageOf } from "@/client/errors"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -23,7 +23,8 @@ export function SyncHistory({
   onChanged,
 }: {
   projectId: string
-  environmentId: string
+  /** environmentId narrows the list to one environment; omit it for all. */
+  environmentId?: string
   refresh: number
   onChanged: () => Promise<void>
 }) {
@@ -50,7 +51,8 @@ function SyncList({
   onChanged,
 }: {
   projectId: string
-  environmentId: string
+  /** environmentId narrows the list to one environment; omit it for all. */
+  environmentId?: string
   refresh: number
   onChanged: () => Promise<void>
 }) {
@@ -72,18 +74,12 @@ function SyncList({
   const rows = all.filter(
     (s): s is Sync =>
       !!s &&
-      (s.environments ?? []).some((e) => e.environmentId === environmentId)
+      (!environmentId ||
+        (s.environments ?? []).some((e) => e.environmentId === environmentId))
   )
   const moving = all.some((s) => s && activeSync(s))
-  useEffect(() => {
-    const timer = window.setInterval(
-      () => {
-        void refetchSyncs().catch(() => undefined)
-      },
-      moving ? 3000 : 15000
-    )
-    return () => window.clearInterval(timer)
-  }, [moving, refetchSyncs])
+  // cloud_sync.updated refreshes the list; poll only while it's down.
+  useRefetchWhile(moving, refetchSyncs, 3000)
   return (
     <section className="grid gap-3">
       <h2 className="text-[15px] font-semibold">Sync history</h2>
@@ -97,8 +93,10 @@ function SyncList({
         <CloudLoading>Loading sync history...</CloudLoading>
       ) : !rows.length ? (
         <EmptyClouds
-          title="No syncs in this environment"
-          description="Reviewed Cloud changes appear here with each environment's persisted result."
+          title={
+            environmentId ? "No syncs in this environment" : "No syncs yet"
+          }
+          description="Reviewed Cloud changes appear here with each environment's result."
         />
       ) : (
         <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">

@@ -105,15 +105,15 @@ func TestCloudCompensationMixedRuntimeAlwaysReviewsRecreation(t *testing.T) {
 	}
 }
 
-// A revert onto the Loomplane Cloud an environment left is the same
-// environment move back. A target change on a Loomplane Cloud target never
+// A revert onto the Loomplane Cloud a project left is the same default
+// change back. A target change on a Loomplane Cloud target never
 // happened, so it has nothing to revert, and says so in its own branch.
 func TestCloudRevertPlatformTarget(t *testing.T) {
-	st := &platformSyncStore{}
+	st := &platformSyncStore{defaultCloud: "cloud_user"}
 	p := security.Principal{OrgID: "org", UserID: "user"}
-	moved := &cloudprofiles.Preview{Input: cloudprofiles.ChangeInput{CloudID: "cloud_user", EnvironmentID: "env"}, BeforeAssignment: &cloudprofiles.Assignment{CloudID: "cloud_platform"}}
+	moved := &cloudprofiles.Preview{Input: cloudprofiles.ChangeInput{CloudID: "cloud_user", ProjectDefault: true}, BeforeCloud: &cloudprofiles.ProjectCloud{CloudID: "cloud_platform"}}
 	in, err := revertChangeInput(t.Context(), st, p, "proj", &cloudprofiles.Sync{}, moved)
-	if err != nil || in.CloudID != "cloud_platform" || in.EnvironmentID != "env" || in.Revision != 1 {
+	if err != nil || in.CloudID != "cloud_platform" || !in.ProjectDefault || in.Revision != 1 {
 		t.Fatalf("revert onto Loomplane Cloud: %+v %v", in, err)
 	}
 	before, after := *platformTarget, *platformTarget
