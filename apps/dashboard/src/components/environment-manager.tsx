@@ -63,6 +63,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { relative } from "@/lib/format"
 import { isReady } from "@/lib/projects"
 import { Link } from "@/lib/router"
+import { useAddService } from "@/lib/add-service-context"
 import { isLive, type Run, runStatusText } from "@/lib/runs"
 import { useNow, usePeople } from "@/lib/use-runs"
 import { environmentKinds, kindFor } from "@/lib/variables"
@@ -318,6 +319,7 @@ function EnvironmentRow({
   onDelete: () => void
 }) {
   const people = usePeople()
+  const addService = useAddService()
   const moveToNative = useMutation(useProviderEnvironmentsRetry)
   const invalidate = useInvalidate()
   const bindings = useQuery(useBindingsList, {
@@ -469,6 +471,13 @@ function EnvironmentRow({
           )
         )}
         <RowMenu label={`More actions for ${environment.name}`}>
+          {addService && !environment.instanceId && (
+            <DropdownMenuItem
+              onClick={() => addService({ environment: environment.name })}
+            >
+              Add a service
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             onClick={() => onOpen("deployments", environment.name)}
           >

@@ -1,0 +1,81 @@
+---
+title: Add a service to a project
+description: Add a service from your code, a database from the catalog, or any source path to a project's environment, from the dashboard, loomctl or the API.
+---
+
+You don't have to edit `loomplane.yaml` by hand to add something to a project. Open the project and click **Add service**. It's also in each environment's menu on the Overview, on the Services tab, and anywhere the project has nothing to deploy yet.
+
+The dialog has three ways in:
+
+- **From your code** lists the services the latest analysis found that `loomplane.yaml` doesn't run yet. Each one comes with a free name, the provider your other services use if it runs that kind of service, and what it needs among what the manifest already has. When a new analysis finds a service, the Overview says so and offers to add it.
+- **Catalog** has the databases, caches, gateways and the rest. Pick where it runs: a checked server or Kubernetes cluster, or a provider that runs it for you, such as Cloud SQL for Postgres.
+- **Any source path** takes a directory, a Dockerfile or a Procfile process that analysis didn't pick up. The name follows the path until you type one.
+
+Then you choose what it needs and which services use it. Each service you tick gets its address in a variable, such as `DATABASE_URL` for Postgres or `BILLING_URL` for a service called `billing`, and the dialog shows the name next to it. You also choose whether it runs in every environment or only in the one you're adding it to.
+
+Before anything is saved, the dialog asks the server what the change would be and shows you the lines it adds to `loomplane.yaml`. If the server would refuse it, you see why right there.
+
+**Add and plan** saves it as one new revision and plans the environment, then opens the plan for review. **Add only** saves it and leaves planning to you. Nothing deploys until someone approves a plan.
+
+## Only one environment
+
+"Only staging" writes `environments.staging.enabled: true` on the new entry, and `enabled: false` for every other environment the project has:
+
+```yaml
+resources:
+  cache:
+    kind: redis
+    provider: server
+    target: conn_01jc...
+    environments:
+      staging:
+        enabled: true
+      production:
+        enabled: false
+```
+
+A service that runs in production can't need something that's off there. So if you add `cache` to staging only and tick `api` as a service that uses it, Loomplane refuses, and says to add `cache` everywhere or turn `api` off in production first. You'd get the same problem on the production plan otherwise, just later.
+
+## From a terminal
+
+`loomctl services suggest` lists what analysis found that the manifest doesn't run:
+
+```bash
+$ loomctl services suggest shop
+NAME    SOURCE          KIND     PROVIDER     NEEDS
+worker  go:cmd/worker   worker   ecs-fargate  db
+
+Add one with: loomctl services add shop --suggested worker
+```
+
+`loomctl services add` adds any of the three, and plans `--env` (production by default):
+
+```bash
+loomctl services add shop --suggested worker --env staging
+loomctl services add shop --source services/billing --needs db --needed-by api
+loomctl services add shop --kind redis --needed-by api,worker --env staging --only
+```
+
+The project can be its name, slug or ID. A name defaults to the suggestion's, the catalog kind's, or the source's last directory, numbered when it's taken. A catalog kind runs on your only ready server or cluster when you don't give `--target`, and when there are several, loomctl lists them so you can choose.
+
+`--dry-run` prints the `loomplane.yaml` it would save and changes nothing. `--no-plan` saves it without planning.
+
+## From the API
+
+It's one edit: `POST /api/v1/projects/:id/manifest/edits` with `add_service` or `add_resource`. Both take `enabled_in` and `only` for the environment, and `needed_by` for the services that use it. `add_service` takes `source`, and optionally `repo`, `kind`, `provider`, `region`, `target`, `port`, `public` and `needs`.
+
+```json
+{
+  "add_service": {
+    "name": "billing",
+    "source": "services/billing",
+    "needs": ["db"],
+    "needed_by": ["api"],
+    "enabled_in": "staging",
+    "only": true
+  },
+  "dry_run": true
+}
+```
+
+`dry_run` returns the revision the edit would save, YAML and all, without saving it. `GET /api/v1/projects/:id/manifest/suggestions` returns what analysis found, each one already shaped as an `add_service` edit. The first add to a project that has no `loomplane.yaml` yet starts one.

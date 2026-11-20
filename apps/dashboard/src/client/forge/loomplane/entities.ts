@@ -159,6 +159,7 @@ export const entities = {
   'ScalingPool': { fields: { 'pool': 'Pool' } },
   'Sent': { fields: { 'conversation': 'Conversation', 'task': 'Task' } },
   'Server': { idField: 'id' },
+  'ServiceSuggestions': { idField: 'projectId' },
   'Source': { idField: 'id' },
   'SourceList': { fields: { 'sources': 'DiscoverySource' } },
   'SourceState': { fields: { 'latest': 'Analysis', 'shown': 'Analysis', 'source': 'DiscoverySource' } },
