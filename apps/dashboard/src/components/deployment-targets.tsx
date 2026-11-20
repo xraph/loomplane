@@ -176,13 +176,18 @@ function placedManifest(
 export function usePlacementContext(projectId: string, environmentId?: string) {
   const providers = useQuery(useProvidersList)
   const connections = useQuery(useConnectionsList)
-  const cloud = useQuery(useEnvironmentCloudsGet, {
-    path: { id: projectId, environmentId: environmentId ?? "" },
-  })
+  // The assignment changes on the Clouds page, not here, and its read has no
+  // cache identity, so read it fresh each time a placement panel opens.
+  const cloud = useQuery(
+    useEnvironmentCloudsGet,
+    { path: { id: projectId, environmentId: environmentId ?? "" } },
+    { staleTime: 0 }
+  )
   return {
     providers,
     catalog: providers.data?.providers ?? [],
     connections: connections.data?.connections ?? [],
+    cloudAssigned: !!cloud.data?.assignment,
     cloudTargets: (cloud.data?.assignment?.targets ?? []).filter(
       (t): t is Target => !!t
     ),
@@ -317,7 +322,7 @@ function PlacementForm({
   onPendingChange?: (pending: boolean) => void
 }) {
   const environmentId = environments.find((e) => e.name === environment)?.id
-  const { providers, cloudTargets } = usePlacementContext(
+  const { providers, cloudTargets, cloudAssigned } = usePlacementContext(
     projectId,
     environmentId
   )
@@ -356,6 +361,7 @@ function PlacementForm({
           environments={environments}
           catalog={providers.data.providers}
           cloudTargets={cloudTargets}
+          cloudAssigned={cloudAssigned}
           mode={mode}
           pending={pending}
           onUse={onUse}
@@ -380,6 +386,7 @@ function PlacementChoices({
   environments,
   catalog,
   cloudTargets,
+  cloudAssigned,
   mode,
   pending,
   onUse,
@@ -396,6 +403,7 @@ function PlacementChoices({
   environments: Environment[]
   catalog: Provider[]
   cloudTargets: Target[]
+  cloudAssigned: boolean
   mode: "pending" | "save"
   pending?: PendingPlacement
   onUse?: (change: PendingPlacement) => void
@@ -715,14 +723,15 @@ function PlacementChoices({
             )}
             {row.section === "services" && cloudTargets.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                No Cloud is assigned to {environment}, so no Cloud targets are
-                listed.{" "}
+                {cloudAssigned
+                  ? `The Cloud ${environment} uses has no targets this project may use yet.`
+                  : `No Cloud is assigned to ${environment}, so no Cloud targets are listed.`}{" "}
                 <Link
                   to="/clouds"
                   onClick={manageCloud}
                   className="underline underline-offset-4"
                 >
-                  Assign a Cloud
+                  {cloudAssigned ? "Add a target" : "Assign a Cloud"}
                 </Link>
               </p>
             )}

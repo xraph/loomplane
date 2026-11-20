@@ -59,7 +59,7 @@ func (e *Extension) bitbucketRoutes(r forge.Router, guard identity.Guard) error 
 		forge.WithName("bitbucket.disconnect"),
 		forge.WithSummary("Disconnect a workspace. The consumer stays approved on Bitbucket."),
 		forge.WithNoContentResponse(),
-		forge.WithEntity(forge.EntityDef{Type: "BitbucketWorkspace", IDField: "id"}),
+		forge.WithEntity(forge.EntityDef{Type: "BitbucketWorkspaceView", IDField: "id"}),
 	); err != nil {
 		return err
 	}

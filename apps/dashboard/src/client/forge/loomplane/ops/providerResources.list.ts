@@ -4,6 +4,7 @@ import { codec_ProviderResourceList } from '../codecs/ProviderResourceList';
 export const op_providerResources_list = {
   method: 'GET',
   path: '/api/v1/provider-resources',
+  rootType: 'ProviderResourceList',
   provides: [],
   invalidates: [],
   responseCodec: codec_ProviderResourceList,

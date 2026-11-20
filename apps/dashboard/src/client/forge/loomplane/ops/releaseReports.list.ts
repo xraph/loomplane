@@ -4,7 +4,9 @@ import { codec_ReleaseReportList } from '../codecs/ReleaseReportList';
 export const op_releaseReports_list = {
   method: 'GET',
   path: '/api/v1/projects/{id}/release-reports',
-  provides: [],
+  entity: 'ReleaseReport',
+  rootType: 'ReleaseReportList',
+  provides: ['ReleaseReport:{id}', 'ReleaseReport[]'],
   invalidates: [],
   responseCodec: codec_ReleaseReportList,
 } as const satisfies OperationMeta;

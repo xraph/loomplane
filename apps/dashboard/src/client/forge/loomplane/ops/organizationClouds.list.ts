@@ -4,7 +4,9 @@ import { codec_PlanningCloudList } from '../codecs/PlanningCloudList';
 export const op_organizationClouds_list = {
   method: 'GET',
   path: '/api/v1/clouds',
-  provides: [],
+  entity: 'Profile',
+  rootType: 'PlanningCloudList',
+  provides: ['Profile:{id}', 'Profile[]'],
   invalidates: [],
   responseCodec: codec_PlanningCloudList,
 } as const satisfies OperationMeta;

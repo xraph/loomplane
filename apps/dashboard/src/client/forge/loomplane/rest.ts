@@ -34,7 +34,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/activity`;
       const queryParams: Record<string, any> = {};
       if (days !== undefined) {
-        queryParams['days'] = days;
+        queryParams["days"] = days;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -98,10 +98,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/agent/conversations/${encodeURIComponent(String(id))}`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -126,16 +126,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/agent/conversations`;
       const queryParams: Record<string, any> = {};
       if (projectId !== undefined) {
-        queryParams['project_id'] = projectId;
+        queryParams["project_id"] = projectId;
       }
       if (everyone !== undefined) {
-        queryParams['everyone'] = everyone;
+        queryParams["everyone"] = everyone;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -255,13 +255,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/agent/reports`;
       const queryParams: Record<string, any> = {};
       if (status !== undefined) {
-        queryParams['status'] = status;
+        queryParams["status"] = status;
       }
       if (projectId !== undefined) {
-        queryParams['project_id'] = projectId;
+        queryParams["project_id"] = projectId;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -359,16 +359,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/agent/requests`;
       const queryParams: Record<string, any> = {};
       if (status !== undefined) {
-        queryParams['status'] = status;
+        queryParams["status"] = status;
       }
       if (projectId !== undefined) {
-        queryParams['project_id'] = projectId;
+        queryParams["project_id"] = projectId;
       }
       if (forParam !== undefined) {
-        queryParams['for'] = forParam;
+        queryParams["for"] = forParam;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -457,31 +457,6 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Task>(config);
-    },
-
-    /**
-     * Follow a task's events as they happen
-     * Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.
-     */
-    stream: async (id: string, after?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
-      let __path = `/api/v1/agent/tasks/${encodeURIComponent(String(id))}/stream`;
-      const queryParams: Record<string, any> = {};
-      if (after !== undefined) {
-        queryParams['after'] = after;
-      }
-      const queryString = new URLSearchParams(queryParams).toString();
-      if (queryString) {
-        __path += '?' + queryString;
-      }
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        allowEmptyBody: true,
-      };
-
-      await this.request(config);
     },
 
   };
@@ -667,7 +642,7 @@ export class RESTClient extends Client {
     card: async (id?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Card> => {
       let __path = `/api/v1/ai/models/registry/card`;
       const queryParams: Record<string, any> = {};
-      queryParams['id'] = id;
+      queryParams["id"] = id;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -708,7 +683,7 @@ export class RESTClient extends Client {
     entry: async (id?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EntryDetail> => {
       let __path = `/api/v1/ai/models/registry/entry`;
       const queryParams: Record<string, any> = {};
-      queryParams['id'] = id;
+      queryParams["id"] = id;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -767,13 +742,13 @@ export class RESTClient extends Client {
     registry: async (q?: string, task?: string, size?: string, license?: string, commercial?: boolean, fits?: boolean, tested?: boolean, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistryList> => {
       let __path = `/api/v1/ai/models/registry`;
       const queryParams: Record<string, any> = {};
-      queryParams['q'] = q;
-      queryParams['task'] = task;
-      queryParams['size'] = size;
-      queryParams['license'] = license;
-      queryParams['commercial'] = commercial;
-      queryParams['fits'] = fits;
-      queryParams['tested'] = tested;
+      queryParams["q"] = q;
+      queryParams["task"] = task;
+      queryParams["size"] = size;
+      queryParams["license"] = license;
+      queryParams["commercial"] = commercial;
+      queryParams["fits"] = fits;
+      queryParams["tested"] = tested;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -1061,7 +1036,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/api-keys/${encodeURIComponent(String(id))}`;
       const queryParams: Record<string, any> = {};
       if (compromised !== undefined) {
-        queryParams['compromised'] = compromised;
+        queryParams["compromised"] = compromised;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -1123,7 +1098,7 @@ export class RESTClient extends Client {
     list: async (id: string, environment?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.BindingList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/bindings`;
       const queryParams: Record<string, any> = {};
-      queryParams['environment'] = environment;
+      queryParams["environment"] = environment;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -1603,13 +1578,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/attachments`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -1633,13 +1608,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}/capacity`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -1663,13 +1638,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -1693,13 +1668,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -1723,13 +1698,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-options/${encodeURIComponent(String(connectionId))}`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -2252,13 +2227,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/cloud-syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (cloud !== undefined) {
-        queryParams['cloud'] = cloud;
+        queryParams["cloud"] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -2559,13 +2534,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -2589,13 +2564,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -2656,13 +2631,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/clusters`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (region !== undefined) {
-        queryParams['region'] = region;
+        queryParams["region"] = region;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -3228,10 +3203,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/deployments`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -3254,10 +3229,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/logs`;
       const queryParams: Record<string, any> = {};
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -3335,7 +3310,7 @@ export class RESTClient extends Client {
     discover: async (connectionId?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderZoneList> => {
       let __path = `/api/v1/dns-zones/discover`;
       const queryParams: Record<string, any> = {};
-      queryParams['connection_id'] = connectionId;
+      queryParams["connection_id"] = connectionId;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -3569,7 +3544,7 @@ export class RESTClient extends Client {
     extensions: async (connectionId?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistrationExtensionList> => {
       let __path = `/api/v1/domain-registration/extensions`;
       const queryParams: Record<string, any> = {};
-      queryParams['connection_id'] = connectionId;
+      queryParams["connection_id"] = connectionId;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -3591,8 +3566,8 @@ export class RESTClient extends Client {
     search: async (connectionId?: string, q?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOfferList> => {
       let __path = `/api/v1/domain-registration/search`;
       const queryParams: Record<string, any> = {};
-      queryParams['connection_id'] = connectionId;
-      queryParams['q'] = q;
+      queryParams["connection_id"] = connectionId;
+      queryParams["q"] = q;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -4073,7 +4048,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(envId))}`;
       const queryParams: Record<string, any> = {};
       if (keep !== undefined) {
-        queryParams['keep'] = keep;
+        queryParams["keep"] = keep;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -4260,10 +4235,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances/${encodeURIComponent(String(id))}/events`;
       const queryParams: Record<string, any> = {};
       if (after !== undefined) {
-        queryParams['after'] = after;
+        queryParams["after"] = after;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -4340,16 +4315,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances`;
       const queryParams: Record<string, any> = {};
       if (after !== undefined) {
-        queryParams['after'] = after;
+        queryParams["after"] = after;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (status !== undefined) {
-        queryParams['status'] = status;
+        queryParams["status"] = status;
       }
       if (externalRef !== undefined) {
-        queryParams['external_ref'] = externalRef;
+        queryParams["external_ref"] = externalRef;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -4395,10 +4370,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/fleet/instances/${encodeURIComponent(String(id))}/metrics`;
       const queryParams: Record<string, any> = {};
       if (start !== undefined) {
-        queryParams['start'] = start;
+        queryParams["start"] = start;
       }
       if (end !== undefined) {
-        queryParams['end'] = end;
+        queryParams["end"] = end;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -4709,13 +4684,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/gpu-targets`;
       const queryParams: Record<string, any> = {};
       if (minMemoryGib !== undefined) {
-        queryParams['min_memory_gib'] = minMemoryGib;
+        queryParams["min_memory_gib"] = minMemoryGib;
       }
       if (count !== undefined) {
-        queryParams['count'] = count;
+        queryParams["count"] = count;
       }
       if (kind !== undefined) {
-        queryParams['kind'] = kind;
+        queryParams["kind"] = kind;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -5071,16 +5046,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-copies`;
       const queryParams: Record<string, any> = {};
       if (environmentId !== undefined) {
-        queryParams['environment_id'] = environmentId;
+        queryParams["environment_id"] = environmentId;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (resource !== undefined) {
-        queryParams['resource'] = resource;
+        queryParams["resource"] = resource;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -5155,10 +5130,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/history`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -5181,16 +5156,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retirements`;
       const queryParams: Record<string, any> = {};
       if (environmentId !== undefined) {
-        queryParams['environment_id'] = environmentId;
+        queryParams["environment_id"] = environmentId;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (resource !== undefined) {
-        queryParams['resource'] = resource;
+        queryParams["resource"] = resource;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -5231,16 +5206,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}`;
       const queryParams: Record<string, any> = {};
       if (environmentId !== undefined) {
-        queryParams['environment_id'] = environmentId;
+        queryParams["environment_id"] = environmentId;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (resource !== undefined) {
-        queryParams['resource'] = resource;
+        queryParams["resource"] = resource;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -5263,16 +5238,16 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-sources`;
       const queryParams: Record<string, any> = {};
       if (environmentId !== undefined) {
-        queryParams['environment_id'] = environmentId;
+        queryParams["environment_id"] = environmentId;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (resource !== undefined) {
-        queryParams['resource'] = resource;
+        queryParams["resource"] = resource;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -5309,8 +5284,8 @@ export class RESTClient extends Client {
     previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-preview`;
       const queryParams: Record<string, any> = {};
-      queryParams['older_than_days'] = olderThanDays;
-      queryParams['keep_last'] = keepLast;
+      queryParams["older_than_days"] = olderThanDays;
+      queryParams["keep_last"] = keepLast;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -5365,10 +5340,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy/history`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -6021,13 +5996,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/clouds/syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       if (cloud !== undefined) {
-        queryParams['cloud'] = cloud;
+        queryParams["cloud"] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -6471,13 +6446,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
       const queryParams: Record<string, any> = {};
       if (environment !== undefined) {
-        queryParams['environment'] = environment;
+        queryParams["environment"] = environment;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -6556,7 +6531,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/platform/agent/flags`;
       const queryParams: Record<string, any> = {};
       if (status !== undefined) {
-        queryParams['status'] = status;
+        queryParams["status"] = status;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -7445,52 +7420,20 @@ export class RESTClient extends Client {
   public readonly realtime = {
     /**
      */
-    events: async (orgId?: string | undefined, projectIds?: string | undefined, deploymentIds?: string | undefined, cursor?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
-      let __path = `/api/v1/realtime/events`;
-      const queryParams: Record<string, any> = {};
-      if (orgId !== undefined) {
-        queryParams['org_id'] = orgId;
-      }
-      if (projectIds !== undefined) {
-        queryParams['project_ids'] = projectIds;
-      }
-      if (deploymentIds !== undefined) {
-        queryParams['deployment_ids'] = deploymentIds;
-      }
-      if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
-      }
-      const queryString = new URLSearchParams(queryParams).toString();
-      if (queryString) {
-        __path += '?' + queryString;
-      }
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        allowEmptyBody: true,
-      };
-
-      await this.request(config);
-    },
-
-    /**
-     */
     snapshot: async (orgId?: string | undefined, projectIds?: string | undefined, deploymentIds?: string | undefined, cursor?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Snapshot> => {
       let __path = `/api/v1/realtime/snapshot`;
       const queryParams: Record<string, any> = {};
       if (orgId !== undefined) {
-        queryParams['org_id'] = orgId;
+        queryParams["org_id"] = orgId;
       }
       if (projectIds !== undefined) {
-        queryParams['project_ids'] = projectIds;
+        queryParams["project_ids"] = projectIds;
       }
       if (deploymentIds !== undefined) {
-        queryParams['deployment_ids'] = deploymentIds;
+        queryParams["deployment_ids"] = deploymentIds;
       }
       if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
+        queryParams["cursor"] = cursor;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -7505,38 +7448,6 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Snapshot>(config);
-    },
-
-    /**
-     */
-    ws: async (orgId?: string | undefined, projectIds?: string | undefined, deploymentIds?: string | undefined, cursor?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
-      let __path = `/api/v1/realtime/ws`;
-      const queryParams: Record<string, any> = {};
-      if (orgId !== undefined) {
-        queryParams['org_id'] = orgId;
-      }
-      if (projectIds !== undefined) {
-        queryParams['project_ids'] = projectIds;
-      }
-      if (deploymentIds !== undefined) {
-        queryParams['deployment_ids'] = deploymentIds;
-      }
-      if (cursor !== undefined) {
-        queryParams['cursor'] = cursor;
-      }
-      const queryString = new URLSearchParams(queryParams).toString();
-      if (queryString) {
-        __path += '?' + queryString;
-      }
-      const config: RequestConfig = {
-        method: 'GET',
-        url: __path,
-        signal: options?.signal,
-        retry: options?.retry,
-        allowEmptyBody: true,
-      };
-
-      await this.request(config);
     },
 
   };
@@ -7621,7 +7532,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/release-reports`;
       const queryParams: Record<string, any> = {};
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -7732,10 +7643,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retention-policy/history`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -7797,7 +7708,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/rollback-target`;
       const queryParams: Record<string, any> = {};
       if (deploymentId !== undefined) {
-        queryParams['deployment_id'] = deploymentId;
+        queryParams["deployment_id"] = deploymentId;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -7869,8 +7780,8 @@ export class RESTClient extends Client {
     previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
       let __path = `/api/v1/service-backups/${encodeURIComponent(String(id))}/retention-preview`;
       const queryParams: Record<string, any> = {};
-      queryParams['older_than_days'] = olderThanDays;
-      queryParams['keep_last'] = keepLast;
+      queryParams["older_than_days"] = olderThanDays;
+      queryParams["keep_last"] = keepLast;
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
         __path += '?' + queryString;
@@ -8007,10 +7918,10 @@ export class RESTClient extends Client {
       let __path = `/api/v1/service-backup-retirements/${encodeURIComponent(String(id))}/history`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -8033,13 +7944,13 @@ export class RESTClient extends Client {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/service-backup-retirements`;
       const queryParams: Record<string, any> = {};
       if (backupId !== undefined) {
-        queryParams['backup_id'] = backupId;
+        queryParams["backup_id"] = backupId;
       }
       if (before !== undefined) {
-        queryParams['before'] = before;
+        queryParams["before"] = before;
       }
       if (limit !== undefined) {
-        queryParams['limit'] = limit;
+        queryParams["limit"] = limit;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -8395,7 +8306,7 @@ export class RESTClient extends Client {
       let __path = `/api/v1/usage/traffic`;
       const queryParams: Record<string, any> = {};
       if (range !== undefined) {
-        queryParams['range'] = range;
+        queryParams["range"] = range;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -8471,9 +8382,9 @@ export class RESTClient extends Client {
     resolve: async (id: string, environment?: string, service?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Resolution> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/variables/resolved`;
       const queryParams: Record<string, any> = {};
-      queryParams['environment'] = environment;
+      queryParams["environment"] = environment;
       if (service !== undefined) {
-        queryParams['service'] = service;
+        queryParams["service"] = service;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {

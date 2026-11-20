@@ -5,8 +5,8 @@
 // the history left off (useChat's resume).
 import type { ChatTransport } from "ai"
 
-import { op_agentTasks_stream } from "@/client/forge/loomplane/ops/agentTasks.stream"
 import type { Sent } from "@/client/forge/loomplane/types"
+import { agentTaskStream } from "@/client/streams"
 import {
   type AgentChunk,
   type AgentEvent,
@@ -230,10 +230,7 @@ export class AgentChatTransport implements ChatTransport<AgentMessage> {
           return
         }
 
-        const path = op_agentTasks_stream.path.replace(
-          "{id}",
-          encodeURIComponent(turn.taskId)
-        )
+        const path = agentTaskStream(turn.taskId)
         const url = new URL(path, window.location.origin)
         url.searchParams.set("after", String(last))
         source = new EventSource(url, { withCredentials: true })

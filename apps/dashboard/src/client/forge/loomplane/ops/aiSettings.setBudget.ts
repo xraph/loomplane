@@ -5,6 +5,7 @@ import { codec_WorkspaceBudgetInputBody } from '../codecs/WorkspaceBudgetInputBo
 export const op_aiSettings_setBudget = {
   method: 'PUT',
   path: '/api/v1/ai/settings/budget',
+  rootType: 'View',
   provides: [],
   invalidates: [],
   bodyCodec: codec_WorkspaceBudgetInputBody,

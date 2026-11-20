@@ -49,8 +49,8 @@ export class RESTClient extends Client {
   public readonly checkOrgSlug = async (appId?: string, slug?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SlugAvailableResponse> => {
     let __path = `/authsome/v1/orgs/check-slug`;
     const queryParams: Record<string, any> = {};
-    queryParams['app_id'] = appId;
-    queryParams['slug'] = slug;
+    queryParams["app_id"] = appId;
+    queryParams["slug"] = slug;
     const queryString = new URLSearchParams(queryParams).toString();
     if (queryString) {
       __path += '?' + queryString;
@@ -165,10 +165,10 @@ export class RESTClient extends Client {
     let __path = `/authsome/v1/orgs/${encodeURIComponent(String(orgId))}/invitations`;
     const queryParams: Record<string, any> = {};
     if (limit !== undefined) {
-      queryParams['limit'] = limit;
+      queryParams["limit"] = limit;
     }
     if (cursor !== undefined) {
-      queryParams['cursor'] = cursor;
+      queryParams["cursor"] = cursor;
     }
     const queryString = new URLSearchParams(queryParams).toString();
     if (queryString) {
@@ -193,10 +193,10 @@ export class RESTClient extends Client {
     let __path = `/authsome/v1/orgs/${encodeURIComponent(String(orgId))}/members`;
     const queryParams: Record<string, any> = {};
     if (limit !== undefined) {
-      queryParams['limit'] = limit;
+      queryParams["limit"] = limit;
     }
     if (cursor !== undefined) {
-      queryParams['cursor'] = cursor;
+      queryParams["cursor"] = cursor;
     }
     const queryString = new URLSearchParams(queryParams).toString();
     if (queryString) {
@@ -221,10 +221,10 @@ export class RESTClient extends Client {
     let __path = `/authsome/v1/orgs`;
     const queryParams: Record<string, any> = {};
     if (limit !== undefined) {
-      queryParams['limit'] = limit;
+      queryParams["limit"] = limit;
     }
     if (cursor !== undefined) {
-      queryParams['cursor'] = cursor;
+      queryParams["cursor"] = cursor;
     }
     const queryString = new URLSearchParams(queryParams).toString();
     if (queryString) {

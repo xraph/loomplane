@@ -820,10 +820,6 @@
     },
     "/api/v1/agent/tasks/{id}/stream": {
       "get": {
-        "tags": [
-          "Agent"
-        ],
-        "summary": "Follow a task's events as they happen",
         "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
         "operationId": "agentTasks.stream",
         "parameters": [
@@ -846,9 +842,21 @@
         ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
-        }
+        },
+        "summary": "Follow a task's events as they happen",
+        "tags": [
+          "Agent"
+        ],
+        "x-forge-protocol": "sse"
       }
     },
     "/api/v1/agent/watcher": {
@@ -1638,7 +1646,7 @@
         ],
         "x-forge-entity": {
           "idField": "id",
-          "type": "BitbucketWorkspace"
+          "type": "BitbucketWorkspaceView"
         }
       }
     },
@@ -2648,11 +2656,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -2716,11 +2723,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -2784,11 +2790,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -3009,11 +3014,8 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]"
         ]
       }
     },
@@ -3327,11 +3329,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -3406,11 +3407,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -13019,7 +13019,7 @@
         ],
         "x-forge-entity": {
           "idField": "id",
-          "type": "Source"
+          "type": "DiscoverySource"
         }
       },
       "patch": {
@@ -18146,9 +18146,6 @@
     },
     "/api/v1/realtime/events": {
       "get": {
-        "tags": [
-          "Realtime"
-        ],
         "operationId": "realtime.events",
         "parameters": [
           {
@@ -18182,9 +18179,20 @@
         ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
-        }
+        },
+        "tags": [
+          "Realtime"
+        ],
+        "x-forge-protocol": "sse"
       }
     },
     "/api/v1/realtime/snapshot": {
@@ -18240,9 +18248,6 @@
     },
     "/api/v1/realtime/ws": {
       "get": {
-        "tags": [
-          "Realtime"
-        ],
         "operationId": "realtime.ws",
         "parameters": [
           {
@@ -18275,10 +18280,14 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
+          "101": {
+            "description": "Switching Protocols"
           }
-        }
+        },
+        "tags": [
+          "Realtime"
+        ],
+        "x-forge-protocol": "websocket"
       }
     },
     "/api/v1/release-reports/{id}": {

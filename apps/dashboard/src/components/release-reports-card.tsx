@@ -9,12 +9,7 @@ import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone } from "@/components/runs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAgent, useFeatures } from "@/lib/features"
-import {
-  stateLabel,
-  stateTone,
-  useReleaseReportEvents,
-  type StateTone,
-} from "@/lib/release-reports"
+import { stateLabel, stateTone, type StateTone } from "@/lib/release-reports"
 import { ago } from "@/lib/relative-time"
 import { Link } from "@/lib/router"
 import { useNow } from "@/lib/use-runs"
@@ -36,7 +31,6 @@ export function ReleaseReportsCard({ projectId }: { projectId: string }) {
 }
 
 function Reports({ projectId }: { projectId: string }) {
-  useReleaseReportEvents()
   const now = useNow(30_000)
   const list = useQuery(useReleaseReportsList, {
     path: { id: projectId },

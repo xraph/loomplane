@@ -1,15 +1,7 @@
 // What a release readiness report says, in words people read. The gates and
 // their details come from the server as they are: Loomplane computes them,
 // so the page shows them and adds nothing of its own.
-import { useEffect } from "react"
-
-import {
-  useReleaseReportsGet,
-  useReleaseReportsList,
-} from "@/client/forge/loomplane/hooks"
 import type { ReleaseReport } from "@/client/forge/loomplane/types"
-import { useInvalidate } from "@/client/hooks"
-import { useRealtime } from "@/lib/realtime-provider"
 
 /** The seven gates, with the same words as GateNames in internal/releaseprep. */
 export const gateNames: Record<number, string> = {
@@ -94,24 +86,4 @@ export function mayCancelReport(
     who.can("deployment:approve") ||
     (r.requestedBy === who.userId && who.can("agent:use"))
   )
-}
-
-/**
- * useReleaseReportEvents refetches the release report list and the open
- * report when the server says a report changed. The list read tags nothing,
- * so the realtime entity binding can't reach it.
- */
-export function useReleaseReportEvents(): void {
-  const realtime = useRealtime()
-  const invalidate = useInvalidate()
-  useEffect(() => {
-    if (!realtime) return
-    const stop = realtime.onReleaseReport(() => {
-      invalidate(useReleaseReportsList)
-      invalidate(useReleaseReportsGet)
-    })
-    return () => {
-      stop()
-    }
-  }, [realtime, invalidate])
 }

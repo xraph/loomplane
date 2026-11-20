@@ -8,12 +8,13 @@ import type {
   CleanupReview,
   FailedCleanup,
 } from "@/client/forge/loomplane/types"
+import { deploymentItem, deploymentLists } from "@/client/tags"
 
 export type { CleanupReview } from "@/client/forge/loomplane/types"
 // An absent cleanup still depends on its next acceptance. The operation is
 // keyed by deployment rather than by a serving resource entity.
 const provides = ["FailedCleanup:{id}"]
-const invalidates = [...provides, "Deployment:{id}", "Deployment[]"]
+const invalidates = [...provides, deploymentItem, deploymentLists]
 export const useFailedCleanup = query<FailedCleanup>({
   ...op_deployments_cleanup,
   provides,
