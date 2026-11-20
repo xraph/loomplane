@@ -4930,7 +4930,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Add a resource to the manifest, or ignore a resource kind, keeping the YAML's comments
+     * Change the manifest one edit at a time: add a service or a resource, wire it to what needs it, ignore a resource kind or move an entry, keeping the YAML's comments
      */
     edit: async (id: string, body: types.EditInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Revision> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest/edits`;
@@ -4979,6 +4979,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Revision>(config);
+    },
+
+    /**
+     * The services analysis found that the manifest doesn't run yet, each as the add_service edit that adds it
+     */
+    suggestions: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServiceSuggestions> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/manifest/suggestions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ServiceSuggestions"],
+      };
+
+      return this.request<types.ServiceSuggestions>(config);
     },
 
   };

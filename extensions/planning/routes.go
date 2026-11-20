@@ -144,7 +144,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		}},
 		{http.MethodPost, "/projects/:id/manifest/edits", e.editManifest, []forge.RouteOption{
 			forge.WithName("manifests.edit"),
-			forge.WithSummary("Add a resource to the manifest, or ignore a resource kind, keeping the YAML's comments"),
+			forge.WithSummary("Change the manifest one edit at a time: add a service or a resource, wire it to what needs it, ignore a resource kind or move an entry, keeping the YAML's comments"),
 			forge.WithRequestSchema(manifests.EditInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The current revision, unchanged when nothing changed", manifests.Revision{}),
 			forge.WithResponseSchema(http.StatusCreated, "The new revision", manifests.Revision{}),
@@ -153,6 +153,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithName("manifests.history"),
 			forge.WithSummary("The project's latest manifest revisions, newest first"),
 			forge.WithResponseSchema(http.StatusOK, "Revisions", RevisionList{}),
+		}},
+		{http.MethodGet, "/projects/:id/manifest/suggestions", e.suggestServices, []forge.RouteOption{
+			forge.WithName("manifests.suggestions"),
+			forge.WithSummary("The services analysis found that the manifest doesn't run yet, each as the add_service edit that adds it"),
+			forge.WithResponseSchema(http.StatusOK, "The suggestions", planning.ServiceSuggestions{}),
 		}},
 		{http.MethodGet, "/projects/:id/manifest/draft", e.draftManifest, []forge.RouteOption{
 			forge.WithName("manifests.draft"),
@@ -386,7 +391,7 @@ func (e *Extension) editManifest(c forge.Context) error {
 	}
 	var in manifests.EditInput
 	if err = c.BindJSON(&in); err != nil {
-		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"add_resource": {...}} or {"ignore": "kind"}`)
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"add_service": {...}}, {"add_resource": {...}} or {"ignore": "kind"}`)
 	}
 	rev, created, err := e.manifests.Edit(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
@@ -424,6 +429,18 @@ func (e *Extension) draftManifest(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, d)
+}
+
+func (e *Extension) suggestServices(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	out, err := e.plans.SuggestServices(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 func (e *Extension) listProviders(c forge.Context) error {

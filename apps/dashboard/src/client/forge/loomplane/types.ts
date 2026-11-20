@@ -2226,6 +2226,8 @@ export interface EditInputBody {
   gpu?: ManifestGPU;
   kind: string;
   name: string;
+  neededBy?: string[];
+  only?: boolean;
   provider?: string;
   region?: string;
   settings?: Record<string, any>;
@@ -2233,6 +2235,22 @@ export interface EditInputBody {
   uses?: Record<string, any>;
   version?: string;
 };
+  addService?: {
+  enabledIn?: string;
+  kind?: string;
+  name: string;
+  neededBy?: string[];
+  needs?: string[];
+  only?: boolean;
+  port?: number;
+  provider?: string;
+  public?: boolean;
+  region?: string;
+  repo?: string;
+  source: string;
+  target?: string;
+};
+  dryRun?: boolean;
   ignore?: string;
   link?: {
   need: string;
@@ -3961,6 +3979,22 @@ export interface NewKeyBody {
   access: string;
   expiresInDays?: number;
   name: string;
+}
+
+export interface NewServiceInput {
+  enabledIn?: string;
+  kind?: string;
+  name: string;
+  neededBy?: string[];
+  needs?: string[];
+  only?: boolean;
+  port?: number;
+  provider?: string;
+  public?: boolean;
+  region?: string;
+  repo?: string;
+  source: string;
+  target?: string;
 }
 
 export interface Node {
@@ -6259,6 +6293,23 @@ export interface ServiceCoverage {
 export interface ServicePort {
   port: number;
   service: string;
+}
+
+export interface ServiceSuggestion {
+  ecosystem: string;
+  env?: string[];
+  framework?: string;
+  id: string;
+  kind: string;
+  path: string;
+  ports?: number[];
+  service: NewServiceInput;
+}
+
+export interface ServiceSuggestions {
+  analyzed: boolean;
+  projectId: string;
+  services: ServiceSuggestion[];
 }
 
 export interface ServiceTraffic {

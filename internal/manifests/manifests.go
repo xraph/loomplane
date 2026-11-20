@@ -100,11 +100,13 @@ type SaveInput struct {
 }
 
 // EditInput is one change to the current manifest, made to its YAML so
-// the comments in it survive: add a resource, update or remove one, ignore
+// the comments in it survive: add a service or a resource, update or
+// remove a resource, ignore
 // a resource kind, change an existing entry's placement, link a service to
 // a need or unlink it, or set where one dependency of a catalog resource
 // comes from.
 type EditInput struct {
+	AddService     *NewServiceInput     `json:"add_service,omitempty"`
 	AddResource    *NewResource         `json:"add_resource,omitempty"`
 	UpdateResource *ResourceUpdateInput `json:"update_resource,omitempty"`
 	RemoveResource string               `json:"remove_resource,omitempty"`
@@ -113,6 +115,10 @@ type EditInput struct {
 	Link           *ServiceLink         `json:"link,omitempty"`
 	Unlink         *ServiceLink         `json:"unlink,omitempty"`
 	SetUse         *ResourceUse         `json:"set_use,omitempty"`
+	// DryRun makes the edit without saving it, and returns the revision
+	// it would save, so a form can show the YAML before anyone commits to
+	// it. The revision has no ID; its Revision is the number it would get.
+	DryRun bool `json:"dry_run,omitempty"`
 	// BaseRevision makes the edit conditional on the revision the caller
 	// decided it from: when another save landed since, the edit is
 	// ErrConflict and changes nothing. Nil edits whatever is current. It
@@ -174,6 +180,44 @@ type NewResource struct {
 	// written with environments.<EnabledIn>.enabled: true, in the same
 	// revision.
 	EnabledIn string `json:"enabled_in,omitempty"`
+	// Only, with EnabledIn, turns the resource off in every other
+	// environment the project has, so it runs in EnabledIn alone.
+	Only bool `json:"only,omitempty"`
+	// NeededBy names services that need the new resource. Each gets it in
+	// its needs, and with it the resource's address in a variable, in the
+	// same revision.
+	NeededBy []string `json:"needed_by,omitempty"`
+}
+
+// NewServiceInput is a service to add to the manifest: where its code is and,
+// optionally, where it runs and what it needs. Anything left out is
+// inherited from defaults or comes from analysis, as for a service
+// written by hand.
+type NewServiceInput struct {
+	Name string `json:"name"`
+	// Source is where the service's code is, as analysis finds it: a
+	// directory, a Dockerfile or a Procfile process.
+	Source string `json:"source"`
+	// Repo is the alias of the repository Source is in. A project with one
+	// repository can leave it out.
+	Repo string `json:"repo,omitempty"`
+	// Kind corrects what analysis decides the service is: http-service,
+	// web-app, static-site or worker.
+	Kind     string `json:"kind,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Region   string `json:"region,omitempty"`
+	// Target is the checked server or cluster connection it runs on.
+	Target string `json:"target,omitempty"`
+	Port   int    `json:"port,omitempty"`
+	Public *bool  `json:"public,omitempty"`
+	// Needs names the services and resources it talks to. Each must be in
+	// the manifest already.
+	Needs []string `json:"needs,omitempty"`
+	// NeededBy names services that need the new one, and get its address.
+	NeededBy []string `json:"needed_by,omitempty"`
+	// EnabledIn and Only work as they do for a resource.
+	EnabledIn string `json:"enabled_in,omitempty"`
+	Only      bool   `json:"only,omitempty"`
 }
 
 // Edit applies one change to the project's current manifest and saves the
@@ -186,6 +230,11 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 		return nil, false, err
 	}
 	cur, err := s.store.CurrentRevision(ctx, p.OrgID, projectID)
+	// Adding something to a project with no manifest yet starts one, so
+	// the first service doesn't wait on a saved draft.
+	if errors.Is(err, ErrNotFound) && (in.AddService != nil || in.AddResource != nil) {
+		cur, err = &Revision{YAML: "version: 1\n"}, nil
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -194,7 +243,7 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	}
 	var out []byte
 	edits := 0
-	for _, present := range []bool{in.AddResource != nil, in.UpdateResource != nil, in.RemoveResource != "", in.Ignore != "", in.Placement != nil, in.Link != nil, in.Unlink != nil, in.SetUse != nil} {
+	for _, present := range []bool{in.AddService != nil, in.AddResource != nil, in.UpdateResource != nil, in.RemoveResource != "", in.Ignore != "", in.Placement != nil, in.Link != nil, in.Unlink != nil, in.SetUse != nil} {
 		if present {
 			edits++
 		}
@@ -202,6 +251,8 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	switch {
 	case edits > 1:
 		return nil, false, fmt.Errorf("%w: make one edit at a time", ErrInvalid)
+	case in.AddService != nil:
+		out, err = s.addService(ctx, p.OrgID, projectID, []byte(cur.YAML), in.AddService)
 	case in.AddResource != nil:
 		out, err = s.addResource(ctx, p.OrgID, projectID, []byte(cur.YAML), in.AddResource)
 	case in.UpdateResource != nil:
@@ -222,32 +273,155 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 		u := in.SetUse
 		out, err = manifest.WithUse([]byte(cur.YAML), strings.TrimSpace(u.Resource), strings.TrimSpace(u.Dependency), u.Use)
 	default:
-		return nil, false, fmt.Errorf("%w: say what to change: add_resource, update_resource, remove_resource, ignore, placement, link, unlink or set_use", ErrInvalid)
+		return nil, false, fmt.Errorf("%w: say what to change: add_service, add_resource, update_resource, remove_resource, ignore, placement, link, unlink or set_use", ErrInvalid)
 	}
 	if err != nil {
 		return nil, false, err
+	}
+	if in.DryRun {
+		text, m, err := read(SaveInput{YAML: string(out)})
+		if err != nil {
+			return nil, false, err
+		}
+		digest, err := Digest(m)
+		if err != nil {
+			return nil, false, err
+		}
+		return &Revision{
+			OrgID: p.OrgID, ProjectID: projectID, Revision: cur.Revision + 1, YAML: text, Manifest: m, Digest: digest,
+			CreatedBy: p.UserID, CreatedAt: s.now().UTC(),
+		}, false, nil
 	}
 	return s.Save(ctx, p, projectID, SaveInput{YAML: string(out), BaseRevision: &cur.Revision})
 }
 
 // addResource writes a new resource, turned on in the environment it
-// names, if it names one.
+// names, if it names one, and needed by the services it names.
 func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc []byte, r *NewResource) ([]byte, error) {
 	name := strings.TrimSpace(r.Name)
-	environment := strings.TrimSpace(r.EnabledIn)
-	if environment != "" {
-		if err := s.checkEnvironment(ctx, orgID, projectID, environment); err != nil {
-			return nil, err
-		}
-	}
 	out, err := manifest.WithResource(doc, name, manifest.Resource{
 		Kind: r.Kind, Provider: r.Provider, Target: r.Target, Version: r.Version, Uses: r.Uses,
 		Settings: r.Settings, GPU: r.GPU, ExistingResource: r.ExistingResource, Region: r.Region,
 	})
-	if err != nil || environment == "" {
-		return out, err
+	if err != nil {
+		return nil, err
 	}
-	return manifest.WithResourceEnabled(out, name, environment, true)
+	return s.placeNew(ctx, orgID, projectID, out, "resources", name, r.EnabledIn, r.Only, r.NeededBy)
+}
+
+// addService writes a new service, with the same environment and
+// needed-by choices a resource has.
+func (s *Service) addService(ctx context.Context, orgID, projectID string, doc []byte, in *NewServiceInput) ([]byte, error) {
+	name := strings.TrimSpace(in.Name)
+	needs := trimmed(in.Needs)
+	out, err := manifest.WithService(doc, name, manifest.NewService{
+		Repo: in.Repo, Source: in.Source, Kind: in.Kind, Provider: in.Provider, Region: in.Region,
+		Target: in.Target, Port: in.Port, Public: in.Public, Needs: needs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.placeNew(ctx, orgID, projectID, out, "services", name, in.EnabledIn, in.Only, in.NeededBy)
+}
+
+// placeNew finishes adding name to section: on in environment, off in
+// every other one when only, and needed by the services in neededBy. It
+// refuses a result where a service would need something that's off in an
+// environment the service runs in, naming both, so the mistake shows here
+// rather than as a problem on a later plan.
+func (s *Service) placeNew(ctx context.Context, orgID, projectID string, doc []byte, section, name, environment string, only bool, neededBy []string) ([]byte, error) {
+	environment = strings.TrimSpace(environment)
+	if only && environment == "" {
+		return nil, fmt.Errorf("%w: only needs enabled_in, the environment %s runs in", ErrInvalid, name)
+	}
+	var envs []string
+	if environment != "" || len(neededBy) > 0 {
+		list, err := s.projects.ListEnvironments(ctx, orgID, projectID)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range list {
+			envs = append(envs, e.Name)
+		}
+	}
+	if environment != "" {
+		if !slices.Contains(envs, environment) {
+			return nil, fmt.Errorf("%w: the project has no environment called %s", ErrInvalid, environment)
+		}
+		enabled := map[string]bool{environment: true}
+		if only {
+			for _, e := range envs {
+				if e != environment {
+					enabled[e] = false
+				}
+			}
+		}
+		var err error
+		if doc, err = manifest.WithEnabledIn(doc, section, name, enabled); err != nil {
+			return nil, err
+		}
+	}
+	for _, svc := range trimmed(neededBy) {
+		if svc == name {
+			return nil, fmt.Errorf("%w: %s can't need itself", ErrInvalid, name)
+		}
+		var err error
+		if doc, err = manifest.WithNeed(doc, svc, name, nil); err != nil {
+			return nil, err
+		}
+	}
+	m, err := manifest.Parse(doc)
+	if err != nil {
+		return nil, err
+	}
+	if err := reachable(m, envs, name); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+// reachable refuses a manifest where a service needs something that's off
+// in an environment the service runs in, for each need that involves the
+// entry called added: the added service's own needs, and every need on it.
+func reachable(m *manifest.Manifest, envs []string, added string) error {
+	on := func(name, env string) (bool, bool) {
+		if svc, ok := m.Services[name]; ok {
+			e := svc.For(env, m.Defaults).Enabled
+			return e == nil || *e, true
+		}
+		if res, ok := m.Resources[name]; ok {
+			e := res.For(env, m.Defaults).Enabled
+			return e == nil || *e, true
+		}
+		return false, false
+	}
+	for _, env := range envs {
+		for _, svcName := range m.ServiceNames() {
+			if running, _ := on(svcName, env); !running {
+				continue
+			}
+			for _, need := range m.Services[svcName].Needs {
+				if svcName != added && need != added {
+					continue
+				}
+				if running, known := on(need, env); known && !running {
+					return fmt.Errorf("%w: %s runs in %s and needs %s, which would be off there. Add %s to %s too, or turn %s off in %s first", ErrInvalid, svcName, env, need, need, env, svcName, env)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// trimmed is list with each name trimmed and the empty ones dropped.
+func trimmed(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // checkEnvironment refuses an environment the project doesn't have.

@@ -114,7 +114,7 @@ func TestSecurity_organizationsAndRolesHoldEverywhere(t *testing.T) {
 		{http.MethodGet, base + "/deployments"}, {http.MethodGet, base + "/bindings?environment=production"},
 		{http.MethodGet, base + "/variables"}, {http.MethodPost, base + "/variables"},
 		{http.MethodGet, base + "/environments"}, {http.MethodPost, base + "/analyses"},
-		{http.MethodGet, base + "/analyses"}, {http.MethodGet, base + "/graph"}, {http.MethodGet, base + "/manifest/draft"},
+		{http.MethodGet, base + "/analyses"}, {http.MethodGet, base + "/graph"}, {http.MethodGet, base + "/manifest/draft"}, {http.MethodGet, base + "/manifest/suggestions"},
 		{http.MethodGet, base + "/sources"}, {http.MethodPost, base + "/sources"},
 		{http.MethodPatch, base + "/sources/mono"}, {http.MethodDelete, base + "/sources/mono"},
 		{http.MethodGet, base + "/environments/production/deployed"},

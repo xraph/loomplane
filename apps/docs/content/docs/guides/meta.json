@@ -2,6 +2,7 @@
   "title": "Guides",
   "pages": [
     "deploy-a-monorepo",
+    "add-a-service",
     "private-repositories",
     "bitbucket-repositories",
     "gitlab-repositories",

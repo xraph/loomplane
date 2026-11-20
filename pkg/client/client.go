@@ -354,6 +354,9 @@ func (c *Client) SaveManifest(ctx context.Context, projectID, yaml string) (*Man
 // ManifestEdit is one change to the project's manifest, which keeps the
 // YAML's comments and order.
 type ManifestEdit struct {
+	// DryRun returns the revision the edit would save, saving nothing.
+	DryRun      bool         `json:"dry_run,omitempty"`
+	AddService  *NewService  `json:"add_service,omitempty"`
 	AddResource *NewResource `json:"add_resource,omitempty"`
 	// Link makes a service need something, with the options it passes to
 	// it. Unlink removes the need and its options. SetUse chooses where one
@@ -388,6 +391,56 @@ type NewResource struct {
 	Target   string                  `json:"target,omitempty"`
 	Version  string                  `json:"version,omitempty"`
 	Uses     map[string]manifest.Use `json:"uses,omitempty"`
+	// EnabledIn turns the resource on in one environment; Only, with it,
+	// turns it off in every other one. NeededBy names services that get
+	// it in their needs, in the same revision.
+	EnabledIn string   `json:"enabled_in,omitempty"`
+	Only      bool     `json:"only,omitempty"`
+	NeededBy  []string `json:"needed_by,omitempty"`
+}
+
+// NewService is a service to add to the manifest. Source is required;
+// anything else left out is inherited or comes from analysis. EnabledIn,
+// Only and NeededBy work as they do for a resource.
+type NewService struct {
+	Name      string   `json:"name"`
+	Source    string   `json:"source"`
+	Repo      string   `json:"repo,omitempty"`
+	Kind      string   `json:"kind,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	Region    string   `json:"region,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	Port      int      `json:"port,omitempty"`
+	Public    *bool    `json:"public,omitempty"`
+	Needs     []string `json:"needs,omitempty"`
+	NeededBy  []string `json:"needed_by,omitempty"`
+	EnabledIn string   `json:"enabled_in,omitempty"`
+	Only      bool     `json:"only,omitempty"`
+}
+
+// ServiceSuggestions are the services analysis found that the manifest
+// doesn't run yet. Analyzed is false before any analysis finished.
+type ServiceSuggestions struct {
+	Analyzed bool                `json:"analyzed"`
+	Services []ServiceSuggestion `json:"services"`
+}
+
+// ServiceSuggestion is one service to add, as the edit that adds it.
+type ServiceSuggestion struct {
+	ID        string     `json:"id"`
+	Kind      string     `json:"kind"`
+	Ecosystem string     `json:"ecosystem"`
+	Framework string     `json:"framework,omitempty"`
+	Path      string     `json:"path"`
+	Env       []string   `json:"env,omitempty"`
+	Service   NewService `json:"service"`
+}
+
+// SuggestServices lists the services analysis found that the project's
+// manifest doesn't run, each ready to add.
+func (c *Client) SuggestServices(ctx context.Context, projectID string) (*ServiceSuggestions, error) {
+	var out ServiceSuggestions
+	return &out, c.do(ctx, http.MethodGet, "/api/v1/projects/"+esc(projectID)+"/manifest/suggestions", nil, &out)
 }
 
 // EditManifest applies one change to the project's current manifest and
@@ -1095,4 +1148,22 @@ func wait[T any](ctx context.Context, read func() (T, bool, error)) (T, error) {
 		case <-time.After(Every):
 		}
 	}
+}
+
+// Connection is a checked server, cluster or cloud account a project can
+// deploy with.
+type Connection struct {
+	ID      string            `json:"id"`
+	Cloud   string            `json:"cloud"`
+	Name    string            `json:"name"`
+	Status  string            `json:"status"`
+	Details map[string]string `json:"details"`
+}
+
+// Connections lists the organization's connections.
+func (c *Client) Connections(ctx context.Context) ([]Connection, error) {
+	var out struct {
+		Connections []Connection `json:"connections"`
+	}
+	return out.Connections, c.do(ctx, http.MethodGet, "/api/v1/connections", nil, &out)
 }

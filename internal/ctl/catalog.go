@@ -17,7 +17,7 @@ import (
 )
 
 func (a *App) servicesCommand() cli.Command {
-	return cli.NewCommand("services", "Prepare catalog services without a repository", nil,
+	return cli.NewCommand("services", "Add a service to a project's environment, or make a standalone catalog service", nil,
 		cli.WithSubcommand(cli.NewCommand("create", "Plan a standalone database service", a.createCatalogService,
 			cli.WithUsage("services create <project-name> --target <connection-id> [--provider server|kubernetes|rds|cloud-sql] [--region <cloud-region>] [--env production] [--json]"),
 			cli.WithFlags(jsonFlag,
@@ -27,16 +27,8 @@ func (a *App) servicesCommand() cli.Command {
 				cli.NewStringFlag("region", "", "Managed database region; defaults to the provider or connection region", ""),
 				cli.NewStringFlag("env", "e", "Environment", "production"),
 				timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))),
-		cli.WithSubcommand(cli.NewCommand("add", "Plan a catalog service added to an existing project", a.addCatalogService,
-			cli.WithUsage("services add <project-id> --kind <kind> --name <resource> --target <connection-id> [--provider server|kubernetes] [--version <version>] [--env production] [--json]"),
-			cli.WithFlags(jsonFlag,
-				cli.NewStringFlag("kind", "", "Catalog kind to add, such as postgres or a composed service", ""),
-				cli.NewStringFlag("name", "", "Name of the resource in the manifest", ""),
-				cli.NewStringFlag("provider", "", "Where it runs: server or kubernetes", "server"),
-				cli.NewStringFlag("target", "", "Checked server or Kubernetes connection", ""),
-				cli.NewStringFlag("version", "", "Release of the kind; defaults to its newest", ""),
-				cli.NewStringFlag("env", "e", "Environment", "production"),
-				timeoutFlag("Maximum time to prepare the plan", 5*time.Minute)))))
+		cli.WithSubcommand(a.addServiceCommand()),
+		cli.WithSubcommand(a.suggestServicesCommand()))
 }
 
 // serviceProjectVersion is the newest version of a kind that makes its own
@@ -138,61 +130,6 @@ func (a *App) createCatalogService(ctx cli.CommandContext) error {
 		return a.json(plan)
 	}
 	a.printf("Created service project %s.\n", project.ID)
-	a.printPlan(plan)
-	return nil
-}
-
-func (a *App) addCatalogService(ctx cli.CommandContext) error {
-	projectID := strings.TrimSpace(strings.Join(ctx.Args(), " "))
-	name := strings.TrimSpace(ctx.String("name"))
-	target := strings.TrimSpace(ctx.String("target"))
-	kind := strings.TrimSpace(ctx.String("kind"))
-	if projectID == "" || name == "" || target == "" || kind == "" {
-		return errors.New("provide a project id, --kind, --name and --target with a checked server or Kubernetes connection")
-	}
-	targetProvider := ctx.String("provider")
-	if targetProvider != "server" && targetProvider != "kubernetes" {
-		return errors.New("choose --provider server or kubernetes")
-	}
-	info, ok := kindInfo(a.opts.Recipes, kind)
-	if !ok {
-		return fmt.Errorf("%s is not a catalog kind", kind)
-	}
-	if !slices.Contains(info.Targets, targetProvider) {
-		return fmt.Errorf("%s does not run on %s", kind, targetProvider)
-	}
-	version := strings.TrimSpace(ctx.String("version"))
-	if version == "" && len(info.Versions) > 0 {
-		version = info.Versions[0]
-	}
-	duration := time.Duration(ctx.Duration("timeout"))
-	bounded, cancel := context.WithTimeout(ctxOf(ctx), duration)
-	defer cancel()
-	c, err := a.client()
-	if err != nil {
-		return err
-	}
-	revision, err := c.EditManifest(bounded, projectID, client.ManifestEdit{AddResource: &client.NewResource{
-		Name: name, Kind: kind, Provider: targetProvider, Target: target, Version: version,
-	}})
-	if err != nil {
-		return fmt.Errorf("add %s to the configuration of project %s: %w", name, projectID, err)
-	}
-	configuration, parseErr := manifest.Parse([]byte(revision.YAML))
-	// An unknown configuration keeps normal source-pinning requirements.
-	catalog := parseErr == nil && configuration.CatalogOnly()
-	plan, err := c.CreatePlan(bounded, projectID, client.NewPlan{Environment: ctx.String("env"), Catalog: catalog})
-	if err != nil {
-		return fmt.Errorf("plan project %s: %w", projectID, err)
-	}
-	plan, err = c.WaitPlan(bounded, plan.ID)
-	if err != nil {
-		return err
-	}
-	if ctx.Bool("json") {
-		return a.json(plan)
-	}
-	a.printf("Added %s to project %s.\n", name, projectID)
 	a.printPlan(plan)
 	return nil
 }

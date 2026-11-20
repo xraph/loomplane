@@ -80,6 +80,7 @@ import {
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { useNow } from "@/lib/use-runs"
 import { Link, useNavigate } from "@/lib/router"
+import { AddServiceButton } from "@/lib/add-service-context"
 import { cn } from "@/lib/utils"
 import { anchor, anchors } from "@/learn/content"
 
@@ -656,8 +657,12 @@ function DeployScreen({
             A deploy picks from the services an analysis found.
           </CloudEmpty>
         ) : rows.length === 0 ? (
-          <CloudEmpty kind="list" title="No services to deploy yet">
-            Add services to loomplane.yaml, then deploy them here.
+          <CloudEmpty
+            kind="list"
+            title="No services to deploy yet"
+            action={<AddServiceButton environment={environment} size="sm" />}
+          >
+            Add a service from {project.name}&apos;s page, then deploy it here.
           </CloudEmpty>
         ) : (
           <>
