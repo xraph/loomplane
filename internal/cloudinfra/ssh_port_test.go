@@ -66,6 +66,11 @@ func TestBootstrapOpensManagedSSHPort(t *testing.T) {
 					t.Fatalf("SSH port script lacks %q:\n%s", want, script)
 				}
 			}
+			// On first boot Ubuntu 24.04's SSH hasn't started, so /run/sshd
+			// doesn't exist and sshd -t refuses even a good config.
+			if dir := strings.Index(script, "install -d -m 0755 /run/sshd"); dir < 0 || dir > strings.Index(script, "/usr/sbin/sshd -t") {
+				t.Fatalf("/run/sshd must exist before sshd -t checks the config:\n%s", script)
+			}
 		})
 	}
 }
