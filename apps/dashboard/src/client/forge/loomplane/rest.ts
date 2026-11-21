@@ -2150,6 +2150,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * cloudServers.setBuilder
+     */
+    setBuilder: async (cloudId: string, serverId: string, body: types.ServerBuilderSettingBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServerBuilderSetting> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/servers/${encodeURIComponent(String(serverId))}/builder`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ServerBuilderSettingBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ServerBuilderSetting"],
+      };
+
+      return this.request<types.ServerBuilderSetting>(config);
+    },
+
+    /**
      * cloudServers.usage
      */
     usage: async (cloudId: string, serverId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServerUsage> => {
@@ -2913,6 +2931,22 @@ export class RESTClient extends Client {
       };
 
       await this.request(config);
+    },
+
+    /**
+     * List registries in this DigitalOcean account
+     */
+    digitalOceanRegistries: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DigitalOceanRegistryNames> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/digitalocean-registries`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DigitalOceanRegistryNames"],
+      };
+
+      return this.request<types.DigitalOceanRegistryNames>(config);
     },
 
     /**

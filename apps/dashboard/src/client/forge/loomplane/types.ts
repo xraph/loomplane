@@ -1678,6 +1678,7 @@ export interface ConnectionsCreateInputBody {
   cloud: string;
   credential: string;
   name: string;
+  registryAccountId?: string;
   settings?: Record<string, any>;
 }
 
@@ -2051,6 +2052,10 @@ export interface DiffCommit {
   author: string;
   sha: string;
   title: string;
+}
+
+export interface DigitalOceanRegistryNames {
+  names: string[];
 }
 
 export interface DiscoveredService {
@@ -6121,6 +6126,14 @@ export interface Server {
   stateRevision: number;
   status: string;
   updatedAt: string;
+}
+
+export interface ServerBuilderSetting {
+  dedicated?: boolean;
+}
+
+export interface ServerBuilderSettingBody {
+  dedicated?: boolean;
 }
 
 export interface ServerDefaults {

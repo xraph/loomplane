@@ -214,6 +214,9 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	); err != nil {
 		return err
 	}
+	if err := g.GET("/connections/:id/digitalocean-registries", e.digitalOceanRegistries, forge.WithName("connections.digitalOceanRegistries"), forge.WithSummary("List registries in this DigitalOcean account"), forge.WithResponseSchema(http.StatusOK, "Registry names", connections.DigitalOceanRegistryNames{})); err != nil {
+		return err
+	}
 	if err := g.POST("/connections", e.create,
 		forge.WithName("connections.create"),
 		forge.WithSummary("Connect a Google Cloud project or a Vercel account, checking the credential with the cloud first"),
@@ -400,4 +403,16 @@ func (e *Extension) delete(c forge.Context) error {
 		return fail(err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (e *Extension) digitalOceanRegistries(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	names, err := e.svc.DigitalOceanRegistries(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, names)
 }

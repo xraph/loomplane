@@ -254,3 +254,100 @@ it("confirms leaving once the router has stopped it", async () => {
   await user.click(screen.getByRole("button", { name: "Leave" }))
   expect(blocker.proceed).toHaveBeenCalled()
 })
+
+it("uses the current DigitalOcean account to discover and connect its registry", async () => {
+  const writes: Posted[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(String(init.body)) })
+        return Response.json({
+          id: "conn_images",
+          status: "ready",
+          name: "Images",
+        })
+      }
+      if (path.endsWith("/connections"))
+        return Response.json({
+          connections: [
+            {
+              id: "conn_do",
+              cloud: "digitalocean",
+              status: "ready",
+              name: "Wakflo",
+            },
+          ],
+        })
+      if (path.endsWith("/conn_do/digitalocean-registries"))
+        return Response.json({ names: ["team-images"] })
+      return Response.json({
+        clouds: [
+          { cloud: "registry", title: "Image registry", methods: ["token"] },
+        ],
+      })
+    }
+  )
+  page("registry")
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole("radio", {
+      name: /DigitalOcean Container Registry/,
+    })
+  )
+  expect(
+    await screen.findByRole("option", { name: "team-images" })
+  ).toBeTruthy()
+  expect(screen.queryByLabelText("Password or access token")).toBeNull()
+  await user.click(screen.getByRole("button", { name: "Check and connect" }))
+  await waitFor(() =>
+    expect(writes).toEqual([
+      {
+        path: "/api/v1/connections",
+        body: {
+          cloud: "registry",
+          credential: "",
+          name: "DigitalOcean · team-images",
+          registry_account_id: "conn_do",
+          settings: { repository: "team-images" },
+        },
+      },
+    ])
+  )
+})
+it("reuses a checked GitHub registry from the GitHub Packages preset", async () => {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const path = new URL(String(input), "http://localhost").pathname
+    if (path.endsWith("/connections"))
+      return Response.json({
+        connections: [
+          {
+            id: "gh-images",
+            name: "Team images",
+            status: "ready",
+            cloud: "registry",
+            details: { endpoint: "https://ghcr.io", repository: "wakflo" },
+          },
+        ],
+      })
+    if (path.includes("github"))
+      return Response.json({ installations: [{ account: "Wakflo" }] })
+    return Response.json({
+      clouds: [
+        { cloud: "registry", title: "Image registry", methods: ["token"] },
+      ],
+    })
+  })
+  page("registry")
+  await userEvent.click(
+    await screen.findByRole("radio", { name: /GitHub Packages/ })
+  )
+  await userEvent.click(
+    await screen.findByRole("button", { name: /Use Team images/ })
+  )
+  expect(navigate).toHaveBeenCalledWith({
+    to: "/clouds/accounts/$id",
+    params: { id: "gh-images" },
+  })
+})

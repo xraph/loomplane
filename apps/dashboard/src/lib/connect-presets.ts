@@ -131,6 +131,19 @@ export const presets: Record<SelfHosted, Preset[]> = {
       ],
     },
     {
+      id: "docr",
+      label: "DigitalOcean Container Registry",
+      description: "Use a registry in a connected DigitalOcean account.",
+      name: "DigitalOcean Container Registry",
+      settings: {},
+      steps: [
+        {
+          title: "Choose a registry",
+          note: "Loomplane gets a short-lived registry login from your connected account and checks push and pull access.",
+        },
+      ],
+    },
+    {
       id: "dockerhub",
       label: "Docker Hub",
       description: "Push to your Docker Hub account.",

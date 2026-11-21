@@ -187,3 +187,66 @@ it("still offers a health check on a ready server", async () => {
     await screen.findByRole("menuitem", { name: "Check health" })
   ).toBeInTheDocument()
 })
+
+it("toggles the existing Droplet runtime without changing its credentials", async () => {
+  let dedicated = false
+  const writes: unknown[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body))
+        writes.push({ path, body })
+        dedicated = body.dedicated
+        return Response.json(body)
+      }
+      if (path.endsWith("/servers"))
+        return Response.json({
+          servers: [
+            {
+              id: "richmond",
+              name: "Richmond",
+              ownership: "managed",
+              provider: "digitalocean",
+              connection_id: "do",
+              runtime_connection_id: "runtime",
+              status: "ready",
+              health,
+            },
+          ],
+        })
+      if (path.endsWith("/connections"))
+        return Response.json({
+          connections: [
+            { id: "do", cloud: "digitalocean", name: "Team" },
+            {
+              id: "runtime",
+              cloud: "server",
+              status: "ready",
+              details: { build_workers: dedicated ? "dedicated" : "shared" },
+            },
+          ],
+        })
+      if (path.endsWith("/usage"))
+        return Response.json({ workloads: [], retained_storage: [] })
+      return Response.json({ nodes: [], pools: [], providers: [] })
+    }
+  )
+  wrap(<Servers cloud={cloud as never} serverId="richmond" />)
+  const toggle = await screen.findByRole("switch", {
+    name: "Dedicated builder",
+  })
+  for (const enabled of [true, false]) {
+    await userEvent.click(toggle)
+    await vi.waitFor(() =>
+      expect(toggle).toHaveAttribute("aria-checked", String(enabled))
+    )
+  }
+  expect(writes).toEqual(
+    [true, false].map((dedicated) => ({
+      path: "/api/v1/clouds/c/servers/richmond/builder",
+      body: { dedicated },
+    }))
+  )
+})

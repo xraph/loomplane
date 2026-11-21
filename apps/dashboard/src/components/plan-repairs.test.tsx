@@ -35,7 +35,15 @@ it("repairs both builds, a port and a disabled need in one revision before repla
     manifestRevision: 8,
     environment: "production",
     problems,
-    actions: [{ name: "postgres", subject: "resource", op: "create" }],
+    actions: [
+      {
+        name: "api",
+        subject: "service",
+        op: "create",
+        service: { buildTarget: { builder: "builder" } },
+      },
+      { name: "postgres", subject: "resource", op: "create" },
+    ],
   } as Plan
   vi.stubGlobal(
     "fetch",

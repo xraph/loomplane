@@ -53,12 +53,14 @@ func (s *infraSecrets) Delete(_ context.Context, org, id string) error {
 }
 
 type infraAuth struct {
-	denied      bool
-	revokedUser string
+	manageAccounts bool
+	denied         bool
+	revokedUser    string
 }
 
 func (a *infraAuth) Require(_ context.Context, p security.Principal, permission security.Permission, resource string) error {
-	if a.denied || p.UserID == a.revokedUser || p.OrgID != "org" || (p.UserID != "manager" && p.UserID != "manager-2") || permission != security.OrganizationCloudManage || resource != "org" {
+	allowed := (permission == security.OrganizationCloudManage && resource == "org") || (a.manageAccounts && permission == security.CloudAccountManage && resource == "")
+	if a.denied || p.UserID == a.revokedUser || p.OrgID != "org" || (p.UserID != "manager" && p.UserID != "manager-2") || !allowed {
 		return security.ErrForbidden
 	}
 	return nil
@@ -738,5 +740,51 @@ func TestCloudInfrastructureOpenCreatesHaveNoLimit(t *testing.T) {
 	denied.UserID = "project-manager"
 	if _, err = f.svc.OpenServerCreates(t.Context(), denied, "cloud"); !errors.Is(err, security.ErrForbidden) {
 		t.Errorf("without cloud management: %v", err)
+	}
+}
+
+func TestServerDedicatedBuilderKeepsRuntimeConnection(t *testing.T) {
+	f := newInfraFixture(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	c := &connections.Connection{ID: "richmond-runtime", OrgID: "org", Cloud: connections.Server, Name: "SSH runtime", Status: connections.StatusReady, Details: map[string]string{"docker_id": "richmond-docker", "host_key": "pinned-host"}, CreatedAt: now, UpdatedAt: now}
+	if err := f.connections.CreateConnection(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.secrets.Put(ctx, "org", c.ID, []byte("fixture-ssh")); err != nil {
+		t.Fatal(err)
+	}
+	v := &cloudinfra.Server{ID: "richmond", OrgID: "org", CloudID: "cloud", Name: "Richmond", Ownership: "managed", Provider: "digitalocean", AccountID: "account", ResourceID: "droplet", ConnectionID: "infra-account", RuntimeConnectionID: c.ID, Revision: 1, Status: "ready", Health: cloudinfra.RuntimeHealth{DockerID: "richmond-docker", CheckedAt: now, EffectiveCPUMillis: 2000, EffectiveMemoryBytes: 4 << 30}}
+	if err := f.store.SaveServer(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	set := func(value bool) error {
+		return f.svc.SetServerBuilder(ctx, f.p, "cloud", v.ID, cloudinfra.ServerBuilderSetting{Dedicated: &value})
+	}
+	if err := set(true); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("cloud-only manager: %v", err)
+	}
+	f.auth.manageAccounts = true
+	for _, enabled := range []bool{true, true, false} {
+		if err := set(enabled); err != nil {
+			t.Fatal(err)
+		}
+		got, raw, err := f.svc.Connections.Credential(ctx, "org", v.RuntimeConnectionID)
+		if err != nil || got.ID != c.ID || string(raw) != "fixture-ssh" || got.Details["host_key"] != "pinned-host" || (got.Details["build_workers"] == "dedicated") != enabled {
+			t.Fatalf("builder state or runtime identity changed unexpectedly: %v", err)
+		}
+	}
+	if _, err := f.sql.Exec(ctx, `INSERT INTO loomplane_server_pools(id,org_id,cloud_id,revision,body) VALUES('pool','org','cloud',1,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.sql.Exec(ctx, `INSERT INTO loomplane_server_pool_members(org_id,pool_id,server_id,cpu_millis,memory_bytes,draining,gpus) VALUES('org','pool','richmond',1000,1048576,false,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := set(true); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("pooled builder: %v", err)
+	}
+	f.auth.denied = true
+	if err := set(false); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("permission denied: %v", err)
 	}
 }

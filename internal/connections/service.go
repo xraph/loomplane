@@ -105,6 +105,7 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 
 // CreateInput connects a cloud account.
 type CreateInput struct {
+	RegistryAccountID string `json:"registry_account_id,omitempty"`
 	// Cloud is gcp or vercel.
 	Cloud string `json:"cloud"`
 	Name  string `json:"name"`
@@ -200,6 +201,9 @@ func apply(c *Connection, res Check, now time.Time) {
 func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInput) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
+	}
+	if in.RegistryAccountID != "" {
+		return s.createAccountRegistry(ctx, p, in)
 	}
 	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken, "")
 }
@@ -371,6 +375,14 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
 			return nil, err
 		}
+	} else if c.Method == MethodDigitalOceanRegistry {
+		cred, err = s.accountRegistryCredential(ctx, c)
+		switch {
+		case errors.Is(err, ErrChanged), errors.Is(err, ErrNotFound), errors.Is(err, ErrNotReady):
+			err = fmt.Errorf("%w: check the linked DigitalOcean account and its registry access", ErrInvalid)
+		case err != nil && !errors.Is(err, ErrInvalid):
+			return nil, err
+		}
 	} else if c.Method == MethodInCluster {
 		// With the operator's switch off, the check fails it, and says why.
 		cred = kubernetes.InClusterCredential()
@@ -382,7 +394,10 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		return nil, err
 	}
 	now := s.now().UTC()
-	res, err := s.check(ctx, c.Cloud, checker, cred, c.Details)
+	var res Check
+	if err == nil {
+		res, err = s.check(ctx, c.Cloud, checker, cred, c.Details)
+	}
 	if err != nil && legacyPersonalVercel(c) {
 		// A failed legacy upgrade preserves the old row as well as its token.
 		return nil, err
@@ -624,6 +639,10 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		}
 	} else if c.Method == MethodKeyless {
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, nil, err
+		}
+	} else if c.Method == MethodDigitalOceanRegistry {
+		if cred, err = s.accountRegistryCredential(ctx, c); err != nil {
 			return nil, nil, err
 		}
 	} else if c.Method == MethodManagedKubernetes {

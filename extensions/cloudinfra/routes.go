@@ -61,6 +61,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, "/pools", "cloudPools.list", e.pools, nil, PoolList{}, http.StatusOK},
 		{http.MethodPost, "/pools", "cloudPools.create", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
 		{http.MethodPost, "/pools/:poolId", "cloudPools.update", e.savePool, infra.PoolInput{}, infra.Pool{}, http.StatusOK},
+		{http.MethodPost, "/servers/:serverId/builder", "cloudServers.setBuilder", e.setServerBuilder, infra.ServerBuilderSetting{}, infra.ServerBuilderSetting{}, http.StatusOK},
 		{http.MethodPost, "/servers/:serverId/check", "cloudServers.check", e.checkServer, nil, infra.Server{}, http.StatusOK},
 		{http.MethodGet, "/servers", "cloudServers.list", e.list, nil, ServerList{}, http.StatusOK},
 		{http.MethodGet, "/node-adoptions", "cloudNodeAdoptions.list", e.nodeAdoptions, nil, NodeAdoptionList{}, http.StatusOK},
@@ -250,4 +251,17 @@ func (e *Extension) checkServer(c forge.Context) error {
 	}
 	v, err := e.svc.CheckServer(c.Request().Context(), p, c.Param("cloudId"), c.Param("serverId"))
 	return result(c, http.StatusOK, v, err)
+}
+
+func (e *Extension) setServerBuilder(c forge.Context) error {
+	p, err := caller(c)
+	if err != nil {
+		return result(c, 0, nil, err)
+	}
+	var in infra.ServerBuilderSetting
+	if err = c.BindJSON(&in); err != nil {
+		return result(c, 0, nil, infra.ErrInvalid)
+	}
+	err = e.svc.SetServerBuilder(c.Request().Context(), p, c.Param("cloudId"), c.Param("serverId"), in)
+	return result(c, http.StatusOK, in, err)
 }

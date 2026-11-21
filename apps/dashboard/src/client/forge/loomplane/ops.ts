@@ -1080,6 +1080,14 @@ export const ops = {
     bodyCodec: CODECS['ServerInputBody'],
     responseCodec: CODECS['Operation'],
   },
+  'cloudServers.setBuilder': {
+    method: 'POST',
+    path: '/api/v1/clouds/{cloudId}/servers/{serverId}/builder',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['ServerBuilderSettingBody'],
+    responseCodec: CODECS['ServerBuilderSetting'],
+  },
   'cloudServers.check': {
     method: 'POST',
     path: '/api/v1/clouds/{cloudId}/servers/{serverId}/check',
@@ -1304,6 +1312,13 @@ export const ops = {
     invalidates: ['Connection[]'],
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
+  },
+  'connections.digitalOceanRegistries': {
+    method: 'GET',
+    path: '/api/v1/connections/{id}/digitalocean-registries',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DigitalOceanRegistryNames'],
   },
   'connectionFenceRepair.apply': {
     method: 'POST',

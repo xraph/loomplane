@@ -31,6 +31,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useRef, useState } from "react"
@@ -343,6 +344,8 @@ function ServerContent({
           server={
             list.find((s) => s.id === selected.server.id) ?? selected.server
           }
+          pooled={!!poolOf(selected.server.id)}
+          refreshConnections={connections.refetch}
           via={nodeOf(selected.server)}
           action={selected.action}
           capabilities={capabilities}
@@ -1378,6 +1381,8 @@ function ServerDetails({
   cloud,
   server,
   via,
+  pooled,
+  refreshConnections,
   action,
   capabilities,
   connections,
@@ -1388,6 +1393,8 @@ function ServerDetails({
 }: {
   cloud: Profile
   server: Server
+  pooled: boolean
+  refreshConnections: () => Promise<unknown>
   via?: NodeVia
   /** An action a row's menu started, run once when the dialog opens. */
   action?: ServerAction
@@ -1398,6 +1405,12 @@ function ServerDetails({
   onEdit: (kind: string) => void
   onRecover: (planId: string, service: string) => void
 }) {
+  const { can } = useOrganization()
+  const builder = useMutation(api.useCloudServersSetBuilder)
+  const runtime = connections.find(
+    (c) => c.id === server.runtimeConnectionId && c.cloud === "server"
+  )
+  const dedicated = runtime?.details?.build_workers === "dedicated"
   const usage = useQuery(api.useCloudServersUsage, {
     path: { cloudId: cloud.id, serverId: server.id },
   })
@@ -1407,7 +1420,8 @@ function ServerDetails({
   const [drain, setDrain] = useState<DrainReview | null>(null)
   const [error, setError] = useState("")
   const connection = connections.find((c) => c.id === server.connectionId)
-  const busy = preview.isPending || apply.isPending || check.isPending
+  const busy =
+    builder.isPending || preview.isPending || apply.isPending || check.isPending
   async function act(kind: string) {
     setError("")
     try {
@@ -1467,6 +1481,46 @@ function ServerDetails({
               </>
             )}
           </p>
+        )}
+        {runtime && runtime.method !== "node" && (
+          <label className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2">
+            <span>
+              <span className="block text-sm font-medium">
+                Dedicated builder
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {pooled
+                  ? "Shared pool members cannot build source on Docker."
+                  : "Build Docker images here. Choose this only if you trust the builds to share a host with its running services."}
+              </span>
+            </span>
+            <Switch
+              aria-label="Dedicated builder"
+              checked={dedicated}
+              disabled={
+                busy ||
+                !can("cloud_account:manage") ||
+                (!dedicated &&
+                  (pooled ||
+                    server.status !== "ready" ||
+                    runtime.status !== "ready"))
+              }
+              onCheckedChange={async (enabled) => {
+                setError("")
+                try {
+                  await builder.mutateAsync({
+                    path: { cloudId: cloud.id, serverId: server.id },
+                    body: { dedicated: enabled },
+                  })
+                  await refreshConnections()
+                } catch (err) {
+                  setError(
+                    messageOf(err, "Couldn’t update the builder setting.")
+                  )
+                }
+              }}
+            />
+          </label>
         )}
         {server.status === "failed" && (
           <CloudCallout title="This server failed to start">

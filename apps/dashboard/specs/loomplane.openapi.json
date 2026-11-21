@@ -4646,6 +4646,58 @@
         }
       }
     },
+    "/api/v1/clouds/{cloudId}/servers/{serverId}/builder": {
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudServers.setBuilder",
+        "operationId": "cloudServers.setBuilder",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "serverId",
+            "in": "path",
+            "description": "Path parameter: serverId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerBuilderSettingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerBuilderSetting"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clouds/{cloudId}/servers/{serverId}/check": {
       "post": {
         "tags": [
@@ -5580,6 +5632,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/digitalocean-registries": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "List registries in this DigitalOcean account",
+        "operationId": "connections.digitalOceanRegistries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registry names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigitalOceanRegistryNames"
                 }
               }
             }
@@ -25194,6 +25278,9 @@
           "name": {
             "type": "string"
           },
+          "registry_account_id": {
+            "type": "string"
+          },
           "settings": {
             "type": "object",
             "additionalProperties": true
@@ -26409,6 +26496,20 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "DigitalOceanRegistryNames": {
+        "type": "object",
+        "required": [
+          "names"
+        ],
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -40673,6 +40774,22 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ServerBuilderSetting": {
+        "type": "object",
+        "properties": {
+          "dedicated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ServerBuilderSettingBody": {
+        "type": "object",
+        "properties": {
+          "dedicated": {
+            "type": "boolean"
           }
         }
       },

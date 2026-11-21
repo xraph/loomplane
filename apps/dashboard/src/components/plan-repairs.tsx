@@ -110,18 +110,7 @@ export function PlanRepairs({
     (f) => f.code === "registry-required" || builds.includes(f.name!)
   )
   const publicServices = affected((f) => f.code === "host-port-required")
-  const rejected = new Set(
-    plan.actions
-      .filter((a) =>
-        plan.problems.some(
-          (f) => f.name === a.name && f.code === "build-isolation-required"
-        )
-      )
-      .map((a) => a.service?.buildTarget?.builder)
-  )
-  const hosts = dedicatedBuilders(connections.data?.connections ?? []).filter(
-    (c) => !rejected.has(c.id)
-  )
+  const hosts = dedicatedBuilders(connections.data?.connections ?? [])
   const registries = (connections.data?.connections ?? []).filter(
     (c) => c.cloud === "registry" && c.status === "ready"
   )

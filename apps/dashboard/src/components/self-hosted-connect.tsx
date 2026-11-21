@@ -24,6 +24,10 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Connection, Setting } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import {
+  DigitalOceanRegistrySetup,
+  GitHubRegistryAccounts,
+} from "@/components/registry-accounts"
 import { CopyButton } from "@/components/runs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -206,7 +210,21 @@ export function SelfHostedConnect({
       : "Check and connect"
   const page = layout === "page"
 
-  return (
+  if (!replacing && cloud === "registry" && preset?.id === "docr")
+    return (
+      <div className="grid min-w-0 gap-4">
+        <Presets cloud={cloud} chosen={preset} onChoose={apply} />
+        <DigitalOceanRegistrySetup
+          onConnected={(c) => {
+            onDirtyChange?.(false)
+            onConnected(c)
+          }}
+          onCancel={onCancel}
+        />
+      </div>
+    )
+  const github = !replacing && cloud === "registry" && preset?.id === "ghcr"
+  const form = (
     <form
       onSubmit={(e) => void submit(e)}
       className={cn(
@@ -215,7 +233,7 @@ export function SelfHostedConnect({
       )}
     >
       <div className="grid min-w-0 gap-4">
-        {!replacing && (
+        {!replacing && !github && (
           <Presets cloud={cloud} chosen={preset} onChoose={apply} />
         )}
         {/* Beside the form when there's room; otherwise folded under the
@@ -280,6 +298,22 @@ export function SelfHostedConnect({
         </div>
       )}
     </form>
+  )
+  if (!github) return form
+  return (
+    <div className="grid min-w-0 gap-4">
+      <Presets cloud={cloud} chosen={preset} onChoose={apply} />
+      <GitHubRegistryAccounts
+        prefix={values.repository ?? ""}
+        choose={set("repository")}
+        onConnected={(c) => {
+          onDirtyChange?.(false)
+          onConnected(c)
+        }}
+      >
+        {form}
+      </GitHubRegistryAccounts>
+    </div>
   )
 }
 
