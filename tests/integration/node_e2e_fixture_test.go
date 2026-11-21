@@ -341,6 +341,58 @@ func trustForThisProcess(t *testing.T, root []byte) {
 	}
 }
 
+// connectRegistry gives the control plane and the node's Docker daemon the
+// same TLS registry on the private test network.
+func (f *e2eFixture) connectRegistry(c *client) (id, address string) {
+	t := f.t
+	t.Helper()
+	ip := f.ctl.host(12)
+	address = net.JoinHostPort(ip, "5000")
+	cert, key := selfSigned(t, ip, []string{ip}, nil)
+	container := f.container(f.prefix+"-registry", "--network", f.ctl.Name, "--ip", ip,
+		"-e", "REGISTRY_HTTP_TLS_CERTIFICATE=/fixture/tls.crt", "-e", "REGISTRY_HTTP_TLS_KEY=/fixture/tls.key",
+		"registry:3.1.2@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3")
+	f.copyFixture(container, map[string]fixtureFile{"tls.crt": {cert, 0o644}, "tls.key": {key, 0o600}})
+	f.docker("start", container)
+	caFile := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caFile, cert, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	certDir := "/etc/docker/certs.d/" + address
+	f.docker("exec", f.node, "mkdir", "-p", certDir)
+	f.docker("cp", caFile, f.node+":"+certDir+"/ca.crt")
+	endpoint := "https://" + address
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(cert)
+	probe := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}
+	defer probe.CloseIdleConnections()
+	waitUntil(t, time.Minute, "the image registry", func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, endpoint+"/v2/", http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := probe.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
+	credential, err := json.Marshal(map[string]string{"ca": string(cert)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conn struct{ ID, Status string }
+	mustE2E(t, c, http.StatusCreated, http.MethodPost, "/api/v1/connections", map[string]any{
+		"cloud": "registry", "name": "Node test registry", "credential": string(credential),
+		"settings": map[string]string{"endpoint": endpoint, "repository": "e2e"},
+	}, &conn)
+	if conn.Status != "ready" {
+		t.Fatalf("registry connection is %s", conn.Status)
+	}
+	return conn.ID, address
+}
+
 // startNode starts the node's machine, Docker in Docker on ctl and pubA,
 // and waits for its Docker.
 func (f *e2eFixture) startNode() {

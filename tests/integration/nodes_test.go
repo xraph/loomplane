@@ -452,7 +452,7 @@ func TestNodes_joinHopAllowRevoke(t *testing.T) {
 		}
 		apiB.must(http.StatusOK, http.MethodGet, "/api/v1/nodes", nil, &list)
 		for _, n := range list.Nodes {
-			if n.Name == name && n.Status == nodes.StatusOnline {
+			if n.Name == name && n.Status == nodes.StatusOnline && a.hub.Online(n.ID) {
 				node = n
 				return true
 			}
@@ -666,7 +666,7 @@ func e2ePlan(t *testing.T, c *client, project, manifest string) deploymentBody {
 }
 
 // A node joins a Cloud from Docker in Docker, as a user would run it, and
-// is adopted. A service builds from source on it, with no registry, and a
+// is adopted. A service builds there and publishes its image to a registry. A
 // domain in a managed zone serves it over HTTPS with a certificate from an
 // ACME CA. When the node's public address changes, the record follows, and
 // HTTPS keeps answering with the control plane stopped. Started again, the
@@ -786,7 +786,7 @@ func TestNodeDeploysAndServes(t *testing.T) {
 
 	var project, environment string
 	var image string
-	e2eStep(t, "3 hello builds from source on the node with no registry", func(t *testing.T) {
+	e2eStep(t, "3 hello builds on the node and publishes its image", func(t *testing.T) {
 		var p struct {
 			ID string `json:"id"`
 		}
@@ -805,22 +805,14 @@ func TestNodeDeploysAndServes(t *testing.T) {
 		}
 		mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "GREETING", "value": "built here", "environment": "production"}, nil)
 		begin := time.Now()
-		d := e2ePlan(t, c, project, helloManifest(host.RuntimeConnectionID))
+		registry, address := f.connectRegistry(c)
+		d := e2ePlan(t, c, project, helloManifest(host.RuntimeConnectionID, registry))
 		image = d.Steps[0].Image
 		t.Logf("deployment %s built and ran hello in %s: image %s", d.ID, time.Since(begin).Round(time.Second), image)
-		var conns struct {
-			Connections []struct {
-				Cloud string `json:"cloud"`
-			} `json:"connections"`
+		if !strings.HasPrefix(image, address+"/e2e/") || !strings.Contains(image, "@sha256:") {
+			t.Fatalf("expected a published registry digest, got %q", image)
 		}
-		mustE2E(t, c, http.StatusOK, http.MethodGet, "/api/v1/connections", nil, &conns)
-		for _, conn := range conns.Connections {
-			if conn.Cloud == "registry" {
-				t.Fatal("the organization has a registry connection")
-			}
-		}
-		// The image is on the node's own Docker, and so is the container
-		// running it.
+		f.docker("exec", f.node, "docker", "pull", image)
 		f.docker("exec", f.node, "docker", "image", "inspect", image)
 		running := f.docker("exec", f.node, "docker", "ps", "-q", "--filter", "label=loomplane.project="+project)
 		if running == "" {
@@ -974,7 +966,7 @@ func TestNodeDeploysAndServes(t *testing.T) {
 
 // helloManifest places hello on the node's server connection, built from
 // source there.
-func helloManifest(connection string) string {
+func helloManifest(connection, registry string) string {
 	return fmt.Sprintf(`version: 1
 services:
   hello:
@@ -984,8 +976,8 @@ services:
     public: false
     port: 8080
     health_path: /
-    build: {context: .}
-`, connection)
+    build: {context: ., registry: %s}
+`, connection, registry)
 }
 
 // webName is the name web answers with.
