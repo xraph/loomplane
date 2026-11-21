@@ -150,11 +150,13 @@ test("adds an external reference then creates a review without applying infrastr
         name: "orders",
         kind: "postgres",
         existingResource: "r",
-        service: "api",
+        services: ["api", "worker"],
       },
       () => {}
     )
   ).resolves.toEqual({ planId: "review" })
+  // Every consumer is wired in the edit that adds it, so there's no
+  // half-wired manifest if one of them is refused.
   expect(calls).toEqual([
     {
       path: "/api/v1/projects/p/manifest/edits",
@@ -164,12 +166,9 @@ test("adds an external reference then creates a review without applying infrastr
           kind: "postgres",
           existing_resource: "r",
           enabled_in: "production",
+          needed_by: ["api", "worker"],
         },
       },
-    },
-    {
-      path: "/api/v1/projects/p/manifest/edits",
-      body: { link: { service: "api", need: "orders" } },
     },
     { path: "/api/v1/projects/p/plans", body: { environment: "production" } },
   ])
@@ -261,7 +260,7 @@ test("native creation pins the checked account and chosen region before review",
     },
   ])
 })
-test("a failed consumer link reports the persisted edit and stops before planning", async () => {
+test("a failed plan reports the persisted edit", async () => {
   let writes = 0
   vi.stubGlobal("fetch", async () => {
     writes++
@@ -277,7 +276,7 @@ test("a failed consumer link reports the persisted edit and stops before plannin
         name: "orders",
         kind: "postgres",
         existingResource: "r",
-        service: "api",
+        services: ["api"],
       },
       () => {}
     )

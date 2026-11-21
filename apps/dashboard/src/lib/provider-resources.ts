@@ -137,7 +137,8 @@ export type ResourceReviewInput = {
   version?: string
   region?: string
   settings?: Record<string, string>
-  service?: string
+  /** The services that need it, wired in the same edit that adds it. */
+  services?: string[]
 }
 export async function reviewProviderResource(
   input: ResourceReviewInput,
@@ -160,15 +161,11 @@ export async function reviewProviderResource(
               region: input.region,
               settings: input.settings,
             }),
+        ...(input.services?.length ? { neededBy: input.services } : {}),
       },
     },
   })
   try {
-    if (input.service)
-      await editManifest({
-        path: { id: input.projectId },
-        body: { link: { service: input.service, need: input.name } },
-      })
     progress(`Planning ${input.environment}…`)
     const manifest = revision.manifest
     const resourceOnly =

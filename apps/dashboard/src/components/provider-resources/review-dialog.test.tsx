@@ -1,11 +1,12 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, test, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { ResourceReviewDialog } from "./review-dialog"
 
-vi.mock("@/lib/router", () => ({ useNavigate: () => vi.fn() }))
+const navigate = vi.fn()
+vi.mock("@/lib/router", () => ({ useNavigate: () => navigate }))
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -145,4 +146,114 @@ test("required provider settings gate review and are saved in the manifest", asy
     },
   })
   expect(writes[1].path).toBe("/api/v1/projects/p/plans")
+})
+
+let services: Record<string, unknown> = {}
+let edits: Record<string, unknown>[] = []
+function stubManifest() {
+  edits = []
+  services = { api: {}, web: {}, worker: {} }
+  navigate.mockReset()
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        if (path.endsWith("/manifest/edits")) {
+          edits.push(body)
+          return Response.json({ revision: 2 }, { status: 201 })
+        }
+        return Response.json({ id: "plan_1" }, { status: 201 })
+      }
+      switch (path) {
+        case "/api/v1/projects":
+          return Response.json({ projects: [{ id: "p", name: "Shop" }] })
+        case "/api/v1/projects/p/environments":
+          return Response.json({
+            environments: [{ id: "e1", name: "production" }],
+          })
+        case "/api/v1/projects/p/manifest":
+          return Response.json({
+            revision: 1,
+            yaml: "version: 1\n",
+            manifest: { version: 1, services },
+          })
+      }
+      return Response.json({})
+    }
+  )
+}
+
+const providers = [
+  {
+    name: "digitalocean",
+    cloud: "digitalocean",
+    title: "DigitalOcean",
+    available: true,
+    regions: ["nyc"],
+    provisions: [
+      { kind: "postgres", creates: "Managed PostgreSQL", versions: ["17"] },
+    ],
+  },
+] as never
+const connections = [
+  { id: "conn_do", cloud: "digitalocean", name: "Team", status: "ready" },
+] as never
+
+function show() {
+  return render(
+    <ClientProvider client={forgeClient}>
+      <ResourceReviewDialog
+        open
+        onOpenChange={() => {}}
+        offer={{ kind: "postgres", provider: "digitalocean" }}
+        providers={providers}
+        connections={connections}
+      />
+    </ClientProvider>
+  )
+}
+
+test("wires every service you tick in the edit that adds the resource", async () => {
+  stubManifest()
+  const user = userEvent.setup()
+  show()
+  const api = await screen.findByRole("checkbox", { name: "api" })
+  expect(api).not.toBeChecked()
+  await user.click(screen.getByRole("checkbox", { name: "worker" }))
+  await user.click(api)
+  expect(
+    screen.getByText("api and worker will need resource in your manifest.")
+  ).toBeInTheDocument()
+  await user.click(
+    screen.getByRole("button", { name: "Review deployment plan" })
+  )
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/deployments/$id",
+      params: { id: "plan_1" },
+    })
+  )
+  expect(edits).toHaveLength(1)
+  expect(edits[0].add_resource).toMatchObject({
+    name: "resource",
+    kind: "postgres",
+    needed_by: ["api", "worker"],
+  })
+})
+
+test("ticks the only service, and leaves it out when you clear it", async () => {
+  stubManifest()
+  services = { api: {} }
+  const user = userEvent.setup()
+  show()
+  const api = await screen.findByRole("checkbox", { name: "api" })
+  expect(api).toBeChecked()
+  await user.click(api)
+  await user.click(
+    screen.getByRole("button", { name: "Review deployment plan" })
+  )
+  await waitFor(() => expect(edits).toHaveLength(1))
+  expect(edits[0].add_resource).not.toHaveProperty("needed_by")
 })
