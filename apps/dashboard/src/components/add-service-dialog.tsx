@@ -37,6 +37,7 @@ import type {
   Manifest,
   Project,
   ServiceSuggestion,
+  Target,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useQuery } from "@/client/hooks"
 import { CatalogDependencyPicker } from "@/components/catalog-dependency-picker"
@@ -58,10 +59,17 @@ import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  cloudPick,
+  OtherCloudTargets,
+  usePlacementContext,
+} from "@/components/deployment-targets"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import {
@@ -527,6 +535,13 @@ function Configure({
   const [serviceKind, setServiceKind] = useState(suggestion?.service.kind ?? "")
   const [provider, setProvider] = useState(suggestion?.service.provider ?? "")
   const [target, setTarget] = useState(suggestion?.service.target ?? "")
+  // A Cloud target, in the Cloud named or the project's default (""),
+  // replaces a provider and connection.
+  const [onCloud, setOnCloud] = useState<{
+    cloud: string
+    target: string
+  } | null>(null)
+  const clouds = usePlacementContext(project.id)
   const [port, setPort] = useState("")
   const [needs, setNeeds] = useState<string[]>(suggestion?.service.needs ?? [])
   const [neededBy, setNeededBy] = useState<string[]>([])
@@ -558,6 +573,27 @@ function Configure({
   const chosenPlacement =
     placements.find((p) => p.key === placement) ?? placements[0]
   const runners = runnersOf(providers.data?.providers ?? [], serviceKind)
+  // A Cloud target fits when its provider runs this kind of service, or
+  // any kind when analysis will decide.
+  const runsHere = (t: Target): boolean => {
+    const p = clouds.catalog.find((c) => c.name === t.provider)
+    return (
+      !p ||
+      (p.available &&
+        (serviceKind
+          ? !!p.runs?.some((r) => r.workload === serviceKind)
+          : (p.runs ?? []).length > 0))
+    )
+  }
+  const defaultTargets = clouds.cloudTargets.filter(runsHere)
+  const cloudIndex = onCloud?.cloud
+    ? clouds.otherClouds.findIndex((c) => c.name === onCloud.cloud)
+    : -1
+  const runsOnValue = onCloud
+    ? onCloud.cloud
+      ? `cloud@${cloudIndex}:${onCloud.target}`
+      : `cloud:${onCloud.target}`
+    : provider || "default"
   const ownTargets = (connections.data?.connections ?? []).filter(
     (c) =>
       c.status === "ready" &&
@@ -613,10 +649,17 @@ function Configure({
         source: source.trim(),
         ...(repo ? { repo } : {}),
         ...(serviceKind ? { kind: serviceKind } : {}),
-        ...(provider ? { provider } : {}),
-        ...(target && (provider === "server" || provider === "kubernetes")
-          ? { target }
-          : {}),
+        ...(onCloud
+          ? {
+              cloudTarget: onCloud.target,
+              ...(onCloud.cloud ? { cloud: onCloud.cloud } : {}),
+            }
+          : {
+              ...(provider ? { provider } : {}),
+              ...(target && (provider === "server" || provider === "kubernetes")
+                ? { target }
+                : {}),
+            }),
         ...(port.trim() ? { port: portNumber } : {}),
         ...(needs.length ? { needs } : {}),
         ...scope,
@@ -799,14 +842,29 @@ function Configure({
           </Field>
           <Field label="Runs on">
             <Select
-              value={provider || "default"}
+              value={runsOnValue}
               onValueChange={(v) => {
-                setProvider(v === "default" ? "" : String(v))
+                const value = String(v)
                 setTarget("")
+                if (value.startsWith("cloud:") || value.startsWith("cloud@")) {
+                  const pick = cloudPick(value, clouds.otherClouds)
+                  setOnCloud({
+                    cloud: pick.cloud ?? "",
+                    target: pick.cloudTarget ?? "",
+                  })
+                  setProvider("")
+                  return
+                }
+                setOnCloud(null)
+                setProvider(value === "default" ? "" : value)
               }}
             >
               <SelectTrigger aria-label="Runs on" className="w-full">
-                <SelectValue />
+                <SelectValue>
+                  {onCloud
+                    ? `${onCloud.target}${onCloud.cloud ? ` in ${onCloud.cloud}` : ""}`
+                    : undefined}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="default">
@@ -814,16 +872,43 @@ function Configure({
                     ? `The default, ${manifest.defaults.provider}`
                     : "The manifest's default"}
                 </SelectItem>
-                {runners.map((p) => (
-                  <SelectItem key={p.name} value={p.name}>
-                    <CloudGlyph cloud={p.cloud} />
-                    {p.title}
-                  </SelectItem>
+                {defaultTargets.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>
+                      {clouds.cloudName ?? "Cloud targets"}
+                    </SelectLabel>
+                    {defaultTargets.map((t) => (
+                      <SelectItem key={t.id} value={`cloud:${t.name}`}>
+                        {t.displayName || t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {clouds.otherClouds.map((c, i) => (
+                  <OtherCloudTargets
+                    key={c.id}
+                    projectId={project.id}
+                    cloud={c}
+                    index={i}
+                    runsHere={runsHere}
+                  />
                 ))}
+                <SelectGroup>
+                  {(defaultTargets.length > 0 ||
+                    clouds.otherClouds.length > 0) && (
+                    <SelectLabel>Accounts</SelectLabel>
+                  )}
+                  {runners.map((p) => (
+                    <SelectItem key={p.name} value={p.name}>
+                      <CloudGlyph cloud={p.cloud} />
+                      {p.title}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               </SelectContent>
             </Select>
           </Field>
-          {(provider === "server" || provider === "kubernetes") && (
+          {!onCloud && (provider === "server" || provider === "kubernetes") && (
             <Field label="Target">
               <Select
                 value={target || ownTargets[0]?.id || ""}

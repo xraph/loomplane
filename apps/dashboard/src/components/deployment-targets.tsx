@@ -207,7 +207,7 @@ export function usePlacementContext(projectId: string) {
  * sets: `cloud:<target>` is the default Cloud's, `cloud@<i>:<target>` the
  * i-th other Cloud's. Choosing a target replaces any direct placement.
  */
-function cloudPick(value: string, others: Profile[]): PlacementFields {
+export function cloudPick(value: string, others: Profile[]): PlacementFields {
   const named = /^cloud@(\d+):(.+)$/.exec(value)
   return {
     cloud: named ? (others[Number(named[1])]?.name ?? "") : "",
@@ -220,7 +220,7 @@ function cloudPick(value: string, others: Profile[]): PlacementFields {
  * its targets that can run this workload, under the Cloud's name. Nothing
  * shows while they load or when none fit.
  */
-function OtherCloudTargets({
+export function OtherCloudTargets({
   projectId,
   cloud,
   index,

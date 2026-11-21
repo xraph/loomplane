@@ -27084,6 +27084,12 @@
               "source"
             ],
             "properties": {
+              "cloud": {
+                "type": "string"
+              },
+              "cloud_target": {
+                "type": "string"
+              },
               "enabled_in": {
                 "type": "string"
               },
@@ -33170,6 +33176,12 @@
           "source"
         ],
         "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "cloud_target": {
+            "type": "string"
+          },
           "enabled_in": {
             "type": "string"
           },

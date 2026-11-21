@@ -255,3 +255,71 @@ it("names a service from its path, and won't take a name in use", async () => {
     screen.getByRole("button", { name: "Add and plan staging" })
   ).toBeDisabled()
 })
+
+it("adds a service on a target of another Cloud instead of a provider", async () => {
+  const user = userEvent.setup()
+  const base = globalThis.fetch
+  const target = (id: string, name: string, cloud: string) => ({
+    id,
+    name,
+    display_name: name.toUpperCase(),
+    cloud_id: cloud,
+    provider: "ecs-fargate",
+    connection_id: "conn",
+    revision: 1,
+  })
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (path === "/api/v1/projects/p/default-cloud")
+        return Response.json({
+          project_id: "p",
+          revision: 1,
+          cloud: {
+            cloud_id: "main",
+            name: "Main",
+            default: true,
+            targets: [target("t1", "eu-run", "main")],
+          },
+        })
+      if (path === "/api/v1/projects/p/clouds")
+        return Response.json({
+          clouds: [
+            { id: "main", name: "Main" },
+            { id: "lab", name: "GPU Lab" },
+          ],
+        })
+      if (path === "/api/v1/projects/p/clouds/lab/targets")
+        return Response.json({ targets: [target("t2", "a100", "lab")] })
+      return base(input, init)
+    }
+  )
+  show()
+  const found = await screen.findByRole("list", {
+    name: "Services analysis found",
+  })
+  await user.click(within(found).getByRole("button", { name: /worker/ }))
+  await user.click(screen.getByRole("combobox", { name: "Runs on" }))
+  const lab = await screen.findByRole("group", { name: "GPU Lab" })
+  expect(screen.getByRole("group", { name: "Main" })).toHaveTextContent(
+    "EU-RUN"
+  )
+  await user.click(within(lab).getByRole("option", { name: "A100" }))
+  expect(screen.getByRole("combobox", { name: "Runs on" })).toHaveTextContent(
+    "a100 in GPU Lab"
+  )
+  await user.click(
+    await screen.findByRole("button", { name: "Add and plan staging" })
+  )
+  await waitFor(() => expect(writes.length).toBeGreaterThan(0))
+  expect(writes[0].body).toEqual({
+    add_service: {
+      name: "worker",
+      source: "go:cmd/worker",
+      cloud: "GPU Lab",
+      cloud_target: "a100",
+      needs: ["db"],
+    },
+  })
+})

@@ -203,9 +203,14 @@ type NewServiceInput struct {
 	Repo string `json:"repo,omitempty"`
 	// Kind corrects what analysis decides the service is: http-service,
 	// web-app, static-site or worker.
-	Kind     string `json:"kind,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	Region   string `json:"region,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// CloudTarget puts the service on a Cloud target, in the Cloud that
+	// Cloud names or the project's default. Neither goes with Provider or
+	// Target.
+	Cloud       string `json:"cloud,omitempty"`
+	CloudTarget string `json:"cloud_target,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	Region      string `json:"region,omitempty"`
 	// Target is the checked server or cluster connection it runs on.
 	Target string `json:"target,omitempty"`
 	Port   int    `json:"port,omitempty"`
@@ -315,7 +320,7 @@ func (s *Service) addService(ctx context.Context, orgID, projectID string, doc [
 	name := strings.TrimSpace(in.Name)
 	needs := trimmed(in.Needs)
 	out, err := manifest.WithService(doc, name, manifest.NewService{
-		Repo: in.Repo, Source: in.Source, Kind: in.Kind, Provider: in.Provider, Region: in.Region,
+		Repo: in.Repo, Source: in.Source, Kind: in.Kind, Cloud: in.Cloud, CloudTarget: in.CloudTarget, Provider: in.Provider, Region: in.Region,
 		Target: in.Target, Port: in.Port, Public: in.Public, Needs: needs,
 	})
 	if err != nil {

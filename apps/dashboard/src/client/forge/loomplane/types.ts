@@ -2233,6 +2233,8 @@ export interface EditInputBody {
   version?: string;
 };
   addService?: {
+  cloud?: string;
+  cloudTarget?: string;
   enabledIn?: string;
   kind?: string;
   name: string;
@@ -3962,6 +3964,8 @@ export interface NewKeyBody {
 }
 
 export interface NewServiceInput {
+  cloud?: string;
+  cloudTarget?: string;
   enabledIn?: string;
   kind?: string;
   name: string;

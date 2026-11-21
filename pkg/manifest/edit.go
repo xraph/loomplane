@@ -649,15 +649,20 @@ func WithEnabledIn(doc []byte, section, name string, enabled map[string]bool) ([
 // left empty is inherited or comes from analysis, as it does for a
 // service written by hand.
 type NewService struct {
-	Repo     string
-	Source   string
-	Kind     string
-	Provider string
-	Region   string
-	Target   string
-	Port     int
-	Public   *bool
-	Needs    []string
+	Repo   string
+	Source string
+	Kind   string
+	// Cloud and CloudTarget put the service on a Cloud target: CloudTarget
+	// in the Cloud named, or in the project's default when Cloud is empty.
+	// They can't be set with Provider or Target.
+	Cloud       string
+	CloudTarget string
+	Provider    string
+	Region      string
+	Target      string
+	Port        int
+	Public      *bool
+	Needs       []string
 }
 
 // WithService adds a service to a manifest's YAML, after the ones already
@@ -679,6 +684,9 @@ func WithService(doc []byte, name string, s NewService) ([]byte, error) {
 		if m := child(root, section); m != nil && child(m, name) != nil {
 			return nil, fmt.Errorf("%w: something is already called %s", ErrInvalid, name)
 		}
+	}
+	if (s.CloudTarget != "" || s.Cloud != "") && (s.Provider != "" || s.Target != "") {
+		return nil, fmt.Errorf("%w: %s runs on a Cloud target or on an account directly, not both", ErrInvalid, name)
 	}
 	for _, need := range s.Needs {
 		if need == name {
@@ -707,6 +715,8 @@ func WithService(doc []byte, name string, s NewService) ([]byte, error) {
 	add("repo", s.Repo)
 	add("source", source)
 	add("kind", s.Kind)
+	add("cloud", s.Cloud)
+	add("cloud_target", s.CloudTarget)
 	add("provider", s.Provider)
 	add("region", s.Region)
 	add("target", s.Target)

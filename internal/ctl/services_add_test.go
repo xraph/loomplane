@@ -166,3 +166,27 @@ func TestServiceNames(t *testing.T) {
 		t.Errorf("freeName = %q", got)
 	}
 }
+
+// A Cloud target replaces the provider the suggestion came with.
+func TestServicesAddOnACloudTarget(t *testing.T) {
+	var edits []map[string]any
+	var plans []string
+	app, _ := recipesCLI(t, recipestest.Registry(t), servicesFake(t, "", "", &edits, &plans))
+	if err := app.Run([]string{"services", "add", "shop", "--suggested", "worker", "--cloud", "GPU Lab", "--cloud-target", "a100", "--no-plan"}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"add_service": map[string]any{
+		"name": "worker", "source": "go:cmd/worker", "cloud": "GPU Lab", "cloud_target": "a100", "needs": []any{"db"},
+	}}
+	if len(edits) != 1 || !reflect.DeepEqual(edits[0], want) {
+		t.Fatalf("edits %+v", edits)
+	}
+	for _, args := range [][]string{
+		{"services", "add", "shop", "--suggested", "worker", "--cloud-target", "a100", "--provider", "cloud-run"},
+		{"services", "add", "shop", "--suggested", "worker", "--cloud", "GPU Lab"},
+	} {
+		if err := app.Run(args); err == nil {
+			t.Errorf("%v was accepted", args)
+		}
+	}
+}

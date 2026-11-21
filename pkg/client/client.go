@@ -403,19 +403,23 @@ type NewResource struct {
 // anything else left out is inherited or comes from analysis. EnabledIn,
 // Only and NeededBy work as they do for a resource.
 type NewService struct {
-	Name      string   `json:"name"`
-	Source    string   `json:"source"`
-	Repo      string   `json:"repo,omitempty"`
-	Kind      string   `json:"kind,omitempty"`
-	Provider  string   `json:"provider,omitempty"`
-	Region    string   `json:"region,omitempty"`
-	Target    string   `json:"target,omitempty"`
-	Port      int      `json:"port,omitempty"`
-	Public    *bool    `json:"public,omitempty"`
-	Needs     []string `json:"needs,omitempty"`
-	NeededBy  []string `json:"needed_by,omitempty"`
-	EnabledIn string   `json:"enabled_in,omitempty"`
-	Only      bool     `json:"only,omitempty"`
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	Repo   string `json:"repo,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	// Cloud and CloudTarget put the service on a Cloud target: CloudTarget
+	// in the Cloud named, or the project's default Cloud.
+	Cloud       string   `json:"cloud,omitempty"`
+	CloudTarget string   `json:"cloud_target,omitempty"`
+	Provider    string   `json:"provider,omitempty"`
+	Region      string   `json:"region,omitempty"`
+	Target      string   `json:"target,omitempty"`
+	Port        int      `json:"port,omitempty"`
+	Public      *bool    `json:"public,omitempty"`
+	Needs       []string `json:"needs,omitempty"`
+	NeededBy    []string `json:"needed_by,omitempty"`
+	EnabledIn   string   `json:"enabled_in,omitempty"`
+	Only        bool     `json:"only,omitempty"`
 }
 
 // ServiceSuggestions are the services analysis found that the manifest
