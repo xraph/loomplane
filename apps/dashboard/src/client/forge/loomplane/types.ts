@@ -2218,6 +2218,8 @@ export interface EdgeState {
 export interface EditInputBody {
   baseRevision?: number;
   addResource?: {
+  attachments?: Record<string, any>;
+  consumerOptions?: Record<string, any>;
   enabledIn?: string;
   existingResource?: string;
   gpu?: ManifestGPU;

@@ -564,7 +564,8 @@ func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choi
 		return
 	}
 	path += ".resource"
-	if !slices.Contains(dep.Kinds, choice.Kind) {
+	externalKind := choice.ExistingResource != nil && dep.External != nil && dep.External.Engine == choice.Kind
+	if !externalKind && !slices.Contains(dep.Kinds, choice.Kind) {
 		p.problem(Finding{
 			Code: "catalog-connect-kind-mismatch", Subject: ResourceSubject, Name: name, Path: path,
 			Message: fmt.Sprintf("%s needs %s for %s, and %s is %s.", name, strings.Join(dep.Kinds, " or "), dep.Name, choice.Resource, choice.Kind),

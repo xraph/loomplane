@@ -27,6 +27,9 @@ const timescale = { kind: "timescaledb", provider: "server", target: "conn_1" }
 function serve(
   options: {
     cloud?: "server" | "kubernetes"
+    inventory?: Record<string, unknown>[]
+    endpoints?: { id: string; name: string; engine: string }[]
+    services?: Record<string, unknown>
     resources?: Record<string, unknown>
     check?: () => Response
     edit?: () => Response
@@ -71,6 +74,25 @@ function serve(
           )
         throw new Error(`Unexpected request ${method} ${path}`)
       }
+      if (path.endsWith("/catalog/endpoints"))
+        return json({
+          endpoints: (options.endpoints ?? []).map((e) => ({
+            ...e,
+            host: "cache.internal",
+            port: 6379,
+            tls: "require",
+            org_id: "org",
+            created_by: "u",
+            created_at: "2026-10-21T12:00:00Z",
+            revision: 1,
+          })),
+        })
+      if (path.endsWith("/provider-resources"))
+        return json({
+          resources: options.inventory ?? [],
+          syncs: [],
+          supported_providers: [],
+        })
       if (path.endsWith("/projects/p/environments"))
         return json({
           environments: [
@@ -83,7 +105,11 @@ function serve(
           id: "rev_1",
           revision: 1,
           yaml: "version: 1",
-          manifest: { version: 1, resources: options.resources ?? {} },
+          manifest: {
+            version: 1,
+            services: options.services,
+            resources: options.resources ?? {},
+          },
         })
       if (path.endsWith("/connections"))
         return json({
@@ -243,7 +269,9 @@ test("connecting an existing Postgres checks, saves and selects it", async () =>
     },
   })
   // The connection string isn't kept once it's sent.
-  expect(screen.getByLabelText("Postgres connection string")).toHaveValue("")
+  expect(
+    screen.queryByLabelText("Postgres connection string")
+  ).not.toBeInTheDocument()
   expect(JSON.stringify(window.location)).not.toContain("s3cret")
 })
 
@@ -467,4 +495,79 @@ test("a Kubernetes target does not promise daily backups", async () => {
   expect(
     screen.queryByText(/Daily backups when Loomplane runs it/)
   ).not.toBeInTheDocument()
+})
+
+test("a saved endpoint is linked by ID and checked by the planner", async () => {
+  const writes = serve({
+    endpoints: [{ id: "ep_cache", name: "Existing cache", engine: "redis" }],
+  })
+  mount()
+  const review = await ready()
+  await userEvent.click(
+    within(engine("Redis")).getByRole("radio", { name: "Connect existing" })
+  )
+  await userEvent.click(
+    await screen.findByRole("radio", { name: "Existing cache" })
+  )
+  await userEvent.click(review)
+  await vi.waitFor(() => expect(writes).toHaveLength(2))
+  expect(writes[0].body).toMatchObject({
+    add_resource: { uses: { redis: { external: "ep_cache" } } },
+  })
+})
+
+test("an app can receive its Fabriq connection as part of the same manifest edit", async () => {
+  const writes = serve({ services: { api: { source: "services/api" } } })
+  mount()
+  const button = await ready()
+  await userEvent.click(screen.getByRole("checkbox", { name: "api" }))
+  expect(button).toBeDisabled()
+  await userEvent.type(
+    screen.getByRole("textbox", { name: /Default tenant/ }),
+    "wakflo"
+  )
+  await userEvent.click(button)
+  await vi.waitFor(() => expect(writes).toHaveLength(2))
+  expect(writes[0].body).toMatchObject({
+    add_resource: {
+      kind: "fabriq",
+      needed_by: ["api"],
+      consumer_options: { tenant: "wakflo" },
+    },
+  })
+})
+
+test("Fabriq attaches a provider database in the same edit as its dependency", async () => {
+  const id = "providerresource_" + "a".repeat(64)
+  const writes = serve({
+    inventory: [
+      {
+        id,
+        name: "orders",
+        provider: "digitalocean",
+        region: "ric1",
+        endpoint_id: "ep",
+        kind: "postgres",
+        status: "online",
+      },
+    ],
+  })
+  mount()
+  const review = await ready()
+  await userEvent.click(
+    within(engine("Postgres 16")).getByRole("radio", {
+      name: "Connect existing",
+    })
+  )
+  await userEvent.click(
+    await screen.findByRole("radio", { name: "orders · digitalocean · ric1" })
+  )
+  await userEvent.click(review)
+  await vi.waitFor(() => expect(writes).toHaveLength(2))
+  expect(writes[0].body).toMatchObject({
+    add_resource: {
+      attachments: { postgres: { resource_id: id, kind: "postgres" } },
+      uses: { postgres: { resource: "fabriq-postgres" } },
+    },
+  })
 })

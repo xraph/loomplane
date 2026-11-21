@@ -107,6 +107,25 @@ export function scopeBody(
   return moving.length === all.length ? {} : { scope: moving }
 }
 
+/** Carry the reviewed repository and service selection into a replacement plan. */
+export function replanScope(plan?: Plan, addedService?: string) {
+  if (!plan) return {}
+  const services = planServices(plan)
+  return {
+    ...scopeBody(
+      plan.sources.map((s) => s.alias),
+      plan.sources.filter((s) => s.inScope).map((s) => s.alias)
+    ),
+    ...(services.length
+      ? {
+          services: addedService
+            ? [...new Set([...services, addedService])]
+            : services,
+        }
+      : {}),
+  }
+}
+
 /**
  * lockedOn is the repositories a plan of an environment has to move:
  * those with nothing deployed there yet. A plan holds a repository at

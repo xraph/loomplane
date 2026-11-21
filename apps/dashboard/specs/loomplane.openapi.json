@@ -27031,6 +27031,14 @@
               "kind"
             ],
             "properties": {
+              "attachments": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "consumer_options": {
+                "type": "object",
+                "additionalProperties": true
+              },
               "enabled_in": {
                 "type": "string"
               },

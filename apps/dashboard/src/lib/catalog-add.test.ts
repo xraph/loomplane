@@ -179,3 +179,20 @@ test("uses says only what differs from the kind's defaults", () => {
     })
   ).toBeUndefined()
 })
+
+test("keeps the original plan's held repositories and services when adding Fabriq", async () => {
+  const calls = serve(() => json({ id: "rev", revision: 3 }))
+  const parentPlan = {
+    sources: [
+      { alias: "backend", inScope: true },
+      { alias: "web", inScope: false },
+    ],
+    services: ["api"],
+  } as import("@/client/forge/loomplane/types").Plan
+  await addCatalogService({ ...input, kind: "fabriq", parentPlan }, vi.fn())
+  expect(calls[1].body).toEqual({
+    environment: "staging",
+    scope: ["backend"],
+    services: ["api"],
+  })
+})

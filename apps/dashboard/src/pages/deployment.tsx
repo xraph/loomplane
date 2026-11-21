@@ -11,6 +11,7 @@ import {
   useDeploymentsForPlan,
   useDeploymentsList,
   useDeploymentsRetry,
+  useEnvironmentsList,
   usePlansCreate,
   usePlansGet,
   usePlansList,
@@ -21,8 +22,10 @@ import type {
   Connection,
   Finding,
   Plan,
+  Project,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { AddServiceDialog } from "@/components/add-service-dialog"
 import { ApprovalCard } from "@/components/approval"
 import { CancelDeployment } from "@/components/cancel-deployment"
 import { BuildLogPanel, type LogSource } from "@/components/build-log-panel"
@@ -188,6 +191,7 @@ function Loaded({
     wanted,
     deciding ? "changes" : "logs"
   )
+  const [adding, setAdding] = useState(false)
   const [source, setSource] = useState("all")
   const navigate = useNavigate()
   const replan = useMutation(usePlansCreate)
@@ -198,6 +202,7 @@ function Loaded({
         path: { id: run.projectId },
         body: {
           environment: run.environment,
+          ...(plan.catalog ? { catalog: true } : {}),
           // Planning again moves what this plan moved and holds what it held.
           ...scopeBody(
             plan.sources.map((s) => s.alias),
@@ -310,14 +315,35 @@ function Loaded({
               servicePicker={
                 deciding &&
                 can("deployment:create") &&
-                !plan.catalog &&
                 !plan.cloudSyncId &&
                 (!plan.kind || plan.kind === "release") && (
-                  <ReplanServices
-                    plan={plan}
-                    planAgain={planAgain}
-                    pending={replan.isPending}
-                  />
+                  <div className="flex flex-wrap gap-2">
+                    {!plan.catalog && (
+                      <ReplanServices
+                        plan={plan}
+                        planAgain={planAgain}
+                        pending={replan.isPending}
+                      />
+                    )}
+                    {run.project && can("project:update") && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setAdding(true)}
+                        >
+                          Add service
+                        </Button>
+                        {adding && (
+                          <AddToPlan
+                            project={run.project}
+                            plan={plan}
+                            onClose={() => setAdding(false)}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
                 )
               }
             />
@@ -342,6 +368,42 @@ function Loaded({
         </Tabs>
       </Page>
     </>
+  )
+}
+
+function AddToPlan({
+  project,
+  plan,
+  onClose,
+}: {
+  project: Project
+  plan: Plan
+  onClose: () => void
+}) {
+  const environments = useQuery(useEnvironmentsList, {
+    path: { id: project.id },
+  })
+  if (environments.status === "error")
+    return (
+      <QueryError
+        error={environments.error}
+        fallback="The environments couldn't be loaded."
+        retry={environments.refetch}
+      />
+    )
+  if (!environments.data) return <Spinner aria-label="Loading environments" />
+  return (
+    <AddServiceDialog
+      project={project}
+      parentPlan={plan}
+      environments={environments.data.environments}
+      environment={plan.environment}
+      start="catalog"
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    />
   )
 }
 

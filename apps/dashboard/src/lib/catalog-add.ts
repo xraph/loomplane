@@ -2,6 +2,7 @@
 // goes into the project's manifest, then Loomplane plans one environment.
 // Nothing is approved here; the plan opens on its review page like any
 // other.
+import { replanScope } from "@/lib/plans"
 import { messageOf } from "@/client/errors"
 import {
   useManifestsEdit as editManifest,
@@ -16,6 +17,10 @@ import type {
 import type { DependencyChoice } from "@/lib/service-recovery"
 
 export type AddCatalogServiceInput = {
+  attachments?: Record<string, { resource_id: string; kind: string }>
+  consumerOptions?: Record<string, string>
+  neededBy?: string[]
+  parentPlan?: Plan
   projectId: string
   /** The environment's name, such as "production". */
   environment: string
@@ -47,6 +52,13 @@ export async function addCatalogService(
     body: {
       addResource: {
         name: input.name,
+        ...(input.attachments && Object.keys(input.attachments).length
+          ? { attachments: input.attachments }
+          : {}),
+        ...(input.consumerOptions
+          ? { consumerOptions: input.consumerOptions }
+          : {}),
+        ...(input.neededBy?.length ? { neededBy: input.neededBy } : {}),
         kind: input.kind,
         provider: input.provider,
         target: input.target,
@@ -69,6 +81,7 @@ export async function addCatalogService(
     plan = await createPlan({
       path: { id: input.projectId },
       body: {
+        ...replanScope(input.parentPlan),
         environment: input.environment,
         ...(resourceOnly ? { catalog: true } : {}),
       },

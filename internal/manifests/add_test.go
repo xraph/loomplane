@@ -196,3 +196,13 @@ func TestAddServiceOnACloudTarget(t *testing.T) {
 		t.Fatalf("web on the default Cloud: %v\n%s", err, rev.YAML)
 	}
 }
+
+func TestAddResourceWithConsumerOptions(t *testing.T) {
+	rev, store, err := addEdit(t, appYAML, EditInput{AddResource: &NewResource{Name: "fabriq", Kind: "fabriq", Uses: map[string]manifest.Use{"postgres": {Resource: "shared-db"}}, Attachments: map[string]DependencyAttachment{"postgres": {Kind: "postgres", ResourceID: "providerresource_" + strings.Repeat("a", 64)}}, NeededBy: []string{"api"}, ConsumerOptions: map[string]string{"tenant": "wakflo"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.writes != 1 || rev.Manifest.Resources["shared-db"].ExistingResource == "" || rev.Manifest.Services["api"].NeedOptions["fabriq"]["tenant"] != "wakflo" {
+		t.Fatal(rev.YAML)
+	}
+}

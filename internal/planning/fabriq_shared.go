@@ -63,8 +63,21 @@ func (p *planner) checkFabriqDatabases() {
 		if key == "" {
 			continue
 		}
+		resourceID := ""
+		if resource, linked := strings.CutPrefix(key, "resource:"); linked {
+			resourceID = m.Resources[resource].ExistingResource
+			if resourceID != "" {
+				key = "external:" + resourceID
+				if checked := p.in.ExistingResources[resourceID]; checked.Endpoint != nil {
+					key = "external:" + checked.Endpoint.ID
+				}
+			}
+		}
 		endpoint, external := strings.CutPrefix(key, "external:")
 		elsewhere, inOther := p.in.FabriqPostgres[endpoint]
+		if !inOther && resourceID != "" {
+			elsewhere, inOther = p.in.FabriqPostgres[resourceID]
+		}
 		earlier, inManifest := here[key]
 		var used string
 		switch {
@@ -135,6 +148,9 @@ func FabriqPostgres(resources []*OrgResource, projectID, environmentID string) m
 			user.Other, user.Project = true, r.Project
 		}
 		out[choice.External] = user
+		if choice.ExistingResource != nil {
+			out[choice.ExistingResource.ResourceID] = user
+		}
 	}
 	return out
 }

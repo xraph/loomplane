@@ -14,11 +14,14 @@ import {
   useConnectionsList,
   useEnvironmentsList,
   useManifestsCurrent,
+  useProviderResourcesList,
 } from "@/client/forge/loomplane/hooks"
 import type { CheckResult } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FabriqIcon } from "./fabriq-icon"
 import { ProductIcon } from "@/components/product-icon"
+import { Wiring } from "@/components/service-wiring"
+import { entries } from "@/lib/add-service"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -51,6 +54,7 @@ import {
   checkMessage,
   fabriqKindFor,
   fabriqSummary,
+  validTenantId,
   fabriqUses,
   kubernetesBackupsSentence,
   type CheckEngine,
@@ -145,6 +149,7 @@ const engines: Engine[] = [
 /** What the dialog keeps for an engine that connects to something existing. */
 type Existing = {
   /** A resource in this project, or undefined for a connection string. */
+  inventory?: string
   resource?: string
   /** Kept only until it is sent, and never put in a URL. */
   dsn: string
@@ -162,6 +167,7 @@ const noExisting: Existing = { dsn: "" }
  */
 export function AddFabriqDialog({
   projectId,
+  parentPlan,
   projectName,
   onClose,
   onPlanned,
@@ -172,6 +178,8 @@ export function AddFabriqDialog({
   })
   const current = useQuery(useManifestsCurrent, { path: { id: projectId } })
   const connections = useQuery(useConnectionsList)
+  const inventory = useQuery(useProviderResourcesList)
+  const savedEndpoints = useQuery(useCatalogEndpointsList)
   const checking = useMutation(useCatalogEndpointsCheck)
   const saving = useMutation(useCatalogEndpointsCreate)
   const invalidate = useInvalidate()
@@ -183,6 +191,8 @@ export function AddFabriqDialog({
     falkor: "off",
     es: "off",
   })
+  const [tenant, setTenant] = useState("")
+  const [consumers, setConsumers] = useState<string[]>([])
   const [environment, setEnvironment] = useState("")
   const [target, setTarget] = useState("")
   const [existing, setExisting] = useState<Record<"pg" | "redis", Existing>>({
@@ -196,6 +206,7 @@ export function AddFabriqDialog({
 
   const environmentList = environments.data?.environments ?? []
   const environmentName =
+    parentPlan?.environment ??
     environmentList.find((e) => e.name === environment)?.name ??
     (environmentList.find((e) => e.name === "production") ?? environmentList[0])
       ?.name
@@ -218,18 +229,41 @@ export function AddFabriqDialog({
         ([, r]) =>
           engine.check &&
           typeof r?.kind === "string" &&
-          engine.kinds.includes(r.kind) &&
           !!selected &&
-          r.target === selected.connection.id
+          r.environments?.[environmentName ?? ""]?.enabled !== false &&
+          ((engine.kinds.includes(r.kind) &&
+            (r.environments?.[environmentName ?? ""]?.target ?? r.target) ===
+              selected.connection.id) ||
+            ((r.existing_resource || r.existingResource) &&
+              (r.kind === engine.check || engine.kinds.includes(r.kind))))
       )
       .map(([resource]) => resource)
+
+  const attachedIDs = new Set(
+    Object.values(manifest?.resources ?? {}).map(
+      (r) => r?.existing_resource ?? r?.existingResource
+    )
+  )
+  const inventoryFor = (engine: Engine) =>
+    (inventory.data?.resources ?? [])
+      .filter((r) => r !== null)
+      .filter(
+        (r) =>
+          engine.check &&
+          !!r.endpointId &&
+          r.status !== "missing" &&
+          !attachedIDs.has(r.id) &&
+          (r.kind === engine.check || engine.kinds.includes(r.kind))
+      )
 
   // Where an engine that connects to something existing stands: a resource
   // in the project, a saved endpoint, or a connection string that passed.
   const linked = (engine: Engine & { check: CheckEngine }) => {
     const state = existing[engine.id as "pg" | "redis"]
     const resource = resourcesFor(engine).find((r) => r === state.resource)
-    if (resource) return true
+    if (resource || inventoryFor(engine).some((r) => r.id === state.inventory))
+      return true
+    if (state.inventory) return false
     return (
       !!state.endpoint ||
       (!!selected &&
@@ -243,8 +277,14 @@ export function AddFabriqDialog({
   )
   const loading =
     !environments.data || !current.data?.manifest || !connections.data
+  const needsTenant = choice.mode === "server" && consumers.length > 0
   const blocked =
-    pending || loading || !selected || !environmentName || unfinished
+    (needsTenant && !validTenantId(tenant)) ||
+    pending ||
+    loading ||
+    !selected ||
+    !environmentName ||
+    unfinished
 
   const check = async (engine: Engine & { check: CheckEngine }) => {
     const id = engine.id as "pg" | "redis"
@@ -289,6 +329,8 @@ export function AddFabriqDialog({
     setError("")
     try {
       const links: { postgres?: FabriqLink; redis?: FabriqLink } = {}
+      const attachments: Record<string, { resource_id: string; kind: string }> =
+        {}
       for (const engine of engines) {
         if (!engine.check || choice[engine.id] !== "existing") continue
         const id = engine.id as "pg" | "redis"
@@ -297,6 +339,20 @@ export function AddFabriqDialog({
         const key = engine.dependency as "postgres" | "redis"
         if (resource) {
           links[key] = { resource }
+          continue
+        }
+        if (state.inventory) {
+          const entry = inventoryFor(engine).find(
+            (r) => r.id === state.inventory
+          )
+          if (!entry || !manifest)
+            throw new Error(
+              "The selected provider resource is no longer available."
+            )
+          links[key] = {
+            resource: freeName(name + "-" + key, takenNames(manifest)),
+          }
+          attachments[key] = { resource_id: entry.id, kind: entry.kind }
           continue
         }
         let endpoint = state.endpoint
@@ -320,6 +376,10 @@ export function AddFabriqDialog({
         {
           projectId,
           environment: environmentName,
+          parentPlan,
+          attachments,
+          neededBy: needsTenant ? consumers : undefined,
+          consumerOptions: needsTenant ? { tenant } : undefined,
           name,
           kind: fabriqKindFor(choice.mode),
           provider: selected.provider,
@@ -404,7 +464,7 @@ export function AddFabriqDialog({
                     value: e.name,
                   }))}
                   onChange={setEnvironment}
-                  disabled={locked}
+                  disabled={locked || !!parentPlan}
                 />
                 <Pick
                   id={`${ids}-target`}
@@ -495,6 +555,14 @@ export function AddFabriqDialog({
                         engine={engine}
                         state={existing[engine.id as "pg" | "redis"]}
                         resources={resourcesFor(engine)}
+                        inventory={inventoryFor(engine)}
+                        endpoints={(savedEndpoints.data?.endpoints ?? [])
+                          .filter((e) => e !== null)
+                          .filter(
+                            (e) =>
+                              e.engine === engine.check &&
+                              !/^resource-[0-9a-f]{64}-[0-9]+$/.test(e.name)
+                          )}
                         target={selected?.connection.id}
                         checking={checkingEngine === engine.id}
                         disabled={locked}
@@ -509,6 +577,34 @@ export function AddFabriqDialog({
               </div>
             </div>
 
+            {choice.mode === "server" && manifest && (
+              <Wiring
+                label="Used by"
+                help="Choose the services that should receive a Fabriq connection string."
+                options={entries(manifest).filter(
+                  (e) => e.section === "services"
+                )}
+                value={consumers}
+                onChange={setConsumers}
+                hint={() => "FABRIQ_URL"}
+              />
+            )}
+            {needsTenant && (
+              <label className="grid gap-1.5 text-[13px] font-medium">
+                Default tenant
+                <Input
+                  value={tenant}
+                  onChange={(e) => setTenant(e.target.value)}
+                  required
+                  placeholder="wakflo"
+                  maxLength={63}
+                />
+                <Hint>
+                  Fabriq creates this tenant on deployment if it is new. Use
+                  lowercase letters, digits and dashes.
+                </Hint>
+              </label>
+            )}
             <div className="grid gap-1 rounded-lg bg-muted px-3 py-2.5">
               <span className="text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
                 This creates
@@ -654,6 +750,8 @@ function Connecting({
   engine,
   state,
   resources,
+  inventory,
+  endpoints,
   target,
   checking,
   disabled,
@@ -663,6 +761,8 @@ function Connecting({
   engine: Engine & { check: CheckEngine }
   state: Existing
   resources: string[]
+  inventory: { id: string; name: string; provider: string; region: string }[]
+  endpoints: { id: string; name: string }[]
   target?: string
   checking: boolean
   disabled: boolean
@@ -675,36 +775,69 @@ function Connecting({
   const message = result && checkMessage(engine.check, result)
   return (
     <div className="mt-2.5 grid gap-2">
-      {resources.length > 0 && (
+      {(resources.length > 0 ||
+        inventory.length > 0 ||
+        endpoints.length > 0 ||
+        state.endpoint) && (
         <RadioGroup
-          value={resource ?? ""}
-          onValueChange={(value) => onChange({ resource: value || undefined })}
+          value={
+            resource
+              ? "resource:" + resource
+              : state.inventory
+                ? "inventory:" + state.inventory
+                : (state.endpoint ?? "dsn")
+          }
+          onValueChange={(value) =>
+            onChange({
+              resource: value.startsWith("resource:")
+                ? value.slice(9)
+                : undefined,
+              inventory: value.startsWith("inventory:")
+                ? value.slice(10)
+                : undefined,
+              endpoint:
+                value === "dsn" ||
+                value.startsWith("inventory:") ||
+                value.startsWith("resource:")
+                  ? undefined
+                  : value,
+              check: undefined,
+              dsn: "",
+            })
+          }
           disabled={disabled}
-          aria-label={`${engine.name} source`}
+          aria-label={engine.name + " source"}
           className="grid gap-1.5 sm:grid-cols-2"
         >
-          {[...resources.map((r) => r as string | undefined), undefined].map(
-            (r) => {
-              const on = r === resource
-              return (
-                <Radio.Root
-                  key={r ?? "string"}
-                  value={r ?? ""}
-                  nativeButton
-                  render={<button type="button" />}
-                  className={cn(
-                    "truncate rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] font-medium disabled:opacity-60",
-                    on ? "border-brand-line bg-brand-soft" : "hover:bg-muted/50"
-                  )}
-                >
-                  {r ? `${r} (in this project)` : "A connection string"}
-                </Radio.Root>
-              )
-            }
-          )}
+          {[
+            ...resources.map((r) => ({
+              value: "resource:" + r,
+              label: r + " (in this project)",
+            })),
+            ...inventory.map((r) => ({
+              value: "inventory:" + r.id,
+              label: [r.name, r.provider, r.region].filter(Boolean).join(" · "),
+            })),
+            ...endpoints.map((e) => ({ value: e.id, label: e.name })),
+            ...(state.endpoint &&
+            !endpoints.some((e) => e.id === state.endpoint)
+              ? [{ value: state.endpoint, label: "Saved connection" }]
+              : []),
+            { value: "dsn", label: "A connection string" },
+          ].map((item) => (
+            <Radio.Root
+              key={item.value}
+              value={item.value}
+              nativeButton
+              render={<button type="button" />}
+              className="truncate rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] font-medium hover:bg-muted/50 disabled:opacity-60 data-checked:border-brand-line data-checked:bg-brand-soft"
+            >
+              {item.label}
+            </Radio.Root>
+          ))}
         </RadioGroup>
       )}
-      {!resource && (
+      {!resource && !state.inventory && !state.endpoint && (
         <>
           <div className="flex flex-wrap gap-2">
             <Input

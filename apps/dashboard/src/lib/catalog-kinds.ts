@@ -14,7 +14,7 @@ import {
 } from "lucide-react"
 import type { ComponentType } from "react"
 
-import type { Binding, KindInfo } from "@/client/forge/loomplane/types"
+import type { Binding, KindInfo, Plan } from "@/client/forge/loomplane/types"
 import type { ProductKey } from "@/components/product-logos"
 import {
   bindingConfig,
@@ -91,6 +91,7 @@ export type CatalogPanel = {
 
 /** What a module's add dialog is given once the project is chosen. */
 export type CatalogAddProps = {
+  parentPlan?: Plan
   projectId: string
   projectName: string
   onClose: () => void

@@ -24,6 +24,10 @@ func sharedFindings(r *Result) []Finding {
 
 func TestTwoFabriqsRefuseOneDatabase(t *testing.T) {
 	cases := map[string]string{
+		"two attachments of one provider resource": "  primary: {kind: postgres, existing_resource: " + syncedResource + "}\n" +
+			"  reused: {kind: postgres, existing_resource: " + syncedResource + "}\n" +
+			"  orders: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {resource: primary}}}\n" +
+			"  billing: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {resource: reused}}}\n",
 		"one project resource": "  tsdb: {kind: timescaledb, provider: server, target: " + targetA + "}\n" +
 			"  orders: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {resource: tsdb}}}\n" +
 			"  billing: {kind: fabriq-library, provider: server, target: " + targetA + ", uses: {postgres: {resource: tsdb}}}\n",

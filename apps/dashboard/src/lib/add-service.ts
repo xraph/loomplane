@@ -3,6 +3,7 @@
 // writes the entry, scopes it to an environment and wires it to what needs
 // it, so the YAML stays as someone would write it by hand and the plan
 // that follows deploys exactly that.
+import { replanScope } from "@/lib/plans"
 import { messageOf } from "@/client/errors"
 import {
   useManifestsEdit as editManifest,
@@ -260,6 +261,7 @@ export async function preview(
  */
 export async function addService(
   input: {
+    parentPlan?: Plan
     projectId: string
     name: string
     environment: string
@@ -286,6 +288,10 @@ export async function addService(
     plan = await createPlan({
       path: { id: input.projectId },
       body: {
+        ...replanScope(
+          input.parentPlan,
+          input.edit.addService ? input.name : undefined
+        ),
         environment: input.environment,
         ...(catalogOnly ? { catalog: true } : {}),
       },

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -161,13 +162,22 @@ type ResourceUse struct {
 	Use        manifest.Use `json:"use"`
 }
 
+// DependencyAttachment references a provider resource for one catalog dependency.
+type DependencyAttachment struct {
+	ResourceID string `json:"resource_id"`
+	Kind       string `json:"kind"`
+}
+
 // NewResource is a resource to add to the manifest.
 type NewResource struct {
-	ExistingResource string `json:"existing_resource,omitempty"`
-	Region           string `json:"region,omitempty"`
-	Name             string `json:"name"`
-	Kind             string `json:"kind"`
-	Provider         string `json:"provider,omitempty"`
+	Attachments map[string]DependencyAttachment `json:"attachments,omitempty"`
+	// ConsumerOptions are applied to each service listed in NeededBy.
+	ConsumerOptions  map[string]string `json:"consumer_options,omitempty"`
+	ExistingResource string            `json:"existing_resource,omitempty"`
+	Region           string            `json:"region,omitempty"`
+	Name             string            `json:"name"`
+	Kind             string            `json:"kind"`
+	Provider         string            `json:"provider,omitempty"`
 	// Target is the checked server connection a catalog resource runs on.
 	Target  string                  `json:"target,omitempty"`
 	Version string                  `json:"version,omitempty"`
@@ -304,6 +314,21 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 // names, if it names one, and needed by the services it names.
 func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc []byte, r *NewResource) ([]byte, error) {
 	name := strings.TrimSpace(r.Name)
+	if len(r.Attachments) > manifest.MaxResources {
+		return nil, fmt.Errorf("%w: too many resource attachments", ErrInvalid)
+	}
+	for _, dep := range slices.Sorted(maps.Keys(r.Attachments)) {
+		attachment := r.Attachments[dep]
+		alias := r.Uses[dep].Resource
+		if alias == "" || attachment.ResourceID == "" || attachment.Kind == "" {
+			return nil, fmt.Errorf("%w: an attachment needs a resource name, inventory ID and kind for %s", ErrInvalid, dep)
+		}
+		var err error
+		doc, err = manifest.WithResource(doc, alias, manifest.Resource{Kind: attachment.Kind, ExistingResource: attachment.ResourceID})
+		if err != nil {
+			return nil, err
+		}
+	}
 	out, err := manifest.WithResource(doc, name, manifest.Resource{
 		Kind: r.Kind, Provider: r.Provider, Target: r.Target, Version: r.Version, Uses: r.Uses,
 		Settings: r.Settings, GPU: r.GPU, ExistingResource: r.ExistingResource, Region: r.Region,
@@ -311,7 +336,7 @@ func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc 
 	if err != nil {
 		return nil, err
 	}
-	return s.placeNew(ctx, orgID, projectID, out, "resources", name, r.EnabledIn, r.Only, r.NeededBy)
+	return s.placeNew(ctx, orgID, projectID, out, "resources", name, r.EnabledIn, r.Only, r.NeededBy, r.ConsumerOptions)
 }
 
 // addService writes a new service, with the same environment and
@@ -326,7 +351,7 @@ func (s *Service) addService(ctx context.Context, orgID, projectID string, doc [
 	if err != nil {
 		return nil, err
 	}
-	return s.placeNew(ctx, orgID, projectID, out, "services", name, in.EnabledIn, in.Only, in.NeededBy)
+	return s.placeNew(ctx, orgID, projectID, out, "services", name, in.EnabledIn, in.Only, in.NeededBy, nil)
 }
 
 // placeNew finishes adding name to section: on in environment, off in
@@ -334,7 +359,7 @@ func (s *Service) addService(ctx context.Context, orgID, projectID string, doc [
 // refuses a result where a service would need something that's off in an
 // environment the service runs in, naming both, so the mistake shows here
 // rather than as a problem on a later plan.
-func (s *Service) placeNew(ctx context.Context, orgID, projectID string, doc []byte, section, name, environment string, only bool, neededBy []string) ([]byte, error) {
+func (s *Service) placeNew(ctx context.Context, orgID, projectID string, doc []byte, section, name, environment string, only bool, neededBy []string, options map[string]string) ([]byte, error) {
 	environment = strings.TrimSpace(environment)
 	if only && environment == "" {
 		return nil, fmt.Errorf("%w: only needs enabled_in, the environment %s runs in", ErrInvalid, name)
@@ -371,7 +396,7 @@ func (s *Service) placeNew(ctx context.Context, orgID, projectID string, doc []b
 			return nil, fmt.Errorf("%w: %s can't need itself", ErrInvalid, name)
 		}
 		var err error
-		if doc, err = manifest.WithNeed(doc, svc, name, nil); err != nil {
+		if doc, err = manifest.WithNeed(doc, svc, name, options); err != nil {
 			return nil, err
 		}
 	}

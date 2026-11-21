@@ -5,10 +5,8 @@
 // revision and, if asked, a plan for the environment it came from.
 import {
   ArrowLeftIcon,
-  BoxIcon,
   CodeIcon,
   FolderGit2Icon,
-  PackageIcon,
   SearchIcon,
   SparklesIcon,
 } from "lucide-react"
@@ -35,6 +33,7 @@ import type {
   Environment,
   KindInfo,
   Manifest,
+  Plan,
   Project,
   ServiceSuggestion,
   Target,
@@ -45,7 +44,7 @@ import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Wiring } from "@/components/service-wiring"
 import {
   Dialog,
   DialogContent,
@@ -91,7 +90,6 @@ import {
   runnersOf,
   scopeConflicts,
   serviceKinds,
-  type Entry,
 } from "@/lib/add-service"
 import {
   freeName,
@@ -120,6 +118,7 @@ type Step =
  * opens straight on a catalog kind's form.
  */
 export function AddServiceDialog({
+  parentPlan,
   project,
   environments,
   environment: initialEnvironment,
@@ -127,6 +126,7 @@ export function AddServiceDialog({
   open,
   onOpenChange,
 }: {
+  parentPlan?: Plan
   project: Project
   environments: Environment[]
   environment?: string
@@ -139,6 +139,7 @@ export function AddServiceDialog({
       <DialogContent className="grid max-h-[90vh] grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden sm:max-w-3xl">
         {open && (
           <Body
+            parentPlan={parentPlan}
             project={project}
             environments={environments}
             initialEnvironment={initialEnvironment}
@@ -152,12 +153,14 @@ export function AddServiceDialog({
 }
 
 function Body({
+  parentPlan,
   project,
   environments,
   initialEnvironment,
   start,
   onClose,
 }: {
+  parentPlan?: Plan
   project: Project
   environments: Environment[]
   initialEnvironment?: string
@@ -176,6 +179,7 @@ function Body({
   )
   const [tab, setTab] = useState<AddServiceStart>(start)
   const fallbackEnv =
+    parentPlan?.environment ??
     environments.find((e) => e.name === initialEnvironment)?.name ??
     environments.find((e) => e.name === "production")?.name ??
     environments[0]?.name ??
@@ -238,6 +242,7 @@ function Body({
           />
         ) : (
           <Configure
+            parentPlan={parentPlan}
             key={
               step.at === "catalog"
                 ? `kind:${step.info.name}`
@@ -492,6 +497,7 @@ function Catalog({ onKind }: { onKind: (info: KindInfo) => void }) {
 }
 
 function Configure({
+  parentPlan,
   project,
   manifest,
   yaml,
@@ -501,6 +507,7 @@ function Configure({
   step,
   onClose,
 }: {
+  parentPlan?: Plan
   project: Project
   manifest: Manifest
   yaml: string
@@ -676,6 +683,7 @@ function Configure({
   if (AddDialog)
     return (
       <AddDialog
+        parentPlan={parentPlan}
         projectId={project.id}
         projectName={project.name}
         onClose={onClose}
@@ -691,7 +699,14 @@ function Configure({
     setError("")
     try {
       const out = await addService(
-        { projectId: project.id, name: trimmed, environment, edit, plan },
+        {
+          projectId: project.id,
+          name: trimmed,
+          environment,
+          edit,
+          plan,
+          parentPlan,
+        },
         setPending
       )
       invalidate(useManifestsCurrent)
@@ -1056,7 +1071,7 @@ function Configure({
               {o.label}
             </button>
           ))}
-          {environments.length > 1 && (
+          {!parentPlan && environments.length > 1 && (
             <Select
               value={environment}
               onValueChange={(v) => onEnvironment(String(v))}
@@ -1127,66 +1142,6 @@ function Configure({
         </div>
       </DialogFooter>
     </form>
-  )
-}
-
-/** Wiring picks which manifest entries a new service connects to. */
-function Wiring({
-  label,
-  help,
-  options,
-  value,
-  onChange,
-  hint,
-}: {
-  label: string
-  help: string
-  options: Entry[]
-  value: string[]
-  onChange: (value: string[]) => void
-  hint: (e: Entry) => string
-}) {
-  if (options.length === 0) return null
-  return (
-    <fieldset className="grid gap-2">
-      <legend className="mb-1 text-[13px] leading-none font-medium">
-        {label}
-      </legend>
-      <p className="text-xs text-muted-foreground">{help}</p>
-      <div className="flex flex-wrap gap-2">
-        {options.map((e) => {
-          const on = value.includes(e.name)
-          const Icon = e.section === "services" ? BoxIcon : PackageIcon
-          return (
-            <label
-              key={`${e.section}:${e.name}`}
-              className={cn(
-                "flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[13px]",
-                on ? "border-brand-line bg-brand-soft" : "bg-card"
-              )}
-            >
-              <Checkbox
-                checked={on}
-                onCheckedChange={(checked) =>
-                  onChange(
-                    checked
-                      ? [...value, e.name]
-                      : value.filter((n) => n !== e.name)
-                  )
-                }
-              />
-              <Icon className="size-3.5 text-muted-foreground" />
-              {e.name}
-              {on && (
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {hint(e)}
-                </span>
-              )}
-            </label>
-          )
-        })}
-      </div>
-    </fieldset>
   )
 }
 
