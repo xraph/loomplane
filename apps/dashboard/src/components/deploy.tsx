@@ -7,6 +7,7 @@ import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useBindingsList as listBindings,
   useConnectionsList,
   useDeploymentsList,
   useEnvironmentConnectionsChoose,
@@ -37,6 +38,8 @@ import {
   ActionsCell,
   Cell,
   CloudCallout,
+  CloudConfirm,
+  RowMenu,
   CloudTable,
   CloudTableRow,
   NameCell,
@@ -54,6 +57,7 @@ import {
 import { ManifestHistory } from "@/components/manifest-history"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone as RunTone } from "@/components/runs"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -340,6 +344,12 @@ function WhereServicesRun({ project }: { project: Project }) {
   const { onPendingChange } = useDeploymentWrites(project.id)
   const [picked, setPicked] = useState("")
   const [open, setOpen] = useState<PlacementRow | null>(null)
+  const can = useProjectCan(project.id)
+  const edit = useMutation(useManifestsEdit)
+  const save = useMutation(useManifestsSave)
+  const [removing, setRemoving] = useState<PlacementRow | null>(null)
+  const [removalError, setRemovalError] = useState("")
+  const [checking, setChecking] = useState(false)
   const list = environments.data?.environments ?? []
   const environment = list.some((e) => e.name === picked)
     ? picked
@@ -351,6 +361,61 @@ function WhereServicesRun({ project }: { project: Project }) {
       ? placementRows(manifest, view.data.graph, view.data.excluded ?? [])
       : []
 
+  const remove = async () => {
+    if (!removing || !manifest || !current.data || checking) return
+    setChecking(true)
+    onPendingChange(true)
+    setRemovalError("")
+    try {
+      const subject = removing.section === "resources" ? "resource" : "service"
+      const bindings = await Promise.all(
+        list.map((e) =>
+          listBindings({
+            path: { id: project.id },
+            query: { environment: e.name },
+          }).refetch()
+        )
+      )
+      if (
+        bindings.some((b) =>
+          b.bindings.some(
+            (item) => item.subject === subject && item.name === removing.name
+          )
+        )
+      ) {
+        throw new Error(
+          `${removing.name} has a deployment binding. Keep it in the manifest to preserve the running deployment.`
+        )
+      }
+      if (removing.section === "resources") {
+        const preview = await edit.mutateAsync({
+          path: { id: project.id },
+          body: { dryRun: true, removeResource: removing.name },
+        })
+        await save.mutateAsync({
+          path: { id: project.id },
+          body: { baseRevision: current.data.revision, yaml: preview.yaml },
+        })
+      } else {
+        const next = structuredClone(manifest)
+        delete next.services![removing.name]
+        await save.mutateAsync({
+          path: { id: project.id },
+          body: { baseRevision: current.data.revision, manifest: next },
+        })
+      }
+      setRemoving(null)
+      await current.refetch()
+    } catch (err) {
+      setRemovalError(
+        messageOf(err, "Couldn't remove the entry from the manifest.")
+      )
+      if (statusOf(err) === 409) void current.refetch()
+    } finally {
+      setChecking(false)
+      onPendingChange(false)
+    }
+  }
   const body = () => {
     if (environments.status === "error")
       return (
@@ -413,7 +478,7 @@ function WhereServicesRun({ project }: { project: Project }) {
     return (
       <CloudTable
         label={`Where services run in ${environment}`}
-        columns="minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr) 100px"
+        columns="minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr) 132px"
         head={["Service", "Runs on", "Tags", ""]}
       >
         {rows.map((row) => {
@@ -453,6 +518,19 @@ function WhereServicesRun({ project }: { project: Project }) {
                 >
                   Change
                 </Button>
+                {can("project:update") && row.section !== "gateways" && (
+                  <RowMenu label={`More actions for ${row.name}`}>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => {
+                        setRemovalError("")
+                        setRemoving(row)
+                      }}
+                    >
+                      Remove from manifest
+                    </DropdownMenuItem>
+                  </RowMenu>
+                )}
               </ActionsCell>
             </CloudTableRow>
           )
@@ -477,6 +555,22 @@ function WhereServicesRun({ project }: { project: Project }) {
         )}
       </CloudSectionHead>
       {body()}
+      {removing && (
+        <CloudConfirm
+          open
+          onOpenChange={(v) => {
+            if (!v && !checking) setRemoving(null)
+          }}
+          title={`Remove ${removing.name} from the manifest?`}
+          confirmLabel="Remove from manifest"
+          pending={checking}
+          error={removalError && <p role="alert">{removalError}</p>}
+          onConfirm={() => void remove()}
+        >
+          This removes the entry across environments. Replace dependencies that
+          use it first. Entries already deployed stay in the manifest.
+        </CloudConfirm>
+      )}
       {manifest && current.data && (
         <PlacementPanel
           projectId={project.id}

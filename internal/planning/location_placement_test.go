@@ -387,7 +387,7 @@ func TestLocationPlacementSamePoolMoveKeepsDesiredConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.store = locationComputeStore{catalogStore: catalogStore{bindings: []*Binding{{ID: "binding", Subject: ServiceSubject, Name: "web", Provider: "server", ConnectionID: "amd", Config: raw}}}, mixed: mixedLocationStore{locationTestStore{candidates: []PlacementCandidate{c}}}}
-	s.clouds = targetOptions{connections: []*connections.Connection{{ID: "amd", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "amd", "architecture": "amd64"}}, {ID: "arm", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "arm", "architecture": "arm64", "build_workers": "dedicated"}}}}
+	s.clouds = targetOptions{connections: []*connections.Connection{{ID: registryTarget, Cloud: connections.Registry, Status: connections.StatusReady}, {ID: "amd", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "amd", "architecture": "amd64"}}, {ID: "arm", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "arm", "architecture": "arm64", "build_workers": "dedicated"}}}}
 	blocked, _, blockedErr := s.compute(t.Context(), plan)
 	if blockedErr != nil || blocked.Executable {
 		t.Fatalf("unreviewed move executable: %+v %v", blocked, blockedErr)
@@ -477,7 +477,7 @@ func TestLocationPlacementMixedMovePreservesAppliedInputs(t *testing.T) {
 	old := ServiceConfig{Provider: "server", Target: "arm", TargetSettings: map[string]string{"docker_id": "arm", "architecture": "amd64"}, Workload: provider.Worker, Repo: "app", CommitSHA: "old", Source: "cmd/api", Image: "Dockerfile", Size: &manifest.Size{CPU: 1, Memory: 512}, CloudPlacement: &CloudPlacement{CloudID: "cloud", TargetID: "b", TargetName: "mixed", PoolID: "mixed", ServerID: "arm", ConnectionID: "arm"}, AppliedInputs: &AppliedInputs{Variables: "vars", ArtifactKey: "artifact", Source: &PlanSource{Alias: "app", CommitSHA: "old"}}}
 	raw, _ := json.Marshal(old)
 	s.store = locationComputeStore{catalogStore: catalogStore{bindings: []*Binding{{ID: "binding", Subject: ServiceSubject, Name: "other", Provider: "server", ConnectionID: "arm", CommitSHA: "old", Config: raw}}}, mixed: mixedLocationStore{locationTestStore{candidates: []PlacementCandidate{c}}}}
-	s.clouds = targetOptions{connections: []*connections.Connection{{ID: "amd", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "amd", "architecture": "amd64", "build_workers": "dedicated"}}, {ID: "arm", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "arm", "architecture": "amd64", "build_workers": "dedicated"}}}}
+	s.clouds = targetOptions{connections: []*connections.Connection{{ID: registryTarget, Cloud: connections.Registry, Status: connections.StatusReady}, {ID: "amd", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "amd", "architecture": "amd64", "build_workers": "dedicated"}}, {ID: "arm", Cloud: connections.Server, Status: connections.StatusReady, Generation: 1, Details: map[string]string{"docker_id": "arm", "architecture": "amd64", "build_workers": "dedicated"}}}}
 	result, _, err := s.compute(t.Context(), plan)
 	if err != nil {
 		t.Fatal(err)

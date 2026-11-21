@@ -189,7 +189,7 @@ it("saves an owned target, builder and registry while preserving the build conte
               name: "Builder",
               cloud: "server",
               status: "ready",
-              details: {},
+              details: { build_workers: "dedicated" },
             },
             {
               id: "conn_registry",
@@ -433,16 +433,37 @@ it("offers compatible managed targets and saves a scoped placement without chang
 })
 
 // A project with one environment, one worker and one finished deploy.
-function deployTabAPI({ edit }: { edit?: Promise<Response> } = {}) {
+function deployTabAPI({
+  edit,
+  bound = false,
+  save,
+  removeResource,
+}: {
+  edit?: Promise<Response>
+  removeResource?: (body: unknown) => void
+  bound?: boolean
+  save?: (body: unknown) => void
+} = {}) {
   const manifest: Manifest = {
     version: 1,
+    ...(removeResource && {
+      resources: { resource: { kind: "postgres", enabled: false } },
+    }),
     services: { worker: { source: "go:cmd/worker", provider: "render" } },
   }
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
+      if (url.endsWith("/manifest/edits") && removeResource) {
+        removeResource(JSON.parse(String(init?.body)))
+        return json({
+          yaml: "version: 1\nservices: {worker: {source: go:cmd/worker}}\n",
+        })
+      }
       if (url.endsWith("/manifest/edits") && edit) return edit
+      if (url.endsWith("/manifest") && init?.method === "PUT")
+        save?.(JSON.parse(String(init.body)))
       if (url.endsWith("/manifest"))
         return json({ id: "r1", revision: 1, yaml: "version: 1\n", manifest })
       if (url.endsWith("/graph"))
@@ -508,7 +529,10 @@ function deployTabAPI({ edit }: { edit?: Promise<Response> } = {}) {
         return json({ projects: [{ id: "p", name: "Example" }] })
       if (url.endsWith("/environments"))
         return json({ environments: [{ id: "e", name: "preview" }] })
-      if (url.includes("/bindings")) return json({ bindings: [] })
+      if (url.includes("/bindings"))
+        return json({
+          bindings: bound ? [{ subject: "service", name: "worker" }] : [],
+        })
       return json({ connections: [] })
     }
   )
@@ -723,5 +747,72 @@ it("lists every Cloud's targets and puts a service on another Cloud's", async ()
         },
       },
     },
+  })
+})
+
+it.each([true, false])(
+  "checks bindings before removing a manifest entry (bound %s)",
+  async (bound) => {
+    const save = vi.fn()
+    deployTabAPI({ bound, save })
+    render(
+      <ClientProvider client={forgeClient}>
+        <DeployTab project={{ id: "p", name: "Example" } as Project} />
+      </ClientProvider>
+    )
+    const user = userEvent.setup()
+    await user.click(
+      await screen.findByRole("button", { name: "More actions for worker" })
+    )
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Remove from manifest" })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Remove from manifest" })
+    )
+    if (bound) {
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "has a deployment binding"
+      )
+      expect(save).not.toHaveBeenCalled()
+    } else {
+      await vi.waitFor(() =>
+        expect(save).toHaveBeenCalledExactlyOnceWith({
+          base_revision: 1,
+          manifest: { version: 1, services: {} },
+        })
+      )
+    }
+  }
+)
+
+it("removes the manually added database through a guarded manifest revision", async () => {
+  const save = vi.fn()
+  const removeResource = vi.fn()
+  deployTabAPI({ save, removeResource })
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeployTab project={{ id: "p", name: "Example" } as Project} />
+    </ClientProvider>
+  )
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole("button", { name: "More actions for resource" })
+  )
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Remove from manifest" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: "Remove from manifest" })
+  )
+  await vi.waitFor(() =>
+    expect(save).toHaveBeenCalledExactlyOnceWith({
+      base_revision: 1,
+      yaml: "version: 1\nservices: {worker: {source: go:cmd/worker}}\n",
+    })
+  )
+  expect(removeResource).toHaveBeenCalledExactlyOnceWith({
+    dry_run: true,
+    remove_resource: "resource",
   })
 })

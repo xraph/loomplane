@@ -796,8 +796,8 @@ function ServerFields(props: FieldProps) {
             },
             {
               value: "dedicated",
-              label: "Build here",
-              hint: "Choose it for a machine that runs nothing but your own code: builds run your repositories' Dockerfiles on it.",
+              label: "Dedicated builder",
+              hint: "Use a dedicated build machine. Connect an image registry with push and pull access for Docker source builds.",
             },
           ]}
         />
@@ -1046,7 +1046,7 @@ function KubernetesFields(
             value={values.build_runtime_class}
             onChange={set("build_runtime_class")}
             placeholder="kata"
-            hint="One whose handler is kata or kata-*. Your node admin installs Kata."
+            hint="Install Kata on the build nodes and register a RuntimeClass with a kata or kata-* handler. The cluster credential needs permission to read it. Check the connection after setup."
             mono
             required
           />

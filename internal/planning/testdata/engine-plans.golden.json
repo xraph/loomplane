@@ -92,6 +92,7 @@
         "health_path": "/_/health",
         "build_target": {
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "registry": "conn_01m4vem4sde8ab4yfr1abnj3wf",
           "builder_settings": {
             "architecture": "arm64",
             "build_workers": "dedicated",
@@ -99,6 +100,10 @@
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
             "user": "deploy"
+          },
+          "registry_settings": {
+            "endpoint": "https://registry.example.com",
+            "repository": "acme"
           }
         },
         "workload": "http-service",
@@ -218,6 +223,7 @@
         "health_path": "/_/health",
         "build_target": {
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "registry": "conn_01m4vem4sde8ab4yfr1abnj3wf",
           "builder_settings": {
             "architecture": "arm64",
             "build_workers": "dedicated",
@@ -225,6 +231,10 @@
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
             "user": "deploy"
+          },
+          "registry_settings": {
+            "endpoint": "https://registry.example.com",
+            "repository": "acme"
           }
         },
         "workload": "http-service",
@@ -387,6 +397,7 @@
         "health_path": "/_/health",
         "build_target": {
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "registry": "conn_01m4vem4sde8ab4yfr1abnj3wf",
           "builder_settings": {
             "architecture": "arm64",
             "build_workers": "dedicated",
@@ -394,6 +405,10 @@
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
             "user": "deploy"
+          },
+          "registry_settings": {
+            "endpoint": "https://registry.example.com",
+            "repository": "acme"
           }
         },
         "workload": "http-service",
@@ -513,6 +528,7 @@
         "health_path": "/_/health",
         "build_target": {
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "registry": "conn_01m4vem4sde8ab4yfr1abnj3wf",
           "builder_settings": {
             "architecture": "arm64",
             "build_workers": "dedicated",
@@ -520,6 +536,10 @@
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
             "user": "deploy"
+          },
+          "registry_settings": {
+            "endpoint": "https://registry.example.com",
+            "repository": "acme"
           }
         },
         "workload": "http-service",
@@ -639,6 +659,7 @@
         "health_path": "/_/health",
         "build_target": {
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
+          "registry": "conn_01m4vem4sde8ab4yfr1abnj3wf",
           "builder_settings": {
             "architecture": "arm64",
             "build_workers": "dedicated",
@@ -646,6 +667,10 @@
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
             "user": "deploy"
+          },
+          "registry_settings": {
+            "endpoint": "https://registry.example.com",
+            "repository": "acme"
           }
         },
         "workload": "http-service",

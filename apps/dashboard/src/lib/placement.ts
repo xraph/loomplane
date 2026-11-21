@@ -315,6 +315,12 @@ function tagsOf(fields: PlacementFields): string[] {
   return [...(fields.cloudTags ?? fields.cloud_tags ?? [])]
 }
 
+export function dedicatedBuilders(connections: Connection[]) {
+  return targetConnections(connections, "server").filter(
+    (c) => c.details?.build_workers === "dedicated"
+  )
+}
+
 export function targetConnections(
   connections: Connection[],
   cloud: string

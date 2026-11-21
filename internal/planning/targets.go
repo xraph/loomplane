@@ -116,6 +116,8 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 	role = strings.TrimSuffix(role, "-pull")
 	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == id })
 	switch {
+	case id == "" && role == "registry":
+		code, message = "registry-required", "Choose an image registry with push and pull access for "+name+"'s source build."
 	case id == "":
 		code, message = role+"-required", fmt.Sprintf("Choose a %s connection for %s.", cloudTitle(cloud), name)
 	case i < 0:
@@ -249,7 +251,12 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 				p.problem(Finding{Code: "capacity-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "The builder must match the approved pool architecture."})
 			}
 		}
-		if prov.Cloud == "kubernetes" || builderCloud == "firecracker" || build.Builder != cfg.Target {
+		if build.Registry == "" && prov.Cloud == "server" && build.Builder == cfg.Target {
+			if registry, ok := p.connection("registry"); ok {
+				build.Registry = registry.ID
+			}
+		}
+		if build.Registry == "" {
 			p.targetConnection(name, base+".build.registry", "registry", "registry", build.Registry)
 		}
 	}

@@ -29,6 +29,9 @@ func Check(details map[string]string, kubernetes, pooled bool) error {
 		return nil
 	}
 	if pooled || details["build_workers"] != "dedicated" {
+		if !kubernetes {
+			return errors.New("untrusted builds need a dedicated Docker builder outside a shared server pool")
+		}
 		return errors.New("untrusted builds on shared or unclassified workers require Kata isolation; configure a Kata build runtime or use an explicitly dedicated builder")
 	}
 	return nil

@@ -134,6 +134,8 @@ func TestInfrastructureTargets_rejectsWrongOrMissingConnections(t *testing.T) {
 		{"wrong cloud", "server", "target: " + registryTarget, "target-cloud", infrastructureConnections(t)},
 		{"not ready", "server", "target: " + targetA, "target-not-ready", []ConnectionOption{{ID: targetA, Cloud: "server"}}},
 		{"builder role", "server", "target: " + targetA + "\n    build: {builder: " + registryTarget + "}", "builder-cloud", infrastructureConnections(t)},
+		{"same host registry", "server", "target: " + targetA, "registry-required",
+			[]ConnectionOption{infrastructureConnection(t, targetA, "server", map[string]string{"build_workers": "dedicated"})}},
 		{"cluster registry", "kubernetes", "target: " + targetA + "\n    build: {builder: " + targetB + "}", "registry-required",
 			[]ConnectionOption{infrastructureConnection(t, targetA, "kubernetes", map[string]string{"namespace": "apps"}), infrastructureConnection(t, targetB, "server", nil)}},
 		{"server replicas", "server", "target: " + targetA + "\n    scale: {min: 2, max: 2}", "server-scale", infrastructureConnections(t)},

@@ -71,6 +71,7 @@ import {
   compatibleTargets,
   placementSettings,
   targetConnections,
+  dedicatedBuilders,
   type PlacementFields,
   type PlacementRow,
   type RunsOn,
@@ -939,7 +940,7 @@ function OwnedFields({
         title="Builder"
         label={`Builder for ${row.name}`}
         value={value.build?.builder}
-        connections={targetConnections(accounts, "server")}
+        connections={dedicatedBuilders(accounts)}
         disabled={disabled || !!value.build?.image}
         automatic={
           selected.cloud === "server"
@@ -964,7 +965,9 @@ function OwnedFields({
         automatic={
           managedRegistry && !value.build?.builder && !value.build?.image
             ? "Managed cluster registry"
-            : "No registry selected"
+            : value.build?.image
+              ? "Public image"
+              : "Choose a writable registry"
         }
         onChange={(registry) => buildChange({ registry })}
       />

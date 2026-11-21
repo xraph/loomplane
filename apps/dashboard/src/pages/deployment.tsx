@@ -66,6 +66,7 @@ import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { PlanVariableMapping } from "@/components/plan-variable-mapping"
+import { PlanRepairs, repairable } from "@/components/plan-repairs"
 import { ReplanServices } from "@/components/replan-services"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -192,6 +193,7 @@ function Loaded({
     wanted,
     deciding ? "changes" : "logs"
   )
+  const [repairing, setRepairing] = useState(false)
   const [adding, setAdding] = useState(false)
   const [source, setSource] = useState("all")
   const navigate = useNavigate()
@@ -213,6 +215,7 @@ function Loaded({
         },
       })
       invalidate(usePlansList)
+      setRepairing(false)
       void navigate({ to: "/deployments/$id", params: { id: next.id } })
       toast.success(`Planning ${run.environment} again`)
     } catch (err) {
@@ -313,12 +316,29 @@ function Loaded({
           <TabsContent value="changes">
             <ChangesTab
               run={run}
+              repair={
+                deciding &&
+                can("project:update") &&
+                can("deployment:create") &&
+                !plan.cloudSyncId &&
+                !plan.catalog &&
+                (!plan.kind || plan.kind === "release")
+                  ? () => setRepairing(true)
+                  : undefined
+              }
               servicePicker={
                 deciding &&
                 can("deployment:create") &&
                 !plan.cloudSyncId &&
                 (!plan.kind || plan.kind === "release") && (
                   <div className="flex flex-wrap gap-2">
+                    {repairing && (
+                      <PlanRepairs
+                        plan={plan}
+                        onClose={() => setRepairing(false)}
+                        replan={planAgain}
+                      />
+                    )}
                     <PlanVariableMapping plan={plan} replan={planAgain} />
                     {!plan.catalog && (
                       <ReplanServices
@@ -930,8 +950,10 @@ function kindOf(a: Action): string {
 function ChangesTab({
   run,
   servicePicker,
+  repair,
 }: {
   run: Run
+  repair?: () => void
   servicePicker: ReactNode
 }) {
   const connections = useQuery(useConnectionsList)
@@ -974,7 +996,15 @@ function ChangesTab({
               key={`p${i}`}
               tone="error"
               title={f.message}
-              action={fix(f)}
+              action={
+                repair && repairable(f) ? (
+                  <Button size="sm" variant="outline" onClick={repair}>
+                    Fix plan
+                  </Button>
+                ) : (
+                  fix(f)
+                )
+              }
             >
               {f.path && <code className="font-mono text-xs">{f.path}</code>}
             </CloudCallout>
