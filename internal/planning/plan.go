@@ -373,7 +373,8 @@ func (c *ServiceConfig) DockerfileIn(dir string) string {
 // EnvLink is a variable a service gets with the address of something it
 // needs.
 type EnvLink struct {
-	Key string `json:"key"`
+	DropletPostgres bool   `json:"droplet_postgres,omitempty"`
+	Key             string `json:"key"`
 	// From is the manifest name of the resource or service.
 	From    string  `json:"from"`
 	Subject Subject `json:"subject"`

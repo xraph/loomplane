@@ -3,6 +3,7 @@ package catalogconnect
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -24,6 +25,8 @@ import (
 // shared_preload_libraries and the connection role's right to create
 // roles.
 type PostgresProber struct {
+	// Roots verifies the endpoint against a provider-issued cluster CA when supplied.
+	Roots *x509.CertPool
 	// connect opens the connection; nil connects with pgx. Tests stand in
 	// for a server here.
 	connect func(ctx context.Context, cfg *pgx.ConnConfig) (pgConn, error)
@@ -53,6 +56,9 @@ func (p PostgresProber) Probe(ctx context.Context, dial DialFunc, dsn string, re
 	if err != nil {
 		// pgx's message quotes the DSN, password masked; say less.
 		return nil, errors.New("the stored DSN can't be read as a postgres URL")
+	}
+	if p.Roots != nil {
+		cfg.TLSConfig = &tls.Config{RootCAs: p.Roots, ServerName: cfg.Host, MinVersion: tls.VersionTLS12}
 	}
 	// The dialer resolves the host from where it dials, and is the only
 	// way out: no lookup here, no fallback to another address.

@@ -2611,6 +2611,9 @@
           "address": {
             "type": "string"
           },
+          "droplet_postgres": {
+            "type": "boolean"
+          },
           "field": {
             "type": "string"
           },

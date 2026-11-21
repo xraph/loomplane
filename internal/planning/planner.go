@@ -130,8 +130,10 @@ type ConnectionOption struct {
 
 // CloudServer is a Cloud server a connection reaches as its runtime.
 type CloudServer struct {
-	ID      string
-	CloudID string
+	// DropletAccount is the provider account ID recorded when this ready Droplet was created.
+	DropletAccount string
+	ID             string
+	CloudID        string
 }
 
 // ConnectionHost is what runs behind a server connection: whether it
@@ -1960,6 +1962,9 @@ func (p *planner) link(name string, a *Action) {
 				continue
 			}
 			if rc, sc := p.cloud(dep.Provider), p.cloud(a.Provider); rc != sc {
+				if sc == "server" && rc == "digitalocean" && dep.Resource != nil && dep.Resource.Kind == "postgres" && p.linkDropletPostgres(a, dep, key, base) {
+					continue
+				}
 				if l := p.reachOver(sc, rc); l != nil {
 					// Over the link, the resource's private address works.
 					p.throughLink(a, l)

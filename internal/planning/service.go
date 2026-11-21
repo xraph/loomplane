@@ -112,6 +112,7 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	dropletPostgres     DropletPostgresProbe
 	gate                metering.Gate
 	approvalAdmitter    approvaladmission.Admitter
 	approvalVerifier    approvaladmission.Verification
@@ -158,6 +159,7 @@ type Service struct {
 
 // Deps are what a Service needs.
 type Deps struct {
+	DropletPostgres   DropletPostgresProbe
 	ApprovalAdmitter  approvaladmission.Admitter
 	ApprovalVerifier  approvaladmission.Verification
 	ApprovalAppID     string
@@ -243,7 +245,7 @@ func NewService(d Deps) *Service {
 	if gate == nil {
 		gate = metering.AllowAll
 	}
-	return &Service{gate: gate, instanceRuntime: d.InstanceRuntime,
+	return &Service{dropletPostgres: d.DropletPostgres, gate: gate, instanceRuntime: d.InstanceRuntime,
 		approvalAdmitter: d.ApprovalAdmitter, approvalVerifier: d.ApprovalVerifier, approvalAppID: d.ApprovalAppID,
 		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
@@ -1007,6 +1009,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Problems = append(result.Problems, Finding{Code: "managed-cleanup", Message: cleanupErr.Error()})
 		result.Executable = false
 	}
+	s.checkDropletPostgres(ctx, plan, result, bindings)
 	s.checkBackupPreview(ctx, plan, result)
 	warnings, err := s.promotionWarnings(ctx, plan, rev.Revision)
 	if err != nil {

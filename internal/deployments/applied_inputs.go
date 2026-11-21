@@ -92,7 +92,7 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 				resourceValues[link.Key] = value
 				continue
 			}
-			value, extra, e := r.resourceAddress(ctx, d, a.Name, services, link)
+			value, extra, e := r.serviceResourceAddress(ctx, d, a.Name, services, resources, link)
 			if e != nil {
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}

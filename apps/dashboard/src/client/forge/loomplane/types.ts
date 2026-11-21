@@ -2370,6 +2370,7 @@ export interface EntrySummary {
 
 export interface EnvLink {
   address?: string;
+  dropletPostgres?: boolean;
   field?: string;
   from: string;
   gateway?: string;

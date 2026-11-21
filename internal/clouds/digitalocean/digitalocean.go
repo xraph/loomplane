@@ -638,6 +638,9 @@ type Database struct {
 	Connection *struct {
 		URI string `json:"uri"`
 	} `json:"connection"`
+	PrivateConnection *struct {
+		URI string `json:"uri"`
+	} `json:"private_connection"`
 }
 
 // FindDatabase finds the account's database cluster called name.
@@ -665,6 +668,17 @@ func (c *Client) GetDatabase(ctx context.Context, token, id string) (*Database, 
 		return nil, err
 	}
 	return &out.Database, nil
+}
+
+// DatabaseCA reads the certificate authority for a managed database.
+func (c *Client) DatabaseCA(ctx context.Context, token, id string) ([]byte, error) {
+	var out struct {
+		CA struct {
+			Certificate []byte `json:"certificate"`
+		} `json:"ca"`
+	}
+	err := c.do(ctx, token, http.MethodGet, "/v2/databases/"+url.PathEscape(id)+"/ca", nil, nil, &out)
+	return out.CA.Certificate, err
 }
 
 // EnsureDatabase makes the cluster unless the account has one called

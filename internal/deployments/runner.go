@@ -236,6 +236,7 @@ type Runner struct {
 	managedCleanup    *ManagedCleanupExecution
 	existingResources planning.ExistingResourceResolver
 	existingEndpoints planning.EndpointChecker
+	dropletPostgres   *DropletPostgresChecker
 	existingDialer    planning.TargetDialer
 	capacity          CapacityResolver
 	routes            ReleaseRoutes
@@ -271,6 +272,7 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	DropletPostgres *DropletPostgresChecker
 	// Gate refuses a deployment the workspace may not run yet. Nil means
 	// metering.AllowAll.
 	Gate              metering.Gate
@@ -365,7 +367,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		gate = metering.AllowAll
 	}
 	return &Runner{gate: gate, instances: d.Instances, managedCleanup: d.ManagedCleanup,
-		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
+		dropletPostgres: d.DropletPostgres, existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
@@ -1456,6 +1458,9 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 	if err != nil {
 		return err
 	}
+	if err := r.checkDropletPostgres(ctx, job, around.resources); err != nil {
+		return err
+	}
 	for _, link := range a.Service.Env {
 		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil && !planning.ExistingResourceBinding(b) {
 			job.Attach = append(job.Attach, b)
@@ -1911,7 +1916,7 @@ func (r *Runner) env(ctx context.Context, d *Deployment, a planning.Action, serv
 				}
 				return nil, nil, fmt.Errorf("%s's %s for %s is issued when its variables are captured, and none was", link.From, link.Field, a.Name)
 			}
-			addr, extra, err := r.resourceAddress(ctx, d, a.Name, services, link)
+			addr, extra, err := r.serviceResourceAddress(ctx, d, a.Name, services, resources, link)
 			if err != nil {
 				return nil, nil, err
 			}

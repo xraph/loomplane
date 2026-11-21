@@ -77,6 +77,7 @@ func TestPgStore_connectionHosts(t *testing.T) {
 		connection("cluster", "org", "kubernetes", `{}`),
 		server("server_1", "org", "cloud_1", "direct", "ready", `{}`),
 		server("server_2", "org", "cloud_1", "pool-runtime", "ready", `{"health":{"docker_id":"daemon"}}`),
+		`UPDATE loomplane_cloud_servers SET provider='digitalocean',resource_id='42' WHERE id='server_1'`,
 		server("server_3", "org", "cloud_2", "elsewhere", "ready", `{}`),
 		server("server_5", "org", "cloud_1", "gone", "deleted", `{}`),
 		`INSERT INTO loomplane_server_pools(id,org_id,cloud_id,revision,body) VALUES('pool','org','cloud_1',1,'{}')`,
@@ -98,7 +99,7 @@ func TestPgStore_connectionHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]ConnectionHost{
-		"direct":       {Servers: []CloudServer{{ID: "server_1", CloudID: "cloud_1"}}},
+		"direct":       {Servers: []CloudServer{{ID: "server_1", CloudID: "cloud_1", DropletAccount: "account"}}},
 		"elsewhere":    {Servers: []CloudServer{{ID: "server_3", CloudID: "cloud_2"}}},
 		"shared":       {Pooled: true},
 		"pool-runtime": {Pooled: true, Servers: []CloudServer{{ID: "server_2", CloudID: "cloud_1"}}},

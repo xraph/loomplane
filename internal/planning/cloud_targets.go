@@ -820,7 +820,18 @@ func (s *Service) resolvePoolsWithLocationInput(ctx context.Context, plan *Plan,
 // its runtime or through the same Docker daemon. Its Cloud servers are
 // only those it's the runtime connection of, as a domain route needs.
 func (s *PgStore) ConnectionHosts(ctx context.Context, org string) (map[string]ConnectionHost, error) {
-	rows, err := s.db.Query(ctx, `SELECT c.id,s.id,s.cloud_id,s.runtime_connection_id=c.id AND s.org_id=c.org_id,EXISTS(SELECT 1 FROM loomplane_server_pool_members m WHERE m.server_id=s.id) FROM loomplane_cloud_connections c JOIN loomplane_cloud_servers s ON (s.runtime_connection_id=c.id OR (coalesce(c.details->>'docker_id','')<>'' AND c.details->>'docker_id'=s.body->'health'->>'docker_id')) WHERE c.org_id=$1 AND c.cloud='server' AND s.status NOT IN ('deleted','disconnected') ORDER BY c.id,s.id`, org)
+	rows, err := s.db.Query(ctx, `
+		SELECT c.id, s.id, s.cloud_id,
+		       CASE WHEN s.provider='digitalocean' AND s.ownership='managed'
+		                 AND s.status='ready' AND s.resource_id<>''
+		            THEN s.account_id ELSE '' END,
+		       s.runtime_connection_id=c.id AND s.org_id=c.org_id,
+		       EXISTS(SELECT 1 FROM loomplane_server_pool_members m WHERE m.server_id=s.id)
+		FROM loomplane_cloud_connections c
+		JOIN loomplane_cloud_servers s ON s.runtime_connection_id=c.id OR
+		     (coalesce(c.details->>'docker_id','')<>'' AND c.details->>'docker_id'=s.body->'health'->>'docker_id')
+		WHERE c.org_id=$1 AND c.cloud='server' AND s.status NOT IN ('deleted','disconnected')
+		ORDER BY c.id, s.id`, org)
 	if err != nil {
 		return nil, err
 	}
@@ -830,7 +841,7 @@ func (s *PgStore) ConnectionHosts(ctx context.Context, org string) (map[string]C
 		var connection string
 		var server CloudServer
 		var runtime, pooled bool
-		if checkErr := rows.Scan(&connection, &server.ID, &server.CloudID, &runtime, &pooled); checkErr != nil {
+		if checkErr := rows.Scan(&connection, &server.ID, &server.CloudID, &server.DropletAccount, &runtime, &pooled); checkErr != nil {
 			return nil, checkErr
 		}
 		host := out[connection]

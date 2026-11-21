@@ -515,7 +515,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	// nothing analyzed, on the same queue as any analysis.
 	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
 	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
+	dropletPostgres := &deployments.DropletPostgresChecker{Client: appPlatform, Credentials: clouds, Dialer: serverTarget}
 	e.plans = planning.NewService(planning.Deps{
+		DropletPostgres:  dropletPostgres.Check,
 		Gate:             &e.metering,
 		Instances:        instances,
 		ApprovalAdmitter: approvalAdmitter, ApprovalVerifier: approvalVerifier, ApprovalAppID: e.cfg.Identity.AppID,
@@ -589,6 +591,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	clusterTarget.Controllers = managedControllers.WithManagedDemandGuard(e.plans.GuardManagedDemandEffect)
 	cleanupExecution := &deployments.ManagedCleanupExecution{Store: planning.NewManagedCleanupStore(pg, authz, principal).WithReplicaProof(proofKey), Credentials: clouds, Target: clusterTarget, Routes: routeService}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
+		DropletPostgres:   dropletPostgres,
 		Gate:              &e.metering,
 		ManagedCleanup:    cleanupExecution,
 		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer,

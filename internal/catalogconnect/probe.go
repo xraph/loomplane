@@ -254,6 +254,12 @@ func (e *probeError) Error() string { return e.msg }
 
 func unreachable(err error) error { return &probeError{msg: err.Error()} }
 
+// RefusedProbe reports whether the endpoint answered and rejected the probe.
+func RefusedProbe(err error) bool {
+	var failure *probeError
+	return errors.As(err, &failure) && failure.answered
+}
+
 func refused(msg string) error { return &probeError{answered: true, msg: msg} }
 
 // errTimedOut is a probe that ran out of time.
