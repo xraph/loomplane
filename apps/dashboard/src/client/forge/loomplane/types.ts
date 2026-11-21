@@ -2238,6 +2238,7 @@ export interface EditInputBody {
 };
   placement?: {
   build?: Build;
+  cloud?: string;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
@@ -4659,6 +4660,7 @@ export interface ProjectCloud {
   default: boolean;
   defaultPlacement?: DefaultPlacement;
   grantRevision: number;
+  name: string;
   orgId: string;
   projectId: string;
   targets: CloudprofilesTarget[];

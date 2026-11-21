@@ -84,6 +84,8 @@ type ProjectCloud struct {
 	OrgID         string `json:"org_id"`
 	ProjectID     string `json:"project_id"`
 	CloudID       string `json:"cloud_id"`
+	// Name is the Cloud's name, what a manifest's cloud field says.
+	Name string `json:"name"`
 	// Default marks the project's default Cloud, the one a manifest reaches
 	// without naming a Cloud.
 	Default bool     `json:"default"`
@@ -100,4 +102,12 @@ type Resolver interface {
 	// returns nil for "". A Cloud the project holds no live grant on, or a
 	// project outside the organization, returns ErrNotFound.
 	ResolveCloud(ctx context.Context, orgID, projectID, cloudID string) (*ProjectCloud, error)
+}
+
+// NamedResolver reads a Cloud the project names in its manifest.
+type NamedResolver interface {
+	// ResolveNamedCloud reads the project's view of the organization's
+	// Cloud called name. A name no Cloud has, or a Cloud the project holds
+	// no live grant on, returns ErrNotFound.
+	ResolveNamedCloud(ctx context.Context, orgID, projectID, name string) (*ProjectCloud, error)
 }

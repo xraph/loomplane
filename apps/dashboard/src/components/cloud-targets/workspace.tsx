@@ -123,8 +123,9 @@ export function CloudWorkspace({
         <div className="grid max-w-prose gap-1">
           <h2 className="text-[15px] font-semibold">Clouds</h2>
           <p className="text-[13px] text-muted-foreground">
-            Every environment deploys through the default Cloud. Put a service
-            on one of its targets here, or with{" "}
+            Every environment deploys through the default Cloud. A service can
+            run on another Cloud&apos;s target: pick it below, or set{" "}
+            <code className="font-mono text-[12px]">cloud</code> beside{" "}
             <code className="font-mono text-[12px]">cloud_target</code> in
             loomplane.yaml.
           </p>
@@ -276,15 +277,14 @@ function CloudCard({
       {expanded && (
         <div className="grid gap-4 border-t px-4 py-4">
           <Targets projectId={projectId} profile={profile} />
-          {isDefault && (
-            <ServiceAdoption
-              projectId={projectId}
-              targets={(targets.data?.targets ?? []).filter(
-                (t): t is Target => !!t
-              )}
-              fallback={fallback}
-            />
-          )}
+          <ServiceAdoption
+            projectId={projectId}
+            targets={(targets.data?.targets ?? []).filter(
+              (t): t is Target => !!t
+            )}
+            cloud={isDefault ? undefined : profile.name}
+            fallback={fallback}
+          />
         </div>
       )}
     </Card>

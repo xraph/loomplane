@@ -148,7 +148,7 @@ func platformPlacement(name, path string, set manifest.Settings, a *cloudprofile
 		return CloudPlacement{}, set, err
 	}
 	set.Provider, set.Region, set.Target = platformRuntime, t.Region, ""
-	set.CloudTarget, set.CloudTags = "", nil
+	set.Cloud, set.CloudTarget, set.CloudTags = "", "", nil
 	return p, set, nil
 }
 

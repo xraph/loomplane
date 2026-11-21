@@ -59,7 +59,9 @@ export function adoptServiceTarget(
   manifest: Manifest,
   service: string,
   choice: CloudChoice,
-  only?: { environment: string; environments: Environment[] }
+  only?: { environment: string; environments: Environment[] },
+  /** cloud names a Cloud other than the project's default. */
+  cloud?: string
 ): Manifest {
   if (only)
     return adoptInEnvironment(
@@ -67,7 +69,8 @@ export function adoptServiceTarget(
       only.environments,
       only.environment,
       service,
-      choice
+      choice,
+      cloud
     )
   const next = structuredClone(manifest)
   const entry = next.services?.[service]
@@ -77,6 +80,7 @@ export function adoptServiceTarget(
   // entry its own before the default goes.
   materializeDefaults(manifest, next)
   for (const key of placementKeys) delete entry[key]
+  if (cloud) entry.cloud = cloud
   if (typeof choice === "string") entry.cloud_target = choice
   else entry.cloud_tags = [...choice.tags]
   for (const [name, override] of Object.entries(entry.environments ?? {})) {
@@ -95,6 +99,7 @@ export function adoptServiceTarget(
 // placementKeys are the fields that say where a service runs, in both the
 // wire and the client spelling a manifest may carry.
 const placementKeys = [
+  "cloud",
   "provider",
   "target",
   "cloud_target",
@@ -127,7 +132,8 @@ function adoptInEnvironment(
   environments: Environment[],
   environment: string,
   service: string,
-  choice: CloudChoice
+  choice: CloudChoice,
+  cloud?: string
 ): Manifest {
   const next = structuredClone(manifest)
   if (!next.services?.[service])
@@ -152,6 +158,9 @@ function adoptInEnvironment(
       delete override.target
       delete override.cloudTarget
       delete override.cloudTags
+      // An environment's target is in the Cloud it names, or the default.
+      if (cloud) override.cloud = cloud
+      else delete override.cloud
       if (typeof choice === "string") {
         override.cloud_target = choice
         delete override.cloud_tags
@@ -184,6 +193,7 @@ function adoptInEnvironment(
       }
       if (settings.cloudTarget) override.cloud_target = settings.cloudTarget
       if (settings.cloudTags) override.cloud_tags = settings.cloudTags
+      if (settings.cloud) override.cloud = settings.cloud
     }
     // An environment with nothing to pin needs no override of its own.
     if (Object.keys(override).length || previous.environments?.[name])
@@ -191,6 +201,7 @@ function adoptInEnvironment(
   }
   delete entry.provider
   delete entry.target
+  delete entry.cloud
   delete entry.cloud_target
   delete entry.cloudTarget
   delete entry.cloud_tags

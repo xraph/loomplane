@@ -409,7 +409,12 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if in.Default {
 			selector = defaultPlacementSelector
 		}
-		result := appliedCloudPlanWithIntents(planningBindings, after, selector, options, s.providers, poolPlacements, intents, routes)
+		choose := func(*CloudPlacement) (*cloudprofiles.ProjectCloud, bool) { return after, true }
+		if in.ProjectDefault {
+			// A service that names its Cloud doesn't follow the default.
+			choose = func(pin *CloudPlacement) (*cloudprofiles.ProjectCloud, bool) { return after, !pin.Named }
+		}
+		result := appliedCloudPlanChoosing(planningBindings, choose, selector, options, s.providers, poolPlacements, intents, routes)
 		locationReviews := []*cloudprofiles.LocationReview{}
 		priorLocations := map[string]locationSelection{}
 		for i := range result.Actions {

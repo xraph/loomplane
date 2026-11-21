@@ -37,9 +37,11 @@ type Mode = "name" | "tags"
 /** sameChoice reports whether a pending choice changes nothing. */
 function sameChoice(
   choice: CloudChoice | undefined,
-  current: { cloudTarget?: string; cloudTags?: string[] }
+  current: { cloud?: string; cloudTarget?: string; cloudTags?: string[] },
+  cloud?: string
 ): boolean {
   if (choice === undefined) return true
+  if ((current.cloud ?? "") !== (cloud ?? "")) return false
   if (typeof choice === "string")
     return !choice || choice === current.cloudTarget
   return (
@@ -82,11 +84,14 @@ function TagOutcome({ targets, tags }: { targets: Target[]; tags: string[] }) {
 export function ServiceAdoption({
   projectId,
   targets,
+  cloud,
   fallback,
   onSaved,
 }: {
   projectId: string
   targets: Target[]
+  /** cloud names the Cloud these targets are in, unless it's the default. */
+  cloud?: string
   /** fallback is the default Cloud's default placement, when it has one. */
   fallback?: DefaultPlacement | null
   onSaved?: () => void
@@ -113,7 +118,9 @@ export function ServiceAdoption({
       ? adoptServiceTarget(
           manifest.data.manifest,
           reviewing,
-          choices[reviewing]
+          choices[reviewing],
+          undefined,
+          cloud
         )
       : null
   const pending = reviewing ? choices[reviewing] : undefined
@@ -195,10 +202,11 @@ export function ServiceAdoption({
               typeof choice === "object"
                 ? choice.tags
                 : (settings.cloudTags ?? [])
+            const where = settings.cloud ? ` in ${settings.cloud}` : ""
             const current = settings.cloudTarget
-              ? `Target: ${settings.cloudTarget}`
+              ? `Target: ${settings.cloudTarget}${where}`
               : settings.cloudTags
-                ? `Tags: ${settings.cloudTags.join(", ")}`
+                ? `Tags: ${settings.cloudTags.join(", ")}${where}`
                 : settings.provider
                   ? `Direct: ${settings.provider}`
                   : fallback
@@ -269,7 +277,7 @@ export function ServiceAdoption({
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!editable || sameChoice(choice, settings)}
+                    disabled={!editable || sameChoice(choice, settings, cloud)}
                     onClick={() => {
                       setError("")
                       setReviewing(name)

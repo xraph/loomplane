@@ -305,21 +305,30 @@ func (s *PgStore) DefaultCloud(ctx context.Context, orgID, projectID string) (cl
 	return *cloud, *revision, nil
 }
 
+// ResolveNamedCloud reads the project's view of the Cloud called name.
+func (s *PgStore) ResolveNamedCloud(ctx context.Context, orgID, projectID, name string) (*ProjectCloud, error) {
+	var id string
+	if err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND name=$2`, orgID, name).Scan(&id); err != nil {
+		return nil, storeError(err)
+	}
+	return s.projectCloud(ctx, orgID, projectID, id, false)
+}
+
 func (s *PgStore) projectCloud(ctx context.Context, orgID, projectID, cloudID string, retained bool) (*ProjectCloud, error) {
-	var id *string
+	var id, name *string
 	var cloudRevision, grantRevision *int64
 	var isDefault bool
 	var targets []byte
 	var defaultProvider, defaultConnection, defaultRegion *string
 	var wholeCloud *bool
-	err := s.db.QueryRow(ctx, `SELECT c.id,c.revision,g.revision,coalesce(g.is_default,false),c.default_provider,c.default_connection_id,c.default_region,cardinality(g.target_ids)=0,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
+	err := s.db.QueryRow(ctx, `SELECT c.id,c.name,c.revision,g.revision,coalesce(g.is_default,false),c.default_provider,c.default_connection_id,c.default_region,cardinality(g.target_ids)=0,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
  FROM loomplane_projects p
  LEFT JOIN loomplane_cloud_profiles c ON c.org_id=p.org_id AND c.id=CASE WHEN $3='' THEN (SELECT d.cloud_id FROM loomplane_cloud_project_grants d WHERE d.org_id=p.org_id AND d.project_id=p.id AND d.is_default AND NOT d.revoked) ELSE $3 END
  LEFT JOIN loomplane_cloud_project_grants g ON g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=p.id AND NOT g.revoked
  LEFT JOIN loomplane_cloud_targets t ON t.org_id=c.org_id AND t.cloud_id=c.id AND ($4 OR (g.revision IS NOT NULL AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))))
  AND ($4 OR t.managed_resource_id IS NULL OR (t.project_id=p.id AND EXISTS(SELECT 1 FROM loomplane_runtime_attachments ra JOIN loomplane_managed_resources mr ON mr.org_id=ra.org_id AND mr.id=ra.cluster_id WHERE ra.org_id=t.org_id AND ra.cloud_id=t.cloud_id AND ra.cluster_id=t.managed_resource_id AND ra.project_id=p.id AND ra.runtime_connection_id=t.connection_id AND ra.deleted_at IS NULL AND mr.deleted_at IS NULL)))
  WHERE p.org_id=$1 AND p.id=$2
- GROUP BY c.id,c.revision,g.revision,g.is_default,c.default_provider,c.default_connection_id,c.default_region,g.target_ids`, orgID, projectID, cloudID, retained).Scan(&id, &cloudRevision, &grantRevision, &isDefault, &defaultProvider, &defaultConnection, &defaultRegion, &wholeCloud, &targets)
+ GROUP BY c.id,c.name,c.revision,g.revision,g.is_default,c.default_provider,c.default_connection_id,c.default_region,g.target_ids`, orgID, projectID, cloudID, retained).Scan(&id, &name, &cloudRevision, &grantRevision, &isDefault, &defaultProvider, &defaultConnection, &defaultRegion, &wholeCloud, &targets)
 	if err != nil {
 		return nil, storeError(err)
 	}
@@ -336,7 +345,7 @@ func (s *PgStore) projectCloud(ctx context.Context, orgID, projectID, cloudID st
 		zero := int64(0)
 		grantRevision = &zero
 	}
-	c := &ProjectCloud{GrantRevision: *grantRevision, OrgID: orgID, ProjectID: projectID, CloudID: *id, CloudRevision: *cloudRevision, Default: isDefault}
+	c := &ProjectCloud{GrantRevision: *grantRevision, OrgID: orgID, ProjectID: projectID, CloudID: *id, Name: *name, CloudRevision: *cloudRevision, Default: isDefault}
 	if err = json.Unmarshal(targets, &c.Targets); err != nil {
 		return nil, fmt.Errorf("decode granted targets: %w", err)
 	}
@@ -411,8 +420,9 @@ func IsStaleCleanupReview(err error) bool {
 // through run-time assertions, where a drifted signature would read as a
 // missing capability rather than fail the build.
 var (
-	_ GrantStore = (*PgStore)(nil)
-	_ SyncStore  = (*PgStore)(nil)
+	_ GrantStore    = (*PgStore)(nil)
+	_ NamedResolver = (*PgStore)(nil)
+	_ SyncStore     = (*PgStore)(nil)
 	_ interface {
 		RetainedCloud(ctx context.Context, orgID, projectID, cloudID string) (*ProjectCloud, error)
 	} = (*PgStore)(nil)

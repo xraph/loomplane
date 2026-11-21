@@ -680,8 +680,14 @@
           "description": "Managed workload reservation mode. Guaranteed reserves your reviewed replica maximum; best effort grants no fleet expansion.",
           "enum": ["guaranteed", "best_effort"]
         },
+        "cloud": {
+          "description": "Name of the Cloud cloud_target, cloud_tags or the default placement resolve in, any Cloud granted to the project. Omit for the project's default Cloud.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
         "cloud_target": {
-          "description": "Named target in this environment's assigned Cloud.",
+          "description": "Named target in the service's Cloud: the one cloud names, or the project's default Cloud.",
           "type": "string",
           "maxLength": 48,
           "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"

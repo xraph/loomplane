@@ -755,3 +755,45 @@ it("lists Loomplane Cloud in the normal order", async () => {
     /recommended|default|suggested|featured/i
   )
 })
+
+it("puts a service on a target of a Cloud other than the default", async () => {
+  const user = userEvent.setup()
+  const writes: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)))
+        return Response.json({ id: "next", revision: 4, manifest: {} })
+      }
+      return Response.json({
+        id: "saved",
+        revision: 3,
+        manifest: {
+          version: 1,
+          services: { trainer: { source: "trainer", cloud_target: "eu-run" } },
+        },
+      })
+    }
+  )
+  const { ServiceAdoption } =
+    await import("@/components/cloud-targets/service-adoption")
+  const targets = [
+    { id: "a", name: "a100", displayName: "A100" },
+  ] as import("@/client/forge/loomplane/types").Target[]
+  show(<ServiceAdoption projectId="p" targets={targets} cloud="GPU Lab" />)
+  await user.click(
+    await screen.findByRole("combobox", { name: "Cloud target for trainer" })
+  )
+  await user.click(await screen.findByRole("option", { name: /A100/ }))
+  await user.click(screen.getByRole("button", { name: "Review" }))
+  await user.click(screen.getByRole("button", { name: "Save service target" }))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toMatchObject({
+    manifest: {
+      services: {
+        trainer: { source: "trainer", cloud: "GPU Lab", cloud_target: "a100" },
+      },
+    },
+  })
+})

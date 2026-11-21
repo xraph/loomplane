@@ -24,7 +24,6 @@ import (
 	"github.com/xraph/loomplane/internal/metering"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
-	"github.com/xraph/loomplane/internal/platformcloud"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -872,28 +871,14 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	locationSelections := map[string]locationSelection{}
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
+	var named map[string]*cloudprofiles.ProjectCloud
 	if resolutionErr == nil {
-		var pools map[string]*cloudinfra.Placement
-		var poolErr error
-		constrained := false
-		for _, svc := range resolutionManifest.Services {
-			constrained = constrained || svc.For(plan.Environment, resolutionManifest.Defaults).Placement != nil
-		}
-		if constrained {
-			pools, poolErr = s.resolvePoolsWithLocationInput(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, locationSelections, Input{Graph: g, Chosen: chosen}, intents)
-		} else {
-			pools, poolErr = s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
-		}
-		var platform map[string]*platformcloud.Ref
-		if poolErr == nil {
-			platform, poolErr = s.resolvePlatform(ctx, plan, resolutionManifest, assignment, needs.Held)
-		}
-		if poolErr != nil {
-			resolutionErr = poolErr
-		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, platform, needs.Held, intents)
-		}
+		named, resolutionErr = s.namedClouds(ctx, plan, needs)
 	}
+	if resolutionErr == nil {
+		resolved, placements, resolutionErr = s.resolveAcrossClouds(ctx, plan, resolutionManifest, assignment, named, needs, bindings, options, locationSelections, Input{Graph: g, Chosen: chosen}, intents)
+	}
+	clouds := cloudsByID(assignment, named)
 	for name, selection := range locationSelections {
 		if pin, ok := placements[name]; ok {
 			pin.LocationReview = selection.Review
@@ -931,7 +916,8 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		var placementErr *CloudPlacementError
 		switch {
 		case errors.As(resolutionErr, &placementErr):
-			finding = Finding{Code: placementErr.Code, Subject: ServiceSubject, Name: strings.TrimSuffix(strings.TrimPrefix(placementErr.Path, "services."), ".cloud_tags"), Path: placementErr.Path, Message: placementErr.Message}
+			service, _, _ := strings.Cut(strings.TrimPrefix(placementErr.Path, "services."), ".")
+			finding = Finding{Code: placementErr.Code, Subject: ServiceSubject, Name: service, Path: placementErr.Path, Message: placementErr.Message}
 			if strings.HasPrefix(placementErr.Path, "database_gateway.") {
 				finding.Name = dbGatewayName
 			}
@@ -952,7 +938,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		var moves map[string]Action
 		var moveProblems []Finding
 		if len(locationSelections) > 0 {
-			moves, moveProblems = appliedPoolMoves(bindings, assignment, options, s.providers, placements, routes, locationSelections)
+			moves, moveProblems = appliedPoolMoves(bindings, clouds, options, s.providers, placements, routes, locationSelections)
 		}
 		native, nativeErr := nativeMoves(ctx, s.nativeFallbacks, plan.OrgID, plan.EnvironmentID, bindings)
 		if nativeErr != nil {
@@ -977,7 +963,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		})
 	}
 	if resolutionErr == nil && len(locationSelections) == 0 && poolRelocation(bindings, placements) {
-		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
+		result = appliedCloudPlanChoosing(bindings, clouds, "", options, s.providers, placements, nil, routes)
 		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
 	}
 	// A rollback changes only services' code and settings, before anything

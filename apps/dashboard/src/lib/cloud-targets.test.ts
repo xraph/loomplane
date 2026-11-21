@@ -205,3 +205,70 @@ it("selects a target by tags in every environment", () => {
     cloud_tags: ["eu", "web"],
   })
 })
+
+it("reads a service's Cloud the way the planner does", () => {
+  const m: Manifest = {
+    version: 1,
+    services: {
+      trainer: {
+        source: "trainer",
+        cloud: "GPU Lab",
+        cloud_target: "a100",
+        environments: {
+          preview: { cloud_target: "eu-run" },
+          staging: { cloud: "GPU Lab EU" },
+        },
+      },
+    },
+  }
+  const settings = (env: string) =>
+    placementSettings(
+      m,
+      {
+        section: "services",
+        name: "trainer",
+        kind: "",
+        entry: m.services!.trainer,
+      },
+      env
+    )
+  expect(settings("production")).toMatchObject({
+    cloud: "GPU Lab",
+    cloudTarget: "a100",
+  })
+  // A target named without a Cloud is in the default Cloud.
+  expect(settings("preview").cloud).toBeUndefined()
+  expect(settings("preview").cloudTarget).toBe("eu-run")
+  expect(settings("staging")).toMatchObject({
+    cloud: "GPU Lab EU",
+    cloudTarget: "a100",
+  })
+})
+
+it("puts a service on another Cloud's target, everywhere or in one environment", () => {
+  const m: Manifest = {
+    version: 1,
+    services: { trainer: { source: "trainer", cloud_target: "eu-run" } },
+  }
+  expect(
+    adoptServiceTarget(m, "trainer", "a100", undefined, "GPU Lab").services!
+      .trainer
+  ).toEqual({ source: "trainer", cloud: "GPU Lab", cloud_target: "a100" })
+  const environments = [
+    { name: "production" },
+    { name: "preview" },
+  ] as Environment[]
+  const one = adoptServiceTarget(
+    m,
+    "trainer",
+    "a100",
+    { environment: "production", environments },
+    "GPU Lab"
+  ).services!.trainer
+  expect(one.environments.production).toEqual({
+    cloud: "GPU Lab",
+    cloud_target: "a100",
+  })
+  // The other environment keeps the default Cloud's target.
+  expect(one.environments.preview).toEqual({ cloud_target: "eu-run" })
+})

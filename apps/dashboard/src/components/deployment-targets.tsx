@@ -7,6 +7,7 @@ import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useCloudTargetsList,
   useCloudsList,
   useConnectionsList,
   useDefaultCloudGet,
@@ -21,6 +22,7 @@ import type {
   Connection,
   Environment,
   Manifest,
+  Profile,
   Provider,
   Target,
 } from "@/client/forge/loomplane/types"
@@ -158,10 +160,13 @@ function placedManifest(
   const choice = cloudChoice(e.changes)
   if (!choice || e.row.section !== "services")
     return applyPlacement(m, e.row, e.environment, e.changes)
-  const adopted = adoptServiceTarget(m, e.row.name, choice, {
-    environment: e.environment,
-    environments,
-  })
+  const adopted = adoptServiceTarget(
+    m,
+    e.row.name,
+    choice,
+    { environment: e.environment, environments },
+    e.changes.cloud
+  )
   const rest = { ...e.changes }
   for (const key of cloudOwnedFields) delete rest[key]
   return applyPlacement(adopted, e.row, e.environment, rest)
@@ -182,6 +187,10 @@ export function usePlacementContext(projectId: string) {
     providers,
     catalog: providers.data?.providers ?? [],
     connections: connections.data?.connections ?? [],
+    /** otherClouds are the project's Clouds besides its default. */
+    otherClouds: (clouds.data?.clouds ?? []).filter(
+      (c): c is Profile => !!c && c.id !== id
+    ),
     /** cloudName names the default Cloud; undefined when there is none. */
     cloudName: id
       ? (clouds.data?.clouds?.find((c) => c?.id === id)?.name ??
@@ -191,6 +200,54 @@ export function usePlacementContext(projectId: string) {
       (t): t is Target => !!t
     ),
   }
+}
+
+/**
+ * cloudPick turns a "Runs on" value for a Cloud target into the fields it
+ * sets: `cloud:<target>` is the default Cloud's, `cloud@<i>:<target>` the
+ * i-th other Cloud's. Choosing a target replaces any direct placement.
+ */
+function cloudPick(value: string, others: Profile[]): PlacementFields {
+  const named = /^cloud@(\d+):(.+)$/.exec(value)
+  return {
+    cloud: named ? (others[Number(named[1])]?.name ?? "") : "",
+    cloudTarget: named ? named[2] : value.slice("cloud:".length),
+  }
+}
+
+/**
+ * OtherCloudTargets is one Cloud besides the default in the "Runs on" list:
+ * its targets that can run this workload, under the Cloud's name. Nothing
+ * shows while they load or when none fit.
+ */
+function OtherCloudTargets({
+  projectId,
+  cloud,
+  index,
+  runsHere,
+}: {
+  projectId: string
+  cloud: Profile
+  index: number
+  runsHere: (t: Target) => boolean
+}) {
+  const targets = useQuery(useCloudTargetsList, {
+    path: { id: projectId, cloudId: cloud.id },
+  })
+  const usable = (targets.data?.targets ?? []).filter(
+    (t): t is Target => !!t && runsHere(t)
+  )
+  if (!usable.length) return null
+  return (
+    <SelectGroup>
+      <SelectLabel>{cloud.name}</SelectLabel>
+      {usable.map((t) => (
+        <SelectItem key={t.id} value={`cloud@${index}:${t.name}`}>
+          {t.displayName || t.name}
+        </SelectItem>
+      ))}
+    </SelectGroup>
+  )
 }
 
 /** RunsOnCell is a table cell naming where a row runs, and where it moves. */
@@ -320,7 +377,8 @@ function PlacementForm({
   onClose: () => void
   onPendingChange?: (pending: boolean) => void
 }) {
-  const { providers, cloudTargets, cloudName } = usePlacementContext(projectId)
+  const { providers, cloudTargets, cloudName, otherClouds } =
+    usePlacementContext(projectId)
   return (
     <>
       <SheetHeader className="border-b">
@@ -356,6 +414,7 @@ function PlacementForm({
           catalog={providers.data.providers}
           cloudTargets={cloudTargets}
           cloudName={cloudName}
+          otherClouds={otherClouds}
           mode={mode}
           pending={pending}
           onUse={onUse}
@@ -380,6 +439,7 @@ function PlacementChoices({
   catalog,
   cloudTargets,
   cloudName,
+  otherClouds,
   mode,
   pending,
   onUse,
@@ -396,6 +456,7 @@ function PlacementChoices({
   catalog: Provider[]
   cloudTargets: Target[]
   cloudName?: string
+  otherClouds: Profile[]
   mode: "pending" | "save"
   pending?: PendingPlacement
   onUse?: (change: PendingPlacement) => void
@@ -420,24 +481,31 @@ function PlacementChoices({
   const cloudChosen = !!value.cloudTarget || !!value.cloudTags?.length
   // Only services can run on a Cloud target. Offer those whose provider can
   // run this workload; a target whose provider the catalog doesn't know stays.
+  const runsHere = (t: Target): boolean => {
+    const p = catalog.find((c) => c.name === t.provider)
+    return !p || (p.available && !!p.runs?.some((r) => r.workload === row.kind))
+  }
   const cloudChoices =
-    row.section === "services"
-      ? cloudTargets.filter((t) => {
-          const p = catalog.find((c) => c.name === t.provider)
-          return (
-            !p || (p.available && p.runs?.some((r) => r.workload === row.kind))
-          )
-        })
-      : []
+    row.section === "services" ? cloudTargets.filter(runsHere) : []
+  const elsewhere = row.section === "services" ? otherClouds : []
+  // Another Cloud's target is addressed by the Cloud's place in the list:
+  // a Cloud's name can hold any character.
+  const namedIndex = value.cloud
+    ? elsewhere.findIndex((c) => c.name === value.cloud)
+    : -1
   const cloudValue = value.cloudTarget
-    ? `cloud:${value.cloudTarget}`
+    ? value.cloud
+      ? `cloud@${namedIndex}:${value.cloudTarget}`
+      : `cloud:${value.cloudTarget}`
     : value.cloudTags?.length
       ? "cloud-tags"
       : undefined
   const cloudLabelText = value.cloudTarget
-    ? cloudTargets.find((t) => t.name === value.cloudTarget)?.displayName ||
-      value.cloudTarget
-    : `Tagged ${value.cloudTags?.join(", ")}`
+    ? value.cloud
+      ? `${value.cloudTarget} in ${value.cloud}`
+      : cloudTargets.find((t) => t.name === value.cloudTarget)?.displayName ||
+        value.cloudTarget
+    : `Tagged ${value.cloudTags?.join(", ")}${value.cloud ? ` in ${value.cloud}` : ""}`
   const dirty = Object.keys(changes).length > 0 || !!account
   const disabled = !can("project:update") || placement.pending
   // A panel that saves at once holds back plans until it's saved or closed.
@@ -536,9 +604,9 @@ function PlacementChoices({
                 value={cloudValue ?? (value.provider || null)}
                 onValueChange={(v) =>
                   v &&
-                  (v.startsWith("cloud:")
+                  (v.startsWith("cloud:") || v.startsWith("cloud@")
                     ? change({
-                        cloudTarget: v.slice("cloud:".length),
+                        ...cloudPick(v, elsewhere),
                         cloudTags: [],
                         provider: "",
                         region: "",
@@ -552,7 +620,7 @@ function PlacementChoices({
                       change({
                         provider: v,
                         ...(cloudChosen
-                          ? { cloudTarget: "", cloudTags: [] }
+                          ? { cloud: "", cloudTarget: "", cloudTags: [] }
                           : {}),
                         region: "",
                         ...(value.cloudSqlNetwork
@@ -572,7 +640,9 @@ function PlacementChoices({
                   aria-label={`Target for ${row.name}`}
                   disabled={
                     disabled ||
-                    (targets.length === 0 && cloudChoices.length === 0)
+                    (targets.length === 0 &&
+                      cloudChoices.length === 0 &&
+                      elsewhere.length === 0)
                   }
                 >
                   <SelectValue placeholder="Choose a target">
@@ -602,6 +672,15 @@ function PlacementChoices({
                       ))}
                     </SelectGroup>
                   )}
+                  {elsewhere.map((c, i) => (
+                    <OtherCloudTargets
+                      key={c.id}
+                      projectId={projectId}
+                      cloud={c}
+                      index={i}
+                      runsHere={runsHere}
+                    />
+                  ))}
                   {targets.length > 0 && (
                     <SelectGroup>
                       {cloudChoices.length > 0 && (

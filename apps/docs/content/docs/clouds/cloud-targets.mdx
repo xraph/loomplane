@@ -54,6 +54,30 @@ loomctl clouds make-default my-project cloud_... --revision 3 \
 
 Environments still differ where your manifest says so. Give staging its own target with an environment override, as `trainer` does below.
 
+## Use another Cloud
+
+A service can run on a target in any Cloud granted to the project. Name the Cloud with `cloud`:
+
+```yaml
+services:
+  web:
+    source: node:apps/web
+    cloud_target: frontend        # the project's default Cloud
+  trainer:
+    source: python:trainer
+    cloud: GPU Lab
+    cloud_target: a100
+    environments:
+      preview:
+        cloud_target: eu-run      # a target without cloud is in the default Cloud
+      staging:
+        cloud: GPU Lab EU         # same target name, another Cloud
+```
+
+`cloud` alone uses that Cloud's default placement. An environment that names a target also says which Cloud it's in, so `preview` above goes back to the default Cloud. A name no Cloud granted to the project has fails the plan with `cloud-unknown` at `services.trainer.cloud`. In the dashboard, **Runs on** lists every granted Cloud's targets under the Cloud's name, and each Cloud on the project's Clouds tab can take services.
+
+Changing the project's default Cloud leaves services that name their Cloud where they are. A change to a Cloud itself, such as switching one of its targets, reaches every service placed on it.
+
 ## Pick a target by tags
 
 You don't have to name a target. Give your targets tags, then ask for the tags you need:

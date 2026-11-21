@@ -5,13 +5,12 @@ import (
 	"fmt"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
-	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // appliedPoolMoves supplies only the unconstrained services changing hosts.
 // Their source, variables and runtime settings retain the existing move contract.
-func appliedPoolMoves(bindings []*Binding, assignment *cloudprofiles.ProjectCloud, options []ConnectionOption, registry *provider.Registry, placements map[string]CloudPlacement, routes []cloudinfra.Route, selections map[string]locationSelection) (map[string]Action, []Finding) {
+func appliedPoolMoves(bindings []*Binding, clouds cloudChooser, options []ConnectionOption, registry *provider.Registry, placements map[string]CloudPlacement, routes []cloudinfra.Route, selections map[string]locationSelection) (map[string]Action, []Finding) {
 	names := map[string]bool{}
 	for _, b := range bindings {
 		if b.Subject != ServiceSubject {
@@ -29,7 +28,7 @@ func appliedPoolMoves(bindings []*Binding, assignment *cloudprofiles.ProjectClou
 	if len(names) == 0 {
 		return nil, nil
 	}
-	applied := appliedCloudPlan(bindings, assignment, "", options, registry, placements, routes)
+	applied := appliedCloudPlanChoosing(bindings, clouds, "", options, registry, placements, nil, routes)
 	actions := map[string]Action{}
 	for _, a := range applied.Actions {
 		if names[a.Name] && a.Subject == ServiceSubject {

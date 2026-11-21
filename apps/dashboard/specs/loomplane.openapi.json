@@ -27068,6 +27068,9 @@
               "build": {
                 "$ref": "#/components/schemas/Build"
               },
+              "cloud": {
+                "type": "string"
+              },
               "cloud_sql_network": {
                 "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
               },
@@ -35696,6 +35699,7 @@
           "org_id",
           "project_id",
           "cloud_id",
+          "name",
           "default",
           "targets"
         ],
@@ -35714,6 +35718,9 @@
           },
           "grant_revision": {
             "type": "integer"
+          },
+          "name": {
+            "type": "string"
           },
           "org_id": {
             "type": "string"

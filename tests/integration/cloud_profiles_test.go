@@ -187,6 +187,17 @@ func TestCloudProfiles_scopesRevisionsAndDeletion(t *testing.T) {
 	if _, err = st.ResolveCloud(ctx, "org_2", "proj_1", ""); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Fatalf("cross-org resolve: %v", err)
 	}
+	// A manifest names a Cloud by name; the same view comes back.
+	named, err := st.ResolveNamedCloud(ctx, "org_1", "proj_1", assignment.Name)
+	if err != nil || named.CloudID != p.ID || named.GrantRevision != assignment.GrantRevision || len(named.Targets) != 1 {
+		t.Fatalf("named Cloud: %+v %v", named, err)
+	}
+	if _, err = st.ResolveNamedCloud(ctx, "org_1", "proj_1", "No such Cloud"); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Fatalf("unknown Cloud name: %v", err)
+	}
+	if _, err = st.ResolveNamedCloud(ctx, "org_2", "proj_1", assignment.Name); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Fatalf("cross-org named Cloud: %v", err)
+	}
 	if err = st.DeleteTarget(ctx, "org_1", "proj_1", p.ID, target.ID); !errors.Is(err, cloudprofiles.ErrInUse) {
 		t.Fatalf("target of a default Cloud deleted: %v", err)
 	}
