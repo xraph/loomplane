@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xraph/grove/drivers/pgdriver"
 )
@@ -13,6 +14,23 @@ import (
 // StartupSeed is the lock every first-start seed takes, so replicas that
 // boot together seed one at a time.
 const StartupSeed = "loomplane-startup-seed"
+
+// Seed waits for other replicas to finish their startup writes. A busy lock
+// releases the database connection between attempts, so waiting replicas do
+// not occupy the pool or spend the driver's query timeout in a lock queue.
+func Seed(ctx context.Context, pg *pgdriver.PgDB, fn func(context.Context) error) error {
+	for {
+		held, err := Try(ctx, pg, StartupSeed, fn)
+		if held || err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
 
 // FirstRunSetup is the lock first-run setup holds while it checks that the
 // instance has no users and creates the first one, so two setups can't

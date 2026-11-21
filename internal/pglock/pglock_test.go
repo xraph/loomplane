@@ -117,6 +117,33 @@ func TestDo_replicasTakeTurns(t *testing.T) {
 	}
 }
 
+func TestSeedWaitsBeyondOneQueryTimeout(t *testing.T) {
+	dsn := scratchDB(t)
+	first, next := open(t, dsn), open(t, dsn)
+	next.SetQueryTimeout(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	finished := make(chan error, 1)
+	sentinel := errors.New("second replica seeded")
+	err := Do(ctx, first, StartupSeed, func(ctx context.Context) error {
+		go func() {
+			finished <- Seed(ctx, next, func(context.Context) error { return sentinel })
+		}()
+		select {
+		case early := <-finished:
+			return fmt.Errorf("waiting replica returned while lock was held: %w", early)
+		case <-time.After(350 * time.Millisecond):
+			return nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = <-finished; !errors.Is(err, sentinel) {
+		t.Fatalf("waiting replica: %v", err)
+	}
+}
+
 // A failed seed returns its own error and still lets the next replica in.
 func TestDo_failureReleasesLock(t *testing.T) {
 	ctx := t.Context()

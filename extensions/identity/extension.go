@@ -387,7 +387,7 @@ func (e *Extension) Start(ctx context.Context) error {
 	// a start: the app seed, Warden's and authsome's bootstraps, and
 	// authsome's settings, which look for a row before they insert one. Two
 	// at once would both find nothing and one would fail on the duplicate.
-	if err := pglock.Do(ctx, e.pg, pglock.StartupSeed, e.prepare); err != nil {
+	if err := pglock.Seed(ctx, e.pg, e.prepare); err != nil {
 		return err
 	}
 	if e.approvalKeys != nil {

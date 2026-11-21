@@ -154,7 +154,7 @@ func (readOnlyEndpoints) SetEnabled(context.Context, relayid.ID, bool) error {
 // Replicas that start together take turns: the provider has no unique
 // constraint, so two at once would each find none and create one.
 func (s *Service) Prepare(ctx context.Context) error {
-	return pglock.Do(ctx, s.pg, pglock.StartupSeed, s.prepare)
+	return pglock.Seed(ctx, s.pg, s.prepare)
 }
 
 func (s *Service) prepare(ctx context.Context) error {
