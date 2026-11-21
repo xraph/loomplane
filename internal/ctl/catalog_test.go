@@ -125,10 +125,37 @@ func recipesCLI(t *testing.T, reg *recipes.Registry, handler http.HandlerFunc) (
 	return app, &out
 }
 
+// projectLookups answers what services add reads before it edits: the
+// project list, its manifest and the connections. It reports false for
+// anything else.
+func projectLookups(w http.ResponseWriter, r *http.Request, manifestYAML string, connections string) bool {
+	switch {
+	case r.URL.Path == "/api/v1/projects" && r.Method == http.MethodGet:
+		_, _ = w.Write([]byte(`{"projects":[{"id":"shop","slug":"shop","name":"Shop"}]}`))
+	case r.URL.Path == "/api/v1/projects/shop/manifest" && r.Method == http.MethodGet:
+		if manifestYAML == "" {
+			http.NotFound(w, r)
+			return true
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "rev_1", "revision": 1, "yaml": manifestYAML})
+	case r.URL.Path == "/api/v1/connections" && r.Method == http.MethodGet:
+		if connections == "" {
+			connections = `[{"id":"conn_1","cloud":"server","name":"box","status":"ready","details":{"architecture":"amd64"}}]`
+		}
+		_, _ = w.Write([]byte(`{"connections":` + connections + `}`))
+	default:
+		return false
+	}
+	return true
+}
+
 func TestServicesAddEditsManifestAndPlans(t *testing.T) {
 	var calls []string
 	approved := false
 	app, out := recipesCLI(t, recipestest.Registry(t), func(w http.ResponseWriter, r *http.Request) {
+		if projectLookups(w, r, "", "") {
+			return
+		}
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/approve"):
 			approved = true
@@ -174,11 +201,13 @@ func TestServicesAddEditsManifestAndPlans(t *testing.T) {
 
 func TestServicesAddRefusesBeforeWriting(t *testing.T) {
 	tests := map[string][]string{
-		"unknown kind":     {"services", "add", "shop", "--kind", "nothing", "--target", "conn_1", "--name", "x"},
-		"missing target":   {"services", "add", "shop", "--kind", "sample", "--name", "x"},
-		"missing name":     {"services", "add", "shop", "--kind", "sample", "--target", "conn_1"},
-		"missing project":  {"services", "add", "--kind", "sample", "--target", "conn_1", "--name", "x"},
-		"managed provider": {"services", "add", "shop", "--kind", "sample", "--target", "conn_1", "--name", "x", "--provider", "rds"},
+		"unknown kind":        {"services", "add", "shop", "--kind", "nothing", "--target", "conn_1", "--name", "x"},
+		"missing project":     {"services", "add", "--kind", "sample", "--target", "conn_1", "--name", "x"},
+		"managed provider":    {"services", "add", "shop", "--kind", "sample", "--target", "conn_1", "--name", "x", "--provider", "rds"},
+		"nothing to add":      {"services", "add", "shop", "--name", "x"},
+		"source and suggest":  {"services", "add", "shop", "--source", "cmd/api", "--suggested", "api"},
+		"catalog with needs":  {"services", "add", "shop", "--kind", "sample", "--needs", "db"},
+		"catalog kind source": {"services", "add", "shop", "--source", "cmd/api", "--kind", "postgres"},
 	}
 	for name, args := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -196,6 +225,9 @@ func TestServicesAddRefusesBeforeWriting(t *testing.T) {
 
 func TestServicesAddPlansResourceOnlyConfigurationWithoutRepositories(t *testing.T) {
 	app, _ := recipesCLI(t, recipestest.Registry(t), func(w http.ResponseWriter, r *http.Request) {
+		if projectLookups(w, r, "", "") {
+			return
+		}
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/manifest/edits"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "rev_1", "yaml": "version: 1\nresources: {cache: {kind: sample}}\n"})

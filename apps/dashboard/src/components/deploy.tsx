@@ -65,6 +65,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { AddServiceButton } from "@/lib/add-service-context"
 import { lockLabel, resourceLabel } from "@/lib/architecture"
 import {
   useDeploymentDraft,
@@ -401,9 +402,12 @@ function WhereServicesRun({ project }: { project: Project }) {
       )
     if (!manifest || rows.length === 0)
       return (
-        <CloudEmpty kind="list" title="No services to place yet">
-          Add services or resources to loomplane.yaml, then choose where they
-          run.
+        <CloudEmpty
+          kind="list"
+          title="No services to place yet"
+          action={<AddServiceButton environment={environment} size="sm" />}
+        >
+          Add a service or a database, then choose where it runs here.
         </CloudEmpty>
       )
     return (

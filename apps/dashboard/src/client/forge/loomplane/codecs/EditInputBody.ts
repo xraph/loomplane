@@ -1,9 +1,10 @@
 import type { Codec } from '../codec-runtime';
 import { codec_EditInputBody_add_resource } from './EditInputBody.add_resource';
+import { codec_EditInputBody_add_service } from './EditInputBody.add_service';
 import { codec_EditInputBody_link } from './EditInputBody.link';
 import { codec_EditInputBody_placement } from './EditInputBody.placement';
 import { codec_EditInputBody_set_use } from './EditInputBody.set_use';
 import { codec_EditInputBody_unlink } from './EditInputBody.unlink';
 import { codec_EditInputBody_update_resource } from './EditInputBody.update_resource';
 
-export const codec_EditInputBody: Codec = {"kind": "object", "fields": {"BaseRevision": {"ts": "baseRevision"}, "add_resource": {"ts": "addResource", "codec": () => codec_EditInputBody_add_resource}, "ignore": {"ts": "ignore"}, "link": {"ts": "link", "codec": () => codec_EditInputBody_link}, "placement": {"ts": "placement", "codec": () => codec_EditInputBody_placement}, "remove_resource": {"ts": "removeResource"}, "set_use": {"ts": "setUse", "codec": () => codec_EditInputBody_set_use}, "unlink": {"ts": "unlink", "codec": () => codec_EditInputBody_unlink}, "update_resource": {"ts": "updateResource", "codec": () => codec_EditInputBody_update_resource}}};
+export const codec_EditInputBody: Codec = {"kind": "object", "fields": {"BaseRevision": {"ts": "baseRevision"}, "add_resource": {"ts": "addResource", "codec": () => codec_EditInputBody_add_resource}, "add_service": {"ts": "addService", "codec": () => codec_EditInputBody_add_service}, "dry_run": {"ts": "dryRun"}, "ignore": {"ts": "ignore"}, "link": {"ts": "link", "codec": () => codec_EditInputBody_link}, "placement": {"ts": "placement", "codec": () => codec_EditInputBody_placement}, "remove_resource": {"ts": "removeResource"}, "set_use": {"ts": "setUse", "codec": () => codec_EditInputBody_set_use}, "unlink": {"ts": "unlink", "codec": () => codec_EditInputBody_unlink}, "update_resource": {"ts": "updateResource", "codec": () => codec_EditInputBody_update_resource}}};

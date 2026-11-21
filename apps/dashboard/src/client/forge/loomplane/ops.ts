@@ -2853,6 +2853,15 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['RevisionList'],
   },
+  'manifests.suggestions': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/manifest/suggestions',
+    entity: 'ServiceSuggestions',
+    rootType: 'ServiceSuggestions',
+    provides: ['ServiceSuggestions:{projectId}'],
+    invalidates: [],
+    responseCodec: CODECS['ServiceSuggestions'],
+  },
   'nativeRecoveryCopies.list': {
     method: 'GET',
     path: '/api/v1/projects/{id}/native-recovery-copies',
@@ -4120,6 +4129,7 @@ export const entities = {
   'Sent': { fields: { 'conversation': 'Conversation', 'task': 'Task' } },
   'Server': { idField: 'id' },
   'ServerList': { fields: { 'servers': 'Server' } },
+  'ServiceSuggestions': { idField: 'projectId' },
   'Source': { idField: 'id' },
   'SourceList': { fields: { 'sources': 'DiscoverySource' } },
   'SourceState': { fields: { 'latest': 'Analysis', 'shown': 'Analysis', 'source': 'DiscoverySource' } },

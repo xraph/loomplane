@@ -58,6 +58,12 @@ ignore:
   resources: [kafka]
 ```
 
+## Add a service
+
+You don't have to write a new entry by hand. **Add service** on the project page adds a service analysis found, one from any source path, or a catalog kind, wires it to what needs it and, if you like, keeps it to one environment. It shows the YAML it would write first, then saves one revision and plans the environment. `loomctl services add` does the same from a terminal, and `loomctl services suggest` lists what analysis found that the manifest doesn't run yet.
+
+Under the hood it's one call to `POST /projects/:id/manifest/edits` with `add_service` or `add_resource`. Both take `enabled_in` and `only` (on in that environment, off in every other) and `needed_by` (services that get it in their `needs`). `dry_run: true` returns the revision without saving it. An add that would leave a service needing something that's off where the service runs is refused. The [Add a service guide](https://www.loomplane.com/docs/guides/add-a-service) has the details.
+
 ## version
 
 Existing workflows use `1`. Version `2` adds the optional federation intent described below. Loomplane rejects unsupported versions and unknown fields; federation plans remain blocked until their runtime gates are qualified.

@@ -62,6 +62,11 @@ import {
 } from "@/components/cloud-targets/infrastructure-ui"
 import { DatabaseGateways } from "@/components/database-gateway"
 import { DeployTab, ManifestSettings } from "@/components/deploy"
+import {
+  AddServiceButton,
+  AddServiceProvider,
+  FoundServices,
+} from "@/lib/add-service-context"
 import { AddEnvironment, Environments } from "@/components/environment-manager"
 import { ProjectsIcon } from "@/components/icons"
 import { Page } from "@/components/page"
@@ -454,7 +459,11 @@ function Body({
   )
 
   return (
-    <>
+    <AddServiceProvider
+      project={project}
+      environments={environments.list ?? []}
+      enabled={mayEdit && (environments.list?.length ?? 0) > 0}
+    >
       <CloudPageHeader
         glyph={
           <ProjectStylePopover
@@ -474,6 +483,7 @@ function Body({
         ))}
         actions={
           <>
+            {project.deploymentMode !== "fleet" && <AddServiceButton />}
             {project.deploymentMode === "fleet" && (
               <Button
                 variant="outline"
@@ -608,6 +618,8 @@ function Body({
             </CloudCallout>
           ))}
 
+          <FoundServices projectId={project.id} />
+
           <Environments
             project={project}
             environments={environments.list}
@@ -665,6 +677,11 @@ function Body({
         </TabsContent>
 
         <TabsContent value="services" className="grid gap-6">
+          {mayEdit && project.deploymentMode !== "fleet" && (
+            <div className="-mb-3 flex justify-end">
+              <AddServiceButton size="sm" />
+            </div>
+          )}
           {discovered((g) =>
             view ? (
               <ProjectServices
@@ -811,7 +828,7 @@ function Body({
           )}
         </SheetContent>
       </Sheet>
-    </>
+    </AddServiceProvider>
   )
 }
 

@@ -12130,7 +12130,7 @@
         "tags": [
           "Manifests"
         ],
-        "summary": "Add a resource to the manifest, or ignore a resource kind, keeping the YAML's comments",
+        "summary": "Change the manifest one edit at a time: add a service or a resource, wire it to what needs it, ignore a resource kind or move an entry, keeping the YAML's comments",
         "operationId": "manifests.edit",
         "parameters": [
           {
@@ -12203,6 +12203,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RevisionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/manifest/suggestions": {
+      "get": {
+        "tags": [
+          "Manifests"
+        ],
+        "summary": "The services analysis found that the manifest doesn't run yet, each as the add_service edit that adds it",
+        "operationId": "manifests.suggestions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSuggestions"
                 }
               }
             }
@@ -27014,6 +27046,15 @@
               "name": {
                 "type": "string"
               },
+              "needed_by": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "only": {
+                "type": "boolean"
+              },
               "provider": {
                 "type": "string"
               },
@@ -27035,6 +27076,63 @@
                 "type": "string"
               }
             }
+          },
+          "add_service": {
+            "type": "object",
+            "required": [
+              "name",
+              "source"
+            ],
+            "properties": {
+              "enabled_in": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "needed_by": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "needs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "only": {
+                "type": "boolean"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "public": {
+                "type": "boolean"
+              },
+              "region": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean"
           },
           "ignore": {
             "type": "string"
@@ -33061,6 +33159,60 @@
             "type": "integer"
           },
           "name": {
+            "type": "string"
+          }
+        }
+      },
+      "NewServiceInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "source"
+        ],
+        "properties": {
+          "enabled_in": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "needed_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "only": {
+            "type": "boolean"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
             "type": "string"
           }
         }
@@ -41129,6 +41281,71 @@
           },
           "service": {
             "type": "string"
+          }
+        }
+      },
+      "ServiceSuggestion": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "ecosystem",
+          "path",
+          "service"
+        ],
+        "properties": {
+          "ecosystem": {
+            "type": "string"
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "framework": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "service": {
+            "$ref": "#/components/schemas/NewServiceInput"
+          }
+        }
+      },
+      "ServiceSuggestions": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "analyzed",
+          "services"
+        ],
+        "properties": {
+          "analyzed": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSuggestion"
+            }
           }
         }
       },

@@ -609,26 +609,125 @@ func WithoutResource(doc []byte, resource string) ([]byte, error) {
 // environments.<environment>.enabled. The environment's other overrides
 // stay as they are.
 func WithResourceEnabled(doc []byte, resource, environment string, enabled bool) ([]byte, error) {
+	return WithEnabledIn(doc, "resources", resource, map[string]bool{environment: enabled})
+}
+
+// WithEnabledIn turns a service or resource on or off in each environment
+// named, under environments.<environment>.enabled. Each environment's
+// other overrides stay as they are. Section is services or resources.
+func WithEnabledIn(doc []byte, section, name string, enabled map[string]bool) ([]byte, error) {
+	if section != "services" && section != "resources" {
+		return nil, fmt.Errorf("%w: only services and resources are turned on and off by environment", ErrInvalid)
+	}
 	root, file, err := mapping(doc)
 	if err != nil {
 		return nil, err
 	}
-	if !envRE.MatchString(environment) {
-		return nil, fmt.Errorf("%w: %q isn't an environment name", ErrInvalid, environment)
-	}
-	res, err := editTarget(root, "resources", resource)
+	target, err := editTarget(root, section, name)
 	if err != nil {
 		return nil, err
 	}
-	envs, err := editMapping(res, "environments")
-	if err != nil {
-		return nil, fmt.Errorf("%w: resources.%s.%w", ErrInvalid, resource, err)
+	for _, environment := range sortedKeys(enabled) {
+		if !envRE.MatchString(environment) {
+			return nil, fmt.Errorf("%w: %q isn't an environment name", ErrInvalid, environment)
+		}
+		envs, err := editMapping(target, "environments")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s.%s.%w", ErrInvalid, section, name, err)
+		}
+		env, err := editMapping(envs, environment)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s.%s.environments.%w", ErrInvalid, section, name, err)
+		}
+		setChild(env, "enabled", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(enabled[environment])})
 	}
-	env, err := editMapping(envs, environment)
+	return encode(file)
+}
+
+// NewService is what WithService writes for a service someone adds: where
+// its code is and, optionally, where it runs and what it needs. Anything
+// left empty is inherited or comes from analysis, as it does for a
+// service written by hand.
+type NewService struct {
+	Repo     string
+	Source   string
+	Kind     string
+	Provider string
+	Region   string
+	Target   string
+	Port     int
+	Public   *bool
+	Needs    []string
+}
+
+// WithService adds a service to a manifest's YAML, after the ones already
+// there. It refuses a name something already has, and a need the manifest
+// doesn't name.
+func WithService(doc []byte, name string, s NewService) ([]byte, error) {
+	root, file, err := mapping(doc)
 	if err != nil {
-		return nil, fmt.Errorf("%w: resources.%s.environments.%w", ErrInvalid, resource, err)
+		return nil, err
 	}
-	setChild(env, "enabled", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(enabled)})
+	if !nameRE.MatchString(name) {
+		return nil, fmt.Errorf("%w: %q isn't a service name: use lower case letters, digits and hyphens, starting with a letter, at most 40 long", ErrInvalid, name)
+	}
+	source := strings.TrimSpace(s.Source)
+	if source == "" {
+		return nil, fmt.Errorf("%w: say where %s's code is: a directory, a Dockerfile or a Procfile process", ErrInvalid, name)
+	}
+	for _, section := range []string{"services", "resources", "gateways", "links"} {
+		if m := child(root, section); m != nil && child(m, name) != nil {
+			return nil, fmt.Errorf("%w: something is already called %s", ErrInvalid, name)
+		}
+	}
+	for _, need := range s.Needs {
+		if need == name {
+			return nil, fmt.Errorf("%w: %s can't need itself", ErrInvalid, name)
+		}
+		if child(child(root, "services"), need) == nil && child(child(root, "resources"), need) == nil {
+			return nil, fmt.Errorf("%w: %s needs %s, but the manifest has no service or resource called that", ErrInvalid, name, need)
+		}
+	}
+	services := child(root, "services")
+	switch {
+	case services == nil:
+		services = &yaml.Node{Kind: yaml.MappingNode}
+		root.Content = append(root.Content, scalar("services"), services)
+	case services.Kind == yaml.ScalarNode && services.Tag == "!!null":
+		services.Kind, services.Tag, services.Value = yaml.MappingNode, "!!map", ""
+	case services.Kind != yaml.MappingNode:
+		return nil, fmt.Errorf("%w: services isn't a mapping", ErrInvalid)
+	}
+	value := &yaml.Node{Kind: yaml.MappingNode}
+	add := func(key, v string) {
+		if v = strings.TrimSpace(v); v != "" {
+			value.Content = append(value.Content, scalar(key), scalar(v))
+		}
+	}
+	add("repo", s.Repo)
+	add("source", source)
+	add("kind", s.Kind)
+	add("provider", s.Provider)
+	add("region", s.Region)
+	add("target", s.Target)
+	if s.Port > 0 {
+		value.Content = append(value.Content, scalar("port"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(s.Port)})
+	}
+	if s.Public != nil {
+		value.Content = append(value.Content, scalar("public"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(*s.Public)})
+	}
+	if len(s.Needs) > 0 {
+		needs := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+		seen := map[string]bool{}
+		for _, need := range s.Needs {
+			if !seen[need] {
+				seen[need] = true
+				needs.Content = append(needs.Content, scalar(need))
+			}
+		}
+		value.Content = append(value.Content, scalar("needs"), needs)
+	}
+	services.Content = append(services.Content, scalar(name), value)
 	return encode(file)
 }
 

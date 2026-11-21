@@ -174,6 +174,7 @@ export const entities = {
   'Sent': { fields: { 'conversation': 'Conversation', 'task': 'Task' } },
   'Server': { idField: 'id' },
   'ServerList': { fields: { 'servers': 'Server' } },
+  'ServiceSuggestions': { idField: 'projectId' },
   'Source': { idField: 'id' },
   'SourceList': { fields: { 'sources': 'DiscoverySource' } },
   'SourceState': { fields: { 'latest': 'Analysis', 'shown': 'Analysis', 'source': 'DiscoverySource' } },

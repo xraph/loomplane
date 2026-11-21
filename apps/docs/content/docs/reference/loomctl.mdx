@@ -122,7 +122,8 @@ Preparing needs `deployment:create` and `agent:use` on the project. `loomctl mcp
 | Command | What it does |
 |---|---|
 | `services create NAME --target CONN [--kind K] [--provider P] [--region R] [--env E] [--json]` | Plans a standalone database service. `--kind` is `postgres` (default), `mysql`, `mariadb`, `redis` or `valkey`. `--provider` is `server` (default), `kubernetes`, `rds` or `cloud-sql` |
-| `services add PROJECT_ID --kind K --name RESOURCE --target CONN [--provider P] [--version V] [--env E]` | Plans a catalog service added to an existing project (`server` or `kubernetes`) |
+| `services add PROJECT (--suggested NAME \| --source PATH \| --kind K) [--name N] [--env E] [--only] [--needs A,B] [--needed-by A,B] [--provider P] [--target CONN] [--dry-run] [--no-plan] [--json]` | Adds a service to a project and plans `--env`: one analysis found, one from any source path, or a catalog kind. `--only` runs it in `--env` alone. The name and a catalog kind's target default when there's one obvious choice. See [Add a service](/docs/guides/add-a-service) |
+| `services suggest PROJECT [--json]` | Lists the services analysis found that the project's manifest doesn't run yet |
 | `backups PROJECT`, `backups show ID`, `backups create PROJECT --resource NAME`, `backups retry ID` | List, read, create and retry backups. `create` takes `--env` and `--request-id` |
 | `backups policy PROJECT --resource NAME --every-hours N [--disable]`, `backups policies PROJECT` | Set and list backup schedules |
 | `backups retention ID`, `backups retire ID`, `retirements ...` | Preview and run [retention](/docs/services/retention). `retirements`, `retirements show`, `retirements history`, `retirements retry` follow them |
