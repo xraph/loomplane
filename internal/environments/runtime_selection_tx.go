@@ -36,6 +36,9 @@ func ValidateRuntimeSelectionTx(ctx context.Context, tx driver.Tx, selection Run
 	current.Sources = []RuntimeSourcePin{}
 	for _, winner := range resolve(candidates, selection.Service) {
 		v := winner.Variable
+		if v.ResourceOutput != "" {
+			continue
+		}
 		if v.Secret && (v.secretIdentity == "" || v.secretVersion < 1) {
 			return ErrSourceSelection
 		}

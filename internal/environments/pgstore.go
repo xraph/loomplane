@@ -30,13 +30,13 @@ func NewPgStoreWithSourcePool(db, source *pgdriver.PgDB) *PgStore {
 var _ Store = (*PgStore)(nil)
 
 const variableColumns = `id, org_id, project_id, environment_id, environment, service, key, value, secret,
-	created_by, updated_by, created_at, updated_at, source_revision, secret_identity, secret_version`
+	created_by, updated_by, created_at, updated_at, source_revision, secret_identity, secret_version, resource_output`
 
 func scanVariable(row pgx.Row) (*Variable, error) {
 	var v Variable
 	var projectID, envID *string
 	if err := row.Scan(&v.ID, &v.OrgID, &projectID, &envID, &v.Environment, &v.Service, &v.Key, &v.Value, &v.Secret,
-		&v.CreatedBy, &v.UpdatedBy, &v.CreatedAt, &v.UpdatedAt, &v.sourceRevision, &v.secretIdentity, &v.secretVersion); err != nil {
+		&v.CreatedBy, &v.UpdatedBy, &v.CreatedAt, &v.UpdatedAt, &v.sourceRevision, &v.secretIdentity, &v.secretVersion, &v.ResourceOutput); err != nil {
 		return nil, err
 	}
 	switch {
@@ -73,9 +73,9 @@ func (s *PgStore) CreateVariable(ctx context.Context, v *Variable) error {
 		v.sourceRevision = 1
 	}
 	_, err := s.sourceDB(ctx).Exec(ctx, `INSERT INTO loomplane_variables (`+variableColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		v.ID, v.OrgID, nullable(v.ProjectID), nullable(v.environmentID), v.Environment, v.Service, v.Key, v.Value, v.Secret,
-		v.CreatedBy, v.UpdatedBy, v.CreatedAt, v.UpdatedAt, v.sourceRevision, v.secretIdentity, v.secretVersion)
+		v.CreatedBy, v.UpdatedBy, v.CreatedAt, v.UpdatedAt, v.sourceRevision, v.secretIdentity, v.secretVersion, v.ResourceOutput)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return ErrExists
@@ -104,8 +104,8 @@ func (s *PgStore) UpdateVariable(ctx context.Context, v *Variable) error {
 	if _, ok := ctx.Value(sourceTransactionKey{}).(sourceTransaction); !ok {
 		return s.WithSourceTransaction(ctx, v.OrgID, func(ctx context.Context) error { return s.UpdateVariable(ctx, v) })
 	}
-	res, err := s.sourceDB(ctx).Exec(ctx, `UPDATE loomplane_variables SET value = $3, secret = $4, updated_by = $5, updated_at = $6, source_revision=source_revision+1, secret_identity=$7, secret_version=$8
-		WHERE org_id = $1 AND id = $2`, v.OrgID, v.ID, v.Value, v.Secret, v.UpdatedBy, v.UpdatedAt, v.secretIdentity, v.secretVersion)
+	res, err := s.sourceDB(ctx).Exec(ctx, `UPDATE loomplane_variables SET value = $3, secret = $4, updated_by = $5, updated_at = $6, source_revision=source_revision+1, secret_identity=$7, secret_version=$8, resource_output=$9
+		WHERE org_id = $1 AND id = $2`, v.OrgID, v.ID, v.Value, v.Secret, v.UpdatedBy, v.UpdatedAt, v.secretIdentity, v.secretVersion, v.ResourceOutput)
 	if err != nil {
 		return fmt.Errorf("update variable: %w", err)
 	}

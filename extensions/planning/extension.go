@@ -517,6 +517,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
 	dropletPostgres := &deployments.DropletPostgresChecker{Client: appPlatform, Credentials: clouds, Dialer: serverTarget}
 	e.plans = planning.NewService(planning.Deps{
+		VariableMappings: variables.ResourceMappings,
 		DropletPostgres:  dropletPostgres.Check,
 		Gate:             &e.metering,
 		Instances:        instances,

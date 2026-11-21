@@ -249,3 +249,32 @@ func TestVariableSourceSelectionAndConcurrentCleanup(t *testing.T) {
 		}
 	}
 }
+
+func TestVariableResourceOutputPersistence(t *testing.T) {
+	_, svc, _, _ := sourceFixture(t)
+	ctx := t.Context()
+	actor := security.Principal{OrgID: "org", UserID: "usr"}
+	v, err := svc.CreateProject(ctx, actor, "proj", environments.CreateVariableInput{Key: "CUSTOM_URL", Environment: "production", ResourceOutput: "postgres"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := svc.ResourceMappings(ctx, "org", "proj", "env", "production")
+	if err != nil || refs[""]["CUSTOM_URL"] != "postgres" {
+		t.Fatalf("read resource mapping: %v %v", refs, err)
+	}
+	pins, err := svc.SelectRuntime(ctx, actor, "proj", "production", "")
+	if err != nil || len(pins.Sources) != 0 {
+		t.Fatalf("unexpected literal or secret pin: %+v, %v", pins, err)
+	}
+	if _, err = svc.Update(ctx, actor, v.ID, environments.UpdateVariableInput{Value: "literal"}); err != nil {
+		t.Fatal(err)
+	}
+	values, _, err := svc.Values(ctx, "org", "proj", "production", "")
+	if err != nil || values["CUSTOM_URL"] != "literal" {
+		t.Fatalf("read literal: %v %v", values, err)
+	}
+	refs, err = svc.ResourceMappings(ctx, "org", "proj", "env", "production")
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("stale resource map: %v %v", refs, err)
+	}
+}

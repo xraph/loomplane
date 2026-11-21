@@ -73,6 +73,8 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			ref = resourceKey(d.OrgID, d.EnvironmentID, "applied-inputs/"+d.ID, id.String())
 		}
 		resourceValues, gatewayValues, gatewaySecrets := map[string]string{}, map[string]string{}, map[string]bool{}
+		type issuedOutput struct{ resource, field string }
+		issued := map[issuedOutput]string{}
 		for _, link := range cfg.Env {
 			if link.Subject != planning.ResourceSubject {
 				continue
@@ -85,9 +87,15 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 					return fmt.Errorf("capture applied resource variable: %w", e)
 				}
 				// Issued again on every release, and kept only here.
-				value, e := r.bindConsumer(ctx, d, a.Name, link, resources)
-				if e != nil {
-					return e
+				output := issuedOutput{link.From, link.Field}
+				value, found := issued[output]
+				if !found {
+					var e error
+					value, e = r.bindConsumer(ctx, d, a.Name, link, resources)
+					if e != nil {
+						return e
+					}
+					issued[output] = value
 				}
 				resourceValues[link.Key] = value
 				continue

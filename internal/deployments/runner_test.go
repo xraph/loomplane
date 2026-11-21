@@ -1801,7 +1801,9 @@ func consumerPlan(actions ...planning.Action) *planning.Plan {
 }
 
 func TestPerConsumerOutputIsIssuedPerService(t *testing.T) {
-	plan := consumerPlan(consumerService(planning.Create, "web", consumerLink), consumerService(planning.Create, "jobs", consumerLink))
+	alias := consumerLink
+	alias.Key = "APP_KEY"
+	plan := consumerPlan(consumerService(planning.Create, "web", consumerLink, alias), consumerService(planning.Create, "jobs", consumerLink))
 	plan.Actions[1].Step = 2
 	hooks := &binderHooks{}
 	r, store, _, exec := consumerRunner(t, plan, hooks)
@@ -1825,6 +1827,9 @@ func TestPerConsumerOutputIsIssuedPerService(t *testing.T) {
 			t.Fatalf("consumer %d is %+v, channel %v; want %+v with a channel", i, c, channel != nil, want)
 		}
 		job := exec.jobs[i]
+		if service == "web" && (job.Env[alias.Key] != job.Env[consumerLink.Key] || !job.Secrets[alias.Key]) {
+			t.Fatal("resource alias did not receive the same secret")
+		}
 		if job.Action.Name != service || job.Env["SAMPLE_KEY"] != "key-for-"+service || !job.Secrets["SAMPLE_KEY"] {
 			t.Fatalf("%s got %q, secret %v", service, job.Env["SAMPLE_KEY"], job.Secrets["SAMPLE_KEY"])
 		}

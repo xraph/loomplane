@@ -112,6 +112,7 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	variableMappings    func(context.Context, string, string, string, string) (map[string]map[string]string, error)
 	dropletPostgres     DropletPostgresProbe
 	gate                metering.Gate
 	approvalAdmitter    approvaladmission.Admitter
@@ -159,6 +160,7 @@ type Service struct {
 
 // Deps are what a Service needs.
 type Deps struct {
+	VariableMappings  func(context.Context, string, string, string, string) (map[string]map[string]string, error)
 	DropletPostgres   DropletPostgresProbe
 	ApprovalAdmitter  approvaladmission.Admitter
 	ApprovalVerifier  approvaladmission.Verification
@@ -245,7 +247,7 @@ func NewService(d Deps) *Service {
 	if gate == nil {
 		gate = metering.AllowAll
 	}
-	return &Service{dropletPostgres: d.DropletPostgres, gate: gate, instanceRuntime: d.InstanceRuntime,
+	return &Service{variableMappings: d.VariableMappings, dropletPostgres: d.DropletPostgres, gate: gate, instanceRuntime: d.InstanceRuntime,
 		approvalAdmitter: d.ApprovalAdmitter, approvalVerifier: d.ApprovalVerifier, approvalAppID: d.ApprovalAppID,
 		instances:         d.Instances,
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
@@ -950,8 +952,16 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		if renderErr != nil {
 			return nil, "", renderErr
 		}
+		var mappings map[string]map[string]string
+		if s.variableMappings != nil && plan.ManagedInstanceID == "" {
+			mappings, err = s.variableMappings(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, plan.Environment)
+			if err != nil {
+				return nil, "", err
+			}
+		}
 		result = Compute(Input{
-			appliedMoves: moves, appliedMoveProblems: moveProblems,
+			ResourceMappings: mappings,
+			appliedMoves:     moves, appliedMoveProblems: moveProblems,
 			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),
 			ProjectID:         plan.ProjectID,
 			ExistingResources: existing, ExistingResourceChecks: existingChecks,

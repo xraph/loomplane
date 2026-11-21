@@ -1804,6 +1804,7 @@ export interface CreateTeamInputBody {
 export interface CreateVariableInputBody {
   environment?: string;
   key: string;
+  resourceOutput?: string;
   secret?: boolean;
   service?: string;
   value: string;
@@ -6930,6 +6931,7 @@ export interface UpdateTeamInputBody {
 }
 
 export interface UpdateVariableInputBody {
+  resourceOutput?: string;
   secret?: boolean;
   value: string;
 }
@@ -6960,6 +6962,7 @@ export interface Variable {
   key: string;
   orgId: string;
   projectId?: string;
+  resourceOutput?: string;
   scope: string;
   secret: boolean;
   service?: string;

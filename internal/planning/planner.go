@@ -24,6 +24,7 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	ResourceMappings map[string]map[string]string
 	// Server-derived applied actions for explicit unconstrained pool moves.
 	appliedMoves           map[string]Action
 	appliedMoveProblems    []Finding
@@ -2061,6 +2062,7 @@ func (p *planner) link(name string, a *Action) {
 		a.Service.Env = append(a.Service.Env, link)
 		a.DependsOn = append(a.DependsOn, dep.ID)
 	}
+	p.mapResourceOutputs(a)
 	sort.Slice(a.Service.Env, func(i, j int) bool { return a.Service.Env[i].Key < a.Service.Env[j].Key })
 	sort.Strings(a.DependsOn)
 	// The variables are part of the configuration, so the comparison with

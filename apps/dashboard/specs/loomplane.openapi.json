@@ -25628,6 +25628,9 @@
           "key": {
             "type": "string"
           },
+          "resource_output": {
+            "type": "string"
+          },
           "secret": {
             "type": "boolean"
           },
@@ -43293,6 +43296,9 @@
           "value"
         ],
         "properties": {
+          "resource_output": {
+            "type": "string"
+          },
           "secret": {
             "type": "boolean"
           },
@@ -43400,6 +43406,9 @@
             "type": "string"
           },
           "project_id": {
+            "type": "string"
+          },
+          "resource_output": {
             "type": "string"
           },
           "scope": {

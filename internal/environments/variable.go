@@ -39,8 +39,10 @@ var (
 
 // Variable is one key set on one layer.
 type Variable struct {
-	ID    string `json:"id" forge:"id"`
-	OrgID string `json:"org_id"`
+	// ResourceOutput names a linked resource and optionally its output. Only deployment resolves it.
+	ResourceOutput string `json:"resource_output,omitempty"`
+	ID             string `json:"id" forge:"id"`
+	OrgID          string `json:"org_id"`
 	// Scope is organization, project or service.
 	Scope string `json:"scope"`
 	// ProjectID is empty for an organization-wide variable.

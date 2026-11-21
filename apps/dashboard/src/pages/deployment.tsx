@@ -65,6 +65,7 @@ import {
 import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
+import { PlanVariableMapping } from "@/components/plan-variable-mapping"
 import { ReplanServices } from "@/components/replan-services"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -318,6 +319,7 @@ function Loaded({
                 !plan.cloudSyncId &&
                 (!plan.kind || plan.kind === "release") && (
                   <div className="flex flex-wrap gap-2">
+                    <PlanVariableMapping plan={plan} replan={planAgain} />
                     {!plan.catalog && (
                       <ReplanServices
                         plan={plan}

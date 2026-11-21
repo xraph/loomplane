@@ -101,6 +101,10 @@ func (s *Service) SelectRuntime(ctx context.Context, p security.Principal, proje
 		}
 		for _, selected := range resolve(candidates, service) {
 			v := selected.Variable
+			// Resource links travel with the reviewed service.
+			if v.ResourceOutput != "" {
+				continue
+			}
 			if v.Secret {
 				if e = s.enrollSource(ctx, &v); e != nil {
 					return ErrSourceSelection

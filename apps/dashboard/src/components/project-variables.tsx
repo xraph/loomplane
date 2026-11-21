@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useProjectsGraph,
+  useManifestsCurrent,
   useProjectVariablesCreate,
   useProjectVariablesList,
   useVariablesDelete,
@@ -162,11 +163,16 @@ function Panel({
     invalidate(useProjectVariablesList)
   }
 
+  const manifest = useQuery(useManifestsCurrent, { path: { id: project.id } })
   const save = async (input: VariableInput) => {
     if (dialog?.kind === "edit") {
       await update.mutateAsync({
         path: { id: dialog.variable.id },
-        body: { value: input.value, secret: input.secret },
+        body: {
+          value: input.value,
+          secret: input.secret,
+          resourceOutput: input.resourceOutput,
+        },
       })
       toast.success(`Saved ${dialog.variable.key}`)
     } else {
@@ -174,6 +180,7 @@ function Panel({
         path: { id: project.id },
         body: {
           key: input.key,
+          resourceOutput: input.resourceOutput,
           value: input.value,
           secret: input.secret,
           environment: input.environment || undefined,
@@ -340,6 +347,9 @@ function Panel({
               ? `${layerLabel(dialog.variable)} variable, ${reachLabel(dialog.variable)}.`
               : `Set ${where}. It applies in every environment, or only in ${env}.`
           }
+          resourceOptions={Object.entries(
+            manifest.data?.manifest?.resources ?? {}
+          ).map(([name, r]) => ({ value: name, label: `${name} · ${r.kind}` }))}
           environments={{ mode: "project", current: env }}
           editing={dialog?.kind === "edit" ? dialog.variable : undefined}
           presetKey={dialog?.kind === "create" ? dialog.presetKey : undefined}
@@ -494,6 +504,16 @@ function Row({
 
 /** Value shows a variable's value, or that it's a secret. */
 export function Value({ variable }: { variable: Variable }) {
+  if (variable.resourceOutput)
+    return (
+      <span
+        title={variable.resourceOutput}
+        className="inline-flex max-w-full items-center gap-1 text-xs"
+      >
+        <LockIcon className="size-3.5 shrink-0" />
+        <code className="truncate">{variable.resourceOutput}</code>
+      </span>
+    )
   if (variable.secret) {
     return (
       <span className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">

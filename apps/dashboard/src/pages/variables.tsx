@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import {
   useVariablesCreate,
+  useProviderResourcesList,
   useVariablesList,
   useVariablesResolve,
   useVariablesUpdate,
@@ -40,6 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  type VariableDialogProps,
   type VariableInput,
   VariableDialog,
 } from "@/components/variable-dialog"
@@ -57,6 +59,10 @@ export function Variables() {
   const [dialog, setDialog] = useState<
     { kind: "create" } | { kind: "edit"; variable: Variable } | null
   >(null)
+  const Editor =
+    can("infrastructure:read") && dialog
+      ? WorkspaceResourceEditor
+      : VariableDialog
   const create = useMutation(useVariablesCreate)
   const update = useMutation(useVariablesUpdate)
   const invalidate = useInvalidate()
@@ -70,13 +76,18 @@ export function Variables() {
     if (dialog?.kind === "edit") {
       await update.mutateAsync({
         path: { id: dialog.variable.id },
-        body: { value: input.value, secret: input.secret },
+        body: {
+          value: input.value,
+          secret: input.secret,
+          resourceOutput: input.resourceOutput,
+        },
       })
       toast.success(`Saved ${dialog.variable.key}`)
     } else {
       await create.mutateAsync({
         body: {
           key: input.key,
+          resourceOutput: input.resourceOutput,
           value: input.value,
           secret: input.secret,
           environment: input.environment || undefined,
@@ -230,7 +241,7 @@ export function Variables() {
           </p>
         )}
       </Page>
-      <VariableDialog
+      <Editor
         open={dialog !== null}
         onOpenChange={(open) => !open && setDialog(null)}
         title={
@@ -248,5 +259,21 @@ export function Variables() {
         submit={save}
       />
     </>
+  )
+}
+
+function WorkspaceResourceEditor(props: VariableDialogProps) {
+  const inventory = useQuery(useProviderResourcesList)
+  return (
+    <VariableDialog
+      {...props}
+      resourceOptions={(inventory.data?.resources ?? [])
+        .filter((r) => r !== null)
+        .filter((r) => r.endpointId)
+        .map((r) => ({
+          value: r.id,
+          label: `${r.name} · ${r.provider} · ${r.region}`,
+        }))}
+    />
   )
 }

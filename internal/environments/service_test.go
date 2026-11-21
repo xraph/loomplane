@@ -125,6 +125,7 @@ func (m *memStore) UpdateVariable(_ context.Context, nv *Variable) error {
 	if !ok || x.OrgID != nv.OrgID {
 		return ErrNotFound
 	}
+	x.ResourceOutput = nv.ResourceOutput
 	x.Value, x.Secret, x.UpdatedBy, x.UpdatedAt = nv.Value, nv.Secret, nv.UpdatedBy, nv.UpdatedAt
 	return nil
 }
@@ -494,5 +495,57 @@ func TestVariableChangesCheckTheVariablesProject(t *testing.T) {
 				t.Fatalf("organization variable checks %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestResourceMappingPrecedence(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t)
+	admin := f.as(t, "admin", security.RoleAdmin)
+	const key = "APP_DATABASE_URL"
+	global, err := f.svc.CreateOrganization(ctx, admin, CreateVariableInput{Key: key, ResourceOutput: "shared-db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert := func(service, want string) {
+		t.Helper()
+		refs, e := f.svc.ResourceMappings(ctx, org, project, "env_production", "production")
+		if e != nil {
+			t.Fatal(e)
+		}
+		layer, ok := refs[service]
+		if !ok {
+			layer = refs[""]
+		}
+		if layer[key] != want {
+			t.Fatalf("for %s got %q, want %q", service, layer[key], want)
+		}
+	}
+	assert(apiSvc, "shared-db")
+	own, err := f.svc.CreateProject(ctx, admin, project, CreateVariableInput{Key: key, ResourceOutput: "project-db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert(apiSvc, "project-db")
+	_, err = f.svc.CreateProject(ctx, admin, project, CreateVariableInput{Service: apiSvc, Key: key, ResourceOutput: "service-db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert(apiSvc, "service-db")
+	assert(webSvc, "project-db")
+	if _, err = f.svc.Update(ctx, admin, own.ID, UpdateVariableInput{Value: "literal"}); err != nil {
+		t.Fatal(err)
+	}
+	assert(webSvc, "")
+	if err = f.svc.Delete(ctx, admin, own.ID); err != nil {
+		t.Fatal(err)
+	}
+	assert(webSvc, global.ResourceOutput)
+	values, _, err := f.svc.Values(ctx, org, project, "production", apiSvc)
+	if _, ok := values[key]; err != nil || ok {
+		t.Fatalf("mapping appeared as a literal: %v %v", values, err)
+	}
+	if _, err = f.svc.Update(ctx, admin, global.ID, UpdateVariableInput{ResourceOutput: "postgres://secret@host"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted credentials as metadata: %v", err)
 	}
 }

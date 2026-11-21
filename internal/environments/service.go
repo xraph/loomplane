@@ -71,9 +71,10 @@ func NewService(store Store, secrets Secrets, prj Projects, svcs Services, authz
 
 // CreateVariableInput is what a caller sends to set a variable.
 type CreateVariableInput struct {
-	Key    string `json:"key"`
-	Value  string `json:"value"`
-	Secret bool   `json:"secret,omitempty"`
+	ResourceOutput string `json:"resource_output,omitempty"`
+	Key            string `json:"key"`
+	Value          string `json:"value"`
+	Secret         bool   `json:"secret,omitempty"`
 	// Environment limits it to one environment, by name. Empty means
 	// every environment.
 	Environment string `json:"environment,omitempty"`
@@ -86,8 +87,9 @@ type CreateVariableInput struct {
 // A secret's value can't be read back, so changing one means sending it
 // again.
 type UpdateVariableInput struct {
-	Value  string `json:"value"`
-	Secret *bool  `json:"secret,omitempty"`
+	ResourceOutput string `json:"resource_output,omitempty"`
+	Value          string `json:"value"`
+	Secret         *bool  `json:"secret,omitempty"`
 }
 
 // ListOrganization returns the organization-wide variables.
@@ -167,7 +169,19 @@ func (s *Service) CreateProject(ctx context.Context, p security.Principal, proje
 	return s.create(ctx, p, v, in.Value)
 }
 
+var outputReference = regexp.MustCompile(`^([a-z][a-z0-9-]{0,39}|providerresource_[0-9a-f]{64})(\.[A-Za-z0-9_][A-Za-z0-9_-]{0,254})?$`)
+
+func validateOutput(ref, value string, secret bool) error {
+	if ref != "" && (!outputReference.MatchString(ref) || value != "" || secret) {
+		return fmt.Errorf("%w: choose a resource output or set a value", ErrInvalid)
+	}
+	return nil
+}
+
 func (s *Service) build(p security.Principal, scope, projectID string, in CreateVariableInput) (*Variable, error) {
+	if err := validateOutput(in.ResourceOutput, in.Value, in.Secret); err != nil {
+		return nil, err
+	}
 	key := strings.TrimSpace(in.Key)
 	if len(key) > maxKeyLength || !keyPattern.MatchString(key) {
 		return nil, fmt.Errorf("%w: a key is letters, digits and underscores, not starting with a digit", ErrInvalid)
@@ -182,7 +196,7 @@ func (s *Service) build(p security.Principal, scope, projectID string, in Create
 	now := s.now().UTC()
 	v := &Variable{
 		ID: id.String(), OrgID: p.OrgID, Scope: scope, ProjectID: projectID, Service: in.Service,
-		Key: key, Secret: in.Secret, Environment: strings.TrimSpace(in.Environment),
+		Key: key, ResourceOutput: in.ResourceOutput, Secret: in.Secret, Environment: strings.TrimSpace(in.Environment),
 		CreatedBy: p.UserID, UpdatedBy: p.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	if !v.Secret {
@@ -307,6 +321,10 @@ func (s *Service) updateSource(ctx context.Context, p security.Principal, prior 
 	if in.Secret != nil {
 		v.Secret = *in.Secret
 	}
+	if outputErr := validateOutput(in.ResourceOutput, in.Value, v.Secret); outputErr != nil {
+		return nil, outputErr
+	}
+	v.ResourceOutput = in.ResourceOutput
 	if v.Secret {
 		err = s.putSource(ctx, v, []byte(in.Value))
 		if err != nil {
@@ -555,6 +573,9 @@ func (s *Service) sourceValues(ctx context.Context, orgID, projectID string, env
 	values, secret = map[string]string{}, map[string]bool{}
 	for _, r := range resolve(candidates, service) {
 		v := r.Variable
+		if v.ResourceOutput != "" {
+			continue
+		}
 		if !v.Secret {
 			values[r.Key] = v.Value
 			continue
