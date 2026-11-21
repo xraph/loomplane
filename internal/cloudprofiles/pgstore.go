@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/xraph/loomplane/internal/projects"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 // PgStore persists scoped Cloud configuration in Postgres.
