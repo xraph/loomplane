@@ -1,3 +1,4 @@
+import { BoxIcon } from "lucide-react"
 import { useState, type FormEvent } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Connection, Provider } from "@/client/forge/loomplane/types"
@@ -8,6 +9,7 @@ import { ManagedDatabaseSettings } from "@/components/managed-database-settings"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -38,6 +40,14 @@ import {
   type ResourceReviewInput,
 } from "@/lib/provider-resources"
 import { useNavigate } from "@/lib/router"
+import { cn } from "@/lib/utils"
+
+/** list joins names the way a sentence would: "a", "a and b", "a, b and c". */
+function list(names: string[]) {
+  return names.length < 2
+    ? names.join("")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+}
 
 /** The kind and provider a catalog card opens creation with. */
 export type ResourceOffer = { kind: string; provider: string }
@@ -304,7 +314,10 @@ function ResourceReviewForm({
       taken
     )
   )
-  const [service, setService] = useState(services[0] ?? "")
+  // With one service there's nothing to choose, so it starts ticked.
+  const [consumers, setConsumers] = useState<string[]>(
+    services.length === 1 ? services : []
+  )
   const [pending, setPending] = useState(false)
   const [error, setError] = useState("")
   const [progress, setProgress] = useState("")
@@ -338,7 +351,7 @@ function ResourceReviewForm({
             version,
             ...(settingFields.length ? { settings } : {}),
           }),
-      ...(service ? { service } : {}),
+      ...(consumers.length ? { services: consumers } : {}),
     }
     try {
       const result = await reviewProviderResource(input, setProgress)
@@ -551,29 +564,45 @@ function ResourceReviewForm({
         )}
       </div>
       {services.length > 0 && (
-        <div className="grid gap-1.5">
-          <Label>Service that needs this resource</Label>
-          <Select
-            value={service}
-            onValueChange={(value) => setService(value ?? "")}
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label="Consumer service"
-              className="w-full"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">Add without a consumer</SelectItem>
-              {services.map((entry) => (
-                <SelectItem key={entry} value={entry}>
+        <fieldset className="grid gap-2" disabled={pending}>
+          <legend className="mb-1 text-[13px] leading-none font-medium">
+            Services that use it
+          </legend>
+          <p className="text-xs text-muted-foreground">
+            {consumers.length === 0
+              ? "Tick each service that needs it. Leave them all clear to add it without one."
+              : `${list(consumers)} will need ${name || "it"} in your manifest.`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {services.map((entry) => {
+              const on = consumers.includes(entry)
+              return (
+                <label
+                  key={entry}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[13px]",
+                    on ? "border-brand-line bg-brand-soft" : "bg-card"
+                  )}
+                >
+                  <Checkbox
+                    checked={on}
+                    onCheckedChange={(checked) =>
+                      setConsumers(
+                        checked
+                          ? services.filter(
+                              (s) => s === entry || consumers.includes(s)
+                            )
+                          : consumers.filter((s) => s !== entry)
+                      )
+                    }
+                  />
+                  <BoxIcon className="size-3.5 text-muted-foreground" />
                   {entry}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+                </label>
+              )
+            })}
+          </div>
+        </fieldset>
       )}
       {resource && (
         <div className="grid gap-2 text-xs text-muted-foreground">
