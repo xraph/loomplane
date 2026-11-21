@@ -63,6 +63,8 @@ var workspaceChecks = map[string]int{
 	"internal/models/browse.go:Entry":                                         1,
 	"internal/models/browse.go:Card":                                          1,
 	"internal/models/status.go:List":                                          1,
+	"internal/cloudinfra/server_builder.go:SetServerBuilder":                  1,
+	"internal/connections/digitalocean_registry.go:DigitalOceanRegistries":    1,
 	"internal/connections/incluster.go:CreateInCluster":                       1,
 	"internal/connections/service.go:Create":                                  1,
 	"internal/connections/service.go:List":                                    1,
@@ -231,8 +233,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 105 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 107 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, the server builder and DigitalOcean registry checks, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string
