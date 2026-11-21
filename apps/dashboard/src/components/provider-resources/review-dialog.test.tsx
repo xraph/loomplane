@@ -61,6 +61,11 @@ test("creation options come from the installed registry and checked accounts", a
   ).toBeInTheDocument()
 })
 
+async function chooseProject(name = "Orders") {
+  await userEvent.click(await screen.findByRole("combobox", { name: "Owner" }))
+  await userEvent.click(await screen.findByRole("option", { name }))
+}
+
 test("required provider settings gate review and are saved in the manifest", async () => {
   const writes: { path: string; body: unknown }[] = []
   vi.stubGlobal(
@@ -122,6 +127,7 @@ test("required provider settings gate review and are saved in the manifest", asy
       />
     </ClientProvider>
   )
+  await chooseProject()
   const project = await screen.findByLabelText("Existing Vercel project ID")
   const review = screen.getByRole("button", { name: "Review deployment plan" })
   expect(review).toBeDisabled()
@@ -219,6 +225,7 @@ test("wires every service you tick in the edit that adds the resource", async ()
   stubManifest()
   const user = userEvent.setup()
   show()
+  await chooseProject("Shop")
   const api = await screen.findByRole("checkbox", { name: "api" })
   expect(api).not.toBeChecked()
   await user.click(screen.getByRole("checkbox", { name: "worker" }))
@@ -248,6 +255,7 @@ test("ticks the only service, and leaves it out when you clear it", async () => 
   services = { api: {} }
   const user = userEvent.setup()
   show()
+  await chooseProject("Shop")
   const api = await screen.findByRole("checkbox", { name: "api" })
   expect(api).toBeChecked()
   await user.click(api)
@@ -256,4 +264,132 @@ test("ticks the only service, and leaves it out when you clear it", async () => 
   )
   await waitFor(() => expect(edits).toHaveLength(1))
   expect(edits[0].add_resource).not.toHaveProperty("needed_by")
+})
+
+test("reviews a standalone workspace resource with no application projects and retries planning without creating it twice", async () => {
+  const writes: string[] = []
+  let attempts = 0
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") {
+        writes.push(path)
+        if (path.endsWith("/projects")) {
+          expect(JSON.parse(String(init.body))).toMatchObject({
+            kind: "service",
+          })
+          return Response.json({ id: "owner" })
+        }
+        if (path.endsWith("/edits"))
+          return Response.json({
+            revision: 1,
+            manifest: {
+              version: 1,
+              resources: { resource: { kind: "postgres" } },
+            },
+          })
+        if (path.endsWith("/plans")) {
+          expect(JSON.parse(String(init.body))).toEqual({
+            environment: "production",
+            catalog: true,
+          })
+          return ++attempts === 1
+            ? Response.json({ message: "try again" }, { status: 409 })
+            : Response.json({ id: "standalone-plan" })
+        }
+      }
+      if (path.endsWith("/projects")) return Response.json({ projects: [] })
+      if (path.endsWith("/projects/owner"))
+        return Response.json({ id: "owner", status: "ready" })
+      throw new Error(path)
+    }
+  )
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Review deployment plan" })
+  )
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Retry deployment plan" })
+  )
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/deployments/$id",
+      params: { id: "standalone-plan" },
+    })
+  )
+  expect(writes).toEqual([
+    "/api/v1/projects",
+    "/api/v1/projects/owner/manifest/edits",
+    "/api/v1/projects/owner/plans",
+    "/api/v1/projects/owner/plans",
+  ])
+})
+
+test("two projects can attach the same inventory resource to their first manifests", async () => {
+  const writes: { path: string; body: Record<string, unknown> }[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") {
+        writes.push({ path, body: JSON.parse(String(init.body)) })
+        return Response.json(
+          path.endsWith("/edits")
+            ? { manifest: { version: 1 } }
+            : { id: "review" }
+        )
+      }
+      if (path.endsWith("/projects"))
+        return Response.json({
+          projects: [
+            { id: "orders", name: "Orders" },
+            { id: "shop", name: "Shop" },
+          ],
+        })
+      if (path.endsWith("/environments"))
+        return Response.json({ environments: [{ name: "production" }] })
+      if (path.endsWith("/manifest"))
+        return Response.json({ message: "No manifest" }, { status: 404 })
+      throw new Error(path)
+    }
+  )
+  const user = userEvent.setup()
+  for (const name of ["Orders", "Shop"]) {
+    const view = render(
+      <ClientProvider client={forgeClient}>
+        <ResourceReviewDialog
+          open
+          onOpenChange={() => {}}
+          resource={
+            { id: "inventory-db", name: "db", kind: "postgres" } as never
+          }
+          providers={providers}
+          connections={connections}
+        />
+      </ClientProvider>
+    )
+    await user.click(await screen.findByRole("combobox", { name: "Project" }))
+    await user.click(await screen.findByRole("option", { name }))
+    await user.click(
+      await screen.findByRole("button", { name: "Review deployment plan" })
+    )
+    await waitFor(() =>
+      expect(writes.at(-1)?.path).toBe(
+        `/api/v1/projects/${name.toLowerCase()}/plans`
+      )
+    )
+    view.unmount()
+  }
+  const edits = writes.filter((w) => w.path.endsWith("/edits"))
+  expect(edits).toHaveLength(2)
+  for (const edit of edits)
+    expect(edit.body).toEqual({
+      add_resource: {
+        name: "db",
+        kind: "postgres",
+        enabled_in: "production",
+        existing_resource: "inventory-db",
+      },
+    })
 })

@@ -139,6 +139,29 @@ async function waitFor<T>(
     await delay(options.intervalMs ?? 1000)
   }
 }
+export async function standaloneService(
+  name: string,
+  description: string,
+  created: (id: string) => void,
+  existingId?: string
+) {
+  let id = existingId
+  if (!id) {
+    const project = await createProject({
+      body: { name, description, icon: "database", kind: "service" },
+    })
+    id = project.id
+    created(id)
+  }
+  const path = { id }
+  await waitFor(
+    () => getProject({ path }).refetch(),
+    (p) => p.status === "ready",
+    "Service setup"
+  )
+  return id
+}
+
 export async function deployDatabase(
   input: {
     name: string
@@ -198,25 +221,16 @@ export async function deployDatabase(
   )
     throw new Error("Kubernetes currently supports PostgreSQL only.")
   progress("Creating the service project…")
-  const project = await createProject({
-    body: {
-      name: input.name,
-      description: `Standalone ${recipe.title} service`,
-      icon: "database",
-      kind: "service",
-    },
-  })
-  created(project.id)
-  await waitFor(
-    () => getProject({ path: { id: project.id } }).refetch(),
-    (p) => p.status === "ready",
-    "Project setup"
+  const projectId = await standaloneService(
+    input.name,
+    `Standalone ${recipe.title} service`,
+    created
   )
   progress("Checking the deployment plan…")
   if (isManagedDatabaseProvider(provider)) {
     const cloud = managedDatabaseCloud(provider)
     const chosen = await chooseConnection({
-      path: { id: project.id, environment: "production", cloud },
+      path: { id: projectId, environment: "production", cloud },
       body: { connectionId: input.target },
     })
     const choices =
@@ -238,13 +252,13 @@ export async function deployDatabase(
     ? `    cloud_sql_psc:\n      consumer_project: ${JSON.stringify(psc.consumerProject)}\n      network: ${JSON.stringify(psc.network)}\n      forwarding_rule: ${JSON.stringify(psc.forwardingRule)}\n${psc.provisionSubnetwork ? `      provision_subnetwork: ${JSON.stringify(psc.provisionSubnetwork)}\n` : ""}`
     : ""
   const manifest = await saveManifest({
-    path: { id: project.id },
+    path: { id: projectId },
     body: {
       yaml: `version: 1\nresources:\n  database:\n    kind: ${input.kind}\n    provider: ${provider}\n    version: "${recipe.version}"\n${isManagedDatabaseProvider(provider) ? `    region: ${JSON.stringify(managed!.region)}\n${pscYaml}` : `    target: ${JSON.stringify(input.target)}\n`}`,
     },
   })
   let plan = await createPlan({
-    path: { id: project.id },
+    path: { id: projectId },
     body: { environment: "production", catalog: true },
   })
   const planId = plan.id
@@ -258,11 +272,11 @@ export async function deployDatabase(
       "The service plan is ready. Review its target, storage and recovery scope before deploying."
     )
     review?.(plan.id)
-    return project.id
+    return projectId
   }
   assertDatabasePlan(
     plan,
-    project.id,
+    projectId,
     manifest.id,
     input.target,
     input.kind,
@@ -295,7 +309,7 @@ export async function deployDatabase(
   if (input.daily) {
     progress("Scheduling daily backups…")
     await setPolicy({
-      path: { id: project.id },
+      path: { id: projectId },
       body: {
         environment: "production",
         resource: "database",
@@ -305,5 +319,5 @@ export async function deployDatabase(
     })
   }
   progress(`${recipe.title} is ready.`)
-  return project.id
+  return projectId
 }

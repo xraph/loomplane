@@ -142,7 +142,8 @@ export type ResourceReviewInput = {
 }
 export async function reviewProviderResource(
   input: ResourceReviewInput,
-  progress: (step: string) => void
+  progress: (step: string) => void,
+  onSaved?: (catalog: boolean) => void
 ) {
   progress(`Adding ${input.name} to your manifest…`)
   const revision = await editManifest({
@@ -173,6 +174,7 @@ export async function reviewProviderResource(
       [manifest.services, manifest.gateways, manifest.links].every(
         (section) => !section || Object.keys(section).length === 0
       )
+    onSaved?.(resourceOnly)
     const plan = await createPlan({
       path: { id: input.projectId },
       body: {

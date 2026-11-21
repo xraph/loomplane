@@ -99,7 +99,7 @@ test("failed credential save stays visible and never claims readiness", async ()
   )
   expect(screen.queryByRole("status")).not.toBeInTheDocument()
   expect(
-    screen.getByRole("button", { name: "Use in deployment" })
+    screen.getByRole("button", { name: "Attach to project" })
   ).toBeDisabled()
   expect(writes).toEqual([{ dsn: "postgres://app:secret@db.example/orders" }])
   expect(screen.getByLabelText("Application connection string")).toHaveValue("")
@@ -269,7 +269,7 @@ test("unsupported credential methods never offer a database connection field", a
     screen.queryByLabelText("Application connection string")
   ).not.toBeInTheDocument()
   expect(
-    screen.getByRole("button", { name: "Use in deployment" })
+    screen.getByRole("button", { name: "Attach to project" })
   ).toBeDisabled()
 })
 
@@ -379,7 +379,7 @@ test("API credential denial clears the attempted secret and stays unbound", asyn
   expect(token).toHaveValue("")
   expect(screen.queryByRole("status")).not.toBeInTheDocument()
   expect(
-    screen.getByRole("button", { name: "Use in deployment" })
+    screen.getByRole("button", { name: "Attach to project" })
   ).toBeDisabled()
 })
 
@@ -404,7 +404,7 @@ test.each(["cloudflare-durable-object", "cloudflare-hyperdrive"])(
       await screen.findByText(/requires a native Cloudflare Workers binding/i)
     ).toBeInTheDocument()
     expect(
-      screen.getByRole("button", { name: "Use in deployment" })
+      screen.getByRole("button", { name: "Attach to project" })
     ).toBeDisabled()
   }
 )
@@ -506,7 +506,7 @@ test("read-only access shows API outputs without offering credential writes", as
     screen.queryByLabelText("Application API token")
   ).not.toBeInTheDocument()
   expect(
-    screen.getByRole("button", { name: "Use in deployment" })
+    screen.getByRole("button", { name: "Attach to project" })
   ).toBeDisabled()
 })
 

@@ -323,7 +323,7 @@ function ResourceDetailsContent({
                 }
                 onClick={() => onAttach(resource)}
               >
-                Use in deployment
+                Attach to project
               </Button>
               {!resource.endpointId && !attachmentNote && (
                 <p className="text-xs text-muted-foreground">
