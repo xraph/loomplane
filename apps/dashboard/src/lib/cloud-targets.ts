@@ -2,10 +2,31 @@ import { messageOf, statusOf } from "@/client/errors"
 import type {
   Environment,
   Manifest,
+  Server,
   Sync,
   Target,
 } from "@/client/forge/loomplane/types"
+import { cloudLabel } from "@/lib/clouds"
 import { placementSettings } from "@/lib/placement"
+
+export function serverForConnection(
+  servers: (Server | null)[] | undefined,
+  connectionId: string | undefined
+) {
+  if (!connectionId) return undefined
+  return servers?.find(
+    (s): s is Server =>
+      s?.runtimeConnectionId === connectionId &&
+      s.status !== "deleted" &&
+      s.status !== "disconnected"
+  )
+}
+
+export function serverLocation(server: Server) {
+  return [cloudLabel(server.provider), server.region]
+    .filter(Boolean)
+    .join(" · ")
+}
 
 export const activeSync = (sync: Sync) =>
   ["pending", "running", "reverting"].includes(sync.status)

@@ -9,6 +9,7 @@ type Search = {
   tab?: CloudTab
   view?: InfrastructureView
   clusterOperation?: string
+  server?: string
   cluster?: string
 }
 
@@ -38,6 +39,8 @@ export const Route = createFileRoute("/clouds/$id")({
     const cluster = id(search.cluster, 128)
     const clusterOperation = id(search.clusterOperation, 128)
     const project = id(search.project, 64)
+    const server = id(search.server, 128)
+    if (server) out.server = server
     if (cluster) out.cluster = cluster
     if (clusterOperation) out.clusterOperation = clusterOperation
     if (project) out.project = project

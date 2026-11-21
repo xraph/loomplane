@@ -541,6 +541,122 @@ it("disables target choices for whole Cloud access and all grant choices while s
   )
 })
 
+it("keeps the selected Droplet visible through review and reload while the default stays on its own server", async () => {
+  fixture({
+    profile: {
+      default_placement: {
+        provider: "server",
+        connection_id: "ssh-nyc",
+        region: "",
+      },
+    },
+  })
+  const read = window.fetch
+  const servers = [
+    { name: "New York", region: "nyc", runtime_connection_id: "ssh-nyc" },
+    { name: "Richmond", region: "ric1", runtime_connection_id: "ssh-ric" },
+  ].map((s) => ({
+    ...s,
+    id: s.region,
+    health: {},
+    cloud_id: "c",
+    connection_id: "do",
+    provider: "digitalocean",
+    status: "ready",
+  }))
+  let saved = { ...target("backend", "server", "ssh-nyc"), runtime: "managed" }
+  let desired = saved
+  const previewed = vi.fn()
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname
+    if (path.endsWith("/servers")) return Response.json({ servers })
+    if (path.includes("/servers/") && path.endsWith("/usage"))
+      return Response.json({ workloads: [], retained_storage: [] })
+    if (path.endsWith("/connections"))
+      return Response.json({
+        connections: servers.map((s) => ({
+          id: s.runtime_connection_id,
+          name: `Server ${s.id}`,
+          cloud: "server",
+          status: "ready",
+        })),
+      })
+    if (path.endsWith("/providers"))
+      return Response.json({
+        providers: [
+          {
+            name: "server",
+            title: "Existing server",
+            cloud: "server",
+            available: true,
+            runs: ["service"],
+          },
+        ],
+      })
+    if (path.endsWith("/targets")) return Response.json({ targets: [saved] })
+    if (path.endsWith("/changes/preview")) {
+      const body = JSON.parse(String(init?.body))
+      previewed(body)
+      desired = { ...saved, connection_id: body.connection_id }
+      return Response.json({
+        id: "review",
+        revision: 1,
+        before: saved,
+        after: desired,
+      })
+    }
+    if (path.endsWith("/changes/apply")) {
+      saved = desired
+      return Response.json({ id: "sync" })
+    }
+    return read(input, init)
+  })
+  const user = userEvent.setup()
+  show()
+  await openTab("Targets")
+  const named = await screen.findByRole("table", { name: "Targets" })
+  const fallback = screen.getByRole("table", { name: "Default" })
+  expect(await within(named).findByText("New York")).toBeInTheDocument()
+  expect(fallback).toHaveTextContent("New York")
+  await user.click(screen.getByRole("button", { name: "Edit backend" }))
+  await user.click(
+    await screen.findByRole("radio", { name: /Richmond.*DigitalOcean · ric1/ })
+  )
+  await user.click(screen.getByRole("button", { name: "Review switch" }))
+  expect(await screen.findByText(/Desired:.*Richmond/)).toBeInTheDocument()
+  expect(previewed).toHaveBeenCalledWith(
+    expect.objectContaining({
+      target_id: "backend",
+      provider: "server",
+      connection_id: "ssh-ric",
+    })
+  )
+  await user.click(screen.getByRole("button", { name: "Switch and sync" }))
+  expect(await within(named).findByText("Richmond")).toBeInTheDocument()
+  expect(within(named).getByRole("link", { name: "Richmond" })).toHaveAttribute(
+    "href",
+    "/clouds/c?tab=infrastructure&view=servers&server=ric1"
+  )
+  expect(named).toHaveTextContent("DigitalOcean · ric1")
+  expect(fallback).toHaveTextContent("New York")
+  expect(fallback).toHaveTextContent("DigitalOcean · nyc")
+  await user.click(screen.getByRole("button", { name: "Change" }))
+  expect(
+    await screen.findByRole("radio", { name: /New York.*DigitalOcean · nyc/ })
+  ).toBeChecked()
+  cleanup()
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudDetail id="c" server="ric1" />
+    </ClientProvider>
+  )
+  const details = await screen.findByRole("dialog", { name: "Richmond" })
+  await user.click(
+    within(details).getAllByRole("button", { name: "Close" })[0]!
+  )
+  await waitFor(() => expect(details).not.toBeInTheDocument())
+})
+
 it("sets a targetless Cloud's one provider and account", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ noTargets: true })

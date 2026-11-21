@@ -5,6 +5,7 @@ import * as api from "@/client/forge/loomplane/hooks"
 import type {
   ChangeInputBody,
   Preview,
+  Server,
   Target,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
@@ -19,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { EnvironmentProgress } from "./organization-activity"
+import { serverForConnection } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 
 /**
@@ -33,6 +35,7 @@ type ReviewProps = {
   /** The project, or "" for a Cloud the organization owns. */
   projectId: string
   title: string
+  servers?: (Server | null)[]
   change?: ChangeInputBody
   defaultCloud?: DefaultCloudIntent
   revert?: string
@@ -56,6 +59,7 @@ function ReviewContent({
   projectId,
   title,
   change,
+  servers,
   defaultCloud,
   revert,
   onClose,
@@ -63,7 +67,8 @@ function ReviewContent({
 }: ReviewProps) {
   const accounts = useQuery(api.useConnectionsList)
   const accountName = (id: string) =>
-    accounts.data?.connections.find((c) => c.id === id)?.name ?? id
+    serverForConnection(servers, id)?.name ||
+    (accounts.data?.connections.find((c) => c.id === id)?.name ?? id)
   const previewChange = useMutation(api.useCloudChangesPreview)
   const previewDefaultCloud = useMutation(api.useDefaultCloudPreview)
   const previewRevert = useMutation(api.useCloudSyncsPreviewRevert)

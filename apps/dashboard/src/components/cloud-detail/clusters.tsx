@@ -35,12 +35,16 @@ export type InfrastructureView = "servers" | "pools" | "clusters"
 export function CloudInfrastructure({
   cloud,
   view,
+  serverId,
+  onCloseServer,
   onView,
   onOpenCluster,
   onOpenOperation,
 }: {
   cloud: Profile
   view: InfrastructureView
+  serverId?: string
+  onCloseServer?: () => void
   onView: (view: InfrastructureView) => void
   onOpenCluster: (id: string) => void
   onOpenOperation: (id: string) => void
@@ -72,7 +76,12 @@ export function CloudInfrastructure({
           onOpenOperation={onOpenOperation}
         />
       ) : (
-        <Servers cloud={cloud} view={view} />
+        <Servers
+          cloud={cloud}
+          view={view}
+          serverId={serverId}
+          onCloseServer={onCloseServer}
+        />
       )}
     </div>
   )

@@ -25,9 +25,11 @@ import type {
   Profile,
   Project,
   ProjectGrant,
+  Server,
   Target,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
+import { ServerLink } from "@/components/cloud-targets/server-link"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import {
   ActionsCell,
@@ -56,6 +58,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { serverForConnection, serverLocation } from "@/lib/cloud-targets"
 import { cloudLabel } from "@/lib/clouds"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
@@ -242,12 +245,14 @@ export function DefaultPlacementSection({
   targets,
   columns,
   services,
+  servers,
 }: {
   cloud: Profile
   targets: Target[]
   /** The targets table's grid template. */
   columns: string
   /** Running services on the default; undefined while usage loads. */
+  servers?: Server[]
   services?: number
 }) {
   const { can } = useOrganization()
@@ -266,6 +271,7 @@ export function DefaultPlacementSection({
     Placement | null | undefined
   >(undefined)
   const [error, setError] = useState("")
+  const server = serverForConnection(servers, current?.connectionId)
   const account = (connections.data?.connections ?? []).find(
     (c) => c.id === current?.connectionId
   )
@@ -330,11 +336,13 @@ export function DefaultPlacementSection({
             <Cell>
               <span className="flex min-w-0 items-center gap-2.5">
                 <CloudGlyph
-                  cloud={account?.cloud ?? current.provider}
+                  cloud={server?.provider || account?.cloud || current.provider}
                   size="sm"
                 />
                 <span className="grid min-w-0 gap-0.5">
-                  {account ? (
+                  {server ? (
+                    <ServerLink server={server} />
+                  ) : account ? (
                     <Link
                       to="/clouds/accounts/$id"
                       params={{ id: account.id }}
@@ -348,10 +356,16 @@ export function DefaultPlacementSection({
                     </span>
                   )}
                   <span className="truncate text-xs text-muted-foreground">
-                    {provider?.title ??
-                      cloudLabel(account?.cloud ?? current.provider)}
-                    {account?.account && ` · ${account.account}`}
-                    {` · ${current.region || "provider default region"}`}
+                    {server
+                      ? serverLocation(server)
+                      : [
+                          provider?.title ??
+                            cloudLabel(account?.cloud ?? current.provider),
+                          account?.account,
+                          current.region || "provider default region",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                   </span>
                 </span>
               </span>
@@ -426,6 +440,7 @@ export function DefaultPlacementSection({
       </CloudConfirm>
       {pendingDefault !== undefined && (
         <ChangeReview
+          servers={servers}
           projectId=""
           title={
             pendingDefault
@@ -454,6 +469,7 @@ export function DefaultPlacementSection({
       )}
       {editing && (
         <DefaultPlacementDialog
+          servers={servers}
           cloud={cloud}
           current={current}
           busy={set.isPending}
@@ -492,12 +508,14 @@ export function PlacementPicker({
   onChange,
   disabled = false,
   label = "Default",
+  servers,
 }: {
   value: Placement
   onChange: (next: Placement, complete: boolean) => void
   disabled?: boolean
   /** Names the radio groups, such as "Default provider". */
   label?: string
+  servers?: Server[]
 }) {
   const providers = useQuery(api.useProvidersList)
   const connections = useQuery(api.useConnectionsList)
@@ -582,24 +600,27 @@ export function PlacementPicker({
               aria-label={`${label} account`}
               className="grid gap-2"
             >
-              {accounts.map((c) => (
-                <Choice
-                  key={c.id}
-                  checked={value.connectionId === c.id}
-                  disabled={disabled}
-                  onSelect={() => emit({ ...value, connectionId: c.id })}
-                >
-                  <CloudGlyph cloud={c.cloud} size="sm" />
-                  <span className="grid min-w-0 flex-1 gap-0.5">
-                    <span className="truncate text-[13px] font-medium">
-                      {c.name}
+              {accounts.map((c) => {
+                const server = serverForConnection(servers, c.id)
+                return (
+                  <Choice
+                    key={c.id}
+                    checked={value.connectionId === c.id}
+                    disabled={disabled}
+                    onSelect={() => emit({ ...value, connectionId: c.id })}
+                  >
+                    <CloudGlyph cloud={server?.provider || c.cloud} size="sm" />
+                    <span className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="truncate text-[13px] font-medium">
+                        {server?.name || c.name}
+                      </span>
+                      <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                        {server ? serverLocation(server) : c.account}
+                      </span>
                     </span>
-                    <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-                      {c.account}
-                    </span>
-                  </span>
-                </Choice>
-              ))}
+                  </Choice>
+                )
+              })}
             </div>
           )}
         </div>
@@ -648,12 +669,14 @@ export function PlacementPicker({
 function DefaultPlacementDialog({
   cloud,
   current,
+  servers,
   busy,
   error,
   onClose,
   onSave,
 }: {
   cloud: Profile
+  servers?: Server[]
   current: Profile["defaultPlacement"]
   busy: boolean
   error: string
@@ -678,6 +701,7 @@ function DefaultPlacementDialog({
           </DialogDescription>
         </DialogHeader>
         <PlacementPicker
+          servers={servers}
           value={value}
           disabled={busy}
           onChange={(next, ok) => {

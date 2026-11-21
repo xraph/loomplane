@@ -134,13 +134,22 @@ export type ServersView = "servers" | "pools"
 export function Servers({
   cloud,
   view,
+  serverId,
+  onCloseServer,
 }: {
   cloud: Profile
   view?: ServersView
+  serverId?: string
+  onCloseServer?: () => void
 }) {
   const { can } = useOrganization()
   return can("organization_cloud:manage") ? (
-    <ServerContent cloud={cloud} view={view} />
+    <ServerContent
+      cloud={cloud}
+      view={view}
+      serverId={serverId}
+      onCloseServer={onCloseServer}
+    />
   ) : (
     <CloudEmpty
       kind="notice"
@@ -164,9 +173,13 @@ const serverColumns =
 function ServerContent({
   cloud,
   view,
+  serverId,
+  onCloseServer,
 }: {
   cloud: Profile
   view?: ServersView
+  serverId?: string
+  onCloseServer?: () => void
 }) {
   const servers = useQuery(api.useCloudServersList, {
     path: { cloudId: cloud.id },
@@ -185,7 +198,7 @@ function ServerContent({
     kind: string
     server?: Server
   } | null>(null)
-  const [selected, setSelected] = useState<{
+  const [opened, setSelected] = useState<{
     server: Server
     action?: ServerAction
   } | null>(null)
@@ -194,6 +207,12 @@ function ServerContent({
     service: string
   } | null>(null)
   const list = servers.data?.servers.filter((s): s is Server => !!s) ?? []
+  const linked = serverId ? list.find((s) => s.id === serverId) : undefined
+  const selected = linked ? { server: linked, action: undefined } : opened
+  const closeDetails = () => {
+    setSelected(null)
+    if (serverId) onCloseServer?.()
+  }
   const capabilities = providers.data?.providers ?? []
   const accounts = connections.data?.connections ?? []
   const create = accounts.some(
@@ -328,14 +347,14 @@ function ServerContent({
           action={selected.action}
           capabilities={capabilities}
           connections={accounts}
-          onClose={() => setSelected(null)}
+          onClose={closeDetails}
           onChanged={() => void servers.refetch()}
           onRecover={(planId, service) => {
-            setSelected(null)
+            closeDetails()
             setRecovering({ planId, service })
           }}
           onEdit={(kind) => {
-            setSelected(null)
+            closeDetails()
             setEditing({ kind, server: selected.server })
           }}
         />

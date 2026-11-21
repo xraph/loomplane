@@ -30,8 +30,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { cloudLabel } from "@/lib/clouds"
-import { cloudDeletionError } from "@/lib/cloud-targets"
+import {
+  cloudDeletionError,
+  serverForConnection,
+  serverLocation,
+} from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 import { ChangeReview } from "./change-review"
@@ -354,12 +357,7 @@ export function TargetEditor({
                     >
                       {accounts.map((c) => {
                         const server = directServer
-                          ? servers.data?.servers?.find(
-                              (s) =>
-                                s?.runtimeConnectionId === c.id &&
-                                s.status !== "deleted" &&
-                                s.status !== "disconnected"
-                            )
+                          ? serverForConnection(servers.data?.servers, c.id)
                           : undefined
                         return (
                           <Choice
@@ -368,17 +366,16 @@ export function TargetEditor({
                             disabled={!manage || busy}
                             onSelect={() => setConnection(c.id)}
                           >
-                            <CloudGlyph cloud={c.cloud} size="sm" />
+                            <CloudGlyph
+                              cloud={server?.provider || c.cloud}
+                              size="sm"
+                            />
                             <span className="grid min-w-0 flex-1 gap-0.5">
                               <span className="truncate text-[13px] font-medium">
                                 {server?.name || c.name}
                               </span>
                               <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-                                {server
-                                  ? [cloudLabel(server.provider), server.region]
-                                      .filter(Boolean)
-                                      .join(" · ")
-                                  : c.account}
+                                {server ? serverLocation(server) : c.account}
                               </span>
                             </span>
                             {target?.connectionId === c.id && (
@@ -512,6 +509,7 @@ export function TargetEditor({
         <ChangeReview
           projectId={projectId}
           title={`Switch ${target.name}`}
+          servers={servers.data?.servers}
           change={{
             cloudId: profile.id,
             targetId: target.id,

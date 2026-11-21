@@ -7,10 +7,12 @@ import * as api from "@/client/forge/loomplane/hooks"
 import type {
   Connection,
   Pool,
+  Server,
   Target,
   Usage,
 } from "@/client/forge/loomplane/types"
 import { useMutation } from "@/client/hooks"
+import { ServerLink } from "@/components/cloud-targets/server-link"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import {
   ActionsCell,
@@ -34,7 +36,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
-import { cloudDeletionError } from "@/lib/cloud-targets"
+import {
+  cloudDeletionError,
+  serverForConnection,
+  serverLocation,
+} from "@/lib/cloud-targets"
 import { Link } from "@/lib/router"
 
 import {
@@ -51,6 +57,7 @@ export function RunsOn({
   target,
   connections,
   pools,
+  servers,
 }: {
   target: Pick<
     Target,
@@ -58,6 +65,7 @@ export function RunsOn({
   >
   connections: Connection[]
   pools?: Pool[]
+  servers?: Server[]
 }) {
   if (target.runtime === "server") {
     const pool = pools?.find((p) => p.id === target.poolId)
@@ -76,11 +84,17 @@ export function RunsOn({
     )
   }
   const account = connections.find((c) => c.id === target.connectionId)
+  const server = serverForConnection(servers, target.connectionId)
   return (
     <span className="flex min-w-0 items-center gap-2.5">
-      <CloudGlyph cloud={account?.cloud ?? target.provider} size="sm" />
+      <CloudGlyph
+        cloud={server?.provider || account?.cloud || target.provider}
+        size="sm"
+      />
       <span className="grid min-w-0 gap-0.5">
-        {account ? (
+        {server ? (
+          <ServerLink server={server} />
+        ) : account ? (
           <Link
             to="/clouds/accounts/$id"
             params={{ id: account.id }}
@@ -92,7 +106,7 @@ export function RunsOn({
           <span className="truncate text-[13px]">A removed account</span>
         )}
         <span className="truncate text-xs text-muted-foreground">
-          {whereLabel(connections, target)}
+          {server ? serverLocation(server) : whereLabel(connections, target)}
         </span>
       </span>
     </span>
@@ -104,6 +118,7 @@ export function Targets({
   targets,
   connections,
   pools,
+  servers,
   usage,
   manage,
   onSaved,
@@ -112,6 +127,7 @@ export function Targets({
   targets: Target[]
   connections: Connection[]
   pools?: Pool[]
+  servers?: Server[]
   usage?: Usage
   manage: boolean
   onSaved: () => void
@@ -184,6 +200,7 @@ export function Targets({
                       target={t}
                       connections={connections}
                       pools={pools}
+                      servers={servers}
                     />
                   </Cell>
                   <Cell className="flex flex-wrap gap-1">
@@ -255,6 +272,7 @@ export function Targets({
       {!scope.project && (
         <DefaultPlacementSection
           cloud={scope.cloud}
+          servers={servers}
           targets={targets}
           columns={columns}
           services={usage ? (placed.get(DEFAULT_KEY) ?? 0) : undefined}

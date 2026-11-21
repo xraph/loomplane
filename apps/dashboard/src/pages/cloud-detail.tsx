@@ -68,6 +68,7 @@ import { Link, useNavigate } from "@/lib/router"
 type Place = {
   tab: CloudTab
   view: InfrastructureView
+  server: string
   cluster: string
   clusterOperation: string
 }
@@ -78,6 +79,7 @@ type CloudDetailProps = {
   /** The view the page opens on; Overview when unset. */
   tab?: CloudTab
   view?: InfrastructureView
+  server?: string
   cluster?: string
   clusterOperation?: string
 }
@@ -102,8 +104,9 @@ export function CloudDetail(props: CloudDetailProps) {
 function placeOf(p: Omit<CloudDetailProps, "id">): Place {
   const child = !!(p.cluster || p.clusterOperation)
   return {
-    tab: p.tab ?? (child ? "infrastructure" : "overview"),
+    tab: p.tab ?? (child || p.server ? "infrastructure" : "overview"),
     view: p.view ?? (child ? "clusters" : "servers"),
+    server: p.server ?? "",
     cluster: p.cluster ?? "",
     clusterOperation: p.clusterOperation ?? "",
   }
@@ -124,7 +127,7 @@ function usePlace(
         : props
     )
   })
-  const { tab, view, cluster, clusterOperation } = props
+  const { tab, view, server, cluster, clusterOperation } = props
   const first = useRef(true)
   useEffect(() => {
     // The first render already holds the search; later ones follow it, so a
@@ -133,10 +136,12 @@ function usePlace(
       first.current = false
       return
     }
-    setPlace(placeOf({ tab, view, cluster, clusterOperation }))
-  }, [tab, view, cluster, clusterOperation])
+    setPlace(placeOf({ tab, view, server, cluster, clusterOperation }))
+  }, [tab, view, server, cluster, clusterOperation])
   const go = (next: Partial<Place>) => {
     const merged = { ...place, ...next }
+    if (merged.tab !== "infrastructure" || merged.view !== "servers")
+      merged.server = ""
     setPlace(merged)
     void navigate({
       to: ".",
@@ -147,6 +152,7 @@ function usePlace(
           merged.tab === "infrastructure" && merged.view !== "servers"
             ? merged.view
             : undefined,
+        server: merged.server || undefined,
         cluster: merged.cluster || undefined,
         clusterOperation: merged.clusterOperation || undefined,
       }),
@@ -661,6 +667,7 @@ function CloudPage({
             </TabsContent>
             <TabsContent value="targets">
               <Targets
+                servers={servers}
                 scope={scope}
                 targets={targets.list}
                 connections={accounts}
@@ -697,6 +704,8 @@ function CloudPage({
                 <CloudInfrastructure
                   cloud={cloud}
                   view={place.view}
+                  serverId={place.server}
+                  onCloseServer={() => go({ server: "" })}
                   onView={(view) => go({ view })}
                   onOpenCluster={(id) =>
                     go({ cluster: id, clusterOperation: "" })

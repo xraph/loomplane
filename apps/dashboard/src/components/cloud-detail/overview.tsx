@@ -230,6 +230,7 @@ export function Overview({
                   />
                   <Cell>
                     <RunsOn
+                      servers={servers}
                       target={t}
                       connections={connections}
                       pools={pools}
@@ -249,6 +250,7 @@ export function Overview({
                   />
                   <Cell>
                     <RunsOn
+                      servers={servers}
                       target={{ ...fallback, runtime: "managed" }}
                       connections={connections}
                     />
