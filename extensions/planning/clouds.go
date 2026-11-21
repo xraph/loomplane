@@ -36,14 +36,25 @@ type CloudSyncList struct {
 
 func (CloudSyncList) ForgeEnvelope() forge.EnvelopeDef { return forge.EnvelopeDef{ItemsField: "syncs"} }
 
-// EnvironmentCloud distinguishes an unassigned environment from missing scope.
-type EnvironmentCloud struct {
-	Assignment *cloudprofiles.Assignment `json:"assignment" nullable:"true" required:"true"`
-	Revision   int64                     `json:"revision"`
+// DefaultCloud is the Cloud every environment of a project uses unless a
+// service names another. Cloud is null when the project has none. Revision
+// is the token a reviewed change compares against: the default's grant
+// revision, or zero for none.
+type DefaultCloud struct {
+	ProjectID string                      `json:"project_id"`
+	Cloud     *cloudprofiles.ProjectCloud `json:"cloud" nullable:"true" required:"true"`
+	Revision  int64                       `json:"revision"`
 }
 
-// EnvironmentCloudInput reviews a Cloud assignment at the current generation.
-type EnvironmentCloudInput struct {
+// ForgeEntity keys the read by project, so a project_cloud.updated event
+// reaches it.
+func (DefaultCloud) ForgeEntity() forge.EntityDef {
+	return forge.EntityDef{Type: "DefaultCloud", IDField: "project_id"}
+}
+
+// DefaultCloudInput reviews making a Cloud the project's default, or with no
+// Cloud, leaving the project without one.
+type DefaultCloudInput struct {
 	CloudID  string `json:"cloud_id"`
 	Revision int64  `json:"revision"`
 }
@@ -84,7 +95,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 	const target = targets + "/:targetId"
 	const syncs = base + "/cloud-syncs"
 	const sync = syncs + "/:syncId"
-	const assignment = base + "/environments/:environmentId/cloud"
+	const defaultCloud = base + "/default-cloud"
 	routes := append(e.cloudLocationRoutes(), []cloudRoute{
 		{http.MethodGet, "/clouds", "organizationClouds.list", e.listClouds, nil, CloudList{}, http.StatusOK},
 		{http.MethodPost, "/clouds", "organizationClouds.create", e.createCloud, cloudprofiles.CreateInput{}, cloudprofiles.Profile{}, http.StatusCreated},
@@ -126,8 +137,8 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodDelete, target, "cloudTargets.delete", e.deleteCloudTarget, nil, nil, http.StatusNoContent},
 		{http.MethodPost, base + "/cloud-changes/preview", "cloudChanges.preview", e.previewCloudChange, cloudprofiles.ChangeInput{}, cloudprofiles.Preview{}, http.StatusOK},
 		{http.MethodPost, base + "/cloud-changes/apply", "cloudChanges.apply", e.applyCloudChange, ApplyCloudInput{}, cloudprofiles.Sync{}, http.StatusAccepted},
-		{http.MethodGet, assignment, "environmentClouds.get", e.getEnvironmentCloud, nil, EnvironmentCloud{}, http.StatusOK},
-		{http.MethodPost, assignment + "/preview", "environmentClouds.preview", e.previewEnvironmentCloud, EnvironmentCloudInput{}, cloudprofiles.Preview{}, http.StatusOK},
+		{http.MethodGet, defaultCloud, "defaultCloud.get", e.getDefaultCloud, nil, DefaultCloud{}, http.StatusOK},
+		{http.MethodPost, defaultCloud + "/preview", "defaultCloud.preview", e.previewDefaultCloud, DefaultCloudInput{}, cloudprofiles.Preview{}, http.StatusOK},
 		{http.MethodGet, syncs, "cloudSyncs.list", e.listCloudSyncs, nil, CloudSyncList{}, http.StatusOK},
 		{http.MethodGet, sync, "cloudSyncs.get", e.getCloudSync, nil, cloudprofiles.Sync{}, http.StatusOK},
 		{http.MethodPost, sync + "/retry", "cloudSyncs.retry", e.retryCloudSync, nil, cloudprofiles.Sync{}, http.StatusAccepted},
@@ -268,19 +279,24 @@ func (e *Extension) deleteCloudTarget(c forge.Context) error {
 		return nil, e.cloudProfiles.DeleteTarget(ctx, p, c.Param("id"), c.Param("cloudId"), c.Param("targetId"))
 	})
 }
-func (e *Extension) getEnvironmentCloud(c forge.Context) error {
+func (e *Extension) getDefaultCloud(c forge.Context) error {
 	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
-		a, revision, err := e.cloudProfiles.EnvironmentCloud(ctx, p, c.Param("id"), c.Param("environmentId"))
-		return EnvironmentCloud{Assignment: a, Revision: revision}, err
+		project := c.Param("id")
+		cloud, err := e.cloudProfiles.DefaultCloud(ctx, p, project)
+		out := DefaultCloud{ProjectID: project, Cloud: cloud}
+		if cloud != nil {
+			out.Revision = cloud.GrantRevision
+		}
+		return out, err
 	})
 }
-func (e *Extension) previewEnvironmentCloud(c forge.Context) error {
-	in, err := cloudBody[EnvironmentCloudInput](c)
+func (e *Extension) previewDefaultCloud(c forge.Context) error {
+	in, err := cloudBody[DefaultCloudInput](c)
 	if err != nil {
 		return err
 	}
 	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
-		return e.plans.PreviewCloudChange(ctx, p, c.Param("id"), cloudprofiles.ChangeInput{EnvironmentID: c.Param("environmentId"), CloudID: in.CloudID, Revision: in.Revision})
+		return e.plans.PreviewCloudChange(ctx, p, c.Param("id"), cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: in.CloudID, Revision: in.Revision})
 	})
 }
 func (e *Extension) previewCloudChange(c forge.Context) error {

@@ -67,9 +67,9 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	if env == "" {
 		t.Fatal("production missing")
 	}
-	assignment := base + "/environments/" + env + "/cloud"
+	assignment := base + "/default-cloud"
 	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
+	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: cloud.ID}, &preview)
 	if got := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign").ID); got.Status != cloudprofiles.SyncSucceeded {
 		t.Fatalf("assignment: %+v", got)
 	}
@@ -137,10 +137,10 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	if len(afterAdoption) != 2 || afterAdoption["docs"].ConnectionID != docs || count("old-token-0123456789") != 1 || count("docs-token-0123456789") != 1 {
 		t.Fatalf("two-target deployment: %+v", afterAdoption)
 	}
-	var assignedBefore apiclient.EnvironmentCloud
+	var assignedBefore apiclient.DefaultCloud
 	c.must(http.StatusOK, http.MethodGet, assignment, nil, &assignedBefore)
 	replacement := connect("vercel", "new-token-0123456789")
-	var assignedAfter apiclient.EnvironmentCloud
+	var assignedAfter apiclient.DefaultCloud
 	c.must(http.StatusOK, http.MethodGet, assignment, nil, &assignedAfter)
 	var targetAfter cloudprofiles.Target
 	c.must(http.StatusOK, http.MethodGet, targets+"/"+frontend.ID, nil, &targetAfter)
@@ -153,7 +153,7 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	switchTo := func(provider, conn string, revision int64, key string) *cloudprofiles.Sync {
 		t.Helper()
 		c.must(http.StatusOK, http.MethodPost, base+"/cloud-changes/preview", cloudprofiles.ChangeInput{CloudID: cloud.ID, TargetID: frontend.ID, Revision: revision, Provider: provider, ConnectionID: conn}, &preview)
-		if len(preview.Blockers) != 0 || len(preview.Environments) != 1 || preview.Environments[0].Summary.Replace != 1 {
+		if production := cloudPreviewEnvironment(&preview, env); len(preview.Blockers) != 0 || len(preview.Environments) != 2 || production == nil || production.Summary.Replace != 1 {
 			t.Fatalf("switch preview: %+v", preview)
 		}
 		return applyCloudAPI(t, c, base, &preview, key)
@@ -384,7 +384,9 @@ func TestCloudFlowIsolationAdoptionRecoveryAndProviderReplacement(t *testing.T) 
 	// Even a read-only recent preview keeps its referenced Cloud protected.
 	var reviewed cloudprofiles.Profile
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds", cloudprofiles.CreateInput{Name: "Recently reviewed"}, &reviewed)
-	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.EnvironmentCloudInput{CloudID: reviewed.ID, Revision: 1}, &preview)
+	var standing apiclient.DefaultCloud
+	c.must(http.StatusOK, http.MethodGet, assignment, nil, &standing)
+	c.must(http.StatusOK, http.MethodPost, assignment+"/preview", apiclient.DefaultCloudInput{CloudID: reviewed.ID, Revision: standing.Revision}, &preview)
 	c.must(http.StatusConflict, http.MethodDelete, base+"/clouds/"+reviewed.ID, nil, nil)
 	// A fresh unreferenced Cloud and target can be removed through public APIs.
 	var disposable cloudprofiles.Profile

@@ -83,13 +83,14 @@ func TestAddServiceWritesItWithItsNeeds(t *testing.T) {
 
 func TestAddServiceRefusesWhatIsntThere(t *testing.T) {
 	for name, in := range map[string]*NewServiceInput{
-		"a taken name":       {Name: "db", Source: "cmd/db"},
-		"a bad name":         {Name: "Worker", Source: "cmd/worker"},
-		"no source":          {Name: "worker"},
-		"an unknown need":    {Name: "worker", Source: "cmd/worker", Needs: []string{"cache"}},
-		"an unknown env":     {Name: "worker", Source: "cmd/worker", EnabledIn: "qa"},
-		"only without env":   {Name: "worker", Source: "cmd/worker", Only: true},
-		"an unknown service": {Name: "worker", Source: "cmd/worker", NeededBy: []string{"web"}},
+		"a taken name":            {Name: "db", Source: "cmd/db"},
+		"a bad name":              {Name: "Worker", Source: "cmd/worker"},
+		"no source":               {Name: "worker"},
+		"an unknown need":         {Name: "worker", Source: "cmd/worker", Needs: []string{"cache"}},
+		"an unknown env":          {Name: "worker", Source: "cmd/worker", EnabledIn: "qa"},
+		"only without env":        {Name: "worker", Source: "cmd/worker", Only: true},
+		"an unknown service":      {Name: "worker", Source: "cmd/worker", NeededBy: []string{"web"}},
+		"a target and a provider": {Name: "worker", Source: "cmd/worker", CloudTarget: "eu-run", Provider: "cloud-run"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, store, err := addEdit(t, appYAML, EditInput{AddService: in})
@@ -174,5 +175,24 @@ func TestAddDryRunSavesNothing(t *testing.T) {
 	}
 	if rev.ID != "" || rev.Revision != 2 || rev.Manifest.Services["worker"].Source != "go:cmd/worker" || !strings.Contains(rev.YAML, "worker:") {
 		t.Fatalf("rev=%+v\n%s", rev, rev.YAML)
+	}
+}
+
+func TestAddServiceOnACloudTarget(t *testing.T) {
+	rev, _, err := addEdit(t, appYAML, EditInput{AddService: &NewServiceInput{
+		Name: "trainer", Source: "python:trainer", Cloud: "GPU Lab", CloudTarget: "a100",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rev.Manifest.Services["trainer"]
+	if got.Cloud != "GPU Lab" || got.CloudTarget != "a100" || got.Provider != "" {
+		t.Fatalf("trainer = %+v\n%s", got, rev.YAML)
+	}
+	rev, _, err = addEdit(t, appYAML, EditInput{AddService: &NewServiceInput{
+		Name: "web", Source: "node:web", CloudTarget: "frontend",
+	}})
+	if err != nil || rev.Manifest.Services["web"].CloudTarget != "frontend" || rev.Manifest.Services["web"].Cloud != "" {
+		t.Fatalf("web on the default Cloud: %v\n%s", err, rev.YAML)
 	}
 }

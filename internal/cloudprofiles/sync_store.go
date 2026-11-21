@@ -21,7 +21,7 @@ type SyncStore interface {
 	Store
 	Resolver
 	SnapshotBindings(context.Context, string, string) (json.RawMessage, error)
-	AssignmentGeneration(context.Context, string, string, string) (int64, error)
+	DefaultCloud(ctx context.Context, orgID, projectID string) (string, int64, error)
 	SavePreview(context.Context, *Preview, *Snapshot) error
 	GetPreview(context.Context, string, string, string) (*Preview, *Snapshot, error)
 	Accept(context.Context, *Preview, *Snapshot, *Sync, string) (*Sync, error)
@@ -30,13 +30,6 @@ type SyncStore interface {
 	ListSyncs(context.Context, string, string) ([]*Sync, error)
 	PendingSyncs(context.Context) ([]*Sync, error)
 	SaveSync(context.Context, *Sync, *Snapshot) error
-}
-
-// AssignmentGeneration includes unassignment tombstones, preventing ABA replay.
-func (s *PgStore) AssignmentGeneration(ctx context.Context, org, project, env string) (int64, error) {
-	var revision int64
-	err := s.db.QueryRow(ctx, `SELECT coalesce(a.revision,0) FROM loomplane_environments e LEFT JOIN loomplane_cloud_assignments a ON a.org_id=e.org_id AND a.project_id=e.project_id AND a.environment_id=e.id WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$3`, org, project, env).Scan(&revision)
-	return revision, storeError(err)
 }
 
 // SavePreview inserts a review once; updates are deliberately unsupported.
@@ -262,11 +255,12 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if active {
 			return nil, ErrBusy
 		}
-		var generation int64
-		if queryErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT revision FROM loomplane_cloud_assignments WHERE org_id=$1 AND project_id=$2 AND environment_id=$3),0)`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID).Scan(&generation); queryErr != nil {
+		// The plan moved services relying on the default Cloud as it was.
+		var defaultCloud string
+		if queryErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT cloud_id FROM loomplane_cloud_project_grants WHERE org_id=$1 AND project_id=$2 AND is_default AND NOT revoked FOR SHARE),'')`, p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID)).Scan(&defaultCloud); queryErr != nil {
 			return nil, queryErr
 		}
-		if generation != env.AssignmentRevision {
+		if defaultCloud != env.DefaultCloud {
 			return nil, ErrConflict
 		}
 		if _, lockErr := tx.Exec(ctx, `SELECT id FROM loomplane_bindings WHERE org_id=$1 AND environment_id=$2 ORDER BY id FOR UPDATE`, p.OrgID, env.EnvironmentID); lockErr != nil {
@@ -309,15 +303,16 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		}
 	}
 	if p.Input.Shared() {
-		// Check the full assignment set too, including a newly assigned empty environment.
+		// The change must reach exactly the environments it reviewed,
+		// including one that took this Cloud as its default since.
 		var ids []string
-		rows, qerr := tx.Query(ctx, `SELECT environment_id FROM loomplane_cloud_assignments WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 ORDER BY environment_id`, p.OrgID, p.ProjectID, p.Input.CloudID)
+		rows, qerr := tx.Query(ctx, environmentsUsingSQL, p.OrgID, p.Input.CloudID)
 		if qerr != nil {
 			return nil, qerr
 		}
 		for rows.Next() {
-			var id string
-			if qerr = rows.Scan(&id); qerr != nil {
+			var id, project, name string
+			if qerr = rows.Scan(&id, &project, &name); qerr != nil {
 				rows.Close()
 				return nil, qerr
 			}
@@ -328,11 +323,27 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if qerr != nil {
 			return nil, qerr
 		}
+		slices.Sort(ids)
 		reviewed := make([]string, 0, len(envs))
 		for _, env := range envs {
 			reviewed = append(reviewed, env.EnvironmentID)
 		}
 		if !slices.Equal(ids, reviewed) {
+			return nil, ErrConflict
+		}
+	}
+	if p.Input.ProjectDefault {
+		// A project with no environments has no per-environment pin above.
+		var current string
+		var revision int64
+		if qerr := tx.QueryRow(ctx, `SELECT coalesce(cloud_id,''),coalesce(revision,0) FROM (SELECT 1) one LEFT JOIN loomplane_cloud_project_grants ON org_id=$1 AND project_id=$2 AND is_default AND NOT revoked`, p.OrgID, p.ProjectID).Scan(&current, &revision); qerr != nil {
+			return nil, qerr
+		}
+		before := ""
+		if p.BeforeCloud != nil {
+			before = p.BeforeCloud.CloudID
+		}
+		if current != before || revision != p.Input.Revision {
 			return nil, ErrConflict
 		}
 	}
@@ -343,7 +354,14 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 	case p.Input.TargetID != "":
 		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=nullif($6,''),region=$7,revision=revision+1,updated_at=$8,runtime=$9,pool_id=nullif($10,''),managed_resource_id=nullif($11,''),location_id=nullif($12,'') WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt, cmp.Or(p.After.Runtime, "managed"), p.After.PoolID, p.After.ManagedResourceID, p.After.LocationID)
 	default:
-		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES($1,$2,$3,nullif($4,''),1) ON CONFLICT(org_id,project_id,environment_id) DO UPDATE SET cloud_id=EXCLUDED.cloud_id,revision=loomplane_cloud_assignments.revision+1`, p.OrgID, p.ProjectID, p.Input.EnvironmentID, p.Input.CloudID)
+		err = setDefaultCloud(ctx, tx, p.OrgID, p.ProjectID, p.Input.CloudID)
+		// Both grants just advanced. The stored snapshot is what the sync's
+		// runs validate against, so it records them as they now stand.
+		for i := range snapshot.Grants {
+			if snapshot.Grants[i].ProjectID == p.ProjectID {
+				snapshot.Grants[i].Revision++
+			}
+		}
 	}
 	if err != nil {
 		return nil, storeError(err)
@@ -587,7 +605,7 @@ func (s *PgStore) ListSyncPage(ctx context.Context, org, project, cloud string, 
 	if limit < 1 || limit > page.Max {
 		return nil, page.Cursor{}, page.ErrBadLimit
 	}
-	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND ($3='' OR (created_at,id)<($4,$3)) AND ($6='' OR s.cloud_id=$6 OR EXISTS(SELECT 1 FROM loomplane_cloud_previews r WHERE r.org_id=s.org_id AND r.id=s.preview_id AND r.body->'before_assignment'->>'cloud_id'=$6)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1, cloud)
+	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND ($3='' OR (created_at,id)<($4,$3)) AND ($6='' OR s.cloud_id=$6 OR EXISTS(SELECT 1 FROM loomplane_cloud_previews r WHERE r.org_id=s.org_id AND r.id=s.preview_id AND r.body->'before_cloud'->>'cloud_id'=$6)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1, cloud)
 	if err != nil {
 		return nil, page.Cursor{}, err
 	}
@@ -686,6 +704,34 @@ func checkSyncTarget(target Target, revision int64, before *Target) error {
 		return ErrPlatformOwned
 	case target.Revision != revision || before == nil || target.ConnectionID != before.ConnectionID || target.Provider != before.Provider || target.Region != before.Region || target.Runtime != before.Runtime || target.PoolID != before.PoolID || target.ManagedResourceID != before.ManagedResourceID || target.LocationID != before.LocationID:
 		return ErrConflict
+	}
+	return nil
+}
+
+// setDefaultCloud makes cloud the project's default, or leaves the project
+// without one when cloud is "". Both grants it touches advance their
+// revision, so every plan resolved against the old default goes stale.
+func setDefaultCloud(ctx context.Context, tx driver.Tx, org, project, cloud string) error {
+	if _, err := tx.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET is_default=false,revision=revision+1,updated_at=now() WHERE org_id=$1 AND project_id=$2 AND is_default AND cloud_id<>$3`, org, project, cloud); err != nil {
+		return err
+	}
+	if cloud == "" {
+		return nil
+	}
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET is_default=true,revision=revision+1,updated_at=now() WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND NOT revoked AND NOT is_default`, org, project, cloud)
+	if err != nil {
+		return err
+	}
+	if n, countErr := tag.RowsAffected(); countErr != nil {
+		return countErr
+	} else if n == 0 {
+		var already bool
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_project_grants WHERE org_id=$1 AND project_id=$2 AND cloud_id=$3 AND NOT revoked AND is_default)`, org, project, cloud).Scan(&already); checkErr != nil {
+			return checkErr
+		}
+		if !already {
+			return ErrNotFound
+		}
 	}
 	return nil
 }

@@ -117,7 +117,7 @@ export class AgentTasksStreamSSEClient extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       this.setState(ConnectionState.CONNECTING);
-      let url = this.config.baseURL + '/api/v1/agent/tasks/:id/stream';
+      let url = this.config.baseURL + "/api/v1/agent/tasks/:id/stream";
       
       // In browser, add auth as query params since EventSource doesn't support custom headers
       if (isBrowser) {
@@ -182,37 +182,37 @@ export class AgentTasksStreamSSEClient extends EventEmitter {
           reject(error);
         };
 
-        this.eventSource.addEventListener('agent.end', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent.end", (event: MessageEvent) => {
           try {
             const data: types.RealtimeAgentEnd = decode(JSON.parse(event.data), "RealtimeAgentEnd");
-            this.emit('agent.end', data);
+            this.emit("agent.end", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('agent.event', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent.event", (event: MessageEvent) => {
           try {
             const data: types.RealtimeAgentEvent = decode(JSON.parse(event.data), "RealtimeAgentEvent");
-            this.emit('agent.event', data);
+            this.emit("agent.event", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('forge.resumed', (event: MessageEvent) => {
+        this.eventSource.addEventListener("forge.resumed", (event: MessageEvent) => {
           try {
             const data: unknown = JSON.parse(event.data);
-            this.emit('forge.resumed', data);
+            this.emit("forge.resumed", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('forge.gap', (event: MessageEvent) => {
+        this.eventSource.addEventListener("forge.gap", (event: MessageEvent) => {
           try {
             const data: unknown = JSON.parse(event.data);
-            this.emit('forge.gap', data);
+            this.emit("forge.gap", data);
           } catch (error) {
             this.emit('error', error);
           }
@@ -235,7 +235,7 @@ export class AgentTasksStreamSSEClient extends EventEmitter {
    * @param handler - Function to call when agent.end event is received
    */
   onAgentEnd(handler: (data: types.RealtimeAgentEnd) => void): void {
-    this.on('agent.end', handler);
+    this.on("agent.end", handler);
   }
 
   /**
@@ -243,7 +243,7 @@ export class AgentTasksStreamSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentEnd(handler: (data: types.RealtimeAgentEnd) => void): void {
-    this.off('agent.end', handler);
+    this.off("agent.end", handler);
   }
 
   /**
@@ -251,7 +251,7 @@ export class AgentTasksStreamSSEClient extends EventEmitter {
    * @param handler - Function to call when agent.event event is received
    */
   onAgentEvent(handler: (data: types.RealtimeAgentEvent) => void): void {
-    this.on('agent.event', handler);
+    this.on("agent.event", handler);
   }
 
   /**
@@ -259,7 +259,7 @@ export class AgentTasksStreamSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentEvent(handler: (data: types.RealtimeAgentEvent) => void): void {
-    this.off('agent.event', handler);
+    this.off("agent.event", handler);
   }
 
   /**
@@ -347,7 +347,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       this.setState(ConnectionState.CONNECTING);
-      let url = this.config.baseURL + '/api/v1/realtime/events';
+      let url = this.config.baseURL + "/api/v1/realtime/events";
       
       // In browser, add auth as query params since EventSource doesn't support custom headers
       if (isBrowser) {
@@ -412,415 +412,415 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           reject(error);
         };
 
-        this.eventSource.addEventListener('agent_report.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent_report.deleted", (event: MessageEvent) => {
           try {
             const data: types.Report = decode(JSON.parse(event.data), "Report");
-            this.emit('agent_report.deleted', data);
+            this.emit("agent_report.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('agent_report.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent_report.updated", (event: MessageEvent) => {
           try {
             const data: types.Report = decode(JSON.parse(event.data), "Report");
-            this.emit('agent_report.updated', data);
+            this.emit("agent_report.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('agent_request.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent_request.deleted", (event: MessageEvent) => {
           try {
             const data: types.RequestEvent = decode(JSON.parse(event.data), "RequestEvent");
-            this.emit('agent_request.deleted', data);
+            this.emit("agent_request.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('agent_request.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent_request.updated", (event: MessageEvent) => {
           try {
             const data: types.RequestEvent = decode(JSON.parse(event.data), "RequestEvent");
-            this.emit('agent_request.updated', data);
+            this.emit("agent_request.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('agent_task.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent_task.deleted", (event: MessageEvent) => {
           try {
             const data: types.TaskEvent = decode(JSON.parse(event.data), "TaskEvent");
-            this.emit('agent_task.deleted', data);
+            this.emit("agent_task.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('agent_task.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("agent_task.updated", (event: MessageEvent) => {
           try {
             const data: types.TaskEvent = decode(JSON.parse(event.data), "TaskEvent");
-            this.emit('agent_task.updated', data);
+            this.emit("agent_task.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('analysis.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("analysis.deleted", (event: MessageEvent) => {
           try {
             const data: types.Analysis = decode(JSON.parse(event.data), "Analysis");
-            this.emit('analysis.deleted', data);
+            this.emit("analysis.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('analysis.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("analysis.updated", (event: MessageEvent) => {
           try {
             const data: types.Analysis = decode(JSON.parse(event.data), "Analysis");
-            this.emit('analysis.updated', data);
+            this.emit("analysis.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('binding.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("binding.deleted", (event: MessageEvent) => {
           try {
             const data: types.Binding = decode(JSON.parse(event.data), "Binding");
-            this.emit('binding.deleted', data);
+            this.emit("binding.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('binding.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("binding.updated", (event: MessageEvent) => {
           try {
             const data: types.Binding = decode(JSON.parse(event.data), "Binding");
-            this.emit('binding.updated', data);
+            this.emit("binding.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('build.collection', (event: MessageEvent) => {
+        this.eventSource.addEventListener("build.collection", (event: MessageEvent) => {
           try {
             const data: types.Collection = decode(JSON.parse(event.data), "Collection");
-            this.emit('build.collection', data);
+            this.emit("build.collection", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('build.log', (event: MessageEvent) => {
+        this.eventSource.addEventListener("build.log", (event: MessageEvent) => {
           try {
             const data: types.Log = decode(JSON.parse(event.data), "Log");
-            this.emit('build.log', data);
+            this.emit("build.log", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('canary_verdict.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("canary_verdict.deleted", (event: MessageEvent) => {
           try {
             const data: types.CanaryVerdict = decode(JSON.parse(event.data), "CanaryVerdict");
-            this.emit('canary_verdict.deleted', data);
+            this.emit("canary_verdict.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('canary_verdict.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("canary_verdict.updated", (event: MessageEvent) => {
           try {
             const data: types.CanaryVerdict = decode(JSON.parse(event.data), "CanaryVerdict");
-            this.emit('canary_verdict.updated', data);
+            this.emit("canary_verdict.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud.deleted", (event: MessageEvent) => {
           try {
             const data: types.Profile = decode(JSON.parse(event.data), "Profile");
-            this.emit('cloud.deleted', data);
+            this.emit("cloud.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud.updated", (event: MessageEvent) => {
           try {
             const data: types.Profile = decode(JSON.parse(event.data), "Profile");
-            this.emit('cloud.updated', data);
+            this.emit("cloud.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud_capacity.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud_capacity.updated", (event: MessageEvent) => {
           try {
             const data: types.CapacityChange = decode(JSON.parse(event.data), "CapacityChange");
-            this.emit('cloud_capacity.updated', data);
+            this.emit("cloud_capacity.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud_cluster.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud_cluster.updated", (event: MessageEvent) => {
           try {
             const data: types.ClusterChange = decode(JSON.parse(event.data), "ClusterChange");
-            this.emit('cloud_cluster.updated', data);
+            this.emit("cloud_cluster.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud_sync.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud_sync.updated", (event: MessageEvent) => {
           try {
             const data: types.CloudSyncEvent = decode(JSON.parse(event.data), "CloudSyncEvent");
-            this.emit('cloud_sync.updated', data);
+            this.emit("cloud_sync.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud_target.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud_target.deleted", (event: MessageEvent) => {
           try {
             const data: types.Target = decode(JSON.parse(event.data), "Target");
-            this.emit('cloud_target.deleted', data);
+            this.emit("cloud_target.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('cloud_target.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("cloud_target.updated", (event: MessageEvent) => {
           try {
             const data: types.Target = decode(JSON.parse(event.data), "Target");
-            this.emit('cloud_target.updated', data);
+            this.emit("cloud_target.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('connection.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("connection.deleted", (event: MessageEvent) => {
           try {
             const data: types.Connection = decode(JSON.parse(event.data), "Connection");
-            this.emit('connection.deleted', data);
+            this.emit("connection.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('connection.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("connection.updated", (event: MessageEvent) => {
           try {
             const data: types.Connection = decode(JSON.parse(event.data), "Connection");
-            this.emit('connection.updated', data);
+            this.emit("connection.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('deployment.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("deployment.deleted", (event: MessageEvent) => {
           try {
             const data: types.Deployment = decode(JSON.parse(event.data), "Deployment");
-            this.emit('deployment.deleted', data);
+            this.emit("deployment.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('deployment.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("deployment.updated", (event: MessageEvent) => {
           try {
             const data: types.Deployment = decode(JSON.parse(event.data), "Deployment");
-            this.emit('deployment.updated', data);
+            this.emit("deployment.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('environment.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("environment.deleted", (event: MessageEvent) => {
           try {
             const data: types.Environment = decode(JSON.parse(event.data), "Environment");
-            this.emit('environment.deleted', data);
+            this.emit("environment.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('environment.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("environment.updated", (event: MessageEvent) => {
           try {
             const data: types.Environment = decode(JSON.parse(event.data), "Environment");
-            this.emit('environment.updated', data);
+            this.emit("environment.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('environment_cloud.updated', (event: MessageEvent) => {
-          try {
-            const data: types.EnvironmentCloudEvent = decode(JSON.parse(event.data), "EnvironmentCloudEvent");
-            this.emit('environment_cloud.updated', data);
-          } catch (error) {
-            this.emit('error', error);
-          }
-        });
-
-        this.eventSource.addEventListener('forge.gap', (event: MessageEvent) => {
+        this.eventSource.addEventListener("forge.gap", (event: MessageEvent) => {
           try {
             const data: types.RealtimeForgeGap = decode(JSON.parse(event.data), "RealtimeForgeGap");
-            this.emit('forge.gap', data);
+            this.emit("forge.gap", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('forge.resumed', (event: MessageEvent) => {
+        this.eventSource.addEventListener("forge.resumed", (event: MessageEvent) => {
           try {
             const data: types.RealtimeForgeResumed = decode(JSON.parse(event.data), "RealtimeForgeResumed");
-            this.emit('forge.resumed', data);
+            this.emit("forge.resumed", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('manifest.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("manifest.deleted", (event: MessageEvent) => {
           try {
             const data: types.Revision = decode(JSON.parse(event.data), "Revision");
-            this.emit('manifest.deleted', data);
+            this.emit("manifest.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('manifest.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("manifest.updated", (event: MessageEvent) => {
           try {
             const data: types.Revision = decode(JSON.parse(event.data), "Revision");
-            this.emit('manifest.updated', data);
+            this.emit("manifest.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('node.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("node.updated", (event: MessageEvent) => {
           try {
             const data: types.Node = decode(JSON.parse(event.data), "Node");
-            this.emit('node.updated', data);
+            this.emit("node.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('notification.created', (event: MessageEvent) => {
+        this.eventSource.addEventListener("notification.created", (event: MessageEvent) => {
           try {
             const data: types.NotificationCreated = decode(JSON.parse(event.data), "NotificationCreated");
-            this.emit('notification.created', data);
+            this.emit("notification.created", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('plan.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("plan.deleted", (event: MessageEvent) => {
           try {
             const data: types.Plan = decode(JSON.parse(event.data), "Plan");
-            this.emit('plan.deleted', data);
+            this.emit("plan.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('plan.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("plan.updated", (event: MessageEvent) => {
           try {
             const data: types.Plan = decode(JSON.parse(event.data), "Plan");
-            this.emit('plan.updated', data);
+            this.emit("plan.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('project.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("project.deleted", (event: MessageEvent) => {
           try {
             const data: types.Project = decode(JSON.parse(event.data), "Project");
-            this.emit('project.deleted', data);
+            this.emit("project.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('project.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("project.updated", (event: MessageEvent) => {
           try {
             const data: types.Project = decode(JSON.parse(event.data), "Project");
-            this.emit('project.updated', data);
+            this.emit("project.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('realtime.snapshot', (event: MessageEvent) => {
+        this.eventSource.addEventListener("project_cloud.updated", (event: MessageEvent) => {
+          try {
+            const data: types.ProjectCloudEvent = decode(JSON.parse(event.data), "ProjectCloudEvent");
+            this.emit("project_cloud.updated", data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener("realtime.snapshot", (event: MessageEvent) => {
           try {
             const data: types.RealtimeRealtimeSnapshot = decode(JSON.parse(event.data), "RealtimeRealtimeSnapshot");
-            this.emit('realtime.snapshot', data);
+            this.emit("realtime.snapshot", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('realtime.status', (event: MessageEvent) => {
+        this.eventSource.addEventListener("realtime.status", (event: MessageEvent) => {
           try {
             const data: types.RealtimeRealtimeStatus = decode(JSON.parse(event.data), "RealtimeRealtimeStatus");
-            this.emit('realtime.status', data);
+            this.emit("realtime.status", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('release_report.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("release_report.deleted", (event: MessageEvent) => {
           try {
             const data: types.ReleaseReportEvent = decode(JSON.parse(event.data), "ReleaseReportEvent");
-            this.emit('release_report.deleted', data);
+            this.emit("release_report.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('release_report.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("release_report.updated", (event: MessageEvent) => {
           try {
             const data: types.ReleaseReportEvent = decode(JSON.parse(event.data), "ReleaseReportEvent");
-            this.emit('release_report.updated', data);
+            this.emit("release_report.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('release_watch.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("release_watch.deleted", (event: MessageEvent) => {
           try {
             const data: types.Watch = decode(JSON.parse(event.data), "Watch");
-            this.emit('release_watch.deleted', data);
+            this.emit("release_watch.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('release_watch.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("release_watch.updated", (event: MessageEvent) => {
           try {
             const data: types.Watch = decode(JSON.parse(event.data), "Watch");
-            this.emit('release_watch.updated', data);
+            this.emit("release_watch.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('source.deleted', (event: MessageEvent) => {
+        this.eventSource.addEventListener("source.deleted", (event: MessageEvent) => {
           try {
             const data: types.Source = decode(JSON.parse(event.data), "Source");
-            this.emit('source.deleted', data);
+            this.emit("source.deleted", data);
           } catch (error) {
             this.emit('error', error);
           }
         });
 
-        this.eventSource.addEventListener('source.updated', (event: MessageEvent) => {
+        this.eventSource.addEventListener("source.updated", (event: MessageEvent) => {
           try {
             const data: types.Source = decode(JSON.parse(event.data), "Source");
-            this.emit('source.updated', data);
+            this.emit("source.updated", data);
           } catch (error) {
             this.emit('error', error);
           }
@@ -843,7 +843,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when agent_report.deleted event is received
    */
   onAgentReportDeleted(handler: (data: types.Report) => void): void {
-    this.on('agent_report.deleted', handler);
+    this.on("agent_report.deleted", handler);
   }
 
   /**
@@ -851,7 +851,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentReportDeleted(handler: (data: types.Report) => void): void {
-    this.off('agent_report.deleted', handler);
+    this.off("agent_report.deleted", handler);
   }
 
   /**
@@ -859,7 +859,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when agent_report.updated event is received
    */
   onAgentReportUpdated(handler: (data: types.Report) => void): void {
-    this.on('agent_report.updated', handler);
+    this.on("agent_report.updated", handler);
   }
 
   /**
@@ -867,7 +867,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentReportUpdated(handler: (data: types.Report) => void): void {
-    this.off('agent_report.updated', handler);
+    this.off("agent_report.updated", handler);
   }
 
   /**
@@ -875,7 +875,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when agent_request.deleted event is received
    */
   onAgentRequestDeleted(handler: (data: types.RequestEvent) => void): void {
-    this.on('agent_request.deleted', handler);
+    this.on("agent_request.deleted", handler);
   }
 
   /**
@@ -883,7 +883,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentRequestDeleted(handler: (data: types.RequestEvent) => void): void {
-    this.off('agent_request.deleted', handler);
+    this.off("agent_request.deleted", handler);
   }
 
   /**
@@ -891,7 +891,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when agent_request.updated event is received
    */
   onAgentRequestUpdated(handler: (data: types.RequestEvent) => void): void {
-    this.on('agent_request.updated', handler);
+    this.on("agent_request.updated", handler);
   }
 
   /**
@@ -899,7 +899,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentRequestUpdated(handler: (data: types.RequestEvent) => void): void {
-    this.off('agent_request.updated', handler);
+    this.off("agent_request.updated", handler);
   }
 
   /**
@@ -907,7 +907,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when agent_task.deleted event is received
    */
   onAgentTaskDeleted(handler: (data: types.TaskEvent) => void): void {
-    this.on('agent_task.deleted', handler);
+    this.on("agent_task.deleted", handler);
   }
 
   /**
@@ -915,7 +915,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentTaskDeleted(handler: (data: types.TaskEvent) => void): void {
-    this.off('agent_task.deleted', handler);
+    this.off("agent_task.deleted", handler);
   }
 
   /**
@@ -923,7 +923,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when agent_task.updated event is received
    */
   onAgentTaskUpdated(handler: (data: types.TaskEvent) => void): void {
-    this.on('agent_task.updated', handler);
+    this.on("agent_task.updated", handler);
   }
 
   /**
@@ -931,7 +931,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAgentTaskUpdated(handler: (data: types.TaskEvent) => void): void {
-    this.off('agent_task.updated', handler);
+    this.off("agent_task.updated", handler);
   }
 
   /**
@@ -939,7 +939,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when analysis.deleted event is received
    */
   onAnalysisDeleted(handler: (data: types.Analysis) => void): void {
-    this.on('analysis.deleted', handler);
+    this.on("analysis.deleted", handler);
   }
 
   /**
@@ -947,7 +947,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAnalysisDeleted(handler: (data: types.Analysis) => void): void {
-    this.off('analysis.deleted', handler);
+    this.off("analysis.deleted", handler);
   }
 
   /**
@@ -955,7 +955,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when analysis.updated event is received
    */
   onAnalysisUpdated(handler: (data: types.Analysis) => void): void {
-    this.on('analysis.updated', handler);
+    this.on("analysis.updated", handler);
   }
 
   /**
@@ -963,7 +963,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offAnalysisUpdated(handler: (data: types.Analysis) => void): void {
-    this.off('analysis.updated', handler);
+    this.off("analysis.updated", handler);
   }
 
   /**
@@ -971,7 +971,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when binding.deleted event is received
    */
   onBindingDeleted(handler: (data: types.Binding) => void): void {
-    this.on('binding.deleted', handler);
+    this.on("binding.deleted", handler);
   }
 
   /**
@@ -979,7 +979,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offBindingDeleted(handler: (data: types.Binding) => void): void {
-    this.off('binding.deleted', handler);
+    this.off("binding.deleted", handler);
   }
 
   /**
@@ -987,7 +987,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when binding.updated event is received
    */
   onBindingUpdated(handler: (data: types.Binding) => void): void {
-    this.on('binding.updated', handler);
+    this.on("binding.updated", handler);
   }
 
   /**
@@ -995,7 +995,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offBindingUpdated(handler: (data: types.Binding) => void): void {
-    this.off('binding.updated', handler);
+    this.off("binding.updated", handler);
   }
 
   /**
@@ -1003,7 +1003,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when build.collection event is received
    */
   onBuildCollection(handler: (data: types.Collection) => void): void {
-    this.on('build.collection', handler);
+    this.on("build.collection", handler);
   }
 
   /**
@@ -1011,7 +1011,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offBuildCollection(handler: (data: types.Collection) => void): void {
-    this.off('build.collection', handler);
+    this.off("build.collection", handler);
   }
 
   /**
@@ -1019,7 +1019,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when build.log event is received
    */
   onBuildLog(handler: (data: types.Log) => void): void {
-    this.on('build.log', handler);
+    this.on("build.log", handler);
   }
 
   /**
@@ -1027,7 +1027,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offBuildLog(handler: (data: types.Log) => void): void {
-    this.off('build.log', handler);
+    this.off("build.log", handler);
   }
 
   /**
@@ -1035,7 +1035,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when canary_verdict.deleted event is received
    */
   onCanaryVerdictDeleted(handler: (data: types.CanaryVerdict) => void): void {
-    this.on('canary_verdict.deleted', handler);
+    this.on("canary_verdict.deleted", handler);
   }
 
   /**
@@ -1043,7 +1043,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCanaryVerdictDeleted(handler: (data: types.CanaryVerdict) => void): void {
-    this.off('canary_verdict.deleted', handler);
+    this.off("canary_verdict.deleted", handler);
   }
 
   /**
@@ -1051,7 +1051,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when canary_verdict.updated event is received
    */
   onCanaryVerdictUpdated(handler: (data: types.CanaryVerdict) => void): void {
-    this.on('canary_verdict.updated', handler);
+    this.on("canary_verdict.updated", handler);
   }
 
   /**
@@ -1059,7 +1059,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCanaryVerdictUpdated(handler: (data: types.CanaryVerdict) => void): void {
-    this.off('canary_verdict.updated', handler);
+    this.off("canary_verdict.updated", handler);
   }
 
   /**
@@ -1067,7 +1067,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud.deleted event is received
    */
   onCloudDeleted(handler: (data: types.Profile) => void): void {
-    this.on('cloud.deleted', handler);
+    this.on("cloud.deleted", handler);
   }
 
   /**
@@ -1075,7 +1075,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudDeleted(handler: (data: types.Profile) => void): void {
-    this.off('cloud.deleted', handler);
+    this.off("cloud.deleted", handler);
   }
 
   /**
@@ -1083,7 +1083,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud.updated event is received
    */
   onCloudUpdated(handler: (data: types.Profile) => void): void {
-    this.on('cloud.updated', handler);
+    this.on("cloud.updated", handler);
   }
 
   /**
@@ -1091,7 +1091,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudUpdated(handler: (data: types.Profile) => void): void {
-    this.off('cloud.updated', handler);
+    this.off("cloud.updated", handler);
   }
 
   /**
@@ -1099,7 +1099,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud_capacity.updated event is received
    */
   onCloudCapacityUpdated(handler: (data: types.CapacityChange) => void): void {
-    this.on('cloud_capacity.updated', handler);
+    this.on("cloud_capacity.updated", handler);
   }
 
   /**
@@ -1107,7 +1107,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudCapacityUpdated(handler: (data: types.CapacityChange) => void): void {
-    this.off('cloud_capacity.updated', handler);
+    this.off("cloud_capacity.updated", handler);
   }
 
   /**
@@ -1115,7 +1115,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud_cluster.updated event is received
    */
   onCloudClusterUpdated(handler: (data: types.ClusterChange) => void): void {
-    this.on('cloud_cluster.updated', handler);
+    this.on("cloud_cluster.updated", handler);
   }
 
   /**
@@ -1123,7 +1123,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudClusterUpdated(handler: (data: types.ClusterChange) => void): void {
-    this.off('cloud_cluster.updated', handler);
+    this.off("cloud_cluster.updated", handler);
   }
 
   /**
@@ -1131,7 +1131,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud_sync.updated event is received
    */
   onCloudSyncUpdated(handler: (data: types.CloudSyncEvent) => void): void {
-    this.on('cloud_sync.updated', handler);
+    this.on("cloud_sync.updated", handler);
   }
 
   /**
@@ -1139,7 +1139,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudSyncUpdated(handler: (data: types.CloudSyncEvent) => void): void {
-    this.off('cloud_sync.updated', handler);
+    this.off("cloud_sync.updated", handler);
   }
 
   /**
@@ -1147,7 +1147,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud_target.deleted event is received
    */
   onCloudTargetDeleted(handler: (data: types.Target) => void): void {
-    this.on('cloud_target.deleted', handler);
+    this.on("cloud_target.deleted", handler);
   }
 
   /**
@@ -1155,7 +1155,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudTargetDeleted(handler: (data: types.Target) => void): void {
-    this.off('cloud_target.deleted', handler);
+    this.off("cloud_target.deleted", handler);
   }
 
   /**
@@ -1163,7 +1163,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when cloud_target.updated event is received
    */
   onCloudTargetUpdated(handler: (data: types.Target) => void): void {
-    this.on('cloud_target.updated', handler);
+    this.on("cloud_target.updated", handler);
   }
 
   /**
@@ -1171,7 +1171,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offCloudTargetUpdated(handler: (data: types.Target) => void): void {
-    this.off('cloud_target.updated', handler);
+    this.off("cloud_target.updated", handler);
   }
 
   /**
@@ -1179,7 +1179,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when connection.deleted event is received
    */
   onConnectionDeleted(handler: (data: types.Connection) => void): void {
-    this.on('connection.deleted', handler);
+    this.on("connection.deleted", handler);
   }
 
   /**
@@ -1187,7 +1187,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offConnectionDeleted(handler: (data: types.Connection) => void): void {
-    this.off('connection.deleted', handler);
+    this.off("connection.deleted", handler);
   }
 
   /**
@@ -1195,7 +1195,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when connection.updated event is received
    */
   onConnectionUpdated(handler: (data: types.Connection) => void): void {
-    this.on('connection.updated', handler);
+    this.on("connection.updated", handler);
   }
 
   /**
@@ -1203,7 +1203,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offConnectionUpdated(handler: (data: types.Connection) => void): void {
-    this.off('connection.updated', handler);
+    this.off("connection.updated", handler);
   }
 
   /**
@@ -1211,7 +1211,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when deployment.deleted event is received
    */
   onDeploymentDeleted(handler: (data: types.Deployment) => void): void {
-    this.on('deployment.deleted', handler);
+    this.on("deployment.deleted", handler);
   }
 
   /**
@@ -1219,7 +1219,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offDeploymentDeleted(handler: (data: types.Deployment) => void): void {
-    this.off('deployment.deleted', handler);
+    this.off("deployment.deleted", handler);
   }
 
   /**
@@ -1227,7 +1227,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when deployment.updated event is received
    */
   onDeploymentUpdated(handler: (data: types.Deployment) => void): void {
-    this.on('deployment.updated', handler);
+    this.on("deployment.updated", handler);
   }
 
   /**
@@ -1235,7 +1235,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offDeploymentUpdated(handler: (data: types.Deployment) => void): void {
-    this.off('deployment.updated', handler);
+    this.off("deployment.updated", handler);
   }
 
   /**
@@ -1243,7 +1243,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when environment.deleted event is received
    */
   onEnvironmentDeleted(handler: (data: types.Environment) => void): void {
-    this.on('environment.deleted', handler);
+    this.on("environment.deleted", handler);
   }
 
   /**
@@ -1251,7 +1251,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offEnvironmentDeleted(handler: (data: types.Environment) => void): void {
-    this.off('environment.deleted', handler);
+    this.off("environment.deleted", handler);
   }
 
   /**
@@ -1259,7 +1259,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when environment.updated event is received
    */
   onEnvironmentUpdated(handler: (data: types.Environment) => void): void {
-    this.on('environment.updated', handler);
+    this.on("environment.updated", handler);
   }
 
   /**
@@ -1267,23 +1267,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offEnvironmentUpdated(handler: (data: types.Environment) => void): void {
-    this.off('environment.updated', handler);
-  }
-
-  /**
-   * Register a handler for environment_cloud.updated events.
-   * @param handler - Function to call when environment_cloud.updated event is received
-   */
-  onEnvironmentCloudUpdated(handler: (data: types.EnvironmentCloudEvent) => void): void {
-    this.on('environment_cloud.updated', handler);
-  }
-
-  /**
-   * Remove a handler for environment_cloud.updated events.
-   * @param handler - The handler to remove
-   */
-  offEnvironmentCloudUpdated(handler: (data: types.EnvironmentCloudEvent) => void): void {
-    this.off('environment_cloud.updated', handler);
+    this.off("environment.updated", handler);
   }
 
   /**
@@ -1291,7 +1275,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when forge.gap event is received
    */
   onForgeGap(handler: (data: types.RealtimeForgeGap) => void): void {
-    this.on('forge.gap', handler);
+    this.on("forge.gap", handler);
   }
 
   /**
@@ -1299,7 +1283,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offForgeGap(handler: (data: types.RealtimeForgeGap) => void): void {
-    this.off('forge.gap', handler);
+    this.off("forge.gap", handler);
   }
 
   /**
@@ -1307,7 +1291,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when forge.resumed event is received
    */
   onForgeResumed(handler: (data: types.RealtimeForgeResumed) => void): void {
-    this.on('forge.resumed', handler);
+    this.on("forge.resumed", handler);
   }
 
   /**
@@ -1315,7 +1299,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offForgeResumed(handler: (data: types.RealtimeForgeResumed) => void): void {
-    this.off('forge.resumed', handler);
+    this.off("forge.resumed", handler);
   }
 
   /**
@@ -1323,7 +1307,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when manifest.deleted event is received
    */
   onManifestDeleted(handler: (data: types.Revision) => void): void {
-    this.on('manifest.deleted', handler);
+    this.on("manifest.deleted", handler);
   }
 
   /**
@@ -1331,7 +1315,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offManifestDeleted(handler: (data: types.Revision) => void): void {
-    this.off('manifest.deleted', handler);
+    this.off("manifest.deleted", handler);
   }
 
   /**
@@ -1339,7 +1323,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when manifest.updated event is received
    */
   onManifestUpdated(handler: (data: types.Revision) => void): void {
-    this.on('manifest.updated', handler);
+    this.on("manifest.updated", handler);
   }
 
   /**
@@ -1347,7 +1331,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offManifestUpdated(handler: (data: types.Revision) => void): void {
-    this.off('manifest.updated', handler);
+    this.off("manifest.updated", handler);
   }
 
   /**
@@ -1355,7 +1339,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when node.updated event is received
    */
   onNodeUpdated(handler: (data: types.Node) => void): void {
-    this.on('node.updated', handler);
+    this.on("node.updated", handler);
   }
 
   /**
@@ -1363,7 +1347,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offNodeUpdated(handler: (data: types.Node) => void): void {
-    this.off('node.updated', handler);
+    this.off("node.updated", handler);
   }
 
   /**
@@ -1371,7 +1355,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when notification.created event is received
    */
   onNotificationCreated(handler: (data: types.NotificationCreated) => void): void {
-    this.on('notification.created', handler);
+    this.on("notification.created", handler);
   }
 
   /**
@@ -1379,7 +1363,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offNotificationCreated(handler: (data: types.NotificationCreated) => void): void {
-    this.off('notification.created', handler);
+    this.off("notification.created", handler);
   }
 
   /**
@@ -1387,7 +1371,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when plan.deleted event is received
    */
   onPlanDeleted(handler: (data: types.Plan) => void): void {
-    this.on('plan.deleted', handler);
+    this.on("plan.deleted", handler);
   }
 
   /**
@@ -1395,7 +1379,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offPlanDeleted(handler: (data: types.Plan) => void): void {
-    this.off('plan.deleted', handler);
+    this.off("plan.deleted", handler);
   }
 
   /**
@@ -1403,7 +1387,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when plan.updated event is received
    */
   onPlanUpdated(handler: (data: types.Plan) => void): void {
-    this.on('plan.updated', handler);
+    this.on("plan.updated", handler);
   }
 
   /**
@@ -1411,7 +1395,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offPlanUpdated(handler: (data: types.Plan) => void): void {
-    this.off('plan.updated', handler);
+    this.off("plan.updated", handler);
   }
 
   /**
@@ -1419,7 +1403,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when project.deleted event is received
    */
   onProjectDeleted(handler: (data: types.Project) => void): void {
-    this.on('project.deleted', handler);
+    this.on("project.deleted", handler);
   }
 
   /**
@@ -1427,7 +1411,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offProjectDeleted(handler: (data: types.Project) => void): void {
-    this.off('project.deleted', handler);
+    this.off("project.deleted", handler);
   }
 
   /**
@@ -1435,7 +1419,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when project.updated event is received
    */
   onProjectUpdated(handler: (data: types.Project) => void): void {
-    this.on('project.updated', handler);
+    this.on("project.updated", handler);
   }
 
   /**
@@ -1443,7 +1427,23 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offProjectUpdated(handler: (data: types.Project) => void): void {
-    this.off('project.updated', handler);
+    this.off("project.updated", handler);
+  }
+
+  /**
+   * Register a handler for project_cloud.updated events.
+   * @param handler - Function to call when project_cloud.updated event is received
+   */
+  onProjectCloudUpdated(handler: (data: types.ProjectCloudEvent) => void): void {
+    this.on("project_cloud.updated", handler);
+  }
+
+  /**
+   * Remove a handler for project_cloud.updated events.
+   * @param handler - The handler to remove
+   */
+  offProjectCloudUpdated(handler: (data: types.ProjectCloudEvent) => void): void {
+    this.off("project_cloud.updated", handler);
   }
 
   /**
@@ -1451,7 +1451,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when realtime.snapshot event is received
    */
   onRealtimeSnapshot(handler: (data: types.RealtimeRealtimeSnapshot) => void): void {
-    this.on('realtime.snapshot', handler);
+    this.on("realtime.snapshot", handler);
   }
 
   /**
@@ -1459,7 +1459,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offRealtimeSnapshot(handler: (data: types.RealtimeRealtimeSnapshot) => void): void {
-    this.off('realtime.snapshot', handler);
+    this.off("realtime.snapshot", handler);
   }
 
   /**
@@ -1467,7 +1467,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when realtime.status event is received
    */
   onRealtimeStatus(handler: (data: types.RealtimeRealtimeStatus) => void): void {
-    this.on('realtime.status', handler);
+    this.on("realtime.status", handler);
   }
 
   /**
@@ -1475,7 +1475,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offRealtimeStatus(handler: (data: types.RealtimeRealtimeStatus) => void): void {
-    this.off('realtime.status', handler);
+    this.off("realtime.status", handler);
   }
 
   /**
@@ -1483,7 +1483,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when release_report.deleted event is received
    */
   onReleaseReportDeleted(handler: (data: types.ReleaseReportEvent) => void): void {
-    this.on('release_report.deleted', handler);
+    this.on("release_report.deleted", handler);
   }
 
   /**
@@ -1491,7 +1491,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offReleaseReportDeleted(handler: (data: types.ReleaseReportEvent) => void): void {
-    this.off('release_report.deleted', handler);
+    this.off("release_report.deleted", handler);
   }
 
   /**
@@ -1499,7 +1499,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when release_report.updated event is received
    */
   onReleaseReportUpdated(handler: (data: types.ReleaseReportEvent) => void): void {
-    this.on('release_report.updated', handler);
+    this.on("release_report.updated", handler);
   }
 
   /**
@@ -1507,7 +1507,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offReleaseReportUpdated(handler: (data: types.ReleaseReportEvent) => void): void {
-    this.off('release_report.updated', handler);
+    this.off("release_report.updated", handler);
   }
 
   /**
@@ -1515,7 +1515,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when release_watch.deleted event is received
    */
   onReleaseWatchDeleted(handler: (data: types.Watch) => void): void {
-    this.on('release_watch.deleted', handler);
+    this.on("release_watch.deleted", handler);
   }
 
   /**
@@ -1523,7 +1523,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offReleaseWatchDeleted(handler: (data: types.Watch) => void): void {
-    this.off('release_watch.deleted', handler);
+    this.off("release_watch.deleted", handler);
   }
 
   /**
@@ -1531,7 +1531,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when release_watch.updated event is received
    */
   onReleaseWatchUpdated(handler: (data: types.Watch) => void): void {
-    this.on('release_watch.updated', handler);
+    this.on("release_watch.updated", handler);
   }
 
   /**
@@ -1539,7 +1539,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offReleaseWatchUpdated(handler: (data: types.Watch) => void): void {
-    this.off('release_watch.updated', handler);
+    this.off("release_watch.updated", handler);
   }
 
   /**
@@ -1547,7 +1547,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when source.deleted event is received
    */
   onSourceDeleted(handler: (data: types.Source) => void): void {
-    this.on('source.deleted', handler);
+    this.on("source.deleted", handler);
   }
 
   /**
@@ -1555,7 +1555,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offSourceDeleted(handler: (data: types.Source) => void): void {
-    this.off('source.deleted', handler);
+    this.off("source.deleted", handler);
   }
 
   /**
@@ -1563,7 +1563,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - Function to call when source.updated event is received
    */
   onSourceUpdated(handler: (data: types.Source) => void): void {
-    this.on('source.updated', handler);
+    this.on("source.updated", handler);
   }
 
   /**
@@ -1571,7 +1571,7 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    * @param handler - The handler to remove
    */
   offSourceUpdated(handler: (data: types.Source) => void): void {
-    this.off('source.updated', handler);
+    this.off("source.updated", handler);
   }
 
   /**

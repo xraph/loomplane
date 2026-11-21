@@ -4,6 +4,7 @@ import { codec_ModelDeploymentList } from '../codecs/ModelDeploymentList';
 export const op_aiModelDeployments_list = {
   method: 'GET',
   path: '/api/v1/ai/models/deployments',
+  rootType: 'ModelDeploymentList',
   provides: [],
   invalidates: [],
   responseCodec: codec_ModelDeploymentList,

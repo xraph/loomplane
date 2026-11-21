@@ -52,7 +52,7 @@ func locationWorkload(m *manifest.Manifest, name string, g *graph.Graph) (provid
 
 // locationRequirements reads only this plan's scoped bindings and declared
 // destinations. Unknown dependency destinations are not network evidence.
-func (s *Service) locationRequirements(plan *Plan, m *manifest.Manifest, name string, g *graph.Graph, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption, prior map[string]locationSelection, held map[string]bool, chosen map[string]string, pools map[string]*cloudinfra.Placement) (locationRequirements, error) {
+func (s *Service) locationRequirements(plan *Plan, m *manifest.Manifest, name string, g *graph.Graph, a *cloudprofiles.ProjectCloud, bindings []*Binding, options []ConnectionOption, prior map[string]locationSelection, held map[string]bool, chosen map[string]string, pools map[string]*cloudinfra.Placement) (locationRequirements, error) {
 	out := locationRequirements{}
 	var err error
 	out.Workload, err = locationWorkload(m, name, g)

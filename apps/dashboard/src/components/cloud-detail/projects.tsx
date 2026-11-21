@@ -136,7 +136,7 @@ export function Projects({
             const style = p ? projectStyle(p) : null
             const allowed = targets.filter((t) => g.targetIds.includes(t.id))
             const envs = (usage?.environments ?? []).filter(
-              (e) => e.projectId === g.projectId && e.assigned
+              (e) => e.projectId === g.projectId && e.default
             )
             return (
               <CloudTableRow key={g.projectId}>
@@ -165,6 +165,7 @@ export function Projects({
                       </span>
                     )
                   }
+                  meta={g.default ? "Default Cloud" : undefined}
                 />
                 <Cell className="flex flex-wrap gap-1.5 text-xs">
                   {g.targetIds.length === 0 ? (
@@ -187,7 +188,9 @@ export function Projects({
                     "…"
                   ) : envs.length === 0 ? (
                     <span className="text-muted-foreground">
-                      None chose this Cloud yet
+                      {g.default
+                        ? "No environments yet"
+                        : "Not its default Cloud"}
                     </span>
                   ) : (
                     envs.map((e) => {

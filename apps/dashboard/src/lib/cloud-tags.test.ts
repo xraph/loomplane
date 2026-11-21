@@ -87,16 +87,27 @@ it("selects one environment's target by tags and pins the others", () => {
       },
     },
   }
-  const next = adoptServiceTarget(m, environments, "production", "web", {
-    tags: ["eu", "web"],
-  })
+  const next = adoptServiceTarget(
+    m,
+    "web",
+    {
+      tags: ["eu", "web"],
+    },
+    {
+      environment: "production",
+      environments: environments,
+    }
+  )
   const web = next.services!.web
   expect(web.cloud_target).toBeUndefined()
   expect(web.environments.production).toEqual({ cloud_tags: ["eu", "web"] })
   expect(web.environments.staging).toEqual({ cloud_tags: ["preview"] })
 
   // Switching back to a name drops the tags in that environment only.
-  const named = adoptServiceTarget(next, environments, "staging", "web", "edge")
+  const named = adoptServiceTarget(next, "web", "edge", {
+    environment: "staging",
+    environments: environments,
+  })
   expect(named.services!.web.environments.staging).toEqual({
     cloud_target: "edge",
   })

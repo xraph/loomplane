@@ -302,8 +302,13 @@ func TestSharedSyncAdmissionRejectsSourceAllocationMismatch(t *testing.T) {
 //go:embed testdata/pre_allocation_pool_functions.sql
 var preAllocationPoolFunctions string
 
+// applySyncUpgrade replays the shared sync upgrade over legacy rows. The
+// upgrade's function bodies have since been superseded, and some name tables
+// later migrations dropped, so every function the replay changed goes back to
+// its current definition: the rows see the upgrade, the code is today's.
 func applySyncUpgrade(t *testing.T, f *poolFixture) {
 	t.Helper()
+	head := functionDefinitions(t, f)
 	for _, migration := range migrations.Group().Migrations() {
 		if migration.Name == "routed_releases" || migration.Name == "shared_sync_admission" || migration.Name == "shared_sync_capacity_ledger" {
 			if err := migration.Up(t.Context(), pgmigrate.New(f.db)); err != nil {
@@ -311,6 +316,36 @@ func applySyncUpgrade(t *testing.T, f *poolFixture) {
 			}
 		}
 	}
+	for name, def := range functionDefinitions(t, f) {
+		if current, ok := head[name]; ok && current != def {
+			if _, err := f.sql.Exec(t.Context(), current); err != nil {
+				t.Fatalf("restore %s: %v", name, err)
+			}
+		}
+	}
+}
+
+// functionDefinitions maps each Loomplane function to the statement that
+// creates it as it stands.
+func functionDefinitions(t *testing.T, f *poolFixture) map[string]string {
+	t.Helper()
+	rows, err := f.sql.Query(t.Context(), `SELECT p.oid::regprocedure::text, pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f' AND p.proname LIKE 'loomplane\_%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, def string
+		if err = rows.Scan(&name, &def); err != nil {
+			t.Fatal(err)
+		}
+		out[name] = def
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 func TestSharedSyncForwardUpgradeRetainsLegacyPlansAndBindings(t *testing.T) {
 	f := newPoolFixture(t)

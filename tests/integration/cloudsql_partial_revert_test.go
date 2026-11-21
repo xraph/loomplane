@@ -269,9 +269,9 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 	var profile cloudprofiles.Profile
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds", cloudprofiles.CreateInput{Name: "Unrelated placement"}, &profile)
 	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, base+"/environments/"+plan.EnvironmentID+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: profile.ID}, &preview)
-	if len(preview.Blockers) != 0 || len(preview.Environments) != 1 || preview.Environments[0].Summary != (cloudprofiles.PlanSummary{}) {
-		t.Fatalf("Cloud assignment imported partial SQL: %+v", preview)
+	c.must(http.StatusOK, http.MethodPost, base+"/default-cloud/preview", apiclient.DefaultCloudInput{CloudID: profile.ID}, &preview)
+	if production := cloudPreviewEnvironment(&preview, plan.EnvironmentID); len(preview.Blockers) != 0 || len(preview.Environments) != 2 || production == nil || production.Summary != (cloudprofiles.PlanSummary{}) {
+		t.Fatalf("default Cloud change imported partial SQL: %+v", preview)
 	}
 	assignment := applyCloudAPI(t, c, base, &preview, "assign-around-partial")
 	if got := waitCloudAPI(t, c, base, assignment.ID); got.Status != cloudprofiles.SyncSucceeded {
@@ -279,7 +279,7 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 	}
 	denied.must(http.StatusForbidden, http.MethodPost, base+"/cloud-syncs/"+assignment.ID+"/revert/preview", nil, nil)
 	c.must(http.StatusOK, http.MethodPost, base+"/cloud-syncs/"+assignment.ID+"/revert/preview", nil, &preview)
-	if preview.Reverts != assignment.ID || len(preview.Blockers) != 0 || preview.Environments[0].Summary != (cloudprofiles.PlanSummary{}) {
+	if production := cloudPreviewEnvironment(&preview, plan.EnvironmentID); preview.Reverts != assignment.ID || len(preview.Blockers) != 0 || production == nil || production.Summary != (cloudprofiles.PlanSummary{}) {
 		t.Fatalf("revert imported partial SQL: %+v", preview)
 	}
 	input := apiclient.ApplyCloudInput{PreviewID: preview.ID, Revision: preview.Revision, IdempotencyKey: "revert-around-partial"}

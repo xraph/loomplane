@@ -55,7 +55,7 @@ func permission(event string) security.Permission {
 		return security.DeploymentRead
 	case "binding":
 		return security.InfrastructureRead
-	case "connection", "cloud", "cloud_target", "environment_cloud":
+	case "connection", "cloud", "cloud_target", "project_cloud":
 		return security.CloudAccountRead
 	case "node":
 		return security.NodeRead

@@ -54,7 +54,6 @@ import {
   mayCancelReport,
   stateLabel,
   stateTone,
-  useReleaseReportEvents,
   type StateTone,
 } from "@/lib/release-reports"
 import { ago } from "@/lib/relative-time"
@@ -102,7 +101,6 @@ function AgentOff() {
 }
 
 function Loaded({ id }: { id: string }) {
-  useReleaseReportEvents()
   const report = useQuery(useReleaseReportsGet, { path: { id } })
   // Without a live connection the report still catches up while it's active.
   useRefetchWhile(

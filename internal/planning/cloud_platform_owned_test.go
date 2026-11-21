@@ -15,6 +15,7 @@ import (
 // Loomplane Cloud and one user Cloud it could move to. Methods a preview
 // doesn't reach stay nil and panic.
 type platformSyncStore struct {
+	defaultCloud string
 	cloudprofiles.SyncStore
 	saved *cloudprofiles.Preview
 }
@@ -44,11 +45,24 @@ func (st *platformSyncStore) GetTarget(_ context.Context, org, _, cloud, id stri
 func (st *platformSyncStore) ListTargets(context.Context, string, string, string) ([]*cloudprofiles.Target, error) {
 	return []*cloudprofiles.Target{}, nil
 }
-func (st *platformSyncStore) Resolve(_ context.Context, org, project, env string) (*cloudprofiles.Assignment, error) {
-	return &cloudprofiles.Assignment{OrgID: org, ProjectID: project, EnvironmentID: env, CloudID: platformProfile.ID, CloudRevision: 1, Revision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{*platformTarget}}, nil
+
+// ResolveCloud answers the platform Cloud, the project's default unless the
+// test moved it, and an empty Cloud for any other ID.
+func (st *platformSyncStore) ResolveCloud(_ context.Context, org, project, cloud string) (*cloudprofiles.ProjectCloud, error) {
+	current, _, _ := st.DefaultCloud(context.Background(), org, project)
+	if cloud == "" {
+		cloud = current
+	}
+	if cloud != platformProfile.ID {
+		return &cloudprofiles.ProjectCloud{OrgID: org, ProjectID: project, CloudID: cloud, CloudRevision: 1, GrantRevision: 1, Default: cloud == current, Targets: []cloudprofiles.Target{}}, nil
+	}
+	return &cloudprofiles.ProjectCloud{OrgID: org, ProjectID: project, CloudID: platformProfile.ID, CloudRevision: 1, GrantRevision: 1, Default: cloud == current, Targets: []cloudprofiles.Target{*platformTarget}}, nil
 }
-func (st *platformSyncStore) AssignmentGeneration(context.Context, string, string, string) (int64, error) {
-	return 1, nil
+func (st *platformSyncStore) DefaultCloud(context.Context, string, string) (string, int64, error) {
+	if st.defaultCloud != "" {
+		return st.defaultCloud, 1, nil
+	}
+	return platformProfile.ID, 1, nil
 }
 func (st *platformSyncStore) SnapshotBindings(context.Context, string, string) (json.RawMessage, error) {
 	return json.RawMessage(`[]`), nil
@@ -96,11 +110,11 @@ func TestPreviewCloudChangeOnPlatformOwnedCloud(t *testing.T) {
 		t.Fatal("a refused change saved a preview")
 	}
 
-	preview, err := s.PreviewCloudChange(ctx, p, "proj", cloudprofiles.ChangeInput{CloudID: "cloud_user", EnvironmentID: "env", Revision: 1})
+	preview, err := s.PreviewCloudChange(ctx, p, "proj", cloudprofiles.ChangeInput{CloudID: "cloud_user", ProjectDefault: true, Revision: 1})
 	if err != nil {
-		t.Fatalf("moving an environment off the platform Cloud: %v", err)
+		t.Fatalf("moving a project off the platform Cloud: %v", err)
 	}
-	if st.saved == nil || preview.BeforeAssignment == nil || preview.BeforeAssignment.CloudID != "cloud_platform" || preview.AfterAssignment == nil || preview.AfterAssignment.CloudID != "cloud_user" {
+	if st.saved == nil || preview.BeforeCloud == nil || preview.BeforeCloud.CloudID != "cloud_platform" || preview.AfterCloud == nil || preview.AfterCloud.CloudID != "cloud_user" {
 		t.Fatalf("preview = %+v", preview)
 	}
 }

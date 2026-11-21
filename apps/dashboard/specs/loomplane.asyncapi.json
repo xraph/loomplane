@@ -293,15 +293,6 @@
           "title": "environment.updated event",
           "summary": "SSE event: environment.updated"
         },
-        "environment_cloud.updated": {
-          "payload": {
-            "$ref": "#/components/schemas/EnvironmentCloudEvent"
-          },
-          "contentType": "text/event-stream",
-          "name": "environment_cloud.updated",
-          "title": "environment_cloud.updated event",
-          "summary": "SSE event: environment_cloud.updated"
-        },
         "forge.gap": {
           "payload": {
             "$ref": "#/components/schemas/RealtimeForgeGap"
@@ -391,6 +382,15 @@
           "name": "project.updated",
           "title": "project.updated event",
           "summary": "SSE event: project.updated"
+        },
+        "project_cloud.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/ProjectCloudEvent"
+          },
+          "contentType": "text/event-stream",
+          "name": "project_cloud.updated",
+          "title": "project_cloud.updated event",
+          "summary": "SSE event: project_cloud.updated"
         },
         "realtime.snapshot": {
           "payload": {
@@ -639,7 +639,7 @@
           "entityType": "CanaryVerdict",
           "intent": "upsert",
           "invalidates": [
-            "CanaryReport"
+            "CanaryVerdict[]"
           ],
           "message": "canary_verdict.updated",
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
@@ -648,7 +648,7 @@
           "entityType": "CanaryVerdict",
           "intent": "evict",
           "invalidates": [
-            "CanaryReport"
+            "CanaryVerdict[]"
           ],
           "message": "canary_verdict.deleted",
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
@@ -708,21 +708,21 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.Target"
         },
         {
-          "entityType": "EnvironmentCloudEvent",
+          "entityType": "ProjectCloudEvent",
           "intent": "patch",
           "invalidates": [
-            "EnvironmentCloud"
+            "DefaultCloud:{projectId}"
           ],
-          "message": "environment_cloud.updated",
-          "type": "github.com/xraph/loomplane/internal/cloudprofiles.EnvironmentCloudEvent"
+          "message": "project_cloud.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.ProjectCloudEvent"
         },
         {
           "entityType": "CloudSyncEvent",
           "intent": "patch",
           "invalidates": [
-            "Sync",
+            "Sync:{id}",
             "Sync[]",
-            "EnvironmentCloud"
+            "DefaultCloud:{projectId}"
           ],
           "message": "cloud_sync.updated",
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
@@ -731,16 +731,13 @@
           "entityType": "ClusterChange",
           "intent": "patch",
           "invalidates": [
-            "CloudCluster",
-            "CloudClusterPage",
-            "CloudClusterOperation",
-            "CloudClusterOperationPage",
-            "Target",
-            "Target[]",
-            "Connection",
+            "CloudCluster:{resourceId}",
+            "CloudCluster[]",
+            "CloudClusterOperation:{operationId}",
+            "CloudClusterOperation[]",
+            "CloudprofilesTarget[]",
             "Connection[]",
-            "Profile",
-            "Profile[]"
+            "Profile:{cloudId}"
           ],
           "message": "cloud_cluster.updated",
           "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
@@ -749,8 +746,8 @@
           "entityType": "CapacityChange",
           "intent": "patch",
           "invalidates": [
-            "CapacityPolicyView:{cloud_id}",
-            "CapacityUsage:{cloud_id}",
+            "CapacityPolicyView:{cloudId}",
+            "CapacityUsage:{cloudId}",
             "Expansion[]"
           ],
           "message": "cloud_capacity.updated",
@@ -760,7 +757,7 @@
           "entityType": "NotificationCreated",
           "intent": "upsert",
           "invalidates": [
-            "NotificationList"
+            "Notification[]"
           ],
           "message": "notification.created",
           "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
@@ -776,19 +773,18 @@
         },
         {
           "entityType": "TaskEvent",
-          "intent": "upsert",
+          "intent": "patch",
           "invalidates": [
-            "AgentTask",
-            "AgentTask[]"
+            "Task:{id}"
           ],
           "message": "agent_task.updated",
           "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
         },
         {
           "entityType": "TaskEvent",
-          "intent": "evict",
+          "intent": "patch",
           "invalidates": [
-            "TaskEvent[]"
+            "Task:{id}"
           ],
           "message": "agent_task.deleted",
           "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
@@ -797,8 +793,7 @@
           "entityType": "Report",
           "intent": "upsert",
           "invalidates": [
-            "AgentReport",
-            "AgentReport[]"
+            "Report[]"
           ],
           "message": "agent_report.updated",
           "type": "github.com/xraph/loomplane/internal/agentreports.Report"
@@ -814,28 +809,29 @@
         },
         {
           "entityType": "RequestEvent",
-          "intent": "upsert",
+          "intent": "patch",
           "invalidates": [
-            "AgentRequest",
-            "AgentRequest[]"
+            "Request:{id}",
+            "Request[]"
           ],
           "message": "agent_request.updated",
           "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
         },
         {
           "entityType": "RequestEvent",
-          "intent": "evict",
+          "intent": "patch",
           "invalidates": [
-            "RequestEvent[]"
+            "Request:{id}",
+            "Request[]"
           ],
           "message": "agent_request.deleted",
           "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
         },
         {
           "entityType": "ReleaseReportEvent",
-          "intent": "upsert",
+          "intent": "patch",
           "invalidates": [
-            "ReleaseReport",
+            "ReleaseReport:{id}",
             "ReleaseReport[]"
           ],
           "message": "release_report.updated",
@@ -843,9 +839,9 @@
         },
         {
           "entityType": "ReleaseReportEvent",
-          "intent": "evict",
+          "intent": "patch",
           "invalidates": [
-            "ReleaseReport",
+            "ReleaseReport:{id}",
             "ReleaseReport[]"
           ],
           "message": "release_report.deleted",
@@ -1073,7 +1069,7 @@
           "entityType": "CanaryVerdict",
           "intent": "upsert",
           "invalidates": [
-            "CanaryReport"
+            "CanaryVerdict[]"
           ],
           "message": "canary_verdict.updated",
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
@@ -1082,7 +1078,7 @@
           "entityType": "CanaryVerdict",
           "intent": "evict",
           "invalidates": [
-            "CanaryReport"
+            "CanaryVerdict[]"
           ],
           "message": "canary_verdict.deleted",
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
@@ -1142,21 +1138,21 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.Target"
         },
         {
-          "entityType": "EnvironmentCloudEvent",
+          "entityType": "ProjectCloudEvent",
           "intent": "patch",
           "invalidates": [
-            "EnvironmentCloud"
+            "DefaultCloud:{projectId}"
           ],
-          "message": "environment_cloud.updated",
-          "type": "github.com/xraph/loomplane/internal/cloudprofiles.EnvironmentCloudEvent"
+          "message": "project_cloud.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudprofiles.ProjectCloudEvent"
         },
         {
           "entityType": "CloudSyncEvent",
           "intent": "patch",
           "invalidates": [
-            "Sync",
+            "Sync:{id}",
             "Sync[]",
-            "EnvironmentCloud"
+            "DefaultCloud:{projectId}"
           ],
           "message": "cloud_sync.updated",
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
@@ -1165,16 +1161,13 @@
           "entityType": "ClusterChange",
           "intent": "patch",
           "invalidates": [
-            "CloudCluster",
-            "CloudClusterPage",
-            "CloudClusterOperation",
-            "CloudClusterOperationPage",
-            "Target",
-            "Target[]",
-            "Connection",
+            "CloudCluster:{resourceId}",
+            "CloudCluster[]",
+            "CloudClusterOperation:{operationId}",
+            "CloudClusterOperation[]",
+            "CloudprofilesTarget[]",
             "Connection[]",
-            "Profile",
-            "Profile[]"
+            "Profile:{cloudId}"
           ],
           "message": "cloud_cluster.updated",
           "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
@@ -1183,8 +1176,8 @@
           "entityType": "CapacityChange",
           "intent": "patch",
           "invalidates": [
-            "CapacityPolicyView:{cloud_id}",
-            "CapacityUsage:{cloud_id}",
+            "CapacityPolicyView:{cloudId}",
+            "CapacityUsage:{cloudId}",
             "Expansion[]"
           ],
           "message": "cloud_capacity.updated",
@@ -1194,7 +1187,7 @@
           "entityType": "NotificationCreated",
           "intent": "upsert",
           "invalidates": [
-            "NotificationList"
+            "Notification[]"
           ],
           "message": "notification.created",
           "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
@@ -1210,19 +1203,18 @@
         },
         {
           "entityType": "TaskEvent",
-          "intent": "upsert",
+          "intent": "patch",
           "invalidates": [
-            "AgentTask",
-            "AgentTask[]"
+            "Task:{id}"
           ],
           "message": "agent_task.updated",
           "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
         },
         {
           "entityType": "TaskEvent",
-          "intent": "evict",
+          "intent": "patch",
           "invalidates": [
-            "TaskEvent[]"
+            "Task:{id}"
           ],
           "message": "agent_task.deleted",
           "type": "github.com/xraph/loomplane/internal/agentruns.TaskEvent"
@@ -1231,8 +1223,7 @@
           "entityType": "Report",
           "intent": "upsert",
           "invalidates": [
-            "AgentReport",
-            "AgentReport[]"
+            "Report[]"
           ],
           "message": "agent_report.updated",
           "type": "github.com/xraph/loomplane/internal/agentreports.Report"
@@ -1248,28 +1239,29 @@
         },
         {
           "entityType": "RequestEvent",
-          "intent": "upsert",
+          "intent": "patch",
           "invalidates": [
-            "AgentRequest",
-            "AgentRequest[]"
+            "Request:{id}",
+            "Request[]"
           ],
           "message": "agent_request.updated",
           "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
         },
         {
           "entityType": "RequestEvent",
-          "intent": "evict",
+          "intent": "patch",
           "invalidates": [
-            "RequestEvent[]"
+            "Request:{id}",
+            "Request[]"
           ],
           "message": "agent_request.deleted",
           "type": "github.com/xraph/loomplane/internal/agentrequests.RequestEvent"
         },
         {
           "entityType": "ReleaseReportEvent",
-          "intent": "upsert",
+          "intent": "patch",
           "invalidates": [
-            "ReleaseReport",
+            "ReleaseReport:{id}",
             "ReleaseReport[]"
           ],
           "message": "release_report.updated",
@@ -1277,9 +1269,9 @@
         },
         {
           "entityType": "ReleaseReportEvent",
-          "intent": "evict",
+          "intent": "patch",
           "invalidates": [
-            "ReleaseReport",
+            "ReleaseReport:{id}",
             "ReleaseReport[]"
           ],
           "message": "release_report.deleted",
@@ -1424,9 +1416,6 @@
           "$ref": "#/channels/api-v1-realtime-events/messages/environment.updated"
         },
         {
-          "$ref": "#/channels/api-v1-realtime-events/messages/environment_cloud.updated"
-        },
-        {
           "$ref": "#/channels/api-v1-realtime-events/messages/forge.gap"
         },
         {
@@ -1455,6 +1444,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/project.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/project_cloud.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/realtime.snapshot"
@@ -1903,16 +1895,12 @@
           "template",
           "template_hash",
           "commit_sha",
-          "assignment_revision",
           "cloud_revision",
           "target_revision",
           "grant_revision",
           "target_name"
         ],
         "properties": {
-          "assignment_revision": {
-            "type": "integer"
-          },
           "cloud_revision": {
             "type": "integer"
           },
@@ -2104,7 +2092,6 @@
           "account_identity",
           "cloud_id",
           "cloud_revision",
-          "assignment_revision",
           "target_id",
           "target_revision",
           "target_name",
@@ -2117,9 +2104,6 @@
           },
           "allocation": {
             "type": "string"
-          },
-          "assignment_revision": {
-            "type": "integer"
           },
           "cloud_id": {
             "type": "string"
@@ -5996,34 +5980,6 @@
           }
         }
       },
-      "EnvironmentCloudEvent": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "project_id",
-          "environment_id",
-          "cloud_id",
-          "revision"
-        ],
-        "properties": {
-          "cloud_id": {
-            "type": "string",
-            "nullable": true
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          }
-        }
-      },
       "RealtimeForgeGap": {
         "type": "object",
         "required": [
@@ -6475,6 +6431,26 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ProjectCloudEvent": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "project_id",
+          "cloud_id"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
           }
         }
       },
@@ -9019,40 +8995,6 @@
         "title": "environment.updated event",
         "summary": "SSE event: environment.updated"
       },
-      "api-v1-realtime-eventsenvironment_cloud.updated": {
-        "payload": {
-          "type": "object",
-          "required": [
-            "org_id",
-            "project_id",
-            "environment_id",
-            "cloud_id",
-            "revision"
-          ],
-          "properties": {
-            "cloud_id": {
-              "type": "string",
-              "nullable": true
-            },
-            "environment_id": {
-              "type": "string"
-            },
-            "org_id": {
-              "type": "string"
-            },
-            "project_id": {
-              "type": "string"
-            },
-            "revision": {
-              "type": "integer"
-            }
-          }
-        },
-        "contentType": "text/event-stream",
-        "name": "environment_cloud.updated",
-        "title": "environment_cloud.updated event",
-        "summary": "SSE event: environment_cloud.updated"
-      },
       "api-v1-realtime-eventsforge.gap": {
         "payload": {
           "type": "object",
@@ -9868,6 +9810,32 @@
         "name": "project.updated",
         "title": "project.updated event",
         "summary": "SSE event: project.updated"
+      },
+      "api-v1-realtime-eventsproject_cloud.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "org_id",
+            "project_id",
+            "cloud_id"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string",
+              "nullable": true
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "project_cloud.updated",
+        "title": "project_cloud.updated event",
+        "summary": "SSE event: project_cloud.updated"
       },
       "api-v1-realtime-eventsrealtime.snapshot": {
         "payload": {

@@ -68,7 +68,7 @@ func platformRequest(plan *Plan, name, region string, size *manifest.Size) (plat
 // refusePlatformLocation refuses location constraints on a service that a
 // Loomplane Cloud target places, or that only Loomplane Cloud targets could
 // place: the platform chooses its own hosts.
-func refusePlatformLocation(name string, set manifest.Settings, a *cloudprofiles.Assignment) error {
+func refusePlatformLocation(name string, set manifest.Settings, a *cloudprofiles.ProjectCloud) error {
 	if set.Placement == nil || a == nil {
 		return nil
 	}
@@ -91,7 +91,7 @@ func refusePlatformLocation(name string, set manifest.Settings, a *cloudprofiles
 // Loomplane Cloud target. A refusal is the plan's problem at the service.
 // A Cloud default is never a Loomplane Cloud target, so only services that
 // name or tag one are previewed.
-func (s *Service) resolvePlatform(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, held map[string]bool) (map[string]*platformcloud.Ref, error) {
+func (s *Service) resolvePlatform(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.ProjectCloud, held map[string]bool) (map[string]*platformcloud.Ref, error) {
 	out := map[string]*platformcloud.Ref{}
 	if a == nil {
 		return out, nil
@@ -128,7 +128,7 @@ func (s *Service) resolvePlatform(ctx context.Context, plan *Plan, m *manifest.M
 
 // platformPlacement pins a service to a Loomplane Cloud target. It looks up
 // no connection: the target has none, and the room is ref's.
-func platformPlacement(name, path string, set manifest.Settings, a *cloudprofiles.Assignment, t cloudprofiles.Target, ref *platformcloud.Ref) (CloudPlacement, manifest.Settings, error) {
+func platformPlacement(name, path string, set manifest.Settings, a *cloudprofiles.ProjectCloud, t cloudprofiles.Target, ref *platformcloud.Ref) (CloudPlacement, manifest.Settings, error) {
 	if ref == nil {
 		message := platformUnavailable
 		if name == dbGatewayName {
@@ -148,27 +148,27 @@ func platformPlacement(name, path string, set manifest.Settings, a *cloudprofile
 		return CloudPlacement{}, set, err
 	}
 	set.Provider, set.Region, set.Target = platformRuntime, t.Region, ""
-	set.CloudTarget, set.CloudTags = "", nil
+	set.Cloud, set.CloudTarget, set.CloudTags = "", "", nil
 	return p, set, nil
 }
 
 // platformCloudPin pins the assignment's Loomplane Cloud target t with the
 // room ref previewed in it. The pin names no connection, pool or server.
-func platformCloudPin(a *cloudprofiles.Assignment, t cloudprofiles.Target, ref *platformcloud.Ref, regionSource string) (CloudPlacement, error) {
+func platformCloudPin(a *cloudprofiles.ProjectCloud, t cloudprofiles.Target, ref *platformcloud.Ref, regionSource string) (CloudPlacement, error) {
 	if !isPlatformTarget(&t) || ref == nil || ref.Region != t.Region {
 		return CloudPlacement{}, fmt.Errorf("a Loomplane Cloud placement needs its target's region previewed")
 	}
 	if regionSource == "" {
 		regionSource = "default"
 	}
-	return CloudPlacement{GrantRevision: a.GrantRevision, CloudID: a.CloudID, CloudRevision: a.CloudRevision, AssignmentRevision: a.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, Region: t.Region, RegionSource: regionSource, Platform: ref}, nil
+	return CloudPlacement{GrantRevision: a.GrantRevision, CloudID: a.CloudID, CloudRevision: a.CloudRevision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, Region: t.Region, RegionSource: regionSource, Platform: ref}, nil
 }
 
 // syncPlatformPlacements previews room on Loomplane Cloud for every applied
 // service a Cloud sync moves onto one of after's Loomplane Cloud targets,
 // at the size it was applied with. selector picks the services the sync
 // moves, as appliedCloudPlan does.
-func (s *Service) syncPlatformPlacements(ctx context.Context, plan *Plan, bindings []*Binding, after *cloudprofiles.Assignment, selector string) (map[string]CloudPlacement, error) {
+func (s *Service) syncPlatformPlacements(ctx context.Context, plan *Plan, bindings []*Binding, after *cloudprofiles.ProjectCloud, selector string) (map[string]CloudPlacement, error) {
 	out := map[string]CloudPlacement{}
 	if after == nil {
 		return out, nil

@@ -52,7 +52,7 @@ func lifecycleCleanupFixture(t *testing.T, a *capacityAPI, attachmentID string) 
 	if err = a.sql.QueryRow(ctx, `SELECT id FROM loomplane_cloud_targets WHERE org_id=$1 AND connection_id=$2`, a.org, attachment.RuntimeConnectionID).Scan(&target); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.sql.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES($1,$2,$3,$4,1) ON CONFLICT DO NOTHING`, a.org, a.project, environment, a.cloud); err != nil {
+	if _, err = a.sql.Exec(ctx, defaultCloudSQL(a.org, a.project, a.cloud)); err != nil {
 		t.Fatal(err)
 	}
 	infrastructure, err := forge.InjectType[*cloudinfra.Service](a.r.app.(forge.App).Container())
@@ -64,7 +64,7 @@ func lifecycleCleanupFixture(t *testing.T, a *capacityAPI, attachmentID string) 
 		t.Fatal(err)
 	}
 	plan := &planning.Plan{ID: "fixture-cleanup-plan", OrgID: a.org, ProjectID: a.project, EnvironmentID: environment, Environment: "production", CreatedBy: owner}
-	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: attachment.RuntimeConnectionID, TargetSettings: map[string]string{"managed_attachment_id": attachmentID, "managed_project_id": a.project, "managed_resource_id": r.ID, "architecture": "amd64"}, CapacityMode: "best_effort", Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 1}, CloudPlacement: &planning.CloudPlacement{CloudID: a.cloud, CloudRevision: 1, AssignmentRevision: 1, TargetID: target, TargetRevision: 1, GrantRevision: 1, ConnectionID: attachment.RuntimeConnectionID, Provider: "kubernetes"}}
+	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: attachment.RuntimeConnectionID, TargetSettings: map[string]string{"managed_attachment_id": attachmentID, "managed_project_id": a.project, "managed_resource_id": r.ID, "architecture": "amd64"}, CapacityMode: "best_effort", Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 1}, CloudPlacement: &planning.CloudPlacement{CloudID: a.cloud, CloudRevision: 1, TargetID: target, TargetRevision: 1, GrantRevision: 1, ConnectionID: attachment.RuntimeConnectionID, Provider: "kubernetes"}}
 	result := &planning.Result{Executable: true, Connections: map[string]string{"kubernetes": attachment.RuntimeConnectionID}, Actions: []planning.Action{{ID: "service:fixture", Subject: planning.ServiceSubject, Name: "fixture", Op: planning.Create, Provider: "kubernetes", Service: cfg}}}
 	if err = svc.PrepareClusterWorkloadDemands(ctx, plan, result); err != nil {
 		t.Fatal(err)

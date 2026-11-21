@@ -344,10 +344,7 @@ function WhereServicesRun({ project }: { project: Project }) {
   const environment = list.some((e) => e.name === picked)
     ? picked
     : (list[0]?.name ?? "")
-  const ctx = usePlacementContext(
-    project.id,
-    list.find((e) => e.name === environment)?.id
-  )
+  const ctx = usePlacementContext(project.id)
   const manifest = current.data?.manifest
   const rows =
     manifest && view.data?.graph

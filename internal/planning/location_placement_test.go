@@ -195,7 +195,7 @@ type locationTestStore struct {
 func (s locationTestStore) LocationPolicy(context.Context, string, string) (*cloudprofiles.LocationPolicy, error) {
 	return &s.policy, nil
 }
-func (s locationTestStore) LocationCandidate(_ context.Context, _ *Plan, _ *cloudprofiles.Assignment, target cloudprofiles.Target, _ manifest.Settings, _ cloudinfra.PlacementRequest, _ cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
+func (s locationTestStore) LocationCandidate(_ context.Context, _ *Plan, _ *cloudprofiles.ProjectCloud, target cloudprofiles.Target, _ manifest.Settings, _ cloudinfra.PlacementRequest, _ cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
 	for _, c := range s.candidates {
 		if c.TargetID == target.ID {
 			return c, nil
@@ -214,7 +214,7 @@ func TestLocationPlacementPlannerSelection(t *testing.T) {
 	s := NewService(Deps{Store: store, Providers: providers.Registry()})
 	s.now = func() time.Time { return in.Now }
 	plan := &Plan{OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
-	assignment := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "vercel", Runtime: "managed", LocationID: "la"}, {ID: "b", Name: "b", Provider: "vercel", Runtime: "managed", LocationID: "lb"}}}
+	assignment := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "vercel", Runtime: "managed", LocationID: "la"}, {ID: "b", Name: "b", Provider: "vercel", Runtime: "managed", LocationID: "lb"}}}
 	raw, err := json.Marshal(ServiceConfig{Workload: provider.WebApp, CloudPlacement: &CloudPlacement{TargetID: "b"}})
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +289,7 @@ func TestLocationPlacementMaterializationPreservesArchitecture(t *testing.T) {
 	s := NewService(Deps{Store: store, Providers: providers.Registry()})
 	s.now = func() time.Time { return in.Now }
 	m := &manifest.Manifest{Services: map[string]manifest.Service{"api": {Kind: "web-app", Settings: manifest.Settings{Placement: &manifest.PlacementConstraints{Architecture: "arm64"}}}}}
-	a := &cloudprofiles.Assignment{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "b", Name: "pool", Provider: "server", PoolID: "mixed"}}}
+	a := &cloudprofiles.ProjectCloud{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "b", Name: "pool", Provider: "server", PoolID: "mixed"}}}
 	raw, err := json.Marshal(ServiceConfig{Workload: provider.WebApp, TargetSettings: map[string]string{"architecture": "amd64"}})
 	if err != nil {
 		t.Fatal(err)
@@ -311,7 +311,7 @@ func TestLocationPlacementDesiredWorkloadBeforeRank(t *testing.T) {
 			s := NewService(Deps{Store: store, Providers: providers.Registry()})
 			s.now = func() time.Time { return in.Now }
 			m := &manifest.Manifest{Services: map[string]manifest.Service{"api": {Source: "cmd/api", Settings: manifest.Settings{Placement: &manifest.PlacementConstraints{}}}}}
-			a := &cloudprofiles.Assignment{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "vercel"}, {ID: "b", Name: "b", Provider: "render"}}}
+			a := &cloudprofiles.ProjectCloud{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "vercel"}, {ID: "b", Name: "b", Provider: "render"}}}
 			var bindings []*Binding
 			if existing {
 				raw, _ := json.Marshal(ServiceConfig{Workload: provider.WebApp, CloudPlacement: &CloudPlacement{TargetID: "a"}})
@@ -338,7 +338,7 @@ func TestLocationPlacementSavedDependencyBeforeRank(t *testing.T) {
 	s := NewService(Deps{Store: store, Providers: providers.Registry()})
 	s.now = func() time.Time { return in.Now }
 	m := &manifest.Manifest{Services: map[string]manifest.Service{"api": {Kind: "web-app", Needs: []string{"db"}, Settings: manifest.Settings{Placement: &manifest.PlacementConstraints{}}}}, Resources: map[string]manifest.Resource{"db": {Kind: "postgres", Provider: "server", Target: "b"}}}
-	a := &cloudprofiles.Assignment{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "server", ConnectionID: "a"}, {ID: "b", Name: "b", Provider: "server", ConnectionID: "b"}}}
+	a := &cloudprofiles.ProjectCloud{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "server", ConnectionID: "a"}, {ID: "b", Name: "b", Provider: "server", ConnectionID: "b"}}}
 	raw := json.RawMessage(`{"provider":"server","target":"b","target_settings":{"docker_id":"b"},"catalog":{}}`)
 	bindings := []*Binding{{Subject: ResourceSubject, Name: "db", Provider: "server", ConnectionID: "b", Config: raw}}
 	options := []ConnectionOption{{ID: "a", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "a"}}, {ID: "b", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "b"}}}
@@ -367,7 +367,7 @@ type locationComputeStore struct {
 func (s locationComputeStore) LocationPolicy(ctx context.Context, org, cloud string) (*cloudprofiles.LocationPolicy, error) {
 	return s.mixed.LocationPolicy(ctx, org, cloud)
 }
-func (s locationComputeStore) LocationCandidate(ctx context.Context, p *Plan, a *cloudprofiles.Assignment, target cloudprofiles.Target, set manifest.Settings, req cloudinfra.PlacementRequest, c cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
+func (s locationComputeStore) LocationCandidate(ctx context.Context, p *Plan, a *cloudprofiles.ProjectCloud, target cloudprofiles.Target, set manifest.Settings, req cloudinfra.PlacementRequest, c cloudinfra.ClusterWorkloadVector) (PlacementCandidate, error) {
 	return s.mixed.LocationCandidate(ctx, p, a, target, set, req, c)
 }
 func (s locationComputeStore) PreviewPlacement(ctx context.Context, req cloudinfra.PlacementRequest) (*cloudinfra.Placement, error) {
@@ -380,7 +380,7 @@ func TestLocationPlacementSamePoolMoveKeepsDesiredConfiguration(t *testing.T) {
 	c.Provider, c.ServerID, c.RuntimeConnectionID, c.ConnectionGeneration = "server", "arm", "arm", 1
 	s, plan, resolver := targetPlanningService(t, "version: 1\nservices:\n  web: {source: cmd/api, kind: worker, placement: {architecture: arm64}}\n")
 	s.now = func() time.Time { return in.Now }
-	resolver.assignment = &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "b", OrgID: "org", CloudID: "cloud", Name: "mixed", Provider: "server", Runtime: "server", PoolID: "mixed", Revision: 1}}}
+	resolver.assignment = &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "b", OrgID: "org", CloudID: "cloud", Name: "mixed", Provider: "server", Runtime: "server", PoolID: "mixed", Revision: 1}}}
 	old := ServiceConfig{Provider: "server", Target: "amd", TargetSettings: map[string]string{"docker_id": "amd", "architecture": "amd64"}, Workload: provider.WebApp, Source: "cmd/api", Image: "Dockerfile", CloudPlacement: &CloudPlacement{CloudID: "cloud", TargetID: "b", TargetName: "mixed", PoolID: "mixed", ServerID: "amd", ConnectionID: "amd"}}
 	raw, err := json.Marshal(old)
 	if err != nil {
@@ -418,7 +418,7 @@ func TestLocationPlacementCurrentPoolLabelDoesNotKeepIneligibleHost(t *testing.T
 	store := locationTestStore{candidates: in.Candidates}
 	s := NewService(Deps{Store: store, Providers: providers.Registry()})
 	s.now = func() time.Time { return in.Now }
-	a := &cloudprofiles.Assignment{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "server"}, {ID: "b", Name: "b", Provider: "server", PoolID: "mixed"}}}
+	a := &cloudprofiles.ProjectCloud{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "server"}, {ID: "b", Name: "b", Provider: "server", PoolID: "mixed"}}}
 	old := ServiceConfig{Target: "old-b", TargetSettings: map[string]string{"architecture": "amd64"}, Workload: provider.Worker, CloudPlacement: &CloudPlacement{TargetID: "b", PoolID: "mixed", ServerID: "old-b"}}
 	raw, err := json.Marshal(old)
 	if err != nil {
@@ -447,7 +447,7 @@ func TestLocationPlacementNewPoolDependencyBeforeRank(t *testing.T) {
 				"dependency": {Kind: "web-app", Settings: manifest.Settings{CloudTarget: "pool", Public: &public}},
 				"consumer":   {Kind: "web-app", Needs: []string{"dependency"}, Settings: manifest.Settings{Placement: &manifest.PlacementConstraints{}}},
 			}}
-			a := &cloudprofiles.Assignment{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "server", ConnectionID: "a"}, {ID: "b", Name: "pool", Provider: "server", PoolID: "mixed"}}}
+			a := &cloudprofiles.ProjectCloud{CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "a", Name: "a", Provider: "server", ConnectionID: "a"}, {ID: "b", Name: "pool", Provider: "server", PoolID: "mixed"}}}
 			options := []ConnectionOption{{ID: "a", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "a"}}, {ID: "amd", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "amd"}}}
 			var bindings []*Binding
 			if scenario == "applied-private" {
@@ -473,7 +473,7 @@ func TestLocationPlacementMixedMovePreservesAppliedInputs(t *testing.T) {
 	c.Provider, c.ServerID, c.RuntimeConnectionID, c.ConnectionGeneration = "server", "amd", "amd", 1
 	s, plan, resolver := targetPlanningService(t, "version: 1\nservices:\n  web: {source: cmd/api, kind: worker, placement: {}}\n  other: {source: cmd/api, kind: worker, cloud_target: mixed, size: {cpu: 1.5, memory: 768}}\n")
 	s.now = func() time.Time { return in.Now }
-	resolver.assignment = &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "b", OrgID: "org", CloudID: "cloud", Name: "mixed", Provider: "server", Runtime: "server", PoolID: "mixed", Revision: 1}}}
+	resolver.assignment = &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 2, Targets: []cloudprofiles.Target{{ID: "b", OrgID: "org", CloudID: "cloud", Name: "mixed", Provider: "server", Runtime: "server", PoolID: "mixed", Revision: 1}}}
 	old := ServiceConfig{Provider: "server", Target: "arm", TargetSettings: map[string]string{"docker_id": "arm", "architecture": "amd64"}, Workload: provider.Worker, Repo: "app", CommitSHA: "old", Source: "cmd/api", Image: "Dockerfile", Size: &manifest.Size{CPU: 1, Memory: 512}, CloudPlacement: &CloudPlacement{CloudID: "cloud", TargetID: "b", TargetName: "mixed", PoolID: "mixed", ServerID: "arm", ConnectionID: "arm"}, AppliedInputs: &AppliedInputs{Variables: "vars", ArtifactKey: "artifact", Source: &PlanSource{Alias: "app", CommitSHA: "old"}}}
 	raw, _ := json.Marshal(old)
 	s.store = locationComputeStore{catalogStore: catalogStore{bindings: []*Binding{{ID: "binding", Subject: ServiceSubject, Name: "other", Provider: "server", ConnectionID: "arm", CommitSHA: "old", Config: raw}}}, mixed: mixedLocationStore{locationTestStore{candidates: []PlacementCandidate{c}}}}
@@ -507,7 +507,7 @@ func TestLocationPlacementSkipsPlatformTargets(t *testing.T) {
 	s := NewService(Deps{Store: store, Providers: providers.Registry()})
 	s.now = func() time.Time { return in.Now }
 	plan := &Plan{OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
-	assignment := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{
+	assignment := &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", GrantRevision: 2, Targets: []cloudprofiles.Target{
 		{ID: "fra", Name: "fra", Provider: "platform", Runtime: "platform", Region: "fra"},
 		{ID: "a", Name: "a", Provider: "vercel", Runtime: "managed", LocationID: "la"},
 	}}

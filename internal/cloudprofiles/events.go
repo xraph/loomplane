@@ -17,11 +17,10 @@ type CloudSyncEvent struct {
 	UpdatedAt    time.Time           `json:"updated_at"`
 }
 
-// EnvironmentCloudEvent invalidates the environment's nullable assignment.
-type EnvironmentCloudEvent struct {
-	OrgID         string  `json:"org_id"`
-	ProjectID     string  `json:"project_id"`
-	EnvironmentID string  `json:"environment_id"`
-	CloudID       *string `json:"cloud_id" nullable:"true" required:"true"`
-	Revision      int64   `json:"revision"`
+// ProjectCloudEvent says a project's default Cloud changed. CloudID is the
+// new default, or null when the project has none.
+type ProjectCloudEvent struct {
+	OrgID     string  `json:"org_id"`
+	ProjectID string  `json:"project_id"`
+	CloudID   *string `json:"cloud_id" nullable:"true" required:"true"`
 }

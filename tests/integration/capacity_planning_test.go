@@ -47,7 +47,7 @@ func futurePlanWith(t *testing.T, f *poolFixture, id, env string, change func(*p
 	t.Helper()
 	req := f.request(env, "api")
 	template := cloudinfra.PoolExpansionPolicy{PoolID: "pool", ConnectionID: "runtime-1", Region: "region", Architecture: "amd64", Image: "ubuntu", AllowedSizes: []string{"small"}}
-	intent := &planning.CapacityIntent{ProviderPin: cloudinfra.CapacityTemplatePin{ConnectionGeneration: 1, AccountID: "runtime-1"}, Template: template, CommitSHA: "commit", AssignmentRevision: 1, CloudRevision: 1, TargetRevision: 1, GrantRevision: 1, TargetName: "shared", Demand: cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: "pool", TargetID: "pool-target", ProjectID: req.ProjectID, EnvironmentID: env, PlanID: id, Service: "api", Architecture: "amd64", PolicyRevision: 1, Resources: cloudinfra.ResourceVector{CPUMillis: 2000, MemoryBytes: 512 << 20}}}
+	intent := &planning.CapacityIntent{ProviderPin: cloudinfra.CapacityTemplatePin{ConnectionGeneration: 1, AccountID: "runtime-1"}, Template: template, CommitSHA: "commit", CloudRevision: 1, TargetRevision: 1, GrantRevision: 1, TargetName: "shared", Demand: cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: "pool", TargetID: "pool-target", ProjectID: req.ProjectID, EnvironmentID: env, PlanID: id, Service: "api", Architecture: "amd64", PolicyRevision: 1, Resources: cloudinfra.ResourceVector{CPUMillis: 2000, MemoryBytes: 512 << 20}}}
 	if change != nil {
 		change(intent)
 	}
@@ -257,7 +257,7 @@ func (deployOnlyTemplateAuth) Require(_ context.Context, p security.Principal, p
 }
 func TestCapacityPlanningTemplateFit(t *testing.T) {
 	f, _, d := expansionFixture(t, false, 0)
-	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1) ON CONFLICT DO NOTHING`); err != nil {
+	if _, err := f.sql.Exec(t.Context(), defaultCloudSQL("org", "proj", "cloud")); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")

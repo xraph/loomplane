@@ -145,8 +145,10 @@ func TestAcceptanceCloudAccountSwitch(t *testing.T) {
 		t.Fatalf("live migration timed out: %s", sync.Status)
 		return nil
 	}
+	var standing apiclient.DefaultCloud
+	c.must(http.StatusOK, http.MethodGet, base+"/default-cloud", nil, &standing)
 	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, base+"/environments/"+env+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
+	c.must(http.StatusOK, http.MethodPost, base+"/default-cloud/preview", apiclient.DefaultCloudInput{CloudID: cloud.ID, Revision: standing.Revision}, &preview)
 	if got := wait(applyCloudAPI(t, c, base, &preview, "assign-live").ID); got.Status != cloudprofiles.SyncSucceeded {
 		t.Fatalf("assignment %s", got.Status)
 	}

@@ -380,7 +380,7 @@ function Body({
       count: variables.data?.variables.length,
       show: true,
     },
-    { id: "cloud", label: "Cloud", show: mayClouds },
+    { id: "cloud", label: "Clouds", show: mayClouds },
     {
       id: "analyses",
       label: "Analyses",
@@ -737,11 +737,7 @@ function Body({
 
         {mayClouds && (
           <TabsContent value="cloud" className="grid gap-4">
-            <CloudsWorkspace
-              key={wantedEnvironment}
-              projectId={project.id}
-              environment={wantedEnvironment}
-            />
+            <CloudsWorkspace projectId={project.id} />
           </TabsContent>
         )}
 

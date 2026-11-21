@@ -182,9 +182,15 @@ type Settings struct {
 	CapacityMode string `json:"capacity_mode,omitempty" yaml:"capacity_mode,omitempty"`
 	// CloudSQLNetwork is the explicit application route for PSC attachments.
 	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty" yaml:"cloud_sql_network,omitempty"`
-	// CloudTarget names a target in the environment's assigned Cloud.
+	// Cloud names, by name, the Cloud this service's cloud_target,
+	// cloud_tags or default placement resolves in: any Cloud granted to the
+	// project. Empty means the project's default Cloud. An environment that
+	// names a target also says which Cloud it's in, so an override with a
+	// target and no cloud goes back to the default Cloud.
+	Cloud string `json:"cloud,omitempty" yaml:"cloud,omitempty"`
+	// CloudTarget names a target in the service's Cloud.
 	CloudTarget string `json:"cloud_target,omitempty" yaml:"cloud_target,omitempty"`
-	// CloudTags select the one target in the assigned Cloud that carries
+	// CloudTags select the one target in the service's Cloud that carries
 	// every tag. Planning fails rather than guessing when none or several do.
 	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
 	Provider  string   `json:"provider,omitempty" yaml:"provider,omitempty"`
@@ -835,6 +841,12 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 			add(path+".cloud_sql_network", "requires a canonical VPC and regional subnet in the consumer project")
 		}
 	}
+	if s.Cloud != "" && (len(s.Cloud) > 64 || strings.TrimSpace(s.Cloud) != s.Cloud) {
+		add(path+".cloud", "must be a Cloud's name, at most 64 characters with no surrounding spaces")
+	}
+	if s.Cloud != "" && (s.Provider != "" || s.Target != "") {
+		add(path+".cloud", "can't be set with provider or target; a service runs on a Cloud or on an account directly")
+	}
 	if s.CloudTarget != "" && (len(s.CloudTarget) > 48 || !cloudTargetRE.MatchString(s.CloudTarget)) {
 		add(path+".cloud_target", "must be a lowercase target slug of at most 48 characters")
 	}
@@ -1164,12 +1176,16 @@ func (s Service) For(env string, d Defaults) Settings {
 		out.Endpoint = nil
 	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
-	// An environment names its target one way, replacing the service's.
+	// An environment names its target one way, replacing the service's,
+	// and in the Cloud it names: none is the project's default.
 	if o.CloudTarget != "" {
-		out.CloudTarget, out.CloudTags = o.CloudTarget, nil
+		out.Cloud, out.CloudTarget, out.CloudTags = o.Cloud, o.CloudTarget, nil
 	}
 	if len(o.CloudTags) > 0 {
-		out.CloudTarget, out.CloudTags = "", o.CloudTags
+		out.Cloud, out.CloudTarget, out.CloudTags = o.Cloud, "", o.CloudTags
+	}
+	if o.Cloud != "" {
+		out.Cloud = o.Cloud
 	}
 	if o.Target != "" {
 		out.Target = o.Target

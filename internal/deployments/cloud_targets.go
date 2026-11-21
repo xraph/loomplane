@@ -46,30 +46,33 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	if platform && (a.Provider != platformProvider || pin.Provider != platformProvider || pin.Default || pin.ConnectionID != "" || a.ConnectionID != "" || pin.PoolID != "" || pin.Platform.Region != pin.Region) {
 		return stale("is not a Loomplane Cloud placement")
 	}
-	if pin.AccountIdentity == "" && !platform || pin.CloudRevision < 1 || pin.AssignmentRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
+	if pin.AccountIdentity == "" && !platform || pin.CloudRevision < 1 || !pin.Default && pin.TargetRevision < 1 {
 		return stale("has no verified identity or revision")
 	}
 	if pin.Provider != a.Provider || reviewed.provider != a.Provider || pin.ConnectionID != a.ConnectionID || pin.Region != a.Region || reviewed.region != a.Region {
 		return stale("differs from the reviewed action")
 	}
-	var assignment *cloudprofiles.Assignment
+	var assignment *cloudprofiles.ProjectCloud
 	var err error
 	if retained {
 		reader, ok := r.cloudProfiles.(interface {
-			RetainedAssignment(context.Context, string, string, string) (*cloudprofiles.Assignment, error)
+			RetainedCloud(context.Context, string, string, string) (*cloudprofiles.ProjectCloud, error)
 		})
 		if !ok {
 			return stale("has no retained cleanup resolver")
 		}
-		assignment, err = reader.RetainedAssignment(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+		assignment, err = reader.RetainedCloud(ctx, plan.OrgID, plan.ProjectID, pin.CloudID)
 	} else {
-		assignment, err = r.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+		// The pinned Cloud as the project sees it now. A default switched
+		// since review advanced this grant's revision, so the check below
+		// catches it.
+		assignment, err = r.cloudProfiles.ResolveCloud(ctx, plan.OrgID, plan.ProjectID, pin.CloudID)
 	}
 	if err != nil {
 		return fmt.Errorf("revalidate Cloud target for %s: %w", a.Name, err)
 	}
-	if assignment == nil || assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.EnvironmentID != plan.EnvironmentID || assignment.CloudID != pin.CloudID || assignment.CloudRevision != pin.CloudRevision || assignment.Revision != pin.AssignmentRevision || !retained && (pin.GrantRevision > 0 && assignment.GrantRevision != pin.GrantRevision || pin.GrantRevision == 0 && assignment.GrantRevision > 1) {
-		return stale("assignment changed since review or is outside this scope")
+	if assignment == nil || assignment.OrgID != plan.OrgID || assignment.ProjectID != plan.ProjectID || assignment.CloudID != pin.CloudID || assignment.CloudRevision != pin.CloudRevision || !retained && (pin.GrantRevision > 0 && assignment.GrantRevision != pin.GrantRevision || pin.GrantRevision == 0 && assignment.GrantRevision > 1) {
+		return stale("Cloud or grant changed since review or is outside this scope")
 	}
 	if !retained && pin.LocationReview != nil {
 		reader, ok := r.cloudProfiles.(interface {
@@ -91,7 +94,7 @@ func (r *Runner) validateCloudPlacementAuthority(ctx context.Context, plan *plan
 	} else {
 		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool { return t.ID == pin.TargetID })
 		if i < 0 {
-			return stale("is missing from the assigned Cloud")
+			return stale("is missing from its Cloud")
 		}
 		target := assignment.Targets[i]
 		if target.OrgID != plan.OrgID || target.CloudID != pin.CloudID || target.Revision != pin.TargetRevision || target.Name != pin.TargetName || target.Provider != pin.Provider || (pin.PoolID == "" && target.ConnectionID != pin.ConnectionID) || target.PoolID != pin.PoolID || target.LocationID != pin.LocationID || target.ManagedResourceID != pin.ManagedResourceID {

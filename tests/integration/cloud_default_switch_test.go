@@ -35,7 +35,7 @@ func defaultSwitchFixture(t *testing.T) *syncFixture {
 		if err := json.Unmarshal(raw, &cfg); err != nil {
 			t.Fatal(err)
 		}
-		cfg.CloudPlacement = &planning.CloudPlacement{Default: true, CloudID: "cloud", CloudRevision: 2, AssignmentRevision: 1, Provider: "vercel", ConnectionID: "old", AccountIdentity: connections.AccountIdentity("vercel", "old", map[string]string{"team_id": "old"})}
+		cfg.CloudPlacement = &planning.CloudPlacement{Default: true, CloudID: "cloud", CloudRevision: 2, Provider: "vercel", ConnectionID: "old", AccountIdentity: connections.AccountIdentity("vercel", "old", map[string]string{"team_id": "old"})}
 		raw, err := json.Marshal(cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -122,12 +122,13 @@ func TestCloudDefaultSwitchMovesOnlyDefaultPlacedServices(t *testing.T) {
 	if connection, revision := cloudDefault(t, f); connection != "new" || revision != 3 {
 		t.Fatalf("acceptance left the default at %s revision %d", connection, revision)
 	}
-	// One switch per Cloud at a time, and no environment joins it meanwhile.
-	if _, err = f.conn.Exec(ctx, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('late','org','proj','late','preview',now(),now())`); err != nil {
+	// One switch per Cloud at a time, and no project takes the Cloud as its
+	// default, bringing its environments, meanwhile.
+	if _, err = f.conn.Exec(ctx, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('late','org','Late','late','ready','usr',now(),now())`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','late','cloud',1)`); err == nil {
-		t.Fatal("an environment joined the Cloud during its default switch")
+	if _, err = f.conn.Exec(ctx, defaultCloudSQL("org", "late", "cloud")); err == nil {
+		t.Fatal("a project joined the Cloud during its default switch")
 	}
 	again, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", Default: true, Revision: 3, Provider: "vercel", ConnectionID: "old"})
 	if err == nil && len(again.Blockers) == 0 {
@@ -195,6 +196,16 @@ func TestCloudDefaultSwitchVisibilityAndClearing(t *testing.T) {
 	}
 	if _, err = f.service.ApplyCloudChange(ctx, actor, "proj", clearing.ID, clearing.Revision, "clear"); err == nil {
 		t.Fatal("blocked clear accepted")
+	}
+
+	// An environment created in a project whose default the Cloud is joins
+	// the next shared change.
+	if _, err = f.conn.Exec(ctx, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('late','org','proj','late','preview',now(),now())`); err != nil {
+		t.Fatal(err)
+	}
+	switching, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", Default: true, Revision: 2, Provider: "vercel", ConnectionID: "new"})
+	if err != nil || cloudPreviewEnvironment(switching, "late") == nil || len(switching.Environments) != 3 {
+		t.Fatalf("new environment missed by the next shared change: %+v %v", switching, err)
 	}
 
 	// Default switches are shared: only an organization Cloud manager reviews them.

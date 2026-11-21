@@ -820,10 +820,6 @@
     },
     "/api/v1/agent/tasks/{id}/stream": {
       "get": {
-        "tags": [
-          "Agent"
-        ],
-        "summary": "Follow a task's events as they happen",
         "description": "Each agent.event carries one event, with its seq as the SSE id. Reconnect with Last-Event-ID (or after) set to the last seq you have, and the stream picks up at the next one. agent.end is the last frame: the task's final status.",
         "operationId": "agentTasks.stream",
         "parameters": [
@@ -846,9 +842,21 @@
         ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
-        }
+        },
+        "summary": "Follow a task's events as they happen",
+        "tags": [
+          "Agent"
+        ],
+        "x-forge-protocol": "sse"
       }
     },
     "/api/v1/agent/watcher": {
@@ -1638,7 +1646,7 @@
         ],
         "x-forge-entity": {
           "idField": "id",
-          "type": "BitbucketWorkspace"
+          "type": "BitbucketWorkspaceView"
         }
       }
     },
@@ -2648,11 +2656,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -2716,11 +2723,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -2784,11 +2790,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -3009,11 +3014,8 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]"
         ]
       }
     },
@@ -3327,11 +3329,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -3406,11 +3407,10 @@
           "Cloud clusters"
         ],
         "x-forge-invalidates": [
-          "CloudCluster",
-          "CloudClusterOperation",
-          "CloudClusterPage",
-          "CloudClusterOperationPage",
-          "RuntimeAttachmentPage"
+          "CloudCluster[]",
+          "CloudClusterOperation[]",
+          "CloudCluster:{res.resourceId}",
+          "RuntimeAttachmentPage:{res.resourceId}"
         ]
       }
     },
@@ -11304,6 +11304,81 @@
         }
       }
     },
+    "/api/v1/projects/{id}/default-cloud": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "defaultCloud.get",
+        "operationId": "defaultCloud.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefaultCloud"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/default-cloud/preview": {
+      "post": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "defaultCloud.preview",
+        "operationId": "defaultCloud.preview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultCloudInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/deletion": {
       "get": {
         "tags": [
@@ -11500,99 +11575,6 @@
         "x-forge-entity": {
           "idField": "id",
           "type": "Environment"
-        }
-      }
-    },
-    "/api/v1/projects/{id}/environments/{environmentId}/cloud": {
-      "get": {
-        "tags": [
-          "Clouds"
-        ],
-        "summary": "environmentClouds.get",
-        "operationId": "environmentClouds.get",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Path parameter: id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EnvironmentCloud"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{id}/environments/{environmentId}/cloud/preview": {
-      "post": {
-        "tags": [
-          "Clouds"
-        ],
-        "summary": "environmentClouds.preview",
-        "operationId": "environmentClouds.preview",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Path parameter: id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EnvironmentCloudInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Preview"
-                }
-              }
-            }
-          }
         }
       }
     },
@@ -13051,7 +13033,7 @@
         ],
         "x-forge-entity": {
           "idField": "id",
-          "type": "Source"
+          "type": "DiscoverySource"
         }
       },
       "patch": {
@@ -18178,9 +18160,6 @@
     },
     "/api/v1/realtime/events": {
       "get": {
-        "tags": [
-          "Realtime"
-        ],
         "operationId": "realtime.events",
         "parameters": [
           {
@@ -18214,9 +18193,20 @@
         ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
-        }
+        },
+        "tags": [
+          "Realtime"
+        ],
+        "x-forge-protocol": "sse"
       }
     },
     "/api/v1/realtime/snapshot": {
@@ -18272,9 +18262,6 @@
     },
     "/api/v1/realtime/ws": {
       "get": {
-        "tags": [
-          "Realtime"
-        ],
         "operationId": "realtime.ws",
         "parameters": [
           {
@@ -18307,10 +18294,14 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Success"
+          "101": {
+            "description": "Switching Protocols"
           }
-        }
+        },
+        "tags": [
+          "Realtime"
+        ],
+        "x-forge-protocol": "websocket"
       }
     },
     "/api/v1/release-reports/{id}": {
@@ -20430,51 +20421,6 @@
           }
         }
       },
-      "Assignment": {
-        "type": "object",
-        "required": [
-          "grant_revision",
-          "cloud_revision",
-          "org_id",
-          "project_id",
-          "environment_id",
-          "cloud_id",
-          "revision",
-          "targets"
-        ],
-        "properties": {
-          "cloud_id": {
-            "type": "string"
-          },
-          "cloud_revision": {
-            "type": "integer"
-          },
-          "default_placement": {
-            "$ref": "#/components/schemas/DefaultPlacement"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "grant_revision": {
-            "type": "integer"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "targets": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CloudprofilesTarget"
-            }
-          }
-        }
-      },
       "AttachDefaults": {
         "type": "object",
         "required": [
@@ -21630,16 +21576,12 @@
           "template",
           "template_hash",
           "commit_sha",
-          "assignment_revision",
           "cloud_revision",
           "target_revision",
           "grant_revision",
           "target_name"
         ],
         "properties": {
-          "assignment_revision": {
-            "type": "integer"
-          },
           "cloud_revision": {
             "type": "integer"
           },
@@ -22240,11 +22182,11 @@
           "default": {
             "type": "boolean"
           },
-          "environment_id": {
-            "type": "string"
-          },
           "pool_id": {
             "type": "string"
+          },
+          "project_default": {
+            "type": "boolean"
           },
           "provider": {
             "type": "string"
@@ -22279,11 +22221,11 @@
           "default": {
             "type": "boolean"
           },
-          "environment_id": {
-            "type": "string"
-          },
           "pool_id": {
             "type": "string"
+          },
+          "project_default": {
+            "type": "boolean"
           },
           "provider": {
             "type": "string"
@@ -23071,7 +23013,6 @@
           "account_identity",
           "cloud_id",
           "cloud_revision",
-          "assignment_revision",
           "target_id",
           "target_revision",
           "target_name",
@@ -23084,9 +23025,6 @@
           },
           "allocation": {
             "type": "string"
-          },
-          "assignment_revision": {
-            "type": "integer"
           },
           "cloud_id": {
             "type": "string"
@@ -25914,6 +25852,52 @@
           }
         }
       },
+      "DefaultCloud": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "cloud",
+          "revision"
+        ],
+        "properties": {
+          "cloud": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectCloud"
+              },
+              {
+                "type": "object",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          },
+          "project_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "DefaultCloudInputBody": {
+        "type": "object",
+        "required": [
+          "cloud_id",
+          "revision"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
       "DefaultPlacement": {
         "type": "object",
         "required": [
@@ -27100,6 +27084,12 @@
               "source"
             ],
             "properties": {
+              "cloud": {
+                "type": "string"
+              },
+              "cloud_target": {
+                "type": "string"
+              },
               "enabled_in": {
                 "type": "string"
               },
@@ -27181,6 +27171,9 @@
             "properties": {
               "build": {
                 "$ref": "#/components/schemas/Build"
+              },
+              "cloud": {
+                "type": "string"
               },
               "cloud_sql_network": {
                 "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
@@ -27762,47 +27755,6 @@
           }
         }
       },
-      "EnvironmentCloud": {
-        "type": "object",
-        "required": [
-          "assignment",
-          "revision"
-        ],
-        "properties": {
-          "assignment": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Assignment"
-              },
-              {
-                "type": "object",
-                "nullable": true,
-                "enum": [
-                  null
-                ]
-              }
-            ]
-          },
-          "revision": {
-            "type": "integer"
-          }
-        }
-      },
-      "EnvironmentCloudInputBody": {
-        "type": "object",
-        "required": [
-          "cloud_id",
-          "revision"
-        ],
-        "properties": {
-          "cloud_id": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          }
-        }
-      },
       "EnvironmentConnections": {
         "type": "object",
         "required": [
@@ -27841,11 +27793,11 @@
           "project_name",
           "environment_id",
           "environment_name",
-          "assigned",
+          "default",
           "placements"
         ],
         "properties": {
-          "assigned": {
+          "default": {
             "type": "boolean"
           },
           "environment_id": {
@@ -33217,6 +33169,66 @@
           }
         }
       },
+      "NewServiceInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "source"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "cloud_target": {
+            "type": "string"
+          },
+          "enabled_in": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "needed_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "only": {
+            "type": "boolean"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
       "Node": {
         "type": "object",
         "required": [
@@ -35627,8 +35639,8 @@
           "after": {
             "$ref": "#/components/schemas/CloudprofilesTarget"
           },
-          "after_assignment": {
-            "$ref": "#/components/schemas/Assignment"
+          "after_cloud": {
+            "$ref": "#/components/schemas/ProjectCloud"
           },
           "after_default": {
             "$ref": "#/components/schemas/DefaultPlacement"
@@ -35636,8 +35648,8 @@
           "before": {
             "$ref": "#/components/schemas/CloudprofilesTarget"
           },
-          "before_assignment": {
-            "$ref": "#/components/schemas/Assignment"
+          "before_cloud": {
+            "$ref": "#/components/schemas/ProjectCloud"
           },
           "before_default": {
             "$ref": "#/components/schemas/DefaultPlacement"
@@ -35843,6 +35855,51 @@
           }
         }
       },
+      "ProjectCloud": {
+        "type": "object",
+        "required": [
+          "grant_revision",
+          "cloud_revision",
+          "org_id",
+          "project_id",
+          "cloud_id",
+          "name",
+          "default",
+          "targets"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "cloud_revision": {
+            "type": "integer"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "default_placement": {
+            "$ref": "#/components/schemas/DefaultPlacement"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudprofilesTarget"
+            }
+          }
+        }
+      },
       "ProjectDomain": {
         "type": "object",
         "required": [
@@ -35902,11 +35959,15 @@
           "project_id",
           "target_ids",
           "revision",
-          "revoked"
+          "revoked",
+          "default"
         ],
         "properties": {
           "cloud_id": {
             "type": "string"
+          },
+          "default": {
+            "type": "boolean"
           },
           "org_id": {
             "type": "string"
@@ -41235,6 +41296,71 @@
           }
         }
       },
+      "ServiceSuggestion": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "ecosystem",
+          "path",
+          "service"
+        ],
+        "properties": {
+          "ecosystem": {
+            "type": "string"
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "framework": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "service": {
+            "$ref": "#/components/schemas/NewServiceInput"
+          }
+        }
+      },
+      "ServiceSuggestions": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "analyzed",
+          "services"
+        ],
+        "properties": {
+          "analyzed": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSuggestion"
+            }
+          }
+        }
+      },
       "ServiceTraffic": {
         "type": "object",
         "required": [
@@ -44089,125 +44215,6 @@
           },
           "error": {
             "type": "string"
-          }
-        }
-      },
-      "NewServiceInput": {
-        "type": "object",
-        "required": [
-          "name",
-          "source"
-        ],
-        "properties": {
-          "enabled_in": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "needed_by": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "needs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "only": {
-            "type": "boolean"
-          },
-          "port": {
-            "type": "integer"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "public": {
-            "type": "boolean"
-          },
-          "region": {
-            "type": "string"
-          },
-          "repo": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string"
-          },
-          "target": {
-            "type": "string"
-          }
-        }
-      },
-      "ServiceSuggestion": {
-        "type": "object",
-        "required": [
-          "id",
-          "kind",
-          "ecosystem",
-          "path",
-          "service"
-        ],
-        "properties": {
-          "ecosystem": {
-            "type": "string"
-          },
-          "env": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "framework": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "ports": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            }
-          },
-          "service": {
-            "$ref": "#/components/schemas/NewServiceInput"
-          }
-        }
-      },
-      "ServiceSuggestions": {
-        "type": "object",
-        "required": [
-          "project_id",
-          "analyzed",
-          "services"
-        ],
-        "properties": {
-          "analyzed": {
-            "type": "boolean"
-          },
-          "project_id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "services": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ServiceSuggestion"
-            }
           }
         }
       }

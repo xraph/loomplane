@@ -8,6 +8,7 @@ import {
   useProjectsList,
   useProjectsGraph,
   useDeploymentsForPlan,
+  useReleaseReportsList,
 } from "@/client/forge/loomplane/hooks"
 import { LoomplaneRealtime } from "@/lib/realtime"
 
@@ -104,10 +105,16 @@ it("refreshes the graph projection when analysis completes", async () => {
   live.stop()
 })
 
-it("tells the release report listeners when a report changes", () => {
+it("refetches the release report list when a report changes", async () => {
+  let reads = 0
   const cache = new QueryCache({
     entities,
-    transport: { execute: async () => ({}) },
+    transport: {
+      execute: async () => {
+        reads++
+        return { reports: [] }
+      },
+    },
   })
   const connection = new Connection()
   const live = new LoomplaneRealtime({
@@ -116,40 +123,24 @@ it("tells the release report listeners when a report changes", () => {
     connect: () => connection,
   })
   live.start()
-  const changed = vi.fn()
-  const stop = live.onReleaseReport(changed)
-  const report = {
-    id: "rrep_1",
-    org_id: "org_one",
-    project_id: "proj_one",
-    state: "reviewing",
-  }
+  const list = useReleaseReportsList(
+    { path: { id: "proj_one" } },
+    { client: cache }
+  )
+  await list.fetch()
+  const release = list.subscribe(() => {})
   connection.message({
     event: "release_report.updated",
     cursor: "org_one:1",
-    data: report,
+    data: {
+      id: "rrep_1",
+      org_id: "org_one",
+      project_id: "proj_one",
+      state: "reviewing",
+    },
   })
-  expect(changed).toHaveBeenCalledTimes(1)
-  // Another workspace's event never reaches the page.
-  connection.message({
-    event: "release_report.updated",
-    cursor: "org_one:2",
-    data: { ...report, org_id: "org_two" },
-  })
-  expect(changed).toHaveBeenCalledTimes(1)
-  connection.message({
-    event: "release_report.deleted",
-    cursor: "org_one:3",
-    data: report,
-  })
-  expect(changed).toHaveBeenCalledTimes(2)
-  stop()
-  connection.message({
-    event: "release_report.updated",
-    cursor: "org_one:4",
-    data: report,
-  })
-  expect(changed).toHaveBeenCalledTimes(2)
+  await vi.waitFor(() => expect(reads).toBe(2))
+  release()
   live.stop()
 })
 

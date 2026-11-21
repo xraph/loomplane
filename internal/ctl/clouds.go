@@ -32,7 +32,7 @@ func cloudOrganizationFlag() cli.Flag {
 }
 
 func cloudRevisionFlag() cli.Flag {
-	return cloudFlag("revision", "Expected target, Cloud or assignment revision")
+	return cloudFlag("revision", "Expected target revision, Cloud revision, or default Cloud revision (0 when the project has none)")
 }
 func cloudExecutionFlags() []cli.Flag {
 	return append(recoveryFlags(), cli.NewBoolFlag("yes", "y", "Apply the displayed preview", false), cloudFlag("request-id", "Stable idempotency key to reuse after a lost response"))
@@ -42,9 +42,9 @@ func (a *App) cloudsCommand() cli.Command {
 		cli.WithSubcommand(cli.NewCommand("create", "Create a Cloud", a.createCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds create <project> --name production"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name")))),
 		cli.WithSubcommand(cli.NewCommand("show", "Show a Cloud", a.showCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds show <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
 		cli.WithSubcommand(cli.NewCommand("update", "Rename a Cloud at its expected revision", a.updateCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds update <project> <cloud-id> --name name --revision 1"), cli.WithFlags(jsonFlag, cloudFlag("name", "Cloud name"), cloudRevisionFlag()))),
-		cli.WithSubcommand(cli.NewCommand("delete", "Delete an unassigned Cloud", a.deleteCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds delete <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("assignment", "Show an environment's Cloud and assignment generation", a.cloudAssignment, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds assignment <project> <environment-id>"), cli.WithFlag(jsonFlag))),
-		cli.WithSubcommand(cli.NewCommand("assign", "Review an environment assignment, then apply with --yes", a.assignCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds assign <project> <environment-id> --cloud cloud-id --revision 0 [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("cloud", "Cloud ID; empty to unassign"), cloudRevisionFlag())...))),
+		cli.WithSubcommand(cli.NewCommand("delete", "Delete a Cloud no project uses", a.deleteCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds delete <project> <cloud-id>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("default", "Show the project's default Cloud, which every environment uses", a.defaultCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds default <project>"), cli.WithFlag(jsonFlag))),
+		cli.WithSubcommand(cli.NewCommand("make-default", "Review making a Cloud the project's default, then apply with --yes", a.makeDefaultCloud, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds make-default <project> <cloud-id|none> --revision N [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudRevisionFlag())...))),
 		cli.WithSubcommand(cli.NewCommand("switch-default", "Review a change to a Cloud's default provider and account, then apply with --yes", a.switchCloudDefault, cli.WithFlag(cloudOrganizationFlag()), cli.WithUsage("clouds switch-default <project> <cloud-id> --provider vercel --connection conn-id --revision 3 [--clear] [--yes --wait]"), cli.WithFlags(append(cloudExecutionFlags(), cloudFlag("provider", "Destination provider"), cloudFlag("connection", "Destination connection ID"), cloudFlag("region", "Destination region"), cli.NewBoolFlag("clear", "", "Remove the default", false), cloudRevisionFlag())...))))
 }
 func (a *App) cloudTargetsCommand() cli.Command {
@@ -215,21 +215,21 @@ func (a *App) deleteCloudTarget(ctx cli.CommandContext) error {
 	}
 	return c.DeleteCloudTarget(ctxOf(ctx), p.ID, cloudArg(ctx, 1), cloudArg(ctx, 2))
 }
-func (a *App) cloudAssignment(ctx cli.CommandContext) error {
+func (a *App) defaultCloud(ctx cli.CommandContext) error {
 	if ctx.Bool("organization") {
 		return errors.New("this command requires a project; omit --organization")
 	}
-	c, p, err := a.cloudClient(ctx, 2)
+	c, p, err := a.cloudClient(ctx, 1)
 	if err != nil {
 		return err
 	}
-	v, err := c.EnvironmentCloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1))
+	v, err := c.DefaultCloud(ctxOf(ctx), p.ID)
 	if err != nil {
 		return err
 	}
 	return a.json(v)
 }
-func (a *App) assignCloud(ctx cli.CommandContext) error {
+func (a *App) makeDefaultCloud(ctx cli.CommandContext) error {
 	if ctx.Bool("organization") {
 		return errors.New("this command requires a project; omit --organization")
 	}
@@ -241,7 +241,11 @@ func (a *App) assignCloud(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	preview, err := c.PreviewEnvironmentCloud(ctxOf(ctx), p.ID, cloudArg(ctx, 1), client.EnvironmentCloudInput{CloudID: ctx.String("cloud"), Revision: revision})
+	cloud := cloudArg(ctx, 1)
+	if cloud == "none" {
+		cloud = ""
+	}
+	preview, err := c.PreviewDefaultCloud(ctxOf(ctx), p.ID, client.DefaultCloudInput{CloudID: cloud, Revision: revision})
 	if err != nil {
 		return err
 	}

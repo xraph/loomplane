@@ -48,29 +48,31 @@ type CloudTarget struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// CloudAssignment is the public Cloud API record.
-type CloudAssignment struct {
-	GrantRevision int64         `json:"grant_revision"`
-	CloudRevision int64         `json:"cloud_revision"`
-	OrgID         string        `json:"org_id"`
-	ProjectID     string        `json:"project_id"`
-	EnvironmentID string        `json:"environment_id"`
-	CloudID       string        `json:"cloud_id"`
-	Revision      int64         `json:"revision"`
-	Targets       []CloudTarget `json:"targets"`
+// ProjectCloud is one Cloud as one project may use it.
+type ProjectCloud struct {
+	GrantRevision int64  `json:"grant_revision"`
+	CloudRevision int64  `json:"cloud_revision"`
+	OrgID         string `json:"org_id"`
+	ProjectID     string `json:"project_id"`
+	CloudID       string `json:"cloud_id"`
+	// Default marks the project's default Cloud.
+	Default bool          `json:"default"`
+	Targets []CloudTarget `json:"targets"`
 	// DefaultPlacement is present when the project's grant covers the whole Cloud.
 	DefaultPlacement *CloudPlacement `json:"default_placement,omitempty"`
 }
 
 // CloudChangeInput is the public Cloud API record.
 type CloudChangeInput struct {
-	Runtime       string `json:"runtime,omitempty"`
-	PoolID        string `json:"pool_id,omitempty"`
-	Revision      int64  `json:"revision"`
-	CloudID       string `json:"cloud_id"`
-	TargetID      string `json:"target_id,omitempty"`
-	EnvironmentID string `json:"environment_id,omitempty"`
-	// Default reviews a Cloud default switch; Revision is then the Cloud's.
+	Runtime  string `json:"runtime,omitempty"`
+	PoolID   string `json:"pool_id,omitempty"`
+	Revision int64  `json:"revision"`
+	CloudID  string `json:"cloud_id"`
+	TargetID string `json:"target_id,omitempty"`
+	// ProjectDefault reviews making CloudID the project's default Cloud;
+	// Revision is then the current default's grant revision, zero for none.
+	ProjectDefault bool `json:"project_default,omitempty"`
+	// Default reviews a Cloud default placement switch; Revision is then the Cloud's.
 	Default      bool   `json:"default,omitempty"`
 	Provider     string `json:"provider,omitempty"`
 	ConnectionID string `json:"connection_id,omitempty"`
@@ -123,21 +125,21 @@ type CloudSyncRoute struct {
 
 // CloudPreview is the public Cloud API record.
 type CloudPreview struct {
-	ID               string                   `json:"id" forge:"id"`
-	OrgID            string                   `json:"org_id"`
-	ProjectID        string                   `json:"project_id"`
-	Revision         string                   `json:"revision"`
-	Input            CloudChangeInput         `json:"input"`
-	Before           *CloudTarget             `json:"before,omitempty"`
-	After            *CloudTarget             `json:"after,omitempty"`
-	BeforeDefault    *CloudPlacement          `json:"before_default,omitempty"`
-	AfterDefault     *CloudPlacement          `json:"after_default,omitempty"`
-	BeforeAssignment *CloudAssignment         `json:"before_assignment,omitempty"`
-	AfterAssignment  *CloudAssignment         `json:"after_assignment,omitempty"`
-	Environments     []CloudEnvironmentChange `json:"environments"`
-	Blockers         []string                 `json:"blockers"`
-	Reverts          string                   `json:"reverts,omitempty"`
-	CreatedAt        time.Time                `json:"created_at"`
+	ID            string                   `json:"id" forge:"id"`
+	OrgID         string                   `json:"org_id"`
+	ProjectID     string                   `json:"project_id"`
+	Revision      string                   `json:"revision"`
+	Input         CloudChangeInput         `json:"input"`
+	Before        *CloudTarget             `json:"before,omitempty"`
+	After         *CloudTarget             `json:"after,omitempty"`
+	BeforeDefault *CloudPlacement          `json:"before_default,omitempty"`
+	AfterDefault  *CloudPlacement          `json:"after_default,omitempty"`
+	BeforeCloud   *ProjectCloud            `json:"before_cloud,omitempty"`
+	AfterCloud    *ProjectCloud            `json:"after_cloud,omitempty"`
+	Environments  []CloudEnvironmentChange `json:"environments"`
+	Blockers      []string                 `json:"blockers"`
+	Reverts       string                   `json:"reverts,omitempty"`
+	CreatedAt     time.Time                `json:"created_at"`
 }
 
 // CloudSync is the public Cloud API record.
@@ -197,11 +199,17 @@ type CloudUpdateTargetInput struct {
 	Revision    int64     `json:"revision"`
 }
 
-type EnvironmentCloud struct {
-	Assignment *CloudAssignment `json:"assignment"`
-	Revision   int64            `json:"revision"`
+// DefaultCloud is the Cloud every environment of a project uses unless a
+// service names another. Cloud is nil when the project has none.
+type DefaultCloud struct {
+	ProjectID string        `json:"project_id"`
+	Cloud     *ProjectCloud `json:"cloud"`
+	Revision  int64         `json:"revision"`
 }
-type EnvironmentCloudInput struct {
+
+// DefaultCloudInput reviews making CloudID the project's default Cloud, or
+// with no CloudID, leaving the project without one.
+type DefaultCloudInput struct {
 	CloudID  string `json:"cloud_id"`
 	Revision int64  `json:"revision"`
 }
@@ -283,14 +291,14 @@ func (c *Client) UpdateCloudTarget(ctx context.Context, project, cloud, id strin
 func (c *Client) DeleteCloudTarget(ctx context.Context, project, cloud, id string) error {
 	return c.do(ctx, http.MethodDelete, targetPath(project, cloud)+"/"+esc(id), nil, nil)
 }
-func (c *Client) EnvironmentCloud(ctx context.Context, project, environment string) (*EnvironmentCloud, error) {
-	var out EnvironmentCloud
-	err := c.do(ctx, http.MethodGet, cloudPath(project)+"/environments/"+esc(environment)+"/cloud", nil, &out)
+func (c *Client) DefaultCloud(ctx context.Context, project string) (*DefaultCloud, error) {
+	var out DefaultCloud
+	err := c.do(ctx, http.MethodGet, cloudPath(project)+"/default-cloud", nil, &out)
 	return &out, err
 }
-func (c *Client) PreviewEnvironmentCloud(ctx context.Context, project, environment string, in EnvironmentCloudInput) (*CloudPreview, error) {
+func (c *Client) PreviewDefaultCloud(ctx context.Context, project string, in DefaultCloudInput) (*CloudPreview, error) {
 	var out CloudPreview
-	err := c.do(ctx, http.MethodPost, cloudPath(project)+"/environments/"+esc(environment)+"/cloud/preview", in, &out)
+	err := c.do(ctx, http.MethodPost, cloudPath(project)+"/default-cloud/preview", in, &out)
 	return &out, err
 }
 func (c *Client) PreviewCloudChange(ctx context.Context, project string, in CloudChangeInput) (*CloudPreview, error) {
@@ -384,6 +392,8 @@ type CloudProjectGrant struct {
 	TargetIDs []string `json:"target_ids"`
 	Revision  int64    `json:"revision"`
 	Revoked   bool     `json:"revoked"`
+	// Default marks the project's default Cloud.
+	Default bool `json:"default"`
 }
 
 func (c *Client) OrganizationClouds(ctx context.Context) ([]Cloud, error) { return c.Clouds(ctx, "") }

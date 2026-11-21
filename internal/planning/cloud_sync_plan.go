@@ -15,15 +15,26 @@ import (
 
 // AppliedCloudPlan constructs migration actions from serving bindings only.
 // It never reads a current analysis, manifest, branch or environment variable.
-func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, _ ...*cloudprofiles.Assignment) *Result {
+func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.ProjectCloud, targetID string, options []ConnectionOption, registry *provider.Registry, _ ...*cloudprofiles.ProjectCloud) *Result {
 	return appliedCloudPlan(bindings, assignment, targetID, options, registry, nil)
 }
 
-func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, routes ...[]cloudinfra.Route) *Result {
+func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.ProjectCloud, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, routes ...[]cloudinfra.Route) *Result {
 	return appliedCloudPlanWithIntents(bindings, assignment, targetID, options, registry, pools, nil, routes...)
 }
 
-func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, intents map[string]*CapacityIntent, routes ...[]cloudinfra.Route) *Result {
+// cloudChooser picks, for one applied pin, the Cloud it moves to, and
+// whether it moves at all: a pin that doesn't is kept as it runs.
+type cloudChooser func(pin *CloudPlacement) (cloud *cloudprofiles.ProjectCloud, moves bool)
+
+func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.ProjectCloud, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, intents map[string]*CapacityIntent, routes ...[]cloudinfra.Route) *Result {
+	every := func(*CloudPlacement) (*cloudprofiles.ProjectCloud, bool) { return assignment, true }
+	return appliedCloudPlanChoosing(bindings, every, targetID, options, registry, pools, intents, routes...)
+}
+
+// appliedCloudPlanChoosing moves each selected applied service to the Cloud
+// choose names for its pin.
+func appliedCloudPlanChoosing(bindings []*Binding, choose cloudChooser, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, intents map[string]*CapacityIntent, routes ...[]cloudinfra.Route) *Result {
 	p := &planner{in: Input{Providers: registry, Connections: options, CloudPlacements: map[string]CloudPlacement{}, Chosen: map[string]string{}}, services: map[string]*Action{}, resources: map[string]*Action{}, bindings: map[string]*Binding{}, clouds: map[string]bool{}, unready: map[string]string{}, held: map[string]string{}, removing: map[string]bool{}}
 	if len(routes) > 0 {
 		p.in.Routes = routes[0]
@@ -51,8 +62,12 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		if pin == nil || !selectsPlacement(targetID, pin) {
 			continue
 		}
+		assignment, moves := choose(pin)
+		if !moves {
+			continue
+		}
 		if assignment == nil {
-			blocked(b.Name, "This deployed service needs a named Cloud target; remove or adopt its reference before unassigning the Cloud.")
+			blocked(b.Name, "This deployed service needs a named Cloud target; remove or adopt its reference before the project leaves this Cloud.")
 			continue
 		}
 		var t cloudprofiles.Target
@@ -262,10 +277,14 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 	// but deploys against the reviewed Cloud: a default switch advances the
 	// Cloud revision its old pin recorded.
 	for _, a := range p.actions {
-		if a.Op == Keep || a.Service == nil || a.Service.CloudPlacement == nil || assignment == nil {
+		if a.Op == Keep || a.Service == nil || a.Service.CloudPlacement == nil {
 			continue
 		}
 		if _, moved := p.in.CloudPlacements[a.Name]; moved {
+			continue
+		}
+		assignment, _ := choose(a.Service.CloudPlacement)
+		if assignment == nil {
 			continue
 		}
 		// A pin that no longer matches is left for the deploy-time check to refuse.
@@ -359,7 +378,7 @@ func migrationPlanID(syncID, environmentID string) string {
 
 // repinCloudPlacement carries an unchanged placement onto a reviewed
 // assignment. It reports false when the default or target no longer matches.
-func repinCloudPlacement(pin CloudPlacement, assignment *cloudprofiles.Assignment) (CloudPlacement, bool) {
+func repinCloudPlacement(pin CloudPlacement, assignment *cloudprofiles.ProjectCloud) (CloudPlacement, bool) {
 	if pin.CloudID != assignment.CloudID {
 		return pin, false
 	}
@@ -379,7 +398,7 @@ func repinCloudPlacement(pin CloudPlacement, assignment *cloudprofiles.Assignmen
 		}
 		pin.TargetRevision, pin.TargetName = t.Revision, t.Name
 	}
-	pin.CloudRevision, pin.AssignmentRevision, pin.GrantRevision = assignment.CloudRevision, assignment.Revision, assignment.GrantRevision
+	pin.CloudRevision, pin.GrantRevision = assignment.CloudRevision, assignment.GrantRevision
 	return pin, true
 }
 

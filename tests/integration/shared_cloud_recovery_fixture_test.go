@@ -29,7 +29,6 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
-	apiclient "github.com/xraph/loomplane/pkg/client"
 )
 
 type recoveryFixture struct {
@@ -153,9 +152,7 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 		}
 	}
 	c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+f.cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: "direct", Provider: "server", Runtime: "managed", ConnectionID: f.connections["host1"].ID}, &f.target)
-	var preview cloudprofiles.Preview
-	c.must(http.StatusOK, http.MethodPost, base+"/environments/"+f.environment+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: f.cloud.ID}, &preview)
-	waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "recovery-assignment").ID)
+	makeDefaultCloudAPI(t, c, base, f.cloud.ID, "recovery-assignment")
 	manifest := "version: 1\nservices:\n  web:\n    source: node:apps/web\n    cloud_target: direct\n    public: false\n    port: 80\n    health_path: /\n    size: {cpu: 0.2, memory: 128}\n    build: {image: traefik/whoami:v1.11.0@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab}\nignore:\n  resources: [postgres, redis]\n"
 	f.manifest = manifest
 	c.must(http.StatusCreated, http.MethodPut, base+"/manifest", map[string]string{"yaml": manifest}, nil)
@@ -543,9 +540,7 @@ func (f *recoveryFixture) routedProject() {
 		}
 	}
 	f.c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+f.cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: "routed", Provider: "server", Runtime: "server", PoolID: pool.ID}, &f.target)
-	var preview cloudprofiles.Preview
-	f.c.must(http.StatusOK, http.MethodPost, base+"/environments/"+f.environment+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: f.cloud.ID}, &preview)
-	waitCloudAPI(t, f.c, base, applyCloudAPI(t, f.c, base, &preview, "routed-assignment").ID)
+	makeDefaultCloudAPI(t, f.c, base, f.cloud.ID, "routed-assignment")
 	f.manifest = strings.Replace(f.manifest, "cloud_target: direct", "cloud_target: routed", 1)
 	f.marker = f.state.RunID + "-routed"
 	var variable struct{ ID string }

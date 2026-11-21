@@ -326,14 +326,20 @@ func cleanupSyncFixture(t *testing.T) (*poolFixture, *planning.Service, *cloudpr
 	if err != nil {
 		t.Fatal(err)
 	}
-	generation, err := f.clouds.AssignmentGeneration(t.Context(), "org", "proj", "env")
+	// The review clears the project's default Cloud, reviewed against the
+	// default as it stands.
+	defaultCloud, generation, err := f.clouds.DefaultCloud(t.Context(), "org", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := f.clouds.ResolveCloud(t.Context(), "org", "proj", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
 	envs := []cloudprofiles.EnvironmentChange{{EnvironmentID: "env", Environment: "production", Status: cloudprofiles.SyncPending}}
-	preview := &cloudprofiles.Preview{ID: "cleanup-preview", OrgID: "org", ProjectID: "proj", Revision: "cleanup-digest", Input: cloudprofiles.ChangeInput{EnvironmentID: "env", Revision: generation}, Environments: envs, CreatedAt: now}
-	snapshot := &cloudprofiles.Snapshot{Actor: security.Principal{OrgID: "org", UserID: "preview-author"}, Environments: []cloudprofiles.EnvironmentSnapshot{{EnvironmentID: "env", AssignmentRevision: generation, Bindings: bindings, Plan: raw}}, Connections: []string{scope.Connection}}
+	preview := &cloudprofiles.Preview{ID: "cleanup-preview", OrgID: "org", ProjectID: "proj", Revision: "cleanup-digest", Input: cloudprofiles.ChangeInput{ProjectDefault: true, Revision: generation}, BeforeCloud: before, Environments: envs, CreatedAt: now}
+	snapshot := &cloudprofiles.Snapshot{Actor: security.Principal{OrgID: "org", UserID: "preview-author"}, Environments: []cloudprofiles.EnvironmentSnapshot{{EnvironmentID: "env", DefaultCloud: defaultCloud, Bindings: bindings, Plan: raw}}, Connections: []string{scope.Connection}}
 	if err = f.clouds.SavePreview(t.Context(), preview, snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +408,7 @@ func TestManagedCleanupCloudSyncApply(t *testing.T) {
 func TestManagedCleanupCloudSyncRollback(t *testing.T) {
 	f, _, preview, snapshot, sync := cleanupSyncFixture(t)
 	var generation int64
-	if err := f.sql.QueryRow(t.Context(), `SELECT revision FROM loomplane_cloud_assignments WHERE environment_id='env'`).Scan(&generation); err != nil {
+	if err := f.sql.QueryRow(t.Context(), `SELECT revision FROM loomplane_cloud_project_grants WHERE org_id='org' AND project_id='proj' AND is_default`).Scan(&generation); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_managed_workload_authority SET revision=revision+1 WHERE org_id='org'`); err != nil {
@@ -413,8 +419,8 @@ func TestManagedCleanupCloudSyncRollback(t *testing.T) {
 	}
 	var current int64
 	var effects int
-	if err := f.sql.QueryRow(t.Context(), `SELECT revision FROM loomplane_cloud_assignments WHERE environment_id='env'`).Scan(&current); err != nil || current != generation {
-		t.Fatalf("assignment did not roll back: %d %v", current, err)
+	if err := f.sql.QueryRow(t.Context(), `SELECT revision FROM loomplane_cloud_project_grants WHERE org_id='org' AND project_id='proj' AND is_default`).Scan(&current); err != nil || current != generation {
+		t.Fatalf("default Cloud did not roll back: %d %v", current, err)
 	}
 	if err := f.sql.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM loomplane_cloud_syncs)+(SELECT count(*) FROM loomplane_managed_cleanup_intents)+(SELECT count(*) FROM loomplane_environment_sync_guards)`).Scan(&effects); err != nil || effects != 0 {
 		t.Fatalf("partial acceptance: %d %v", effects, err)

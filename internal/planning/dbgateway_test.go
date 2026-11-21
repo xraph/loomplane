@@ -407,8 +407,8 @@ func TestDatabaseGatewayLabels(t *testing.T) {
 
 // dbgwCloudFixture is a Cloud with a Cloud Run target tagged db, a Vercel
 // target tagged web, and a default placement on ECS.
-func dbgwCloudFixture() (*cloudprofiles.Assignment, []ConnectionOption) {
-	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 3, Revision: 4,
+func dbgwCloudFixture() (*cloudprofiles.ProjectCloud, []ConnectionOption) {
+	return &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 3, GrantRevision: 4,
 		Targets: []cloudprofiles.Target{
 			{ID: "target-run", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "run", Provider: cloudRun, ConnectionID: "g", Region: "us-east4", Revision: 5, Tags: []string{"db"}},
 			{ID: "target-web", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "web", Provider: "vercel", ConnectionID: "v", Revision: 6, Tags: []string{"web"}},
@@ -723,7 +723,7 @@ func dbgwAppliedGateway(t *testing.T) *Binding {
 	t.Helper()
 	cfg := ServiceConfig{Provider: cloudRun, Region: "us-east1", Workload: "http-service", Execution: "container", Source: ".", Ecosystem: "go", Image: dbgateway.Dockerfile, Port: dbgateway.Port, Public: true,
 		DatabaseGateway: &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: "us-east1.db.example.com", Resources: []string{"db"}},
-		CloudPlacement:  &CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "run", Provider: cloudRun, ConnectionID: "old", AccountIdentity: "gcp:old"}}
+		CloudPlacement:  &CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "run", Provider: cloudRun, ConnectionID: "old", AccountIdentity: "gcp:old"}}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -732,8 +732,8 @@ func dbgwAppliedGateway(t *testing.T) *Binding {
 }
 
 func TestDatabaseGatewayInCloudSync(t *testing.T) {
-	assignment := func(connection string) *cloudprofiles.Assignment {
-		return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "run", Provider: cloudRun, ConnectionID: connection, Revision: 2}}}
+	assignment := func(connection string) *cloudprofiles.ProjectCloud {
+		return &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", ProjectID: "project", CloudID: "cloud", Name: "run", Provider: cloudRun, ConnectionID: connection, Revision: 2}}}
 	}
 	gcp := func(id string) ConnectionOption {
 		return ConnectionOption{ID: id, Cloud: "gcp", Ready: true, Details: map[string]string{"project_id": id}}
@@ -810,7 +810,7 @@ func TestDatabaseGatewayHeldUserWhenItsResourceLeaves(t *testing.T) {
 func TestDatabaseGatewayMarkingClearsAdoption(t *testing.T) {
 	live := deployed(t, dbgwCompute(t, dbgwSameCloud, exampleZone))
 	in := dbgwInput(t, strings.Replace(dbgwSameCloud, "provider: digitalocean}", "provider: digitalocean, gateway: true}", 1), exampleZone, live...)
-	in.CloudPlacements = map[string]CloudPlacement{"api": {CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "apps", Provider: "digitalocean", ConnectionID: "conn_do", AccountIdentity: "digitalocean:team"}}
+	in.CloudPlacements = map[string]CloudPlacement{"api": {CloudID: "cloud", CloudRevision: 1, TargetID: "target", TargetRevision: 1, TargetName: "apps", Provider: "digitalocean", ConnectionID: "conn_do", AccountIdentity: "digitalocean:team"}}
 	api := action(t, Compute(in), "service:api")
 	if api.Op != Update || api.AdoptCloudPlacement || api.CloudAdoption != nil {
 		t.Fatalf("api is %s, adopt %v %+v", api.Op, api.AdoptCloudPlacement, api.CloudAdoption)

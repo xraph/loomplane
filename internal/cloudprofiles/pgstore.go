@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 // PgStore persists scoped Cloud configuration in Postgres.
@@ -153,17 +155,18 @@ func (s *PgStore) UpdateProfile(ctx context.Context, p *Profile, previousRevisio
 	}
 	defer rollbackSync(tx)
 	provider, connection, region := defaultColumns(p.DefaultPlacement)
-	// The organization lock is held, so no assignment can begin while this
-	// runs. Setting a first default is safe: services it places had none.
+	// The organization lock is held, so no default Cloud can change while
+	// this runs. Setting a first default is safe: services it places had none.
 	var redirects bool
 	err = tx.QueryRow(ctx, `SELECT default_provider IS NOT NULL AND (default_provider IS DISTINCT FROM $3 OR default_connection_id IS DISTINCT FROM $4 OR default_region<>$5)
- AND EXISTS(SELECT 1 FROM loomplane_cloud_assignments a WHERE a.org_id=c.org_id AND a.cloud_id=c.id)
+ AND (EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=c.org_id AND g.cloud_id=c.id AND g.is_default AND NOT g.revoked)
+  OR EXISTS(SELECT 1 FROM loomplane_bindings b WHERE b.org_id=c.org_id AND b.subject='service' AND b.config->'cloud_placement'->>'cloud_id'=c.id AND (b.config->'cloud_placement'->>'default')::boolean))
  FROM loomplane_cloud_profiles c WHERE org_id=$1 AND id=$2`, p.OrgID, p.ID, provider, connection, region).Scan(&redirects)
 	if err != nil {
 		return storeError(err)
 	}
 	if redirects {
-		return fmt.Errorf("%w: this Cloud is in use; review the default change as a Cloud change with default set, which moves its services, or unassign it first", ErrInUse)
+		return fmt.Errorf("%w: this Cloud is in use; review the default placement change as a Cloud change with default set, which moves its services", ErrInUse)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET name=$4,revision=$5,updated_at=$6,default_provider=$8,default_connection_id=$9,default_region=$10 WHERE org_id=$1 AND ($2='' OR project_id=$2) AND id=$3 AND revision=$7`, p.OrgID, p.ProjectID, p.ID, p.Name, p.Revision, p.UpdatedAt, previousRevision, provider, connection, region)
 	if err != nil {
@@ -273,74 +276,94 @@ func (s *PgStore) DeleteTarget(ctx context.Context, orgID, projectID, cloudID, i
 	return nil
 }
 
-// Resolve reads the environment, assignment and targets in a single snapshot.
-// No assignment returns nil only when the environment exists in this scope.
-func (s *PgStore) Resolve(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, error) {
-	assignment, _, err := s.EnvironmentCloud(ctx, orgID, projectID, environmentID)
-	return assignment, err
+// ResolveCloud reads the project's view of one Cloud, or of its default
+// Cloud when cloud is "", in a single snapshot.
+func (s *PgStore) ResolveCloud(ctx context.Context, orgID, projectID, cloudID string) (*ProjectCloud, error) {
+	return s.projectCloud(ctx, orgID, projectID, cloudID, false)
 }
 
-// EnvironmentCloud reads the nullable assignment and its generation atomically.
-func (s *PgStore) EnvironmentCloud(ctx context.Context, orgID, projectID, environmentID string) (*Assignment, int64, error) {
-	return s.environmentCloud(ctx, orgID, projectID, environmentID, false)
+// RetainedCloud reads a Cloud the project placed services on, for reviewed
+// removal and compensation. It answers after the grant is revoked, with
+// every target, since cleanup must reach what the grant once allowed.
+func (s *PgStore) RetainedCloud(ctx context.Context, orgID, projectID, cloudID string) (*ProjectCloud, error) {
+	return s.projectCloud(ctx, orgID, projectID, cloudID, true)
 }
 
-// RetainedAssignment reads an existing placement for reviewed removal or reassignment.
-func (s *PgStore) RetainedAssignment(ctx context.Context, org, project, env string) (*Assignment, error) {
-	a, _, err := s.environmentCloud(ctx, org, project, env, true)
-	return a, err
-}
-func (s *PgStore) environmentCloud(ctx context.Context, orgID, projectID, environmentID string, retained bool) (*Assignment, int64, error) {
-	var cloudID *string
-	var revision, cloudRevision, grantRevision *int64
-	var targets []byte
-	var defaultProvider, defaultConnection *string
-	var defaultRegion *string
-	var wholeCloud *bool
-	err := s.db.QueryRow(ctx, `SELECT a.cloud_id,a.revision,c.revision,g.revision,c.default_provider,c.default_connection_id,c.default_region,cardinality(g.target_ids)=0,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
- FROM loomplane_environments e
- JOIN loomplane_projects p ON p.org_id=e.org_id AND p.id=e.project_id
- LEFT JOIN loomplane_cloud_assignments a ON a.org_id=e.org_id AND a.project_id=e.project_id AND a.environment_id=e.id
- LEFT JOIN loomplane_cloud_profiles c ON c.org_id=a.org_id AND c.id=a.cloud_id
- LEFT JOIN loomplane_cloud_project_grants g ON g.org_id=a.org_id AND g.cloud_id=a.cloud_id AND g.project_id=a.project_id AND NOT g.revoked
- LEFT JOIN loomplane_cloud_targets t ON t.org_id=a.org_id AND t.cloud_id=a.cloud_id AND ($4 OR (g.revision IS NOT NULL AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))))
- AND ($4 OR t.managed_resource_id IS NULL OR (t.project_id=e.project_id AND EXISTS(SELECT 1 FROM loomplane_runtime_attachments ra JOIN loomplane_managed_resources mr ON mr.org_id=ra.org_id AND mr.id=ra.cluster_id WHERE ra.org_id=t.org_id AND ra.cloud_id=t.cloud_id AND ra.cluster_id=t.managed_resource_id AND ra.project_id=e.project_id AND ra.runtime_connection_id=t.connection_id AND ra.deleted_at IS NULL AND mr.deleted_at IS NULL)))
- WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$3
- GROUP BY e.id,a.cloud_id,a.revision,c.revision,g.revision,c.default_provider,c.default_connection_id,c.default_region,g.target_ids`, orgID, projectID, environmentID, retained).Scan(&cloudID, &revision, &cloudRevision, &grantRevision, &defaultProvider, &defaultConnection, &defaultRegion, &wholeCloud, &targets)
+// DefaultCloud reads the project's default Cloud and its grant revision:
+// "" and 0 when the project has none.
+func (s *PgStore) DefaultCloud(ctx context.Context, orgID, projectID string) (cloudID string, grantRevision int64, err error) {
+	var cloud *string
+	var revision *int64
+	err = s.db.QueryRow(ctx, `SELECT g.cloud_id,g.revision FROM loomplane_projects p
+ LEFT JOIN loomplane_cloud_project_grants g ON g.org_id=p.org_id AND g.project_id=p.id AND g.is_default AND NOT g.revoked
+ WHERE p.org_id=$1 AND p.id=$2`, orgID, projectID).Scan(&cloud, &revision)
 	if err != nil {
-		return nil, 0, storeError(err)
+		return "", 0, storeError(err)
 	}
-	if cloudID == nil {
-		if revision != nil {
-			return nil, *revision, nil
+	if cloud == nil {
+		return "", 0, nil
+	}
+	return *cloud, *revision, nil
+}
+
+// ResolveNamedCloud reads the project's view of the Cloud called name.
+func (s *PgStore) ResolveNamedCloud(ctx context.Context, orgID, projectID, name string) (*ProjectCloud, error) {
+	var id string
+	if err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_cloud_profiles WHERE org_id=$1 AND name=$2`, orgID, name).Scan(&id); err != nil {
+		return nil, storeError(err)
+	}
+	return s.projectCloud(ctx, orgID, projectID, id, false)
+}
+
+func (s *PgStore) projectCloud(ctx context.Context, orgID, projectID, cloudID string, retained bool) (*ProjectCloud, error) {
+	var id, name *string
+	var cloudRevision, grantRevision *int64
+	var isDefault bool
+	var targets []byte
+	var defaultProvider, defaultConnection, defaultRegion *string
+	var wholeCloud *bool
+	err := s.db.QueryRow(ctx, `SELECT c.id,c.name,c.revision,g.revision,coalesce(g.is_default,false),c.default_provider,c.default_connection_id,c.default_region,cardinality(g.target_ids)=0,coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.name,t.id) FILTER(WHERE t.id IS NOT NULL),'[]'::jsonb)
+ FROM loomplane_projects p
+ LEFT JOIN loomplane_cloud_profiles c ON c.org_id=p.org_id AND c.id=CASE WHEN $3='' THEN (SELECT d.cloud_id FROM loomplane_cloud_project_grants d WHERE d.org_id=p.org_id AND d.project_id=p.id AND d.is_default AND NOT d.revoked) ELSE $3 END
+ LEFT JOIN loomplane_cloud_project_grants g ON g.org_id=c.org_id AND g.cloud_id=c.id AND g.project_id=p.id AND NOT g.revoked
+ LEFT JOIN loomplane_cloud_targets t ON t.org_id=c.org_id AND t.cloud_id=c.id AND ($4 OR (g.revision IS NOT NULL AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids))))
+ AND ($4 OR t.managed_resource_id IS NULL OR (t.project_id=p.id AND EXISTS(SELECT 1 FROM loomplane_runtime_attachments ra JOIN loomplane_managed_resources mr ON mr.org_id=ra.org_id AND mr.id=ra.cluster_id WHERE ra.org_id=t.org_id AND ra.cloud_id=t.cloud_id AND ra.cluster_id=t.managed_resource_id AND ra.project_id=p.id AND ra.runtime_connection_id=t.connection_id AND ra.deleted_at IS NULL AND mr.deleted_at IS NULL)))
+ WHERE p.org_id=$1 AND p.id=$2
+ GROUP BY c.id,c.name,c.revision,g.revision,g.is_default,c.default_provider,c.default_connection_id,c.default_region,g.target_ids`, orgID, projectID, cloudID, retained).Scan(&id, &name, &cloudRevision, &grantRevision, &isDefault, &defaultProvider, &defaultConnection, &defaultRegion, &wholeCloud, &targets)
+	if err != nil {
+		return nil, storeError(err)
+	}
+	if id == nil {
+		if cloudID == "" {
+			return nil, nil
 		}
-		return nil, 0, nil
+		return nil, ErrNotFound
 	}
 	if grantRevision == nil {
 		if !retained {
-			return nil, *revision, ErrNotFound
+			return nil, ErrNotFound
 		}
 		zero := int64(0)
 		grantRevision = &zero
 	}
-	a := &Assignment{GrantRevision: *grantRevision, OrgID: orgID, ProjectID: projectID, EnvironmentID: environmentID, CloudID: *cloudID, Revision: *revision, CloudRevision: *cloudRevision}
-	if err = json.Unmarshal(targets, &a.Targets); err != nil {
-		return nil, 0, fmt.Errorf("decode assigned targets: %w", err)
+	c := &ProjectCloud{GrantRevision: *grantRevision, OrgID: orgID, ProjectID: projectID, CloudID: *id, Name: *name, CloudRevision: *cloudRevision, Default: isDefault}
+	if err = json.Unmarshal(targets, &c.Targets); err != nil {
+		return nil, fmt.Errorf("decode granted targets: %w", err)
 	}
-	for i := range a.Targets {
-		if a.Targets[i].Tags == nil {
-			a.Targets[i].Tags = []string{}
+	for i := range c.Targets {
+		if c.Targets[i].Tags == nil {
+			c.Targets[i].Tags = []string{}
 		}
 	}
 	// Cleanup keeps the default it placed with; fresh placement needs a grant
 	// covering the whole Cloud, not just chosen targets.
 	if defaultProvider != nil && defaultConnection != nil && (retained || wholeCloud != nil && *wholeCloud) {
-		a.DefaultPlacement = &DefaultPlacement{Provider: *defaultProvider, ConnectionID: *defaultConnection}
+		c.DefaultPlacement = &DefaultPlacement{Provider: *defaultProvider, ConnectionID: *defaultConnection}
 		if defaultRegion != nil {
-			a.DefaultPlacement.Region = *defaultRegion
+			c.DefaultPlacement.Region = *defaultRegion
 		}
 	}
-	return a, *revision, nil
+	return c, nil
 }
 
 // metadataTransaction serializes edits with acceptance. Retained syncs pin both
@@ -393,3 +416,18 @@ func IsStaleCleanupReview(err error) bool {
 	var pg *pgconn.PgError
 	return errors.As(err, &pg) && pg.Code == "23514" && (pg.Message == "cleanup target changed; review again" || pg.Message == "cleanup target is unresolved or untrusted")
 }
+
+// Planning, deployment and the Cloud infrastructure service reach these
+// through run-time assertions, where a drifted signature would read as a
+// missing capability rather than fail the build.
+var (
+	_ GrantStore    = (*PgStore)(nil)
+	_ NamedResolver = (*PgStore)(nil)
+	_ SyncStore     = (*PgStore)(nil)
+	_ interface {
+		RetainedCloud(ctx context.Context, orgID, projectID, cloudID string) (*ProjectCloud, error)
+	} = (*PgStore)(nil)
+	_ interface {
+		EnvironmentsUsing(ctx context.Context, orgID, cloudID string) ([]*projects.Environment, error)
+	} = (*PgStore)(nil)
+)

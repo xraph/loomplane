@@ -133,7 +133,14 @@ func (e *Extension) clusterRoutes(r forge.Router, guard identity.Guard) error {
 			opts = append(opts, forge.WithRequestSchema(rt.request))
 		}
 		if rt.method == http.MethodPost {
-			opts = append(opts, forge.WithInvalidates("CloudCluster", "CloudClusterOperation", "CloudClusterPage", "CloudClusterOperationPage", "RuntimeAttachmentPage"))
+			// Every write changes what the cluster and operation lists show.
+			// A write about an existing cluster names it in its response; a
+			// preview of a new one has no resource yet.
+			tags := []string{"CloudCluster[]", "CloudClusterOperation[]"}
+			if rt.name != "cloudClusters.preview" {
+				tags = append(tags, "CloudCluster:{res.resourceId}", "RuntimeAttachmentPage:{res.resourceId}")
+			}
+			opts = append(opts, forge.WithInvalidates(tags...))
 		}
 		var err error
 		if rt.method == http.MethodGet {

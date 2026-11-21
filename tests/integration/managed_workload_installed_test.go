@@ -94,7 +94,7 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		t.Fatal(err)
 	}
 	cfg.TargetSettings = planning.ReviewedConnectionSettings(c.Cloud, c.Details)
-	assignment, err := f.clouds.Resolve(ctx, p.OrgID, p.ProjectID, p.EnvironmentID)
+	assignment, err := f.clouds.ResolveCloud(ctx, p.OrgID, p.ProjectID, cfg.CloudPlacement.CloudID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,6 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		t.Fatal(err)
 	}
 	cfg.CloudPlacement.CloudRevision = assignment.CloudRevision
-	cfg.CloudPlacement.AssignmentRevision = assignment.Revision
 	cfg.CloudPlacement.TargetName, cfg.CloudPlacement.TargetRevision = targetPin.Name, targetPin.Revision
 	cfg.CloudPlacement.AccountIdentity = connections.AccountIdentity(c.Cloud, c.Account, c.Details)
 	cfg.CloudPlacement.Region, cfg.Region, a.Region = targetPin.Region, targetPin.Region, targetPin.Region

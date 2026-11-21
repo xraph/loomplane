@@ -1,24 +1,14 @@
-import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { Card } from "@/components/ui/card"
 import { Item, ItemGroup } from "@/components/ui/item"
-import {
-  CloudLoading,
-  listItemClass,
-} from "@/components/cloud-targets/infrastructure-ui"
+import { listItemClass } from "@/components/cloud-targets/infrastructure-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import {
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
-import { type ReactNode, useEffect, useState } from "react"
-import { PlusIcon } from "lucide-react"
+import { type ReactNode, useState } from "react"
+import { ChevronRightIcon, PlusIcon } from "lucide-react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
   Connection,
-  Environment,
+  DefaultPlacement,
   Profile,
   Target,
 } from "@/client/forge/loomplane/types"
@@ -50,6 +40,7 @@ import { CloudGlyph } from "@/components/cloud-glyph"
 import { CloudsIcon } from "@/components/icons"
 import { cloudLabel } from "@/lib/clouds"
 import { cn } from "@/lib/utils"
+import { StatusPill } from "@/components/runs"
 
 import { AccountSummary, cloudOf } from "./target-mix"
 import { TargetEditor } from "./target-editor"
@@ -82,297 +73,224 @@ export function EmptyClouds({
     </ZeroState>
   )
 }
+/**
+ * CloudWorkspace is a project's Clouds: every Cloud granted to it, with the
+ * default first. Every environment deploys through the default Cloud, so
+ * nothing here is per environment; an environment differs only where
+ * loomplane.yaml, or the deploy screen, says so.
+ */
 export function CloudWorkspace({
   projectId,
-  environment: wanted,
   cloudId,
 }: {
   projectId: string
-  /** The environment to open on by name, such as one a Cloud's page links to. */
-  environment?: string
   /** The Cloud to open on, such as the one a Cloud's own page is about. */
   cloudId?: string
 }) {
-  const environments = useQuery(api.useEnvironmentsList, {
-    path: { id: projectId },
-  })
-  const { session } = useOrganization()
-  const preference = `loomplane.clouds.environment.${session.orgId}.${projectId}`
-  // A pick made here wins over the linked environment, which wins over the
-  // last one picked on this device.
-  const [chosen, setChosen] = useState("")
-  const [stored] = useState(() => window.localStorage.getItem(preference) ?? "")
-  const list = environments.data?.environments ?? []
-  const environment =
-    list.find((e) => e.id === chosen) ??
-    list.find((e) => e.name === wanted) ??
-    list.find((e) => e.id === stored) ??
-    list[0]
-  return environments.status === "error" ? (
-    <QueryError
-      error={environments.error}
-      fallback="Environments couldn't be loaded."
-      retry={environments.refetch}
-    />
-  ) : !environments.data ? (
-    <Skeleton className="h-32" />
-  ) : !environment ? (
-    <EmptyClouds
-      title="No environments yet"
-      description="Add an environment in your project before assigning a Cloud."
-    />
-  ) : (
-    <EnvironmentWorkspace
-      key={environment.id}
-      projectId={projectId}
-      cloudId={cloudId}
-      environment={environment}
-      environments={environments.data.environments}
-      scopeControls={
-        <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-          <FieldLabel className="contents">
-            Environment
-            <Select
-              value={environment.id}
-              onValueChange={(e) => {
-                setChosen(e ?? "")
-                window.localStorage.setItem(preference, e ?? "")
-              }}
-            >
-              <SelectTrigger
-                aria-label="Environment"
-                className={"w-full min-w-0"}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {environments.data.environments.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FieldLabel>
-        </FormField>
-      }
-    />
-  )
-}
-function EnvironmentWorkspace({
-  projectId,
-  cloudId,
-  environment,
-  environments,
-  scopeControls,
-}: {
-  projectId: string
-  cloudId?: string
-  environment: Environment
-  environments: Environment[]
-  scopeControls: ReactNode
-}) {
   const { can } = useOrganization()
   const manage = can("cloud_account:manage")
-  const deploy = manage && can("deployment:approve")
+  const review = manage && can("deployment:approve")
   const profiles = useQuery(api.useCloudsList, { path: { id: projectId } })
-  const assignment = useQuery(api.useEnvironmentCloudsGet, {
-    path: { id: projectId, environmentId: environment.id },
-  })
-  const { refetch: refetchAssignment } = assignment
-  const { refetch: refetchProfiles } = profiles
-  const [chosen, setChosen] = useState(cloudId ?? "")
+  const current = useQuery(api.useDefaultCloudGet, { path: { id: projectId } })
+  const [open, setOpen] = useState<string | undefined>(cloudId)
   const [editing, setEditing] = useState<Profile | "new" | null>(null)
-  const [assigning, setAssigning] = useState(false)
-  const [unassign, setUnassign] = useState(false)
-  const [refresh, setRefresh] = useState(0)
-  const list = (profiles.data?.clouds ?? []).filter((p): p is Profile => !!p)
-  const profile =
-    list.find((p) => p.id === chosen) ??
-    list.find((p) => p.id === assignment.data?.assignment?.cloudId) ??
-    list[0]
-  const reload = async () => {
-    await Promise.allSettled([refetchProfiles(), refetchAssignment()])
-    setRefresh((n) => n + 1)
-  }
-  // Lists have no generated cache tags. Bounded reads also cover reconnects and
-  // changes made in another tab while retaining the server's persisted status.
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void refetchProfiles().catch(() => undefined)
-      void refetchAssignment().catch(() => undefined)
-    }, 15000)
-    return () => window.clearInterval(timer)
-  }, [refetchProfiles, refetchAssignment])
+  const [making, setMaking] = useState<string | null>(null)
+  if (profiles.status === "error" || current.status === "error")
+    return (
+      <QueryError
+        error={profiles.error ?? current.error}
+        fallback="This project's Clouds couldn't be loaded."
+        retry={() =>
+          Promise.allSettled([profiles.refetch(), current.refetch()])
+        }
+      />
+    )
+  if (!profiles.data || !current.data) return <Skeleton className="h-32" />
+  const defaultId = current.data.cloud?.cloudId
+  const list = (profiles.data.clouds ?? [])
+    .filter((p): p is Profile => !!p)
+    .sort((a, b) =>
+      a.id === defaultId
+        ? -1
+        : b.id === defaultId
+          ? 1
+          : a.name.localeCompare(b.name)
+    )
+  const expanded = open ?? defaultId ?? list[0]?.id
   return (
-    <>
-      {(profiles.status === "error" ||
-        assignment.status === "error" ||
-        !profiles.data ||
-        !assignment.data) && (
-        <section className="flex flex-wrap items-end gap-2">
-          {scopeControls}
-        </section>
-      )}
-      {profiles.status === "error" || assignment.status === "error" ? (
-        <QueryError
-          error={profiles.error ?? assignment.error}
-          fallback="Cloud configuration couldn't be loaded."
-          retry={reload}
-        />
-      ) : !profiles.data || !assignment.data ? (
-        <Skeleton className="h-28" />
+    <div className="grid gap-5">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid max-w-prose gap-1">
+          <h2 className="text-[15px] font-semibold">Clouds</h2>
+          <p className="text-[13px] text-muted-foreground">
+            Every environment deploys through the default Cloud. A service can
+            run on another Cloud&apos;s target: pick it below, or set{" "}
+            <code className="font-mono text-[12px]">cloud</code> beside{" "}
+            <code className="font-mono text-[12px]">cloud_target</code> in
+            loomplane.yaml.
+          </p>
+        </div>
+        {manage && (
+          <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
+            <PlusIcon />
+            New Cloud
+          </Button>
+        )}
+      </header>
+      {!list.length ? (
+        <EmptyClouds
+          title="No Clouds yet"
+          description="A Cloud groups the targets your services deploy to. The first one you add becomes this project's default."
+        >
+          {manage && (
+            <Button size="sm" onClick={() => setEditing("new")}>
+              New Cloud
+            </Button>
+          )}
+        </EmptyClouds>
       ) : (
-        <>
-          <section className="flex flex-wrap items-end gap-2">
-            {scopeControls}
-            <FormField className="grid min-w-36 flex-1 gap-1 text-xs text-muted-foreground">
-              <FieldLabel className="contents">
-                Cloud
-                <Select
-                  value={profile?.id ?? ""}
-                  onValueChange={(e) => setChosen(e ?? "")}
-                >
-                  <SelectTrigger
-                    aria-label="Cloud"
-                    className={"w-full min-w-0"}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {!profile && <SelectItem value="">No Clouds</SelectItem>}
-                    {list.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FieldLabel>
-            </FormField>
-            {manage && (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setEditing("new")}
-                >
-                  <PlusIcon />
-                  New Cloud
-                </Button>
-                {profile && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setEditing(profile)}
-                  >
-                    Manage Cloud
-                  </Button>
-                )}
-              </>
-            )}
-            <div className="basis-full text-xs text-muted-foreground">
-              {environment.name} currently uses{" "}
-              {list.find((p) => p.id === assignment.data?.assignment?.cloudId)
-                ?.name ??
-                (assignment.data.assignment
-                  ? assignment.data.assignment.cloudId
-                  : "direct service placement")}
-              .
-              {profile &&
-                assignment.data.assignment?.cloudId !== profile.id && (
-                  <>
-                    {" "}
-                    <Button
-                      size="sm"
-                      variant="link"
-                      disabled={!deploy}
-                      onClick={() => {
-                        setUnassign(false)
-                        setAssigning(true)
-                      }}
-                    >
-                      Review assignment
-                    </Button>
-                  </>
-                )}
-              {assignment.data.assignment && (
-                <Button
-                  size="sm"
-                  variant="link"
-                  disabled={!deploy}
-                  onClick={() => {
-                    setUnassign(true)
-                    setAssigning(true)
-                  }}
-                >
-                  Review unassignment
-                </Button>
-              )}
-            </div>
-          </section>
-          {!profile ? (
-            <EmptyClouds
-              title="Create your first Cloud"
-              description="Group named service targets in a Cloud, then assign it to this environment."
-            >
-              {manage && (
-                <Button size="sm" onClick={() => setEditing("new")}>
-                  New Cloud
-                </Button>
-              )}
-            </EmptyClouds>
-          ) : (
-            <Targets
+        <div className="grid gap-3">
+          {!defaultId && (
+            <Alert>
+              <AlertDescription>
+                This project has no default Cloud, so services can&apos;t name a
+                target yet. Make one of these its default.
+              </AlertDescription>
+            </Alert>
+          )}
+          {list.map((profile) => (
+            <CloudCard
               key={profile.id}
               projectId={projectId}
               profile={profile}
-              environment={environment}
-              environments={environments}
-              assigned={assignment.data.assignment?.cloudId === profile.id}
-              refresh={refresh}
-              reload={reload}
+              isDefault={profile.id === defaultId}
+              fallback={
+                profile.id === defaultId
+                  ? current.data?.cloud?.defaultPlacement
+                  : undefined
+              }
+              expanded={profile.id === expanded}
+              onToggle={() =>
+                setOpen(profile.id === expanded ? "" : profile.id)
+              }
+              onMakeDefault={review ? () => setMaking(profile.id) : undefined}
+              onManage={manage ? () => setEditing(profile) : undefined}
             />
-          )}
-          {assigning && (
-            <ChangeReview
-              projectId={projectId}
-              title="Review Cloud assignment"
-              assignment={{
-                environmentId: environment.id,
-                cloudId: unassign ? "" : (profile?.id ?? ""),
-                revision: assignment.data.revision,
-              }}
-              onClose={() => setAssigning(false)}
-              onApplied={() => {
-                setAssigning(false)
-                void reload()
-              }}
-            />
-          )}
-          <SyncHistory
-            projectId={projectId}
-            environmentId={environment.id}
-            refresh={refresh}
-            onChanged={reload}
-          />
-        </>
+          ))}
+        </div>
       )}
+      {making !== null && (
+        <ChangeReview
+          projectId={projectId}
+          title="Change the default Cloud"
+          defaultCloud={{ cloudId: making, revision: current.data.revision }}
+          onClose={() => setMaking(null)}
+          onApplied={() => setMaking(null)}
+        />
+      )}
+      <SyncHistory
+        projectId={projectId}
+        refresh={0}
+        onChanged={async () => {}}
+      />
       {editing && (
         <CloudForm
           projectId={projectId}
           profile={editing === "new" ? undefined : editing}
           onClose={() => setEditing(null)}
           onSaved={(id) => {
-            setChosen(id)
+            if (id) setOpen(id)
             setEditing(null)
-            void reload()
           }}
         />
       )}
-    </>
+    </div>
   )
 }
+
+/**
+ * CloudCard is one Cloud granted to the project: a one-line summary that
+ * opens to its targets, and for the default Cloud, where each service runs.
+ */
+function CloudCard({
+  projectId,
+  profile,
+  isDefault,
+  fallback,
+  expanded,
+  onToggle,
+  onMakeDefault,
+  onManage,
+}: {
+  projectId: string
+  profile: Profile
+  isDefault: boolean
+  fallback?: DefaultPlacement | null
+  expanded: boolean
+  onToggle: () => void
+  onMakeDefault?: () => void
+  onManage?: () => void
+}) {
+  const targets = useQuery(api.useCloudTargetsList, {
+    path: { id: projectId, cloudId: profile.id },
+  })
+  const count = (targets.data?.targets ?? []).filter(Boolean).length
+  return (
+    <Card size="sm" className="gap-0 py-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          <ChevronRightIcon
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground transition-transform",
+              expanded && "rotate-90"
+            )}
+          />
+          <span className="truncate text-[14px] font-medium">
+            {profile.name}
+          </span>
+          {isDefault && <StatusPill tone="live">Default</StatusPill>}
+          <span className="text-xs text-muted-foreground">
+            {targets.data
+              ? `${count} ${count === 1 ? "target" : "targets"}`
+              : ""}
+            {profile.defaultPlacement ? " · default placement" : ""}
+          </span>
+        </button>
+        <div className="flex gap-2">
+          {!isDefault && onMakeDefault && (
+            <Button size="sm" variant="outline" onClick={onMakeDefault}>
+              Make default
+            </Button>
+          )}
+          {onManage && (
+            <Button size="sm" variant="ghost" onClick={onManage}>
+              Manage
+            </Button>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        <div className="grid gap-4 border-t px-4 py-4">
+          <Targets projectId={projectId} profile={profile} />
+          <ServiceAdoption
+            projectId={projectId}
+            targets={(targets.data?.targets ?? []).filter(
+              (t): t is Target => !!t
+            )}
+            cloud={isDefault ? undefined : profile.name}
+            fallback={fallback}
+          />
+        </div>
+      )}
+    </Card>
+  )
+}
+
 export function CloudForm({
   projectId,
   profile,
@@ -425,8 +343,8 @@ export function CloudForm({
           <DialogTitle>{profile ? "Manage Cloud" : "New Cloud"}</DialogTitle>
           <DialogDescription>
             {profile
-              ? "Rename this Cloud or delete it after removing its assignments and references."
-              : "Create a named set of deployment targets for this project."}
+              ? "Rename this Cloud, or delete it once no project uses it."
+              : "A named set of deployment targets. A project's first Cloud becomes its default."}
           </DialogDescription>
         </DialogHeader>
         <FormField className="grid gap-1.5">
@@ -471,26 +389,15 @@ export function CloudForm({
 function Targets({
   projectId,
   profile,
-  environment,
-  environments,
-  assigned,
-  refresh,
-  reload,
 }: {
   projectId: string
   profile: Profile
-  environment: Environment
-  environments: Environment[]
-  assigned: boolean
-  refresh: number
-  reload: () => Promise<void>
 }) {
   const { can } = useOrganization()
   const manage = can("cloud_account:manage")
   const targets = useQuery(api.useCloudTargetsList, {
     path: { id: projectId, cloudId: profile.id },
   })
-  const { refetch: refetchTargets } = targets
   const connections = useQuery(api.useConnectionsList)
   const [query, setQuery] = useState("")
   const [editing, setEditing] = useState<Target | "new" | null>(null)
@@ -501,13 +408,6 @@ function Targets({
       .toLowerCase()
       .includes(query.toLowerCase())
   )
-  useEffect(() => {
-    void refetchTargets().catch(() => undefined)
-    const timer = window.setInterval(() => {
-      void refetchTargets().catch(() => undefined)
-    }, 15000)
-    return () => window.clearInterval(timer)
-  }, [refresh, refetchTargets])
   return (
     <section className="grid min-w-0 gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -533,7 +433,7 @@ function Targets({
           error={targets.error ?? connections.error}
           fallback="Targets couldn't be loaded."
           retry={() =>
-            Promise.allSettled([refetchTargets(), connections.refetch()])
+            Promise.allSettled([targets.refetch(), connections.refetch()])
           }
         />
       ) : !targets.data || !connections.data ? (
@@ -568,22 +468,6 @@ function Targets({
           onEdit={setEditing}
         />
       )}
-      {assigned && (
-        <AppliedPlacement
-          projectId={projectId}
-          environment={environment}
-          refresh={refresh}
-        />
-      )}
-      {assigned && (
-        <ServiceAdoption
-          projectId={projectId}
-          environment={environment}
-          environments={environments}
-          targets={all}
-          onSaved={reload}
-        />
-      )}
       {editing && (
         <TargetEditor
           key={editing === "new" ? "new" : editing.id}
@@ -592,87 +476,8 @@ function Targets({
           target={editing === "new" ? undefined : editing}
           siblingTags={cloudTags(all, editing === "new" ? undefined : editing)}
           onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null)
-            void refetchTargets()
-            void reload()
-          }}
+          onSaved={() => setEditing(null)}
         />
-      )}
-    </section>
-  )
-}
-
-function AppliedPlacement({
-  projectId,
-  environment,
-  refresh,
-}: {
-  projectId: string
-  environment: Environment
-  refresh: number
-}) {
-  const bindings = useQuery(api.useBindingsList, {
-    path: { id: projectId },
-    query: { environment: environment.name },
-  })
-  const { refetch: refetchBindings } = bindings
-  const accounts = useQuery(api.useConnectionsList)
-  useEffect(() => {
-    void refetchBindings().catch(() => undefined)
-    const timer = window.setInterval(() => {
-      void refetchBindings().catch(() => undefined)
-    }, 5000)
-    return () => window.clearInterval(timer)
-  }, [refresh, refetchBindings])
-  if (bindings.status === "error")
-    return (
-      <QueryError
-        error={bindings.error}
-        fallback="Applied service accounts couldn't be loaded."
-        retry={bindings.refetch}
-      />
-    )
-  if (!bindings.data)
-    return <CloudLoading>Loading applied accounts...</CloudLoading>
-  const services = bindings.data.bindings.filter((b) => b.subject === "service")
-  return (
-    <section className="grid gap-2">
-      <h3 className="text-[14px] font-semibold">
-        Applied accounts in {environment.name}
-      </h3>
-      {!services.length ? (
-        <EmptyClouds
-          title="No applied services"
-          description="Deploy this environment to see each service's applied account here."
-        />
-      ) : (
-        <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
-          {services.map((b) => (
-            <div
-              key={b.id}
-              className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-[12.5px]"
-            >
-              <span className="font-medium">{b.name}</span>
-              <span className="break-words text-muted-foreground">
-                {b.provider} ·{" "}
-                {accounts.data?.connections.find((c) => c.id === b.connectionId)
-                  ?.name ?? b.connectionId}{" "}
-                · {b.commitSha?.slice(0, 8)}
-              </span>
-              {b.url && (
-                <a
-                  className="underline underline-offset-4"
-                  href={b.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open service
-                </a>
-              )}
-            </div>
-          ))}
-        </div>
       )}
     </section>
   )

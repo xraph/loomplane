@@ -39,7 +39,7 @@ func TestCloudTagsAndDefaultPlacementPersistence(t *testing.T) {
 
 	// The first default may be set while the Cloud is in use: the services
 	// it places had no placement before.
-	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1)`); err != nil {
+	if _, err = conn.Exec(ctx, defaultCloudSQL("org", "proj", "cloud")); err != nil {
 		t.Fatal(err)
 	}
 	profile, err := st.GetProfile(ctx, "org", "", "cloud")
@@ -51,47 +51,47 @@ func TestCloudTagsAndDefaultPlacementPersistence(t *testing.T) {
 	if err = st.UpdateProfile(ctx, profile, 1); err != nil {
 		t.Fatal(err)
 	}
-	a, err := st.Resolve(ctx, "org", "proj", "env")
+	a, err := st.ResolveCloud(ctx, "org", "proj", "")
 	if err != nil || a.DefaultPlacement == nil || *a.DefaultPlacement != *profile.DefaultPlacement || a.CloudRevision != 2 {
-		t.Fatalf("assignment default: %+v %v", a, err)
+		t.Fatalf("default Cloud's default placement: %+v %v", a, err)
 	}
 	for _, at := range a.Targets {
 		if at.Tags == nil {
-			t.Fatalf("assigned target lost tags: %+v", at)
+			t.Fatalf("granted target lost tags: %+v", at)
 		}
 	}
 
 	// Renaming keeps the default; replacing or clearing it would move serving services.
 	profile.Name, profile.Revision = "Renamed", 3
 	if err = st.UpdateProfile(ctx, profile, 2); err != nil {
-		t.Fatalf("rename of an assigned Cloud with a default: %v", err)
+		t.Fatalf("rename of a default Cloud with a default placement: %v", err)
 	}
 	for _, next := range []*cloudprofiles.DefaultPlacement{nil, {Provider: "vercel", ConnectionID: "new"}, {Provider: "vercel", ConnectionID: "old", Region: "sfo1"}} {
 		changed := *profile
 		changed.DefaultPlacement, changed.Revision = next, 4
 		if err = st.UpdateProfile(ctx, &changed, 3); !errors.Is(err, cloudprofiles.ErrInUse) {
-			t.Fatalf("default change on an assigned Cloud: %v", err)
+			t.Fatalf("default placement change on a default Cloud: %v", err)
 		}
 	}
 
 	// A grant limited to chosen targets reaches those targets, not the default.
 	grants := any(st).(interface {
-		SetProjectGrant(context.Context, string, string, string, []string, bool) (int64, error)
+		SetProjectGrant(context.Context, string, string, string, []string, bool) (*cloudprofiles.ProjectGrant, error)
 	})
 	if _, err = grants.SetProjectGrant(ctx, "org", "cloud", "proj", []string{"gpu"}, false); err != nil {
 		t.Fatal(err)
 	}
-	a, err = st.Resolve(ctx, "org", "proj", "env")
-	if err != nil || a.DefaultPlacement != nil || len(a.Targets) != 1 || a.Targets[0].ID != "gpu" {
+	a, err = st.ResolveCloud(ctx, "org", "proj", "")
+	if err != nil || a == nil || !a.Default || a.DefaultPlacement != nil || len(a.Targets) != 1 || a.Targets[0].ID != "gpu" {
 		t.Fatalf("limited grant reached the default: %+v %v", a, err)
 	}
-	retained, err := st.RetainedAssignment(ctx, "org", "proj", "env")
+	retained, err := st.RetainedCloud(ctx, "org", "proj", "cloud")
 	if err != nil || retained.DefaultPlacement == nil {
 		t.Fatalf("cleanup lost the default it placed with: %+v %v", retained, err)
 	}
 
 	// Once nothing uses the Cloud, its default can change, and the account stays retained.
-	if _, err = conn.Exec(ctx, `DELETE FROM loomplane_cloud_assignments WHERE environment_id='env'`); err != nil {
+	if _, err = conn.Exec(ctx, clearDefaultCloudSQL("org", "proj")); err != nil {
 		t.Fatal(err)
 	}
 	profile.DefaultPlacement, profile.Revision = &cloudprofiles.DefaultPlacement{Provider: "vercel", ConnectionID: "new"}, 4

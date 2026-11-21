@@ -137,7 +137,7 @@ export class RealtimeWsReceiveWSClient extends EventEmitter {
       this.setState(ConnectionState.CONNECTING);
       this.closed = false;
 
-      const wsURL = this.config.baseURL.replace(/^http/, 'ws') + '/api/v1/realtime/ws';
+      const wsURL = this.config.baseURL.replace(/^http/, 'ws') + "/api/v1/realtime/ws";
 
       // Setup connection timeout
       this.connectionTimeoutId = setTimeout(() => {

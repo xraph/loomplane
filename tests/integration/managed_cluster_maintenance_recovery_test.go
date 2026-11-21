@@ -289,7 +289,7 @@ func reviewedCountCohort(t *testing.T, f *poolFixture, r *cloudinfra.ManagedReso
 	for _, q := range []string{
 		`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('env','org','proj','production','production',now(),now()) ON CONFLICT DO NOTHING`,
 		`INSERT INTO loomplane_cloud_project_grants(org_id,cloud_id,project_id) VALUES('org','cloud','proj') ON CONFLICT DO NOTHING`,
-		`INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org','proj','env','cloud',1) ON CONFLICT DO NOTHING`,
+		defaultCloudSQL("org", "proj", "cloud"),
 		`INSERT INTO loomplane_manifests(id,org_id,project_id,revision,body,digest,created_by,created_at) VALUES('pool-manifest-proj','org','proj',1,'version: 1','pool','usr',now())`,
 	} {
 		if _, err := f.sql.Exec(t.Context(), q); err != nil {
@@ -334,7 +334,7 @@ func reviewedCountCohort(t *testing.T, f *poolFixture, r *cloudinfra.ManagedReso
 	svc := planning.NewService(planning.Deps{Store: f.plans, Authz: &capacityPlanAuth{}, Capacity: managedDemandAuthority{}})
 	svc.BindManagedRuntime(ledgerRuntimeFixture{})
 	plan := &planning.Plan{ID: "manual-wait", OrgID: "org", ProjectID: "proj", EnvironmentID: "env", CreatedBy: "usr"}
-	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: "cluster-runtime", TargetSettings: map[string]string{"managed_attachment_id": "attachment", "managed_project_id": "proj", "managed_resource_id": "cluster", "architecture": "amd64"}, Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 90}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, AssignmentRevision: 1, TargetID: "cluster-target", TargetRevision: 1, GrantRevision: 1, ConnectionID: "cluster-runtime", Provider: "kubernetes"}}
+	cfg := &planning.ServiceConfig{Provider: "kubernetes", Target: "cluster-runtime", TargetSettings: map[string]string{"managed_attachment_id": "attachment", "managed_project_id": "proj", "managed_resource_id": "cluster", "architecture": "amd64"}, Size: &manifest.Size{CPU: .5, Memory: 128}, Scale: &manifest.Scale{Min: 1, Max: 90}, CloudPlacement: &planning.CloudPlacement{CloudID: "cloud", CloudRevision: 1, TargetID: "cluster-target", TargetRevision: 1, GrantRevision: 1, ConnectionID: "cluster-runtime", Provider: "kubernetes"}}
 	result := &planning.Result{Executable: true, Connections: map[string]string{"kubernetes": "cluster-runtime"}, Actions: []planning.Action{{ID: "service:api", Subject: planning.ServiceSubject, Name: "api", Op: planning.Create, Provider: "kubernetes", Service: cfg}}}
 
 	if err = svc.PrepareClusterWorkloadDemands(t.Context(), plan, result); err != nil {

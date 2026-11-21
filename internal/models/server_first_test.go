@@ -241,17 +241,17 @@ func (f *fakeServers) calls() (previews, applies, reads int) {
 	return len(f.previews), len(f.applies), f.reads
 }
 
-// fakeClouds assigns every environment of the project to one cloud.
+// fakeClouds gives the project one default Cloud.
 type fakeClouds struct {
-	assignment *cloudprofiles.Assignment
+	assignment *cloudprofiles.ProjectCloud
 }
 
-func (f fakeClouds) EnvironmentCloud(_ context.Context, _ security.Principal, _, _ string) (*cloudprofiles.Assignment, int64, error) {
+func (f fakeClouds) DefaultCloud(_ context.Context, _ security.Principal, _ string) (*cloudprofiles.ProjectCloud, error) {
 	if f.assignment == nil {
-		return nil, 0, nil
+		return nil, nil
 	}
 	a := *f.assignment
-	return &a, a.Revision, nil
+	return &a, nil
 }
 
 // Waiting and Stranded make memDeployments the cron's WaitingLister.
@@ -299,7 +299,7 @@ func newServerFirst(t *testing.T, authz Authorizer) *serverFirstSetup {
 				{ID: gpuImageID, Regions: []string{"tor1"}, Bootstrap: true, Accelerators: []string{provider.VendorNVIDIA}},
 			},
 		}},
-		clouds: &fakeClouds{assignment: &cloudprofiles.Assignment{
+		clouds: &fakeClouds{assignment: &cloudprofiles.ProjectCloud{
 			OrgID: "org", ProjectID: projectID, CloudID: cloudID, CloudRevision: 7,
 			Targets: []cloudprofiles.Target{{ID: "tgt_do", CloudID: cloudID, Provider: connections.DigitalOcean, ConnectionID: doConn, Region: "tor1"}},
 		}},
@@ -441,7 +441,7 @@ func TestServerFirstNeedsTheAccountInTheCloud(t *testing.T) {
 	sf := newServerFirst(t, cloudAdmin)
 	sf.clouds.assignment.Targets = []cloudprofiles.Target{{ID: "tgt_k", Provider: connections.Kubernetes, ConnectionID: kubeConn}}
 	pv, err := sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize()})
-	if err != nil || !slices.Equal(codes(pv), []string{ProblemNoCloud}) || pv.Problems[0].Message != "Add this DigitalOcean account to staging's cloud first." {
+	if err != nil || !slices.Equal(codes(pv), []string{ProblemNoCloud}) || pv.Problems[0].Message != "Add this DigitalOcean account to the project's Cloud first." {
 		t.Errorf("account outside the cloud: %+v, %v", pv.Problems, err)
 	}
 	sf.clouds.assignment = nil

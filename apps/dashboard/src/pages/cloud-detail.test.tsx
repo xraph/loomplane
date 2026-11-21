@@ -86,7 +86,7 @@ const usage = {
       project_name: "Web app",
       environment_id: "prod",
       environment_name: "production",
-      assigned: true,
+      default: true,
       placements: [
         { target_id: "frontend", services: ["site", "docs"] },
         { target_id: "api", services: ["api"] },
@@ -350,7 +350,7 @@ it("shows where services go and how many run on each target", async () => {
   expect(reads).toContain("/api/v1/clouds/syncs?cloud=c&limit=30")
 })
 
-it("sends environment changes to the environment's own project", async () => {
+it("sends Cloud changes to the environment's own project", async () => {
   fixture({ granted: true })
   show()
   const envs = await screen.findByRole("region", {
@@ -359,7 +359,7 @@ it("sends environment changes to the environment's own project", async () => {
   await waitFor(() => expect(envs).toHaveTextContent("production"))
   expect(
     within(envs).getByRole("link", { name: "Open in project" })
-  ).toHaveAttribute("href", "/projects/web?tab=cloud&environment=production")
+  ).toHaveAttribute("href", "/projects/web?tab=cloud")
   expect(
     screen.queryByRole("button", { name: "Use in an environment" })
   ).not.toBeInTheDocument()

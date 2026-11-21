@@ -639,3 +639,89 @@ it("offers a finding's fix for the deployment page to show", async () => {
   )
   await vi.waitFor(() => expect(writes).toEqual([{ ignore: "redis" }]))
 })
+
+it("lists every Cloud's targets and puts a service on another Cloud's", async () => {
+  const manifest: Manifest = {
+    version: 1,
+    services: { web: { source: "node:web", cloud_target: "frontend" } },
+  }
+  const saves: Record<string, unknown>[] = []
+  const target = (id: string, name: string, cloud: string) => ({
+    id,
+    name,
+    display_name: name.toUpperCase(),
+    cloud_id: cloud,
+    provider: "vercel",
+    connection_id: "conn",
+    revision: 1,
+  })
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === "PUT") {
+        saves.push(JSON.parse(String(init.body)))
+        return json({ id: "rev", revision: 2, manifest })
+      }
+      if (url.endsWith("/providers"))
+        return json({
+          providers: [
+            {
+              name: "vercel",
+              title: "Vercel",
+              cloud: "vercel",
+              available: true,
+              runs: [{ workload: "http-service" }],
+            },
+          ],
+        })
+      if (url.endsWith("/default-cloud"))
+        return json({
+          project_id: "p",
+          revision: 1,
+          cloud: {
+            cloud_id: "main",
+            name: "Main",
+            default: true,
+            targets: [target("t1", "frontend", "main")],
+          },
+        })
+      if (url.endsWith("/projects/p/clouds"))
+        return json({
+          clouds: [
+            { id: "main", name: "Main" },
+            { id: "lab", name: "GPU Lab" },
+          ],
+        })
+      if (url.endsWith("/clouds/lab/targets"))
+        return json({ targets: [target("t2", "a100", "lab")] })
+      return json({})
+    }
+  )
+  panel(manifest, service(manifest, "web"))
+  await userEvent.click(
+    await screen.findByRole("combobox", { name: "Target for web" })
+  )
+  // Each Cloud's targets sit under its own name.
+  const lab = await screen.findByRole("group", { name: "GPU Lab" })
+  expect(screen.getByRole("group", { name: "Main" })).toHaveTextContent(
+    "FRONTEND"
+  )
+  await userEvent.click(within(lab).getByRole("option", { name: "A100" }))
+  expect(
+    screen.getByRole("combobox", { name: "Target for web" })
+  ).toHaveTextContent("a100 in GPU Lab")
+  await userEvent.click(screen.getByRole("button", { name: "Save placement" }))
+  await vi.waitFor(() => expect(saves).toHaveLength(1))
+  expect(saves[0]).toMatchObject({
+    manifest: {
+      services: {
+        web: {
+          environments: {
+            production: { cloud: "GPU Lab", cloud_target: "a100" },
+          },
+        },
+      },
+    },
+  })
+})

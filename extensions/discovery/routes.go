@@ -113,7 +113,7 @@ func (e *Extension) sourceRoutes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("sources.delete"),
 		forge.WithSummary("Detach a source. Its alias stays taken, so old plans keep their meaning."),
 		forge.WithNoContentResponse(),
-		forge.WithEntity(forge.EntityDef{Type: "Source", IDField: "id"}),
+		forge.WithEntity(forge.EntityDef{Type: "DiscoverySource", IDField: "id"}),
 	)
 }
 

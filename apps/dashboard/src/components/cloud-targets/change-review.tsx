@@ -2,7 +2,11 @@ import { CloudLoading } from "./infrastructure-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useEffect, useRef, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
-import type { ChangeInputBody, Preview } from "@/client/forge/loomplane/types"
+import type {
+  ChangeInputBody,
+  Preview,
+  Target,
+} from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { messageOf, statusOf } from "@/client/errors"
 import { Button } from "@/components/ui/button"
@@ -17,8 +21,11 @@ import {
 import { EnvironmentProgress } from "./organization-activity"
 import { useOrganization } from "@/lib/organization"
 
-type AssignmentIntent = {
-  environmentId: string
+/**
+ * DefaultCloudIntent makes cloudId the project's default Cloud, or with ""
+ * leaves the project without one. revision is the current default's.
+ */
+type DefaultCloudIntent = {
   cloudId: string
   revision: number
 }
@@ -27,7 +34,7 @@ type ReviewProps = {
   projectId: string
   title: string
   change?: ChangeInputBody
-  assignment?: AssignmentIntent
+  defaultCloud?: DefaultCloudIntent
   revert?: string
   onClose: () => void
   onApplied: () => void
@@ -38,7 +45,7 @@ export function ChangeReview(props: ReviewProps) {
       key={JSON.stringify([
         props.projectId,
         props.change,
-        props.assignment,
+        props.defaultCloud,
         props.revert,
       ])}
       {...props}
@@ -49,7 +56,7 @@ function ReviewContent({
   projectId,
   title,
   change,
-  assignment,
+  defaultCloud,
   revert,
   onClose,
   onApplied,
@@ -58,7 +65,7 @@ function ReviewContent({
   const accountName = (id: string) =>
     accounts.data?.connections.find((c) => c.id === id)?.name ?? id
   const previewChange = useMutation(api.useCloudChangesPreview)
-  const previewAssignment = useMutation(api.useEnvironmentCloudsPreview)
+  const previewDefaultCloud = useMutation(api.useDefaultCloudPreview)
   const previewRevert = useMutation(api.useCloudSyncsPreviewRevert)
   const apply = useMutation(api.useCloudChangesApply)
   const previewOrgChange = useMutation(api.useOrganizationCloudChangesPreview)
@@ -73,27 +80,24 @@ function ReviewContent({
   const [loading, setLoading] = useState(true)
   const [version, setVersion] = useState(0)
   const [latestChange, setLatestChange] = useState(change)
-  const [latestAssignment, setLatestAssignment] = useState(assignment)
+  const [latestDefault, setLatestDefault] = useState(defaultCloud)
   const idempotency = useRef(crypto.randomUUID())
   const intent = JSON.stringify({
     projectId,
     latestChange,
-    latestAssignment,
+    latestDefault,
     revert,
   })
   useEffect(() => {
     let current = true
     const load = revert
       ? previewRevert.mutateAsync({ path: { id: projectId, syncId: revert } })
-      : latestAssignment
-        ? previewAssignment.mutateAsync({
-            path: {
-              id: projectId,
-              environmentId: latestAssignment!.environmentId,
-            },
+      : latestDefault
+        ? previewDefaultCloud.mutateAsync({
+            path: { id: projectId },
             body: {
-              cloudId: latestAssignment!.cloudId,
-              revision: latestAssignment!.revision,
+              cloudId: latestDefault.cloudId,
+              revision: latestDefault.revision,
             },
           })
         : org
@@ -152,13 +156,11 @@ function ReviewContent({
               })
         ).refetch()
         setLatestChange({ ...change, revision: current.revision })
-      } else if (assignment) {
+      } else if (defaultCloud) {
         const current = await api
-          .useEnvironmentCloudsGet({
-            path: { id: projectId, environmentId: assignment.environmentId },
-          })
+          .useDefaultCloudGet({ path: { id: projectId } })
           .refetch()
-        setLatestAssignment({ ...assignment, revision: current.revision })
+        setLatestDefault({ ...defaultCloud, revision: current.revision })
       }
       setVersion((v) => v + 1)
     } catch (err) {
@@ -241,10 +243,11 @@ function ReviewContent({
                 {preview.after.region ? ` / ${preview.after.region}` : ""}
               </p>
             )}
-            {(assignment ||
-              preview.beforeAssignment ||
-              preview.afterAssignment) && (
-              <AssignmentPreview preview={preview} accountName={accountName} />
+            {(defaultCloud || preview.beforeCloud || preview.afterCloud) && (
+              <DefaultCloudPreview
+                preview={preview}
+                accountName={accountName}
+              />
             )}
             {(preview.blockers ?? []).map((blocker, i) => (
               <Alert variant="destructive" key={i} className="text-destructive">
@@ -330,7 +333,12 @@ function ReviewContent({
   )
 }
 
-function AssignmentPreview({
+/**
+ * DefaultCloudPreview shows a project default change: which Cloud every
+ * environment resolves through before and after, and what each target
+ * name a service may use points at on either side.
+ */
+function DefaultCloudPreview({
   preview,
   accountName,
 }: {
@@ -342,53 +350,56 @@ function AssignmentPreview({
   })
   const name = (id: string) =>
     clouds.data?.clouds?.find((cloud) => cloud?.id === id)?.name ?? id
-  const before = preview.beforeAssignment
-  const after = preview.afterAssignment
+  const before = preview.beforeCloud
+  const after = preview.afterCloud
+  const where = (t: Target) =>
+    `${t.provider} / ${accountName(t.connectionId)}${t.region ? ` / ${t.region}` : ""}`
   const targetNames = [
     ...new Set([
       ...(before?.targets ?? []).map((t) => t.name),
       ...(after?.targets ?? []).map((t) => t.name),
     ]),
-  ]
+  ].sort()
   return (
-    <section className="grid gap-2" aria-label="Assignment placement changes">
+    <section className="grid gap-2" aria-label="Default Cloud change">
       <p className="break-words">
-        Current Cloud:{" "}
-        {before
-          ? `${name(before.cloudId)} (revision ${before.cloudRevision})`
-          : "Direct placement"}
+        Every environment moves from{" "}
+        <span className="font-medium">
+          {before ? name(before.cloudId) : "no default Cloud"}
+        </span>{" "}
+        to{" "}
+        <span className="font-medium">
+          {after
+            ? name(after.cloudId)
+            : preview.input.cloudId
+              ? name(preview.input.cloudId)
+              : "no default Cloud"}
+        </span>
+        .
       </p>
-      <p className="break-words">
-        Desired Cloud:{" "}
-        {after
-          ? `${name(after.cloudId)} (revision ${after.cloudRevision})`
-          : preview.input.cloudId
-            ? name(preview.input.cloudId)
-            : "Direct placement"}
-      </p>
-      {targetNames.map((slug) => {
-        const current = before?.targets.find((target) => target.name === slug)
-        const desired = after?.targets.find((target) => target.name === slug)
-        return (
-          <div key={slug} className="grid gap-1 rounded-lg border p-2 text-xs">
-            <p className="font-medium">{slug}</p>
-            <p className="break-words">
-              Current:{" "}
-              {current
-                ? `${current.provider} / ${accountName(current.connectionId)}${current.region ? ` / ${current.region}` : ""}`
-                : "Not assigned"}
-            </p>
-            <p className="break-words">
-              Desired:{" "}
-              {desired
-                ? `${desired.provider} / ${accountName(desired.connectionId)}${desired.region ? ` / ${desired.region}` : ""}`
-                : !after && preview.input.cloudId
-                  ? "Unavailable until blockers are resolved"
-                  : "Target removed from this environment"}
-            </p>
-          </div>
-        )
-      })}
+      {targetNames.length > 0 && (
+        <div className="divide-y rounded-lg border text-xs">
+          {targetNames.map((slug) => {
+            const current = before?.targets.find((t) => t.name === slug)
+            const desired = after?.targets.find((t) => t.name === slug)
+            return (
+              <div
+                key={slug}
+                className="grid gap-0.5 px-3 py-2 sm:grid-cols-[8rem_1fr]"
+              >
+                <span className="font-mono font-medium">{slug}</span>
+                <span className="break-words text-muted-foreground">
+                  {current ? where(current) : "Not in the current Cloud"}
+                  {" → "}
+                  {desired
+                    ? where(desired)
+                    : "Not in the new Cloud: services that name it stop planning"}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }

@@ -46,14 +46,14 @@ export function envState(
       return { label: "Change failed", tone: "failed" }
     return { label: syncLabel(change.status), tone: "flight" }
   }
-  if (!env.assigned) return { label: "Left, services remain", tone: "waiting" }
+  if (!env.default) return { label: "Services placed here", tone: "waiting" }
   return { label: "In sync", tone: "live" }
 }
 
 /**
- * EnvironmentsOnCloud lists the environments that use the Cloud. An
- * environment belongs to its project, so each row opens the project's Cloud
- * tab, where it takes or leaves the Cloud and chooses targets.
+ * EnvironmentsOnCloud lists the environments that use the Cloud: every
+ * environment of a project whose default it is, and any environment still
+ * running services placed on it. Each row opens its project's Clouds tab.
  */
 export function EnvironmentsOnCloud({
   usage,
@@ -68,14 +68,14 @@ export function EnvironmentsOnCloud({
   projects: Project[]
 }) {
   const envs = usage.data?.environments ?? []
-  const assigned = envs.filter((e) => e.assigned)
+  const onDefault = envs.filter((e) => e.default)
   const projectOf = (id: string) => projects.find((p) => p.id === id)
   return (
     <section aria-label="Environments on this Cloud" className="grid gap-2.5">
       <CloudSectionHead
         title="Environments on this Cloud"
-        count={usage.data ? assigned.length : undefined}
-        description="Each one runs its services on this Cloud's targets."
+        count={usage.data ? onDefault.length : undefined}
+        description="Environments of projects whose default Cloud this is, and any still running services placed here."
       />
       {usage.status === "error" ? (
         <QueryError
@@ -88,8 +88,8 @@ export function EnvironmentsOnCloud({
       ) : envs.length === 0 ? (
         <CloudEmpty kind="list" title="No environments yet">
           {grants && grants.length === 0
-            ? "Give a project access first, then choose this Cloud from that project's Cloud tab."
-            : "Choose this Cloud for an environment from its project's Cloud tab. Its services then run on this Cloud's targets."}
+            ? "Give a project access. A project's first Cloud becomes its default, and all its environments use it."
+            : "Make this a project's default Cloud from that project's Clouds tab. All its environments then use it."}
         </CloudEmpty>
       ) : (
         <CloudTable
@@ -144,11 +144,8 @@ export function EnvironmentsOnCloud({
                       <Link
                         to="/projects/$id"
                         params={{ id: env.projectId }}
-                        search={{
-                          tab: "cloud",
-                          environment: env.environmentName,
-                        }}
-                        aria-label={`Open ${env.environmentName} in ${env.projectName}`}
+                        search={{ tab: "cloud" }}
+                        aria-label={`Open ${env.projectName}'s Clouds`}
                       />
                     }
                   >

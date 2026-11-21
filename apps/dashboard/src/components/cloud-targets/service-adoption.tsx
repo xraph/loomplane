@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/select"
 import { useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
-import type { Environment, Target } from "@/client/forge/loomplane/types"
+import type { DefaultPlacement, Target } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { messageOf, statusOf } from "@/client/errors"
 import { Button } from "@/components/ui/button"
@@ -37,9 +37,11 @@ type Mode = "name" | "tags"
 /** sameChoice reports whether a pending choice changes nothing. */
 function sameChoice(
   choice: CloudChoice | undefined,
-  current: { cloudTarget?: string; cloudTags?: string[] }
+  current: { cloud?: string; cloudTarget?: string; cloudTags?: string[] },
+  cloud?: string
 ): boolean {
   if (choice === undefined) return true
+  if ((current.cloud ?? "") !== (cloud ?? "")) return false
   if (typeof choice === "string")
     return !choice || choice === current.cloudTarget
   return (
@@ -74,24 +76,28 @@ function TagOutcome({ targets, tags }: { targets: Target[]; tags: string[] }) {
   )
 }
 
+/**
+ * ServiceAdoption puts each service on one of the default Cloud's targets, in
+ * every environment. An environment can still override a service from the
+ * deploy screen; those overrides are listed here and cleared by a change.
+ */
 export function ServiceAdoption({
   projectId,
-  environment,
-  environments,
   targets,
+  cloud,
+  fallback,
   onSaved,
 }: {
   projectId: string
-  environment: Environment
-  environments: Environment[]
   targets: Target[]
-  onSaved: () => Promise<void>
+  /** cloud names the Cloud these targets are in, unless it's the default. */
+  cloud?: string
+  /** fallback is the default Cloud's default placement, when it has one. */
+  fallback?: DefaultPlacement | null
+  onSaved?: () => void
 }) {
   const manifest = useQuery(api.useManifestsCurrent, {
     path: { id: projectId },
-  })
-  const assignment = useQuery(api.useEnvironmentCloudsGet, {
-    path: { id: projectId, environmentId: environment.id },
   })
   const connections = useQuery(api.useConnectionsList)
   const save = useMutation(api.useManifestsSave)
@@ -99,7 +105,6 @@ export function ServiceAdoption({
   const { can } = useOrganization()
   const [choices, setChoices] = useState<Record<string, CloudChoice>>({})
   const [modes, setModes] = useState<Record<string, Mode>>({})
-  const fallback = assignment.data?.assignment?.defaultPlacement
   const fallbackAccount = (connections.data?.connections ?? []).find(
     (c) => c.id === fallback?.connectionId
   )
@@ -112,10 +117,10 @@ export function ServiceAdoption({
     reviewing && manifest.data?.manifest
       ? adoptServiceTarget(
           manifest.data.manifest,
-          environments,
-          environment.name,
           reviewing,
-          choices[reviewing]
+          choices[reviewing],
+          undefined,
+          cloud
         )
       : null
   const pending = reviewing ? choices[reviewing] : undefined
@@ -130,7 +135,7 @@ export function ServiceAdoption({
       invalidate(api.useManifestsCurrent)
       setReviewing(null)
       setChoices({})
-      await onSaved()
+      onSaved?.()
     } catch (err) {
       setError(messageOf(err, "The service target wasn't saved."))
       if (statusOf(err) === 409) {
@@ -158,9 +163,7 @@ export function ServiceAdoption({
     return <CloudLoading>Loading service placement...</CloudLoading>
   return (
     <section className="grid gap-2">
-      <h3 className="text-[14px] font-semibold">
-        Services in {environment.name}
-      </h3>
+      <h3 className="text-[14px] font-semibold">Services</h3>
       {!services.length ? (
         <EmptyClouds
           title="No services in the manifest"
@@ -172,8 +175,25 @@ export function ServiceAdoption({
             const settings = placementSettings(
               manifest.data!.manifest!,
               { section: "services", name, kind: "", entry },
-              environment.name
+              ""
             )
+            const overridden = Object.entries(
+              (entry.environments ?? {}) as Record<
+                string,
+                Record<string, unknown>
+              >
+            )
+              .filter(([, o]) =>
+                [
+                  "provider",
+                  "target",
+                  "cloud_target",
+                  "cloudTarget",
+                  "cloud_tags",
+                  "cloudTags",
+                ].some((k) => o?.[k] !== undefined)
+              )
+              .map(([env]) => env)
             const mode: Mode =
               modes[name] ?? (settings.cloudTags ? "tags" : "name")
             const choice = choices[name]
@@ -182,10 +202,11 @@ export function ServiceAdoption({
               typeof choice === "object"
                 ? choice.tags
                 : (settings.cloudTags ?? [])
+            const where = settings.cloud ? ` in ${settings.cloud}` : ""
             const current = settings.cloudTarget
-              ? `Target: ${settings.cloudTarget}`
+              ? `Target: ${settings.cloudTarget}${where}`
               : settings.cloudTags
-                ? `Tags: ${settings.cloudTags.join(", ")}`
+                ? `Tags: ${settings.cloudTags.join(", ")}${where}`
                 : settings.provider
                   ? `Direct: ${settings.provider}`
                   : fallback
@@ -198,6 +219,8 @@ export function ServiceAdoption({
                     <p className="text-[13px] font-medium">{name}</p>
                     <p className="text-xs break-words text-muted-foreground">
                       {current}
+                      {overridden.length > 0 &&
+                        ` · ${overridden.join(", ")} ${overridden.length === 1 ? "sets its own" : "set their own"}`}
                     </p>
                   </div>
                   <Select
@@ -254,13 +277,13 @@ export function ServiceAdoption({
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!editable || sameChoice(choice, settings)}
+                    disabled={!editable || sameChoice(choice, settings, cloud)}
                     onClick={() => {
                       setError("")
                       setReviewing(name)
                     }}
                   >
-                    Review service edit
+                    Review
                   </Button>
                 </div>
                 {mode === "tags" && (
@@ -309,10 +332,8 @@ export function ServiceAdoption({
                   : `Assign ${reviewing} to ${pending}`}
               </DialogTitle>
               <DialogDescription>
-                Save this manifest edit for {environment.name}. Your running
-                service stays on its applied account until the next reviewed
-                deployment or Cloud sync. Other environments keep their
-                effective placement.
+                Every environment runs {reviewing} there from its next
+                deployment. What runs now stays where it is until then.
               </DialogDescription>
             </DialogHeader>
             {typeof pending === "object" && (
@@ -322,12 +343,15 @@ export function ServiceAdoption({
               className="max-h-64 overflow-auto rounded-lg bg-muted p-3 text-xs"
               aria-label="Manifest adoption preview"
             >
-              {JSON.stringify(next, null, 2)}
+              {JSON.stringify(
+                { [reviewing]: next.services?.[reviewing] },
+                null,
+                2
+              )}
             </pre>
             <p className="text-xs text-muted-foreground">
-              Revision {manifest.data.revision}. Conflicting direct placement
-              and inherited defaults are removed from this service; other
-              entries retain their provider and region.
+              Saves loomplane.yaml revision {manifest.data.revision + 1}. Any
+              placement an environment set for {reviewing} is cleared.
             </p>
             {error && (
               <Alert variant="destructive">

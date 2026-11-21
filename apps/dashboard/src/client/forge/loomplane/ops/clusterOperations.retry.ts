@@ -7,6 +7,6 @@ export const op_clusterOperations_retry = {
   entity: 'CloudClusterOperation',
   rootType: 'CloudClusterOperation',
   provides: ['CloudClusterOperation:{id}'],
-  invalidates: ['CloudCluster', 'CloudClusterOperation', 'CloudClusterOperationPage', 'CloudClusterOperation[]', 'CloudClusterPage', 'RuntimeAttachmentPage'],
+  invalidates: ['CloudCluster:{res.resourceId}', 'CloudClusterOperation[]', 'CloudCluster[]', 'RuntimeAttachmentPage:{res.resourceId}'],
   responseCodec: codec_CloudClusterOperation,
 } as const satisfies OperationMeta;

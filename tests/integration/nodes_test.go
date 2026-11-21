@@ -34,7 +34,6 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/nodes"
-	apiclient "github.com/xraph/loomplane/pkg/client"
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
 
@@ -863,11 +862,7 @@ func TestNodeDeploysAndServes(t *testing.T) {
 		mustE2E(t, c, http.StatusOK, http.MethodPut, cloudBase+"/projects/"+project, map[string]any{"target_ids": []string{}}, nil)
 		var target cloudprofiles.Target
 		mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: "node", Provider: "server", Runtime: "server", PoolID: pool.ID}, &target)
-		var preview cloudprofiles.Preview
-		mustE2E(t, c, http.StatusOK, http.MethodPost, base+"/environments/"+environment+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
-		if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign-e2e").ID); result.Status != cloudprofiles.SyncSucceeded {
-			t.Fatalf("the environment's Cloud assignment: %+v", result)
-		}
+		makeDefaultCloudAPI(t, c, base, cloud.ID, "assign-e2e")
 		mustE2E(t, c, http.StatusCreated, http.MethodPost, base+"/variables", map[string]any{"key": "WHOAMI_NAME", "value": webName, "environment": "production"}, nil)
 		e2ePlan(t, c, project, webManifest)
 		var op cloudinfra.RouteOperation

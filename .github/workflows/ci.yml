@@ -15,7 +15,7 @@ concurrency:
 env:
   # The forge release whose generator wrote apps/dashboard/src/client/forge.
   # Move it with the forge module, and regenerate if the check fails.
-  FORGE_CLI: github.com/xraph/forge/cmd/forge@v1.14.1
+  FORGE_CLI: github.com/xraph/forge/cmd/forge@v1.14.3
 
 jobs:
   go:

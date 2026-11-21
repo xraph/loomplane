@@ -432,7 +432,7 @@ function CloudPage({
   }
   const viewing = projectList.find((p) => p.id === project)
   const creator = projectList.find((p) => p.id === cloud.projectId)
-  const environments = usage.data?.environments.filter((e) => e.assigned).length
+  const environments = usage.data?.environments.filter((e) => e.default).length
   const state = headState(syncs.list, environments)
   const owner = !cloud.projectId ? "Workspace" : (creator?.name ?? "A project")
 

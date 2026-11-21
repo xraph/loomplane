@@ -583,7 +583,7 @@ func TestSharedSyncCompensationRestoresDirectServerSource(t *testing.T) {
 			t.Fatal(err)
 		}
 		old := cfg.CloudPlacement
-		cfg.CloudPlacement = &planning.CloudPlacement{CloudID: old.CloudID, CloudRevision: old.CloudRevision, GrantRevision: old.GrantRevision, AssignmentRevision: old.AssignmentRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: old.Provider, ConnectionID: old.ConnectionID, AccountIdentity: old.AccountIdentity}
+		cfg.CloudPlacement = &planning.CloudPlacement{CloudID: old.CloudID, CloudRevision: old.CloudRevision, GrantRevision: old.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: old.Provider, ConnectionID: old.ConnectionID, AccountIdentity: old.AccountIdentity}
 		b.Config, err = json.Marshal(cfg)
 		if err != nil {
 			t.Fatal(err)

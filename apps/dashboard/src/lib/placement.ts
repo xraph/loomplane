@@ -12,6 +12,8 @@ import type {
 } from "@/client/forge/loomplane/types"
 
 export type PlacementFields = {
+  /** cloud names the Cloud cloudTarget or cloudTags resolve in; none is the default. */
+  cloud?: string
   cloudSqlNetwork?: CloudSQLApplicationNetwork
   cloud_sql_network?: CloudSQLApplicationNetwork & { consumer_project?: string }
   cloudTarget?: string
@@ -285,11 +287,17 @@ export function placementSettings(
   const overrideTags = o ? tagsOf(o) : []
   if (overrideTarget) [cloudTarget, cloudTags] = [overrideTarget, []]
   if (overrideTags.length) [cloudTarget, cloudTags] = ["", overrideTags]
+  // An environment that names a target also says which Cloud: none is the
+  // project's default, as the planner reads it.
+  let cloud = s.cloud ?? ""
+  if (overrideTarget || overrideTags.length) cloud = o?.cloud ?? ""
+  else if (o?.cloud) cloud = o.cloud
   const defaultTags =
     d?.cloudTags ?? (d as { cloud_tags?: string[] })?.cloud_tags
   if (!cloudTarget && !cloudTags.length && !provider && !target)
     cloudTags = [...(defaultTags ?? [])]
   return {
+    ...(cloud ? { cloud } : {}),
     ...(cloudTarget ? { cloudTarget } : {}),
     ...(cloudTags.length ? { cloudTags } : {}),
     provider,
@@ -369,6 +377,7 @@ export function cloudChoice(
 
 // Fields a Cloud target choice replaces: adoption rewrites them itself.
 export const cloudOwnedFields = [
+  "cloud",
   "cloudTarget",
   "cloudTags",
   "provider",
@@ -474,6 +483,13 @@ export function runsOn(
 ): RunsOn {
   const provider = (name: string) => catalog.find((p) => p.name === name)
   if (!value.enabled) return { name: `Off in ${environment}`, where: "" }
+  // cloudTargets are the default Cloud's; another Cloud's target is named,
+  // not looked up there.
+  if (value.cloud && (value.cloudTarget || value.cloudTags?.length))
+    return {
+      name: value.cloudTarget || `Target tagged ${value.cloudTags!.join(", ")}`,
+      where: value.cloud,
+    }
   if (value.cloudTarget) {
     const t = cloudTargets.find((x) => x.name === value.cloudTarget)
     const p = t ? provider(t.provider) : undefined

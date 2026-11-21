@@ -5,14 +5,17 @@ package integration
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -42,8 +45,13 @@ func TestFleetLegacyWriteDenied(t *testing.T) {
 	if _, err = plans.ChooseConnection(t.Context(), p, "proj", env.Name, "kubernetes", planning.ChooseConnectionInput{}); !errors.Is(err, projects.ErrFleetManaged) {
 		t.Fatalf("legacy connection: %v", err)
 	}
-	if _, err = plans.PreviewCloudChange(t.Context(), p, "proj", cloudprofiles.ChangeInput{EnvironmentID: env.ID}); !errors.Is(err, projects.ErrFleetManaged) {
-		t.Fatalf("legacy cloud assignment: %v", err)
+	// A project default Cloud change reaches every environment of the
+	// project; a fleet-managed one blocks the review rather than move.
+	clouds := planning.NewService(planning.Deps{Projects: f.projects, Store: planning.NewPgStore(f.db), CloudProfiles: cloudprofiles.NewPgStore(f.db), Connections: &syncAccounts{store: connections.NewPgStore(f.db)}, Providers: providers.Registry(), Authz: fleetAuth{}, Manifests: noFleetSourceManifest{}})
+	if preview, previewErr := clouds.PreviewCloudChange(t.Context(), p, "proj", cloudprofiles.ChangeInput{ProjectDefault: true, CloudID: "cloud"}); previewErr != nil || !slices.Contains(preview.Blockers, "Manage instance placement through its fleet.") {
+		t.Fatalf("legacy cloud assignment: %+v %v", preview, previewErr)
+	} else if _, applyErr := clouds.ApplyCloudChange(t.Context(), p, "proj", preview.ID, preview.Revision, "fleet"); applyErr == nil {
+		t.Fatal("blocked default Cloud change applied")
 	}
 	deploymentStore := fleetGuardDeploymentStore{deployment: &deployments.Deployment{ID: "deployment", OrgID: "org", ProjectID: "proj", EnvironmentID: env.ID, Status: deployments.StatusFailed}}
 	deploymentAPI := deployments.NewService(deploymentStore, fleetAuth{}, nil, nil)

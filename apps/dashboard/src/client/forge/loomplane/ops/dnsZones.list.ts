@@ -4,7 +4,9 @@ import { codec_ZoneList } from '../codecs/ZoneList';
 export const op_dnsZones_list = {
   method: 'GET',
   path: '/api/v1/dns-zones',
-  provides: [],
+  entity: 'Zone',
+  rootType: 'ZoneList',
+  provides: ['Zone:{id}', 'Zone[]'],
   invalidates: [],
   responseCodec: codec_ZoneList,
 } as const satisfies OperationMeta;

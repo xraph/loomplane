@@ -4,7 +4,9 @@ import { codec_RegistrationList } from '../codecs/RegistrationList';
 export const op_domainRegistrations_list = {
   method: 'GET',
   path: '/api/v1/domain-registrations',
-  provides: [],
+  entity: 'Registration',
+  rootType: 'RegistrationList',
+  provides: ['Registration:{id}', 'Registration[]'],
   invalidates: [],
   responseCodec: codec_RegistrationList,
 } as const satisfies OperationMeta;

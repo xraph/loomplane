@@ -24,13 +24,16 @@ func (a *App) addServiceCommand() cli.Command {
   services add <project> --source <path>        # your code: a directory, Dockerfile or Procfile process
   services add <project> --kind <catalog-kind>  # postgres, redis and the rest of the catalog
     [--name <name>] [--env production] [--only] [--needs a,b] [--needed-by a,b]
-    [--provider <provider>] [--target <connection>] [--dry-run] [--no-plan] [--json]`),
+    [--cloud-target <target> [--cloud <name>] | --provider <provider> [--target <connection>]]
+    [--dry-run] [--no-plan] [--json]`),
 		cli.WithFlags(jsonFlag,
 			cli.NewStringFlag("suggested", "", "A service analysis found that the manifest doesn't run yet, by the name services suggest gives it", ""),
 			cli.NewStringFlag("source", "", "Where the service's code is: a directory, a Dockerfile or a Procfile process", ""),
 			cli.NewStringFlag("repo", "", "The repository --source is in, when the project has several", ""),
 			cli.NewStringFlag("kind", "", "A catalog kind, such as postgres or redis. With --source, what the service is: http-service, web-app, static-site or worker", ""),
 			cli.NewStringFlag("name", "", "Its name in the manifest. Defaults to the suggestion's, the kind's or the source's last directory, numbered when taken", ""),
+			cli.NewStringFlag("cloud-target", "", "A service runs on this Cloud target, in the project's default Cloud unless --cloud names another", ""),
+			cli.NewStringFlag("cloud", "", "The Cloud --cloud-target is in, by name, when it isn't the project's default", ""),
 			cli.NewStringFlag("provider", "", "Where it runs. A catalog kind runs on server or kubernetes, and takes it from --target when left out", ""),
 			cli.NewStringFlag("target", "", "The checked server or Kubernetes connection it runs on. A catalog kind defaults to the only ready one", ""),
 			cli.NewStringFlag("region", "", "The region it runs in, on a provider that has regions", ""),
@@ -162,6 +165,15 @@ func (a *App) addService(ctx cli.CommandContext) error {
 		set(&s.Kind, "kind")
 		set(&s.Provider, "provider")
 		set(&s.Target, "target")
+		if cloudTarget := strings.TrimSpace(ctx.String("cloud-target")); cloudTarget != "" {
+			if strings.TrimSpace(ctx.String("provider")) != "" || strings.TrimSpace(ctx.String("target")) != "" {
+				return errors.New("a service runs on --cloud-target or on --provider and --target, not both")
+			}
+			// A Cloud target replaces the provider a suggestion came with.
+			s.CloudTarget, s.Cloud, s.Provider, s.Target = cloudTarget, strings.TrimSpace(ctx.String("cloud")), "", ""
+		} else if strings.TrimSpace(ctx.String("cloud")) != "" {
+			return errors.New("--cloud names the Cloud a --cloud-target is in; pass the target too")
+		}
 		set(&s.Region, "region")
 		if port := ctx.Int("port"); port > 0 {
 			s.Port = port

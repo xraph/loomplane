@@ -697,7 +697,7 @@ func TestCompositionWithControlPortNeedsServiceProxy(t *testing.T) {
 const edgeApp = "version: 1\nresources:\n  edge: {kind: sample, provider: server, target: " + targetA + "}\n"
 
 func edgePlacement() CloudPlacement {
-	return CloudPlacement{CloudID: "cloud_1", CloudRevision: 1, AssignmentRevision: 1, TargetID: "t1", TargetRevision: 1, TargetName: "edge-host", Provider: "server", ConnectionID: targetA, RegionSource: "default"}
+	return CloudPlacement{CloudID: "cloud_1", CloudRevision: 1, TargetID: "t1", TargetRevision: 1, TargetName: "edge-host", Provider: "server", ConnectionID: targetA, RegionSource: "default"}
 }
 
 func TestComposedComponentsCarryTheCloudPlacement(t *testing.T) {

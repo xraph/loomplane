@@ -11,6 +11,8 @@ The dialog has three ways in:
 - **Catalog** has the databases, caches, gateways and the rest. Pick where it runs: a checked server or Kubernetes cluster, or a provider that runs it for you, such as Cloud SQL for Postgres.
 - **Any source path** takes a directory, a Dockerfile or a Procfile process that analysis didn't pick up. The name follows the path until you type one.
 
+A service's **Runs on** lists your Clouds' targets first, the project's default Cloud and then each other Cloud the project may use, each under its name, and then the providers you can use directly. Picking a target writes `cloud_target`, plus `cloud` when it's in a Cloud other than the default (see [Cloud targets](/docs/clouds/cloud-targets#use-another-cloud)).
+
 Then you choose what it needs and which services use it. Each service you tick gets its address in a variable, such as `DATABASE_URL` for Postgres or `BILLING_URL` for a service called `billing`, and the dialog shows the name next to it. You also choose whether it runs in every environment or only in the one you're adding it to.
 
 Before anything is saved, the dialog asks the server what the change would be and shows you the lines it adds to `loomplane.yaml`. If the server would refuse it, you see why right there.
@@ -53,16 +55,19 @@ Add one with: loomctl services add shop --suggested worker
 ```bash
 loomctl services add shop --suggested worker --env staging
 loomctl services add shop --source services/billing --needs db --needed-by api
+loomctl services add shop --suggested trainer --cloud "GPU Lab" --cloud-target a100
 loomctl services add shop --kind redis --needed-by api,worker --env staging --only
 ```
 
 The project can be its name, slug or ID. A name defaults to the suggestion's, the catalog kind's, or the source's last directory, numbered when it's taken. A catalog kind runs on your only ready server or cluster when you don't give `--target`, and when there are several, loomctl lists them so you can choose.
 
+`--cloud-target` puts a service on a Cloud target, in the project's default Cloud unless `--cloud` names another, and replaces the provider a suggestion came with. It can't be combined with `--provider` or `--target`.
+
 `--dry-run` prints the `loomplane.yaml` it would save and changes nothing. `--no-plan` saves it without planning.
 
 ## From the API
 
-It's one edit: `POST /api/v1/projects/:id/manifest/edits` with `add_service` or `add_resource`. Both take `enabled_in` and `only` for the environment, and `needed_by` for the services that use it. `add_service` takes `source`, and optionally `repo`, `kind`, `provider`, `region`, `target`, `port`, `public` and `needs`.
+It's one edit: `POST /api/v1/projects/:id/manifest/edits` with `add_service` or `add_resource`. Both take `enabled_in` and `only` for the environment, and `needed_by` for the services that use it. `add_service` takes `source`, and optionally `repo`, `kind`, `cloud`, `cloud_target`, `provider`, `region`, `target`, `port`, `public` and `needs`. `cloud_target` and `cloud` can't be set with `provider` or `target`.
 
 ```json
 {

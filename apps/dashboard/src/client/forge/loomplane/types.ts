@@ -296,18 +296,6 @@ export interface ArtifactChoice {
   service: string;
 }
 
-export interface Assignment {
-  cloudId: string;
-  cloudRevision: number;
-  defaultPlacement?: DefaultPlacement;
-  environmentId: string;
-  grantRevision: number;
-  orgId: string;
-  projectId: string;
-  revision: number;
-  targets: CloudprofilesTarget[];
-}
-
 export interface AttachDefaults {
   blockedPathPrefixes: string[];
   cloudId?: string;
@@ -648,7 +636,6 @@ export interface CapacityDemand {
 }
 
 export interface CapacityIntent {
-  assignmentRevision: number;
   cloudRevision: number;
   commitSha: string;
   demand: CapacityDemand;
@@ -821,8 +808,8 @@ export interface ChangeInput {
   cloudId: string;
   connectionId?: string;
   default?: boolean;
-  environmentId?: string;
   poolId?: string;
+  projectDefault?: boolean;
   provider?: string;
   region?: string;
   revision: number;
@@ -834,8 +821,8 @@ export interface ChangeInputBody {
   cloudId: string;
   connectionId?: string;
   default?: boolean;
-  environmentId?: string;
   poolId?: string;
+  projectDefault?: boolean;
   provider?: string;
   region?: string;
   revision: number;
@@ -1053,7 +1040,6 @@ export interface CloudLocationList {
 export interface CloudPlacement {
   accountIdentity: string;
   allocation?: string;
-  assignmentRevision: number;
   cloudId: string;
   cloudRevision: number;
   connectionGeneration?: number;
@@ -1889,6 +1875,17 @@ export interface DeclineInputBody {
   reason?: string;
 }
 
+export interface DefaultCloud {
+  cloud: ProjectCloud | null;
+  projectId: string;
+  revision: number;
+}
+
+export interface DefaultCloudInputBody {
+  cloudId: string;
+  revision: number;
+}
+
 export interface DefaultPlacement {
   connectionId: string;
   provider: string;
@@ -2236,6 +2233,8 @@ export interface EditInputBody {
   version?: string;
 };
   addService?: {
+  cloud?: string;
+  cloudTarget?: string;
   enabledIn?: string;
   kind?: string;
   name: string;
@@ -2259,6 +2258,7 @@ export interface EditInputBody {
 };
   placement?: {
   build?: Build;
+  cloud?: string;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
@@ -2423,24 +2423,6 @@ export interface EnvironmentChange {
   summary: PlanSummary;
 }
 
-export interface EnvironmentCloud {
-  assignment: Assignment | null;
-  revision: number;
-}
-
-export interface EnvironmentCloudEvent {
-  cloudId: string | null;
-  environmentId: string;
-  orgId: string;
-  projectId: string;
-  revision: number;
-}
-
-export interface EnvironmentCloudInputBody {
-  cloudId: string;
-  revision: number;
-}
-
 export interface EnvironmentConnections {
   connections: Record<string, any>;
   environment: string;
@@ -2451,7 +2433,7 @@ export interface EnvironmentList {
 }
 
 export interface EnvironmentUsage {
-  assigned: boolean;
+  default: boolean;
   environmentId: string;
   environmentName: string;
   placements: PlacementUsage[];
@@ -3982,6 +3964,8 @@ export interface NewKeyBody {
 }
 
 export interface NewServiceInput {
+  cloud?: string;
+  cloudTarget?: string;
   enabledIn?: string;
   kind?: string;
   name: string;
@@ -4654,10 +4638,10 @@ export interface PrepareInputBody {
 
 export interface Preview {
   after?: CloudprofilesTarget;
-  afterAssignment?: Assignment;
+  afterCloud?: ProjectCloud;
   afterDefault?: DefaultPlacement;
   before?: CloudprofilesTarget;
-  beforeAssignment?: Assignment;
+  beforeCloud?: ProjectCloud;
   beforeDefault?: DefaultPlacement;
   blockers: string[];
   createdAt: string;
@@ -4708,6 +4692,24 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface ProjectCloud {
+  cloudId: string;
+  cloudRevision: number;
+  default: boolean;
+  defaultPlacement?: DefaultPlacement;
+  grantRevision: number;
+  name: string;
+  orgId: string;
+  projectId: string;
+  targets: CloudprofilesTarget[];
+}
+
+export interface ProjectCloudEvent {
+  cloudId: string | null;
+  orgId: string;
+  projectId: string;
+}
+
 export interface ProjectDomain {
   hostnames: HostnameUse[];
   mode: string;
@@ -4724,6 +4726,7 @@ export interface ProjectDomainList {
 
 export interface ProjectGrant {
   cloudId: string;
+  default: boolean;
   orgId: string;
   projectId: string;
   revision: number;

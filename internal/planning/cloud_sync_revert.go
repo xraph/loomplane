@@ -238,18 +238,17 @@ func revertChangeInput(ctx context.Context, st cloudprofiles.SyncStore, p securi
 		}
 		in = cloudprofiles.ChangeInput{CloudID: sync.CloudID, TargetID: sync.TargetID, Revision: current.Revision, Provider: sync.Before.Provider, ConnectionID: sync.Before.ConnectionID, Region: sync.Before.Region, Runtime: sync.Before.Runtime, PoolID: sync.Before.PoolID}
 	default:
-		env := previous.Input.EnvironmentID
-		generation, e := st.AssignmentGeneration(ctx, p.OrgID, project, env)
+		// Undo a project default change while the default it set still stands.
+		current, revision, e := st.DefaultCloud(ctx, p.OrgID, project)
 		if e != nil {
 			return in, e
 		}
-		if generation != previous.Input.Revision+1 {
+		if current != previous.Input.CloudID {
 			return in, cloudprofiles.ErrConflict
 		}
-		in.EnvironmentID = env
-		in.Revision = generation
-		if previous.BeforeAssignment != nil {
-			in.CloudID = previous.BeforeAssignment.CloudID
+		in = cloudprofiles.ChangeInput{ProjectDefault: true, Revision: revision}
+		if previous.BeforeCloud != nil {
+			in.CloudID = previous.BeforeCloud.CloudID
 		}
 	}
 	return in, nil

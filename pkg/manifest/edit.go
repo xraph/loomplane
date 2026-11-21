@@ -29,7 +29,10 @@ type Placement struct {
 	Environment     string                                       `json:"environment,omitempty"`
 	Provider        *string                                      `json:"provider,omitempty"`
 	Region          *string                                      `json:"region,omitempty"`
-	CloudTarget     *string                                      `json:"cloud_target,omitempty"`
+	// Cloud names the Cloud cloud_target or cloud_tags resolve in; an
+	// empty value restores the project's default Cloud.
+	Cloud       *string `json:"cloud,omitempty"`
+	CloudTarget *string `json:"cloud_target,omitempty"`
 	// CloudTags replaces the tag list; an empty list restores inheritance.
 	// Clear cloud_target in the same edit when switching to tags.
 	CloudTags  *[]string `json:"cloud_tags,omitempty"`
@@ -60,11 +63,11 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.Commands == nil && p.Vercel == nil && p.CloudSQLNetwork == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil && p.Scale == nil && p.Size == nil) {
+		(p.Commands == nil && p.Vercel == nil && p.CloudSQLNetwork == nil && p.Cloud == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil && p.Scale == nil && p.Size == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
 	}
-	if p.Section != "services" && (p.Commands != nil || p.Vercel != nil || p.CloudSQLNetwork != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil || p.Scale != nil || p.Size != nil) {
-		return nil, fmt.Errorf("%w: cloud_sql_network, cloud_target, cloud_tags, target, endpoint, health_path, build, scale and size edits need a service", ErrInvalid)
+	if p.Section != "services" && (p.Commands != nil || p.Vercel != nil || p.CloudSQLNetwork != nil || p.Cloud != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil || p.Scale != nil || p.Size != nil) {
+		return nil, fmt.Errorf("%w: cloud_sql_network, cloud, cloud_target, cloud_tags, target, endpoint, health_path, build, scale and size edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
 		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
@@ -117,7 +120,7 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 	for _, field := range []struct {
 		key   string
 		value *string
-	}{{"cloud_target", p.CloudTarget}, {"provider", p.Provider}, {"region", p.Region}, {"target", p.Target}, {"health_path", p.HealthPath}} {
+	}{{"cloud", p.Cloud}, {"cloud_target", p.CloudTarget}, {"provider", p.Provider}, {"region", p.Region}, {"target", p.Target}, {"health_path", p.HealthPath}} {
 		if field.value != nil {
 			setPlacementField(target, field.key, scalar(*field.value), *field.value == "")
 		}
@@ -646,15 +649,20 @@ func WithEnabledIn(doc []byte, section, name string, enabled map[string]bool) ([
 // left empty is inherited or comes from analysis, as it does for a
 // service written by hand.
 type NewService struct {
-	Repo     string
-	Source   string
-	Kind     string
-	Provider string
-	Region   string
-	Target   string
-	Port     int
-	Public   *bool
-	Needs    []string
+	Repo   string
+	Source string
+	Kind   string
+	// Cloud and CloudTarget put the service on a Cloud target: CloudTarget
+	// in the Cloud named, or in the project's default when Cloud is empty.
+	// They can't be set with Provider or Target.
+	Cloud       string
+	CloudTarget string
+	Provider    string
+	Region      string
+	Target      string
+	Port        int
+	Public      *bool
+	Needs       []string
 }
 
 // WithService adds a service to a manifest's YAML, after the ones already
@@ -676,6 +684,9 @@ func WithService(doc []byte, name string, s NewService) ([]byte, error) {
 		if m := child(root, section); m != nil && child(m, name) != nil {
 			return nil, fmt.Errorf("%w: something is already called %s", ErrInvalid, name)
 		}
+	}
+	if (s.CloudTarget != "" || s.Cloud != "") && (s.Provider != "" || s.Target != "") {
+		return nil, fmt.Errorf("%w: %s runs on a Cloud target or on an account directly, not both", ErrInvalid, name)
 	}
 	for _, need := range s.Needs {
 		if need == name {
@@ -704,6 +715,8 @@ func WithService(doc []byte, name string, s NewService) ([]byte, error) {
 	add("repo", s.Repo)
 	add("source", source)
 	add("kind", s.Kind)
+	add("cloud", s.Cloud)
+	add("cloud_target", s.CloudTarget)
 	add("provider", s.Provider)
 	add("region", s.Region)
 	add("target", s.Target)

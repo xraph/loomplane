@@ -9,16 +9,16 @@ import (
 	"time"
 )
 
-func TestCloudClientPreservesNullableAssignmentAndGeneration(t *testing.T) {
+func TestCloudClientReadsAProjectWithNoDefaultCloud(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/projects/p/environments/env/cloud" {
+		if r.URL.Path != "/api/v1/projects/p/default-cloud" {
 			t.Error(r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"assignment":null,"revision":4}`))
+		_, _ = w.Write([]byte(`{"project_id":"p","cloud":null,"revision":0}`))
 	}))
 	defer srv.Close()
-	value, err := New(srv.URL, "key").EnvironmentCloud(t.Context(), "p", "env")
-	if err != nil || value.Assignment != nil || value.Revision != 4 {
+	value, err := New(srv.URL, "key").DefaultCloud(t.Context(), "p")
+	if err != nil || value.Cloud != nil || value.Revision != 0 || value.ProjectID != "p" {
 		t.Fatalf("%+v %v", value, err)
 	}
 }

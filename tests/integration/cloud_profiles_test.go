@@ -140,21 +140,28 @@ func TestCloudProfiles_scopesRevisionsAndDeletion(t *testing.T) {
 	if err = cs.DeleteConnection(ctx, "org_1", "conn_1"); !errors.Is(err, connections.ErrInUse) {
 		t.Fatalf("referenced connection deleted: %v", err)
 	}
-	assignment, err := st.Resolve(ctx, "org_1", "proj_1", "env_1")
+	// Creating a Cloud from a project grants it to that project without
+	// making it the project's default.
+	assignment, err := st.ResolveCloud(ctx, "org_1", "proj_1", "")
 	if err != nil || assignment != nil {
-		t.Fatalf("unassigned: %+v %v", assignment, err)
+		t.Fatalf("no default Cloud: %+v %v", assignment, err)
 	}
-	if _, err = st.Resolve(ctx, "org_1", "proj_1", "env_2"); !errors.Is(err, cloudprofiles.ErrNotFound) {
-		t.Fatalf("wrong environment resolved: %v", err)
+	if _, err = st.ResolveCloud(ctx, "org_1", "proj_2", p.ID); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Fatalf("ungranted Cloud resolved: %v", err)
 	}
 
-	// An assignment's parent lock must serialize target deletion, including
-	// an assignment that has not yet committed.
+	// Making the Cloud a project's default must serialize with target
+	// deletion, including a default change that has not yet committed.
+	// Acceptance locks the Cloud row before it moves the default, as here.
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org_1','proj_1','env_1','cloud_1',1)`); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM loomplane_cloud_profiles WHERE org_id='org_1' AND id='cloud_1' FOR UPDATE`); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET is_default=true,revision=revision+1 WHERE org_id='org_1' AND cloud_id='cloud_1' AND project_id='proj_1'`); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}
@@ -163,39 +170,44 @@ func TestCloudProfiles_scopesRevisionsAndDeletion(t *testing.T) {
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		_ = tx.Rollback(ctx)
-		t.Fatalf("delete did not wait for assignment: %v", err)
+		t.Fatalf("delete did not wait for the default change: %v", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES('org_1','proj_2','env_2','cloud_1',1)`); err == nil {
-		t.Fatal("cross-project assignment accepted")
+	// A revoked grant can never be a project's default.
+	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_project_grants(org_id,cloud_id,project_id,target_ids,revoked,is_default) VALUES('org_1','cloud_1','proj_2','{}',true,true)`); err == nil {
+		t.Fatal("revoked default grant accepted")
 	}
-	assignment, err = st.Resolve(ctx, "org_1", "proj_1", "env_1")
-	if err != nil || assignment == nil || assignment.CloudID != p.ID || assignment.CloudRevision != p.Revision || len(assignment.Targets) != 1 || assignment.Targets[0].ID != target.ID {
-		t.Fatalf("assignment: %+v %v", assignment, err)
+	assignment, err = st.ResolveCloud(ctx, "org_1", "proj_1", "")
+	if err != nil || assignment == nil || assignment.CloudID != p.ID || !assignment.Default || assignment.CloudRevision != p.Revision || len(assignment.Targets) != 1 || assignment.Targets[0].ID != target.ID {
+		t.Fatalf("default Cloud: %+v %v", assignment, err)
 	}
-	if _, err = st.Resolve(ctx, "org_2", "proj_1", "env_1"); !errors.Is(err, cloudprofiles.ErrNotFound) {
+	if _, err = st.ResolveCloud(ctx, "org_2", "proj_1", ""); !errors.Is(err, cloudprofiles.ErrNotFound) {
 		t.Fatalf("cross-org resolve: %v", err)
 	}
+	// A manifest names a Cloud by name; the same view comes back.
+	named, err := st.ResolveNamedCloud(ctx, "org_1", "proj_1", assignment.Name)
+	if err != nil || named.CloudID != p.ID || named.GrantRevision != assignment.GrantRevision || len(named.Targets) != 1 {
+		t.Fatalf("named Cloud: %+v %v", named, err)
+	}
+	if _, err = st.ResolveNamedCloud(ctx, "org_1", "proj_1", "No such Cloud"); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Fatalf("unknown Cloud name: %v", err)
+	}
+	if _, err = st.ResolveNamedCloud(ctx, "org_2", "proj_1", assignment.Name); !errors.Is(err, cloudprofiles.ErrNotFound) {
+		t.Fatalf("cross-org named Cloud: %v", err)
+	}
 	if err = st.DeleteTarget(ctx, "org_1", "proj_1", p.ID, target.ID); !errors.Is(err, cloudprofiles.ErrInUse) {
-		t.Fatalf("assigned target deleted: %v", err)
+		t.Fatalf("target of a default Cloud deleted: %v", err)
 	}
 	if err = st.DeleteProfile(ctx, "org_1", "proj_1", p.ID); !errors.Is(err, cloudprofiles.ErrInUse) {
-		t.Fatalf("assigned cloud deleted: %v", err)
+		t.Fatalf("default Cloud deleted: %v", err)
 	}
-	if _, err = conn.Exec(ctx, `DELETE FROM loomplane_cloud_assignments WHERE environment_id='env_1'`); err != nil {
+	if _, err = conn.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET is_default=false,revision=revision+1 WHERE org_id='org_1' AND project_id='proj_1' AND is_default`); err != nil {
 		t.Fatal(err)
 	}
 
-	// A scoped environment row alone cannot authorize the wrong parent project.
-	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('env_bad','org_2','proj_1','bad','preview',now(),now())`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = st.Resolve(ctx, "org_2", "proj_1", "env_bad"); !errors.Is(err, cloudprofiles.ErrNotFound) {
-		t.Fatalf("inconsistent environment parent accepted: %v", err)
-	}
 	if err = st.DeleteProfile(ctx, "org_1", "proj_1", p.ID); err != nil {
 		t.Fatal(err)
 	}

@@ -7,23 +7,26 @@ import (
 	"github.com/xraph/loomplane/internal/security"
 )
 
-// Usage is what a Cloud carries now: the environments that chose it, and the
-// running services it placed, by target or by its default.
+// Usage is what a Cloud carries now: the environments of projects whose
+// default Cloud it is, and the running services it placed, by target or by
+// its default placement.
 type Usage struct {
 	CloudID      string             `json:"cloud_id"`
 	Environments []EnvironmentUsage `json:"environments"`
 }
 
-// EnvironmentUsage is one environment that uses the Cloud, or still runs
-// services it placed after choosing another.
+// EnvironmentUsage is one environment that uses the Cloud, through its
+// project's default or through services that name it, or still runs
+// services it placed.
 type EnvironmentUsage struct {
 	ProjectID       string `json:"project_id"`
 	ProjectName     string `json:"project_name"`
 	EnvironmentID   string `json:"environment_id"`
 	EnvironmentName string `json:"environment_name"`
-	// Assigned is false when the environment chose another Cloud, or none,
-	// and services this one placed are still running there.
-	Assigned   bool             `json:"assigned"`
+	// Default is true when the Cloud is the project's default Cloud. False
+	// means only services placed on it, or still running there, tie the
+	// environment to it.
+	Default    bool             `json:"default"`
 	Placements []PlacementUsage `json:"placements"`
 }
 
@@ -59,13 +62,15 @@ func (s *Service) Usage(ctx context.Context, p security.Principal, projectID, id
 
 var _ UsageStore = (*PgStore)(nil)
 
-// CloudUsage joins assignments with the placement each live service binding
-// recorded when it was applied.
+// CloudUsage joins the projects whose default the Cloud is with the
+// placement each live service binding recorded when it was applied.
 func (s *PgStore) CloudUsage(ctx context.Context, org, project, cloud string) (*Usage, error) {
 	out := &Usage{CloudID: cloud, Environments: []EnvironmentUsage{}}
-	rows, err := s.db.Query(ctx, `SELECT u.project_id,p.name,u.environment_id,e.name,bool_or(u.assigned)
+	rows, err := s.db.Query(ctx, `SELECT u.project_id,p.name,u.environment_id,e.name,bool_or(u.is_default)
  FROM (
-  SELECT project_id,environment_id,true AS assigned FROM loomplane_cloud_assignments WHERE org_id=$1 AND cloud_id=$2 AND ($3='' OR project_id=$3)
+  SELECT e.project_id,e.id AS environment_id,true AS is_default FROM loomplane_environments e
+  JOIN loomplane_cloud_project_grants g ON g.org_id=e.org_id AND g.project_id=e.project_id AND g.cloud_id=$2 AND g.is_default AND NOT g.revoked
+  WHERE e.org_id=$1 AND ($3='' OR e.project_id=$3)
   UNION ALL
   SELECT project_id,environment_id,false FROM loomplane_bindings WHERE org_id=$1 AND subject='service' AND config->'cloud_placement'->>'cloud_id'=$2 AND ($3='' OR project_id=$3)
  ) u
@@ -79,7 +84,7 @@ func (s *PgStore) CloudUsage(ctx context.Context, org, project, cloud string) (*
 	index := map[string]int{}
 	for rows.Next() {
 		var e EnvironmentUsage
-		if scanErr := rows.Scan(&e.ProjectID, &e.ProjectName, &e.EnvironmentID, &e.EnvironmentName, &e.Assigned); scanErr != nil {
+		if scanErr := rows.Scan(&e.ProjectID, &e.ProjectName, &e.EnvironmentID, &e.EnvironmentName, &e.Default); scanErr != nil {
 			rows.Close()
 			return nil, scanErr
 		}

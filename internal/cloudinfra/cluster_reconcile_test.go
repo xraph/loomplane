@@ -137,9 +137,13 @@ func (clusterClouds) GetProfile(_ context.Context, org, _, id string) (*cloudpro
 func (clusterClouds) GetProjectGrant(_ context.Context, org, cloud, project string) (*cloudprofiles.ProjectGrant, error) {
 	return &cloudprofiles.ProjectGrant{OrgID: org, CloudID: cloud, ProjectID: project, Revision: 1}, nil
 }
-func (clusterClouds) SetProjectGrant(context.Context, string, string, string, []string, bool) (int64, error) {
-	return 0, ErrInvalid
+func (clusterClouds) SetProjectGrant(context.Context, string, string, string, []string, bool) (*cloudprofiles.ProjectGrant, error) {
+	return nil, ErrInvalid
 }
+
+// The code under test finds grants by asserting GrantStore at run time, so a
+// signature drift here would surface as a permission error, not a build one.
+var _ cloudprofiles.GrantStore = clusterClouds{}
 
 type clusterProvider struct {
 	observations     int

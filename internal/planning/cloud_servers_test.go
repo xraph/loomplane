@@ -23,8 +23,8 @@ func edgeHostTarget() cloudprofiles.Target {
 	return cloudprofiles.Target{ID: "t1", OrgID: "org", CloudID: "cloud_1", Name: "edge-host", Provider: "server", ConnectionID: targetA, Runtime: "server", Revision: 5}
 }
 
-func edgeAssignment(targets ...cloudprofiles.Target) *cloudprofiles.Assignment {
-	return &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud_1", CloudRevision: 2, Revision: 3, GrantRevision: 4, Targets: targets}
+func edgeAssignment(targets ...cloudprofiles.Target) *cloudprofiles.ProjectCloud {
+	return &cloudprofiles.ProjectCloud{OrgID: "org", ProjectID: "project", CloudID: "cloud_1", CloudRevision: 2, GrantRevision: 4, Targets: targets}
 }
 
 // hostedConnections are the composed fixtures with targetA the runtime
@@ -348,7 +348,7 @@ func TestUnverifiedPlacementsNameResourcesOnTheCloud(t *testing.T) {
 	unreviewedCloud := edgeAssignment(edgeHostTarget())
 	unreviewedCloud.CloudRevision = 0
 	for name, tt := range map[string]struct {
-		assignment *cloudprofiles.Assignment
+		assignment *cloudprofiles.ProjectCloud
 		options    []ConnectionOption
 		want       bool
 	}{

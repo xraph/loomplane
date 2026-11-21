@@ -28,7 +28,6 @@ import (
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/planning"
-	apiclient "github.com/xraph/loomplane/pkg/client"
 
 	"github.com/joho/godotenv"
 	"github.com/xraph/grove"
@@ -867,12 +866,7 @@ func liveLifecycle(t *testing.T, c *client, cfg config.Config, l *liveLedger, p 
 		var target cloudprofiles.Target
 		c.must(http.StatusCreated, http.MethodPost, base+"/clouds/"+cloud.ID+"/targets", cloudprofiles.CreateTargetInput{Name: fmt.Sprintf("app%d", index), Provider: "server", Runtime: "server", PoolID: pools[hostIndices[index]].ID}, &target)
 		targets = append(targets, target)
-		var preview cloudprofiles.Preview
-		c.must(http.StatusOK, http.MethodPost, base+"/environments/"+environment+"/cloud/preview", apiclient.EnvironmentCloudInput{CloudID: cloud.ID}, &preview)
-		if result := waitCloudAPI(t, c, base, applyCloudAPI(t, c, base, &preview, "assign-"+project).ID); result.Status != cloudprofiles.SyncSucceeded {
-			progress.failure(t, "assignment_failed")
-			t.Fatal("live assignment failed")
-		}
+		makeDefaultCloudAPI(t, c, base, cloud.ID, "assign-"+project)
 		marker := l.RunID + "-" + project + "-release-one"
 		markers = append(markers, marker)
 		var variable struct{ ID string }

@@ -138,7 +138,22 @@ function fixture(
                 ],
         }
       if (path.endsWith("/clouds")) body = { clouds: profiles }
-      if (path.endsWith("/cloud")) body = { assignment: null, revision: 0 }
+      if (path.endsWith("/default-cloud"))
+        body = profiles.length
+          ? {
+              project_id: "p",
+              revision: 1,
+              cloud: {
+                cloud_id: profiles[0].id,
+                org_id: "org",
+                project_id: "p",
+                cloud_revision: 1,
+                grant_revision: 1,
+                default: true,
+                targets: [target],
+              },
+            }
+          : { project_id: "p", cloud: null, revision: 0 }
       if (path.endsWith("/targets"))
         body = {
           targets: options.spread
@@ -222,9 +237,9 @@ it("shows a Cloud spread over several accounts of one provider", async () => {
   expect(screen.getByText("2 accounts")).toBeInTheDocument()
   expect(screen.getByText("ams3")).toBeInTheDocument()
 })
-it("distinguishes filtered targets, clears the filter and discards old environment scope", async () => {
+it("filters targets and clears the filter", async () => {
   const user = userEvent.setup()
-  const { reads } = fixture()
+  fixture()
   show(<CloudsWorkspace projectId="p" />)
   await screen.findByText("Frontend")
   await user.type(
@@ -234,16 +249,6 @@ it("distinguishes filtered targets, clears the filter and discards old environme
   expect(screen.getByText("No matching targets")).toBeInTheDocument()
   await user.click(screen.getByRole("button", { name: "Clear filter" }))
   expect(screen.getByText("Frontend")).toBeInTheDocument()
-  await user.click(screen.getByRole("combobox", { name: "Environment" }))
-  await user.click(await screen.findByRole("option", { name: /staging/ }))
-  await waitFor(() =>
-    expect(reads.some((r) => r.includes("/environments/stage/cloud"))).toBe(
-      true
-    )
-  )
-  expect(screen.getByRole("textbox", { name: "Filter targets" })).toHaveValue(
-    ""
-  )
 })
 it("asks for no project, since the tab is already in one", async () => {
   fixture()
@@ -253,47 +258,49 @@ it("asks for no project, since the tab is already in one", async () => {
     screen.queryByRole("combobox", { name: "Project" })
   ).not.toBeInTheDocument()
 })
-it("opens on the environment a link names, then follows a pick", async () => {
+it("puts the default Cloud first, open, and reviews making another the default", async () => {
   const user = userEvent.setup()
-  const { reads } = fixture()
-  show(<CloudsWorkspace projectId="p" environment="staging" />)
+  const { writes, reads } = fixture({
+    profiles: [{ ...profile, id: "lab", name: "GPU Lab" }, profile].reverse(),
+  })
+  show(<CloudsWorkspace projectId="p" />)
+  await screen.findByText("Frontend")
+  // No environment to pick: every environment uses the default Cloud.
+  expect(
+    screen.queryByRole("combobox", { name: "Environment" })
+  ).not.toBeInTheDocument()
+  expect(reads.some((r) => r.includes("/environments/"))).toBe(false)
+  const cards = screen.getAllByRole("button", { expanded: true })
+  expect(cards).toHaveLength(1)
+  expect(cards[0]).toHaveTextContent("Production")
+  expect(cards[0]).toHaveTextContent("Default")
+  await user.click(screen.getByRole("button", { name: "Make default" }))
+  await screen.findByRole("heading", { name: "Change the default Cloud" })
   await waitFor(() =>
     expect(
-      screen.getByRole("combobox", { name: "Environment" })
-    ).toHaveTextContent("staging")
-  )
-  expect(reads.some((r) => r.includes("/environments/stage/cloud"))).toBe(true)
-  await user.click(screen.getByRole("combobox", { name: "Environment" }))
-  await user.click(await screen.findByRole("option", { name: /production/ }))
-  await waitFor(() =>
-    expect(
-      screen.getByRole("combobox", { name: "Environment" })
-    ).toHaveTextContent("production")
+      writes.find((w) => w.url.endsWith("/default-cloud/preview"))?.body
+    ).toEqual({ cloud_id: "lab", revision: 1 })
   )
 })
 it("creates a Cloud and refreshes the generated list", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ noClouds: true })
   show(<CloudsWorkspace projectId="p" />)
-  await screen.findByText("Create your first Cloud")
+  await screen.findByText("No Clouds yet")
   await user.click(screen.getAllByRole("button", { name: "New Cloud" })[0])
   await user.type(
     screen.getByRole("textbox", { name: "Cloud name" }),
     "Customer Cloud"
   )
   await user.click(screen.getByRole("button", { name: "Save Cloud" }))
-  await waitFor(() =>
-    expect(screen.getByRole("combobox", { name: "Cloud" })).toHaveTextContent(
-      "Customer Cloud"
-    )
-  )
+  expect(await screen.findByText("Customer Cloud")).toBeInTheDocument()
   expect(writes[0].body).toEqual({ name: "Customer Cloud" })
 })
 it("shows read errors without presenting an empty Cloud result", async () => {
   fixture({ failure: "list" })
   show(<CloudsWorkspace projectId="p" />)
   await screen.findByText("Cloud read failed.")
-  expect(screen.queryByText("Create your first Cloud")).not.toBeInTheDocument()
+  expect(screen.queryByText("No Clouds yet")).not.toBeInTheDocument()
 })
 it("blocks a stale preview until refreshed", async () => {
   const user = userEvent.setup()
@@ -453,29 +460,15 @@ it("saves an adopted service through the optimistic generated manifest API", asy
   )
   const { ServiceAdoption } =
     await import("@/components/cloud-targets/service-adoption")
-  const environments = [
-    { id: "prod", name: "production" },
-    { id: "stage", name: "staging" },
-  ] as import("@/client/forge/loomplane/types").Environment[]
   const targets = [
     { id: "target", name: "frontend", displayName: "Frontend" },
   ] as import("@/client/forge/loomplane/types").Target[]
-  show(
-    <ServiceAdoption
-      projectId="p"
-      environment={environments[0]}
-      environments={environments}
-      targets={targets}
-      onSaved={async () => undefined}
-    />
-  )
+  show(<ServiceAdoption projectId="p" targets={targets} />)
   await user.click(
     await screen.findByRole("combobox", { name: "Cloud target for web" })
   )
   await user.click(await screen.findByRole("option", { name: /Frontend/ }))
-  await user.click(
-    screen.getAllByRole("button", { name: "Review service edit" })[0]
-  )
+  await user.click(screen.getAllByRole("button", { name: "Review" })[0])
   expect(screen.getByLabelText("Manifest adoption preview")).toHaveTextContent(
     '"cloud_target": "frontend"'
   )
@@ -485,12 +478,7 @@ it("saves an adopted service through the optimistic generated manifest API", asy
     base_revision: 3,
     manifest: {
       services: {
-        web: {
-          environments: {
-            production: { cloud_target: "frontend" },
-            staging: { provider: "vercel", region: "iad1" },
-          },
-        },
+        web: { cloud_target: "frontend" },
         api: { provider: "vercel" },
       },
       resources: { db: { provider: "vercel" } },
@@ -520,22 +508,11 @@ it("selects a service's target by tags and previews where they land", async () =
   )
   const { ServiceAdoption } =
     await import("@/components/cloud-targets/service-adoption")
-  const environments = [
-    { id: "prod", name: "production" },
-  ] as import("@/client/forge/loomplane/types").Environment[]
   const targets = [
     { id: "a", name: "frontend", displayName: "Frontend", tags: ["eu", "web"] },
     { id: "b", name: "edge", displayName: "Edge", tags: ["us", "web"] },
   ] as import("@/client/forge/loomplane/types").Target[]
-  show(
-    <ServiceAdoption
-      projectId="p"
-      environment={environments[0]}
-      environments={environments}
-      targets={targets}
-      onSaved={async () => undefined}
-    />
-  )
+  show(<ServiceAdoption projectId="p" targets={targets} />)
   await user.click(
     await screen.findByRole("combobox", { name: "Select web's target by" })
   )
@@ -545,7 +522,7 @@ it("selects a service's target by tags and previews where they land", async () =
   expect(screen.getByText(/Frontend, Edge all carry these tags/)).toBeVisible()
   await user.type(input, "eu{Enter}")
   expect(screen.getByText(/Runs on/)).toHaveTextContent("Runs on Frontend.")
-  await user.click(screen.getByRole("button", { name: "Review service edit" }))
+  await user.click(screen.getByRole("button", { name: "Review" }))
   expect(
     screen.getByRole("heading", { name: "Select web's target by eu, web" })
   ).toBeVisible()
@@ -555,7 +532,7 @@ it("selects a service's target by tags and previews where they land", async () =
     base_revision: 3,
     manifest: {
       services: {
-        web: { environments: { production: { cloud_tags: ["eu", "web"] } } },
+        web: { cloud_tags: ["eu", "web"] },
       },
     },
   })
@@ -621,18 +598,11 @@ it("requires routing evidence and sends it for the selected environment", async 
   )
 })
 
-it.each([
-  ["empty", "No environments yet"],
-  ["environments", "Environment read failed."],
-  ["list", "Cloud read failed."],
-])("says so when the environment scope is %s", async (state, message) => {
-  fixture({
-    noEnvironments: state === "empty",
-    failure: state === "empty" ? undefined : state,
-  })
+it("says so when the Clouds can't be read", async () => {
+  fixture({ failure: "list" })
   show(<CloudsWorkspace projectId="p" />)
-  await screen.findByText(message)
-  expect(screen.queryByText("Create your first Cloud")).not.toBeInTheDocument()
+  await screen.findByText("Cloud read failed.")
+  expect(screen.queryByText("No Clouds yet")).not.toBeInTheDocument()
 })
 
 it("keeps blocked previews distinct from environments without deployed services", async () => {
@@ -652,8 +622,8 @@ it("keeps blocked previews distinct from environments without deployed services"
   show(
     <ChangeReview
       projectId="p"
-      title="Review assignment"
-      assignment={{ environmentId: "prod", cloudId: "empty", revision: 1 }}
+      title="Change the default Cloud"
+      defaultCloud={{ cloudId: "empty", revision: 1 }}
       onClose={() => undefined}
       onApplied={() => undefined}
     />
@@ -669,8 +639,8 @@ it("keeps blocked previews distinct from environments without deployed services"
 })
 
 it.each([false, true])(
-  "shows revision-bound Cloud assignment account changes, removal=%s",
-  async (remove) => {
+  "shows what each target name points at either side of a default change, clearing=%s",
+  async (clear) => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith("/connections"))
@@ -691,18 +661,26 @@ it.each([false, true])(
         ...preview,
         before: undefined,
         after: undefined,
-        input: { cloud_id: remove ? "" : "new", revision: 1 },
-        before_assignment: {
+        input: {
+          cloud_id: clear ? "" : "new",
+          project_default: true,
+          revision: 1,
+        },
+        before_cloud: {
           cloud_id: "old",
           cloud_revision: 2,
+          grant_revision: 1,
+          default: true,
           targets: [{ ...target, connection_id: "a" }],
         },
-        ...(remove
+        ...(clear
           ? {}
           : {
-              after_assignment: {
+              after_cloud: {
                 cloud_id: "new",
                 cloud_revision: 3,
+                grant_revision: 1,
+                default: true,
                 targets: [
                   { ...target, connection_id: "b", provider: "cloud-run" },
                 ],
@@ -713,46 +691,37 @@ it.each([false, true])(
     show(
       <ChangeReview
         projectId="p"
-        title="Review assignment"
-        assignment={{
-          environmentId: "prod",
-          cloudId: remove ? "" : "new",
-          revision: 1,
-        }}
+        title="Change the default Cloud"
+        defaultCloud={{ cloudId: clear ? "" : "new", revision: 1 }}
         onClose={() => undefined}
         onApplied={() => undefined}
       />
     )
-    await screen.findByText("Current Cloud: Old Cloud (revision 2)")
-    expect(
-      screen.getByText("Current: vercel / Old account")
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        remove
-          ? "Desired Cloud: Direct placement"
-          : "Desired Cloud: New Cloud (revision 3)"
+    const change = await screen.findByRole("region", {
+      name: "Default Cloud change",
+    })
+    await waitFor(() =>
+      expect(change).toHaveTextContent(
+        `Every environment moves from Old Cloud to ${clear ? "no default Cloud" : "New Cloud"}.`
       )
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(
-        remove
-          ? "Desired: Target removed from this environment"
-          : "Desired: cloud-run / New account"
-      )
-    ).toBeInTheDocument()
+    )
+    expect(change).toHaveTextContent(
+      clear
+        ? "vercel / Old account → Not in the new Cloud: services that name it stop planning"
+        : "vercel / Old account → cloud-run / New account"
+    )
   }
 )
 
-it("explains retained preview protection when deleting an unassigned Cloud", async () => {
+it("explains retained preview protection when deleting a Cloud", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ failure: "delete" })
   show(<CloudsWorkspace projectId="p" />)
-  await user.click(await screen.findByRole("button", { name: "Manage Cloud" }))
+  await user.click(await screen.findByRole("button", { name: "Manage" }))
   await user.click(screen.getByRole("button", { name: "Delete Cloud" }))
   await user.click(screen.getByRole("button", { name: "Confirm delete Cloud" }))
   await screen.findByText(
-    "This Cloud is protected while environments, deployments, syncs or recent previews reference it. Preview references expire after 24 hours."
+    "This Cloud is protected while projects, deployments, syncs or recent previews use it. Preview references expire after 24 hours."
   )
   expect(writes[0].url).toBe("/api/v1/projects/p/clouds/cloud")
   expect(screen.getByRole("textbox", { name: "Cloud name" })).toHaveValue(
@@ -785,4 +754,46 @@ it("lists Loomplane Cloud in the normal order", async () => {
   expect(rows[1]!.textContent).not.toMatch(
     /recommended|default|suggested|featured/i
   )
+})
+
+it("puts a service on a target of a Cloud other than the default", async () => {
+  const user = userEvent.setup()
+  const writes: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        writes.push(JSON.parse(String(init.body)))
+        return Response.json({ id: "next", revision: 4, manifest: {} })
+      }
+      return Response.json({
+        id: "saved",
+        revision: 3,
+        manifest: {
+          version: 1,
+          services: { trainer: { source: "trainer", cloud_target: "eu-run" } },
+        },
+      })
+    }
+  )
+  const { ServiceAdoption } =
+    await import("@/components/cloud-targets/service-adoption")
+  const targets = [
+    { id: "a", name: "a100", displayName: "A100" },
+  ] as import("@/client/forge/loomplane/types").Target[]
+  show(<ServiceAdoption projectId="p" targets={targets} cloud="GPU Lab" />)
+  await user.click(
+    await screen.findByRole("combobox", { name: "Cloud target for trainer" })
+  )
+  await user.click(await screen.findByRole("option", { name: /A100/ }))
+  await user.click(screen.getByRole("button", { name: "Review" }))
+  await user.click(screen.getByRole("button", { name: "Save service target" }))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toMatchObject({
+    manifest: {
+      services: {
+        trainer: { source: "trainer", cloud: "GPU Lab", cloud_target: "a100" },
+      },
+    },
+  })
 })
