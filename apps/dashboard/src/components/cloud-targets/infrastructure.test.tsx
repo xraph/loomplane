@@ -492,6 +492,96 @@ it("releases a handoff through its exact preparation with a bounded reviewed dra
   )
 })
 
+it("selects a Cloud Droplet by name and saves its SSH runtime connection", async () => {
+  const { TargetEditor } = await import("./target-editor")
+  const sent = vi.fn()
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") {
+        sent(JSON.parse(String(init.body)))
+        return Response.json({ id: "target" })
+      }
+      if (path.endsWith("/providers"))
+        return Response.json({
+          providers: [
+            {
+              name: "server",
+              title: "Existing server",
+              cloud: "server",
+              available: true,
+              runs: [{}],
+            },
+          ],
+        })
+      if (path.endsWith("/connections"))
+        return Response.json({
+          connections: [
+            {
+              id: "ssh",
+              name: "Server server_123",
+              cloud: "server",
+              status: "ready",
+            },
+            {
+              id: "do",
+              name: "Wakflo LLC",
+              cloud: "digitalocean",
+              status: "ready",
+            },
+          ],
+        })
+      if (path.endsWith("/servers"))
+        return Response.json({
+          servers: [
+            {
+              id: "server_123",
+              name: "Digital Ocean Richmond 1",
+              provider: "digitalocean",
+              region: "ric1",
+              status: "ready",
+              connection_id: "do",
+              runtime_connection_id: "ssh",
+            },
+          ],
+        })
+      return Response.json({})
+    }
+  )
+  const user = userEvent.setup()
+  show(
+    <TargetEditor
+      projectId=""
+      profile={cloud as never}
+      onClose={() => undefined}
+      onSaved={() => undefined}
+    />
+  )
+  await user.type(
+    screen.getByRole("textbox", { name: "Target slug" }),
+    "backend"
+  )
+  await user.click(screen.getByRole("combobox", { name: "Placement runtime" }))
+  await user.click(
+    await screen.findByRole("option", { name: "Existing server" })
+  )
+  await user.click(
+    await screen.findByRole("radio", { name: /Digital Ocean Richmond 1.*ric1/ })
+  )
+  await user.click(screen.getByRole("button", { name: "Save target" }))
+  await waitFor(() =>
+    expect(sent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "backend",
+        runtime: "managed",
+        provider: "server",
+        connection_id: "ssh",
+      })
+    )
+  )
+})
+
 it("creates a pool target without a managed provider account and preserves target tags", async () => {
   const { TargetEditor } = await import("./target-editor")
   const writes: Record<string, unknown>[] = []

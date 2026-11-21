@@ -30,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { cloudLabel } from "@/lib/clouds"
 import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
@@ -58,6 +59,9 @@ export function TargetEditor({
   )
   const providers = useQuery(api.useProvidersList)
   const connections = useQuery(api.useConnectionsList)
+  const servers = useQuery(api.useCloudServersList, {
+    path: { cloudId: profile.id },
+  })
   const create = useMutation(api.useCloudTargetsCreate)
   const update = useMutation(api.useCloudTargetsUpdate)
   const remove = useMutation(api.useCloudTargetsDelete)
@@ -86,6 +90,10 @@ export function TargetEditor({
       ? [added]
       : []),
   ].filter((c) => c.status === "ready" && c.cloud === selected?.cloud)
+  const directServer = runtime === "managed" && provider === "server"
+  const serverProvider = providers.data?.providers.find(
+    (p) => p.name === "server" && p.available && p.runs?.length
+  )
   const changed =
     !!target &&
     (provider !== target.provider ||
@@ -225,12 +233,16 @@ export function TargetEditor({
               <FieldLabel className="contents">
                 Placement runtime
                 <Select
-                  value={runtime}
+                  value={directServer ? "individual" : runtime}
                   disabled={!manage || busy}
                   onValueChange={(e) => {
                     const value = e ?? ""
-                    setRuntime(value)
-                    setProvider(value === "server" ? "server" : "")
+                    setRuntime(value === "individual" ? "managed" : value)
+                    setProvider(
+                      value === "server" || value === "individual"
+                        ? "server"
+                        : ""
+                    )
                     setConnection("")
                     setRegion("")
                     setPool("")
@@ -244,6 +256,11 @@ export function TargetEditor({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="managed">Managed deployment</SelectItem>
+                    {(serverProvider || directServer) && (
+                      <SelectItem value="individual">
+                        Existing server
+                      </SelectItem>
+                    )}
                     {(can("organization_cloud:manage") ||
                       runtime === "server") && (
                       <SelectItem value="server">Server pool</SelectItem>
@@ -261,86 +278,117 @@ export function TargetEditor({
               />
             ) : (
               <>
-                <div className="grid gap-1.5">
-                  <span className="text-xs">Provider</span>
-                  <div
-                    role="radiogroup"
-                    aria-label="Target provider"
-                    className="grid gap-2 sm:grid-cols-2"
-                  >
-                    {providers.data?.providers
-                      .filter((p) => p.available && p.runs?.length)
-                      .map((p) => {
-                        const ready = (
-                          connections.data?.connections ?? []
-                        ).filter(
-                          (c) => c.status === "ready" && c.cloud === p.cloud
-                        ).length
-                        return (
-                          <Choice
-                            key={p.name}
-                            checked={provider === p.name}
-                            disabled={!manage || busy}
-                            onSelect={() => {
-                              if (provider === p.name) return
-                              setProvider(p.name)
-                              setConnection("")
-                              setRegion("")
-                            }}
-                          >
-                            <CloudGlyph cloud={p.cloud} size="sm" />
-                            <span className="grid min-w-0 gap-0.5">
-                              <span className="truncate text-[13px] font-medium">
-                                {p.title}
+                {!directServer && (
+                  <div className="grid gap-1.5">
+                    <span className="text-xs">Provider</span>
+                    <div
+                      role="radiogroup"
+                      aria-label="Target provider"
+                      className="grid gap-2 sm:grid-cols-2"
+                    >
+                      {providers.data?.providers
+                        .filter((p) => p.available && p.runs?.length)
+                        .map((p) => {
+                          const ready = (
+                            connections.data?.connections ?? []
+                          ).filter(
+                            (c) => c.status === "ready" && c.cloud === p.cloud
+                          ).length
+                          return (
+                            <Choice
+                              key={p.name}
+                              checked={provider === p.name}
+                              disabled={!manage || busy}
+                              onSelect={() => {
+                                if (provider === p.name) return
+                                setProvider(p.name)
+                                setConnection("")
+                                setRegion("")
+                              }}
+                            >
+                              <CloudGlyph cloud={p.cloud} size="sm" />
+                              <span className="grid min-w-0 gap-0.5">
+                                <span className="truncate text-[13px] font-medium">
+                                  {p.title}
+                                </span>
+                                <span className="truncate text-xs text-muted-foreground">
+                                  {p.name === "server"
+                                    ? ready
+                                      ? `${ready} ${ready === 1 ? "server" : "servers"} ready`
+                                      : "No server ready"
+                                    : ready
+                                      ? `${ready} ${ready === 1 ? "account" : "accounts"} ready`
+                                      : "No account yet"}
+                                </span>
                               </span>
-                              <span className="truncate text-xs text-muted-foreground">
-                                {ready
-                                  ? `${ready} ${ready === 1 ? "account" : "accounts"} ready`
-                                  : "No account yet"}
-                              </span>
-                            </span>
-                          </Choice>
-                        )
-                      })}
+                            </Choice>
+                          )
+                        })}
+                    </div>
                   </div>
-                </div>
+                )}
+                {directServer && servers.status === "error" && (
+                  <QueryError
+                    error={servers.error}
+                    fallback="Server names couldn't be loaded."
+                    retry={servers.refetch}
+                  />
+                )}
                 {selected && (
                   <div className="grid gap-1.5">
                     <span className="text-xs">
-                      Account
-                      <span className="text-muted-foreground">
-                        {" "}
-                        · any {selected.title} account you&apos;ve connected
-                      </span>
+                      {directServer ? "Server" : "Account"}
+                      {!directServer && (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          · any {selected.title} account you&apos;ve connected
+                        </span>
+                      )}
                     </span>
                     <div
                       role="radiogroup"
-                      aria-label="Desired account"
+                      aria-label={
+                        directServer ? "Target server" : "Desired account"
+                      }
                       className="grid gap-2"
                     >
-                      {accounts.map((c) => (
-                        <Choice
-                          key={c.id}
-                          checked={connectionId === c.id}
-                          disabled={!manage || busy}
-                          onSelect={() => setConnection(c.id)}
-                        >
-                          <CloudGlyph cloud={c.cloud} size="sm" />
-                          <span className="grid min-w-0 flex-1 gap-0.5">
-                            <span className="truncate text-[13px] font-medium">
-                              {c.name}
+                      {accounts.map((c) => {
+                        const server = directServer
+                          ? servers.data?.servers?.find(
+                              (s) =>
+                                s?.runtimeConnectionId === c.id &&
+                                s.status !== "deleted" &&
+                                s.status !== "disconnected"
+                            )
+                          : undefined
+                        return (
+                          <Choice
+                            key={c.id}
+                            checked={connectionId === c.id}
+                            disabled={!manage || busy}
+                            onSelect={() => setConnection(c.id)}
+                          >
+                            <CloudGlyph cloud={c.cloud} size="sm" />
+                            <span className="grid min-w-0 flex-1 gap-0.5">
+                              <span className="truncate text-[13px] font-medium">
+                                {server?.name || c.name}
+                              </span>
+                              <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                                {server
+                                  ? [cloudLabel(server.provider), server.region]
+                                      .filter(Boolean)
+                                      .join(" · ")
+                                  : c.account}
+                              </span>
                             </span>
-                            <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-                              {c.account}
-                            </span>
-                          </span>
-                          {target?.connectionId === c.id && (
-                            <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11.5px] text-muted-foreground">
-                              Current
-                            </span>
-                          )}
-                        </Choice>
-                      ))}
+                            {target?.connectionId === c.id && (
+                              <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11.5px] text-muted-foreground">
+                                Current
+                              </span>
+                            )}
+                          </Choice>
+                        )
+                      })}
                       {manage && (
                         <Button
                           variant="ghost"
@@ -350,9 +398,11 @@ export function TargetEditor({
                           className="flex h-12 items-center gap-2.5 rounded-xl border border-dashed px-3 text-left text-[13px] text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
                         >
                           <PlusIcon className="size-4" />
-                          {accounts.length
-                            ? `Connect another ${selected.title} account`
-                            : `Connect a ${selected.title} account`}
+                          {directServer
+                            ? "Connect an SSH server"
+                            : accounts.length
+                              ? `Connect another ${selected.title} account`
+                              : `Connect a ${selected.title} account`}
                         </Button>
                       )}
                     </div>
