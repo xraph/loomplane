@@ -1,5 +1,11 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { render, screen, within } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
@@ -44,27 +50,34 @@ const plan = (release?: object, status = "ready") => ({
 function serve(
   p: object,
   more: Record<string, unknown> = {},
-  tab?: DeploymentTab
+  tab?: DeploymentTab,
+  onPost?: (url: string, body: unknown) => void
 ) {
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const url = new URL(String(input), "http://localhost").pathname
-    const extra = Object.entries(more).find(([suffix]) => url.endsWith(suffix))
-    const body = extra
-      ? extra[1]
-      : url.endsWith("/plans/plan_1")
-        ? p
-        : url.endsWith("/projects/proj_1")
-          ? { id: "proj_1", name: "Shop", slug: "shop" }
-          : {}
-    if (extra && typeof extra[1] === "number")
-      return new Response(JSON.stringify({ message: "refused" }), {
-        status: extra[1],
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost").pathname
+      if (init?.method === "POST") onPost?.(url, JSON.parse(String(init.body)))
+      const extra = Object.entries(more).find(([suffix]) =>
+        url.endsWith(suffix)
+      )
+      const body = extra
+        ? extra[1]
+        : url.endsWith("/plans/plan_1")
+          ? p
+          : url.endsWith("/projects/proj_1")
+            ? { id: "proj_1", name: "Shop", slug: "shop" }
+            : {}
+      if (extra && typeof extra[1] === "number")
+        return new Response(JSON.stringify({ message: "refused" }), {
+          status: extra[1],
+          headers: { "Content-Type": "application/json" },
+        })
+      return new Response(JSON.stringify(body), {
         headers: { "Content-Type": "application/json" },
       })
-    return new Response(JSON.stringify(body), {
-      headers: { "Content-Type": "application/json" },
-    })
-  })
+    }
+  )
   render(
     <ClientProvider client={forgeClient}>
       <DeploymentPage id="plan_1" tab={tab} />
@@ -376,6 +389,68 @@ const api = (op = "replace") => ({
   subject: "service",
   reason: "4 commits since the running release.",
 })
+
+test.each([undefined, ["api", "worker"]])(
+  "replans only the remaining services, preserving repository scope (%s)",
+  async (services) => {
+    const onPost = vi.fn()
+    serve(
+      {
+        ...plan(undefined, "blocked"),
+        services,
+        actions: [
+          api(),
+          { ...api("update"), id: "service:worker", name: "worker" },
+          {
+            ...api("create"),
+            id: "resource:db",
+            name: "db",
+            subject: "resource",
+          },
+        ],
+        sources: [
+          {
+            source_id: "s1",
+            alias: "backend",
+            commit_sha: "abc",
+            repository: "org/backend",
+            in_scope: true,
+          },
+          {
+            source_id: "s2",
+            alias: "web",
+            commit_sha: "def",
+            repository: "org/web",
+            in_scope: false,
+          },
+        ],
+      },
+      { "/projects/proj_1/plans": { id: "plan_2" } },
+      "changes",
+      onPost
+    )
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Choose services" })
+    )
+    const picker = within(await screen.findByRole("dialog"))
+    expect(picker.getAllByRole("checkbox")).toHaveLength(2)
+    fireEvent.click(picker.getByRole("checkbox", { name: "worker" }))
+    fireEvent.click(picker.getByRole("checkbox", { name: "api" }))
+    expect(
+      picker.getByRole("button", { name: "Plan with 0 services" })
+    ).toBeDisabled()
+    fireEvent.click(picker.getByRole("checkbox", { name: "api" }))
+    fireEvent.click(picker.getByRole("button", { name: "Plan with 1 service" }))
+    await waitFor(() =>
+      expect(onPost).toHaveBeenCalledWith("/api/v1/projects/proj_1/plans", {
+        environment: "production",
+        scope: ["backend"],
+        services: ["api"],
+      })
+    )
+    expect(onPost).toHaveBeenCalledTimes(1)
+  }
+)
 
 test("a waiting plan opens on Changes with the one approval box", async () => {
   serve({

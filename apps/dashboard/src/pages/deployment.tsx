@@ -62,6 +62,7 @@ import {
 import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
+import { ReplanServices } from "@/components/replan-services"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -188,6 +189,31 @@ function Loaded({
     deciding ? "changes" : "logs"
   )
   const [source, setSource] = useState("all")
+  const navigate = useNavigate()
+  const replan = useMutation(usePlansCreate)
+  const invalidate = useInvalidate()
+  const planAgain = async (services = planServices(plan)) => {
+    try {
+      const next = await replan.mutateAsync({
+        path: { id: run.projectId },
+        body: {
+          environment: run.environment,
+          // Planning again moves what this plan moved and holds what it held.
+          ...scopeBody(
+            plan.sources.map((s) => s.alias),
+            plan.sources.filter((s) => s.inScope).map((s) => s.alias)
+          ),
+          ...(services.length > 0 ? { services } : {}),
+        },
+      })
+      invalidate(usePlansList)
+      void navigate({ to: "/deployments/$id", params: { id: next.id } })
+      toast.success(`Planning ${run.environment} again`)
+    } catch (err) {
+      toast.error(messageOf(err, "The plan couldn't start."))
+    }
+  }
+
   const live = isLive(run)
   const sources = logSources(run)
   const showLogs = (id: string) => {
@@ -209,7 +235,12 @@ function Loaded({
         ]}
       />
       <Page>
-        <Heading run={run} now={now} />
+        <Heading
+          run={run}
+          now={now}
+          planAgain={planAgain}
+          pending={replan.isPending}
+        />
         <ProgressStrip
           run={run}
           now={now}
@@ -274,7 +305,22 @@ function Loaded({
             <TabsTrigger value="details">Details</TabsTrigger>
           </TabsList>
           <TabsContent value="changes">
-            <ChangesTab run={run} />
+            <ChangesTab
+              run={run}
+              servicePicker={
+                deciding &&
+                can("deployment:create") &&
+                !plan.catalog &&
+                !plan.cloudSyncId &&
+                (!plan.kind || plan.kind === "release") && (
+                  <ReplanServices
+                    plan={plan}
+                    planAgain={planAgain}
+                    pending={replan.isPending}
+                  />
+                )
+              }
+            />
           </TabsContent>
           <TabsContent value="logs">
             <BuildLogPanel
@@ -302,52 +348,35 @@ function Loaded({
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`
 
-function Heading({ run, now }: { run: Run; now: number }) {
+function Heading({
+  run,
+  now,
+  planAgain,
+  pending,
+}: {
+  run: Run
+  now: number
+  planAgain: () => Promise<void>
+  pending: boolean
+}) {
   const can = useProjectCan(run.projectId)
-  const navigate = useNavigate()
   const person = usePeople()
-  const replan = useMutation(usePlansCreate)
-  const invalidate = useInvalidate()
   const author = person(run.createdBy)
   const style = run.project ? projectStyle(run.project) : null
   const d = run.deployment
   const p = run.plan
-  const moving = p.sources.filter((s) => s.inScope)
-  const services = planServices(p)
   const kind = runKindLabel(p)
   const rollback = mayOfferRollback(run, can("deployment:create"))
   const projectName = run.project?.name ?? "the project"
-
-  const planAgain = async () => {
-    try {
-      const next = await replan.mutateAsync({
-        path: { id: run.projectId },
-        body: {
-          environment: run.environment,
-          // Planning again moves what this plan moved and holds what it held.
-          ...scopeBody(
-            p.sources.map((s) => s.alias),
-            moving.map((s) => s.alias)
-          ),
-          ...(services.length > 0 ? { services } : {}),
-        },
-      })
-      invalidate(usePlansList)
-      void navigate({ to: "/deployments/$id", params: { id: next.id } })
-      toast.success(`Planning ${run.environment} again`)
-    } catch (err) {
-      toast.error(messageOf(err, "The plan couldn't start."))
-    }
-  }
 
   const api = `curl -H "Authorization: Bearer $LOOMPLANE_API_KEY" ${window.location.origin}/api/v1/plans/${run.id}`
   const planAgainButton = !isLive(run) && can("deployment:create") && (
     <Button
       variant="outline"
-      disabled={replan.isPending}
+      disabled={pending}
       onClick={() => void planAgain()}
     >
-      {replan.isPending && <Spinner />}
+      {pending && <Spinner />}
       Plan again
     </Button>
   )
@@ -834,7 +863,13 @@ function kindOf(a: Action): string {
   return a.resource?.version ? `${kind} ${a.resource.version}` : kind
 }
 
-function ChangesTab({ run }: { run: Run }) {
+function ChangesTab({
+  run,
+  servicePicker,
+}: {
+  run: Run
+  servicePicker: ReactNode
+}) {
   const connections = useQuery(useConnectionsList)
   const p = run.plan
   const s = p.summary
@@ -905,7 +940,9 @@ function ChangesTab({ run }: { run: Run }) {
               ? undefined
               : `${s.create} to create, ${s.update} to update, ${s.replace} to replace, ${s.delete} to delete and ${kept} kept, in the order it happens. Kept items show nothing else moves.`
           }
-        />
+        >
+          {servicePicker}
+        </CloudSectionHead>
         {p.actions.length === 0 ? (
           <CloudEmpty kind="compact" title="Nothing to change">
             What&apos;s deployed already matches loomplane.yaml.
