@@ -14,6 +14,7 @@ vi.mock("@/lib/organization", () => ({
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/lib/router", () => ({
+  useNavigate: () => vi.fn(),
   Link: ({
     children,
     to,
@@ -29,6 +30,7 @@ vi.mock("@/lib/router", () => ({
 }))
 
 afterEach(() => {
+  cleanup()
   vi.unstubAllGlobals()
   forgeClient.clear()
 })
@@ -197,6 +199,7 @@ const databases = [
 
 type Fixture = {
   bindings?: Record<string, unknown[]>
+  permissions?: string[]
   status?: number
   projectEnvironments?: { id: string; name: string }[]
 }
@@ -204,6 +207,7 @@ type Fixture = {
 function serve({
   bindings = {},
   status = 200,
+  permissions = ["project:update", "deployment:create"],
   projectEnvironments = environments,
 }: Fixture) {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -223,6 +227,61 @@ function serve({
         bindings: bindings[url.searchParams.get("environment") ?? ""] ?? [],
       }
     }
+    if (url.pathname.endsWith("/permissions")) body = { permissions }
+    if (url.pathname.endsWith("/providers"))
+      body = {
+        providers: [
+          {
+            name: "digitalocean",
+            title: "DigitalOcean",
+            available: true,
+            provisions: [
+              {
+                kind: "postgres",
+                settings: [
+                  {
+                    name: "size",
+                    title: "Size per node",
+                    default: "small",
+                    required: true,
+                    capacity: true,
+                  },
+                  {
+                    name: "nodes",
+                    title: "Total nodes",
+                    default: "1",
+                    required: true,
+                    capacity: true,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    if (url.pathname.endsWith("/manifest"))
+      body = {
+        revision: 4,
+        manifest: {
+          resources: {
+            db: {
+              kind: "postgres",
+              provider: "digitalocean",
+              settings: { size: "small", nodes: "1" },
+            },
+          },
+        },
+      }
+    if (url.pathname.endsWith("/digitalocean-database-capacity"))
+      body = {
+        pg: {
+          regions: ["nyc3"],
+          layouts: [
+            { num_nodes: 1, sizes: ["small", "large"] },
+            { num_nodes: 2, sizes: ["large"] },
+          ],
+        },
+      }
     if (url.pathname.endsWith("/catalog/kinds")) body = { kinds: [] }
     if (url.pathname.endsWith("/connections")) body = { connections: [] }
     if (url.pathname.endsWith("/fabriq/fabriq")) body = { reachable: false }
@@ -677,4 +736,49 @@ test("Fabriq library opens its worker panel and keeps the environment in the sub
   expect(within(header).queryByText("production", { exact: true })).toBeNull()
   expect(screen.queryByRole("tab", { name: "Tenants and keys" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Open Fabriq admin" })).toBeNull()
+})
+
+const managed = {
+  ...binding(
+    "db",
+    {
+      kind: "postgres",
+      provider: "digitalocean",
+      settings: { size: "small", nodes: "1" },
+    },
+    "env_stage",
+    "digitalocean"
+  ),
+  connection_id: "digital-ocean",
+  region: "nyc",
+  external_id: "cluster",
+}
+test("a managed service opens its provider's resize form in the selected environment", async () => {
+  serve({ bindings: { staging: [managed] } })
+  open("db", "env_stage")
+  const capacity = await screen.findByRole("region", { name: "Capacity" })
+  expect(within(capacity).getByText("small")).toBeInTheDocument()
+  await userEvent.click(
+    await within(capacity).findByRole("button", { name: "Scale" })
+  )
+  const dialog = await screen.findByRole("dialog", { name: "Scale db" })
+  expect(dialog).toHaveTextContent("DigitalOcean · staging")
+  await userEvent.selectOptions(
+    await within(dialog).findByLabelText("Size per node"),
+    "large"
+  )
+  await userEvent.selectOptions(
+    within(dialog).getByLabelText("Total nodes"),
+    "2"
+  )
+  expect(
+    within(dialog).getByRole("button", { name: "Review deployment plan" })
+  ).toBeEnabled()
+})
+test("a read-only project member sees deployed capacity without a resize action", async () => {
+  serve({ bindings: { staging: [managed] }, permissions: ["project:read"] })
+  open("db", "env_stage")
+  const capacity = await screen.findByRole("region", { name: "Capacity" })
+  expect(within(capacity).getByText("small")).toBeInTheDocument()
+  expect(within(capacity).queryByRole("button", { name: "Scale" })).toBeNull()
 })

@@ -21,6 +21,7 @@ import {
 import type { Binding, Environment } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { Page } from "@/components/page"
+import { CatalogCapacity } from "@/components/provider-resources/catalog-capacity"
 import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
@@ -359,6 +360,15 @@ function Overview({
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="grid min-w-0 gap-4">
+        {!config.composition && (
+          <CatalogCapacity
+            key={binding.id}
+            binding={binding}
+            kind={config.kind}
+            projectId={props.projectId}
+            environment={environment}
+          />
+        )}
         <Section
           title="Components"
           description={
