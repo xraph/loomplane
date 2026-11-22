@@ -1,13 +1,16 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistry_checksPullAndCancelsPushProbe(t *testing.T) {
@@ -150,7 +153,7 @@ func TestRegistry_approvedTokenServiceUsesReviewedRepositoryScope(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"", "repository:team/loomplane-check:pull", "repository:team/loomplane-check:pull,push", "repository:team/loomplane-check:pull,push"}
+	want := []string{"", "repository:team/loomplane-check:pull", "repository:team/loomplane-check:pull,push"}
 	if _, err = New(cfg).Check(t.Context()); err != nil || !slices.Equal(scopes, want) {
 		t.Fatalf("token scopes: %q %v", scopes, err)
 	}
@@ -263,5 +266,40 @@ func TestDockerAuth_publicReadsAndPrivatePushUseTheirOwnChallenges(t *testing.T)
 	public, err := client.DockerAuth(t.Context(), "team/actual", "pull,push")
 	if err != nil || strings.Contains(string(public), "secret") || !canceled {
 		t.Fatalf("anonymous push probe cleanup: auth=%s err=%v canceled=%v", public, err, canceled)
+	}
+}
+
+func TestTokenPushDenialShowsReasonWithoutProviderSecrets(t *testing.T) {
+	for _, tt := range []struct{ body, want string }{
+		{`{"id":"forbidden","message":"registry is read-only some-secret"}`, "read-only access"},
+		{`{"errors":[{"message":"repository limit exceeded some-secret"}]}`, "repository limit"},
+		{`{"message":"garbage collection in progress some-secret"}`, "garbage collection"},
+		{"some-secret", "push access to wakflo/loomplane-check was denied"},
+	} {
+		r := &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader(tt.body))}
+		err := tokenDenial(r, "wakflo/loomplane-check", "pull,push")
+		if !errors.Is(err, ErrRejected) || !strings.Contains(err.Error(), tt.want) || strings.Contains(err.Error(), "some-secret") {
+			t.Fatalf("unexpected denial: %v", err)
+		}
+	}
+}
+
+func TestRegistryReportsWhichStepExceededTheDeadline(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/tags/list") {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s.Close()
+	cfg, err := ParseConfig([]byte("{}"), map[string]string{"endpoint": s.URL, "repository": "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err = New(cfg).Check(ctx); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "registry:pull") {
+		t.Fatalf("unexpected timeout: %v", err)
 	}
 }

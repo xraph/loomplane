@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type Client struct {
@@ -25,6 +26,9 @@ type Result struct {
 // Check verifies pull access and starts then cancels an empty push upload.
 // It leaves no image, manifest or blob in the registry.
 func (c *Client) Check(ctx context.Context) (*Result, error) {
+	// All challenge exchanges share one budget inside the dashboard request.
+	ctx, stop := context.WithTimeout(ctx, 20*time.Second)
+	defer stop()
 	out := &Result{Details: maps.Clone(c.Config.Details), Missing: []string{}}
 	repository := c.Config.Repository + "/loomplane-check"
 	base := "/v2/" + repository
@@ -34,11 +38,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		{http.MethodPost, base + "/blobs/uploads/", "registry:push", "pull,push"},
 	} {
 		response, err := c.requestScoped(ctx, check.method, check.path, repository, check.actions, nil)
-		if errors.Is(err, ErrRejected) {
-			return nil, fmt.Errorf("%s check: %w", check.permission, err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%s timed out waiting for the registry or its token service: %w", check.permission, context.DeadlineExceeded)
 		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s check: %w", check.permission, err)
 		}
 		status, location := response.StatusCode, response.Header.Get("Location")
 		_ = response.Body.Close()
@@ -52,26 +56,44 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 			out.Missing = append(out.Missing, check.permission)
 		case status == http.StatusNotFound && check.permission == "registry:pull":
 		case status < 200 || status >= 300:
-			return nil, fmt.Errorf("registry check returned HTTP %d", status)
+			return nil, fmt.Errorf("%s check returned HTTP %d", check.permission, status)
 		case check.method == http.MethodPost:
 			if status != http.StatusAccepted || location == "" {
 				return nil, fmt.Errorf("registry did not acknowledge the empty upload")
 			}
-			cancelPath, err := c.uploadPath(location, base)
-			if err != nil {
+			if err := c.cancelCheckUpload(ctx, location, repository, response.Request); err != nil {
 				return nil, err
-			}
-			cancel, cancelErr := c.requestFor(context.WithoutCancel(ctx), http.MethodDelete, cancelPath, repository)
-			if cancelErr != nil {
-				return nil, fmt.Errorf("cancel empty registry upload: %w", cancelErr)
-			}
-			_ = cancel.Body.Close()
-			if cancel.StatusCode != http.StatusNoContent && cancel.StatusCode != http.StatusNotFound {
-				return nil, fmt.Errorf("cancel empty registry upload returned HTTP %d", cancel.StatusCode)
 			}
 		}
 	}
 	return out, nil
+}
+
+func (c *Client) cancelCheckUpload(ctx context.Context, location, repository string, accepted *http.Request) error {
+	path, err := c.uploadPath(location, "/v2/"+repository)
+	if err != nil {
+		return err
+	}
+	// The validated location belongs to the same registry and repository.
+	headers := make(http.Header)
+	if accepted != nil {
+		headers.Set("Authorization", accepted.Header.Get("Authorization"))
+	}
+	cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer stop()
+	response, err := c.requestScoped(cleanup, http.MethodDelete, path, repository, "pull,push", headers)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("timed out cancelling the registry test upload: %w", context.DeadlineExceeded)
+	}
+	if err != nil {
+		// A transport error may contain the signed upload location.
+		return errors.New("could not cancel the registry test upload")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent && response.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("cancel empty registry upload returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 func (c *Client) uploadPath(location, base string) (string, error) {
@@ -104,10 +126,12 @@ func (c *Client) requestScoped(ctx context.Context, method, path, repository, ac
 	for key, values := range headers {
 		req.Header[key] = values
 	}
-	if c.Config.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Config.Token)
-	} else if c.Config.Username != "" {
-		req.SetBasicAuth(c.Config.Username, c.Config.Password)
+	if req.Header.Get("Authorization") == "" {
+		if c.Config.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Config.Token)
+		} else if c.Config.Username != "" {
+			req.SetBasicAuth(c.Config.Username, c.Config.Password)
+		}
 	}
 	response, err := c.HTTP.Do(req)
 	if err != nil {
@@ -183,7 +207,7 @@ func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions
 	}
 	defer tokenResponse.Body.Close()
 	if tokenResponse.StatusCode == 401 || tokenResponse.StatusCode == 403 {
-		return "", fmt.Errorf("%w at the token service (HTTP %d)", ErrRejected, tokenResponse.StatusCode)
+		return "", tokenDenial(tokenResponse, repository, actions)
 	}
 	if tokenResponse.StatusCode != 200 {
 		return "", fmt.Errorf("registry token service returned HTTP %d", tokenResponse.StatusCode)
@@ -202,4 +226,38 @@ func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions
 		return "", ErrRejected
 	}
 	return token.Token, nil
+}
+
+// Registry errors can echo credentials or signed URLs. Only known reasons and
+// the repository name from our own request reach the connection form.
+func tokenDenial(response *http.Response, repository, actions string) error {
+	err := fmt.Errorf("%w at the token service (HTTP %d)", ErrRejected, response.StatusCode)
+	if response.StatusCode != http.StatusForbidden || actions != "pull,push" {
+		return err
+	}
+	var body struct {
+		Message string `json:"message"`
+		Errors  []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	denied := fmt.Errorf("%w: push access to %s was denied", err, repository)
+	if decodeErr := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&body); decodeErr != nil {
+		return denied
+	}
+	messages := []string{body.Message}
+	for _, item := range body.Errors {
+		messages = append(messages, item.Message)
+	}
+	reason := strings.ToLower(strings.Join(messages, " "))
+	switch {
+	case strings.Contains(reason, "garbage collection"):
+		return fmt.Errorf("%w: garbage collection is restricting writes to %s", err, repository)
+	case strings.Contains(reason, "read-only") || strings.Contains(reason, "read only"):
+		return fmt.Errorf("%w: the registry reported read-only access to %s", err, repository)
+	case strings.Contains(reason, "quota") || strings.Contains(reason, "repository limit"):
+		return fmt.Errorf("%w: the registry reported a quota or repository limit for %s", err, repository)
+	default:
+		return denied
+	}
 }
