@@ -170,7 +170,10 @@ export function SelfHostedConnect({
           err,
           replacing
             ? "The credential wasn't replaced."
-            : `The ${selfHostedTitles[cloud]} wasn't connected.`
+            : `The ${selfHostedTitles[cloud]} wasn't connected.`,
+          preset?.id === "ghcr"
+            ? `Loomplane could not verify registry access to ghcr.io/${connection.settings.repository}`
+            : undefined
         )
       )
     }

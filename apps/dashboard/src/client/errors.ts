@@ -11,12 +11,29 @@ export function statusOf(err: unknown): number {
  * messageOf turns a failure into a sentence a person can act on: the
  * server's own explanation when there is one.
  */
-export function messageOf(err: unknown, fallback: string): string {
+export function messageOf(
+  err: unknown,
+  fallback: string,
+  serverFallback?: string
+): string {
   const status = statusOf(err)
+  const details =
+    err && typeof err === "object" && "details" in err ? err.details : undefined
+  if (
+    details &&
+    typeof details === "object" &&
+    "detail" in details &&
+    typeof details.detail === "string" &&
+    details.detail.trim()
+  ) {
+    return sentence(details.detail.trim())
+  }
   const raw = err instanceof Error ? err.message : ""
   if (raw && !/^HTTP \d+/.test(raw)) return sentence(raw)
   if (status >= 500)
-    return "Loomplane couldn't finish that. Try again in a moment."
+    return serverFallback
+      ? `${serverFallback} (HTTP ${status}).`
+      : "Loomplane couldn't finish that. Try again in a moment."
   return fallback
 }
 

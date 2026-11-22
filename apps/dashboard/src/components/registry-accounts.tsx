@@ -159,7 +159,13 @@ function AccountRegistries({
       invalidate(useConnectionsList)
       onConnected(result)
     } catch (e) {
-      setError(messageOf(e, "Couldn’t connect this registry."))
+      setError(
+        messageOf(
+          e,
+          "Couldn’t connect this registry.",
+          `Loomplane could not verify registry access to registry.digitalocean.com/${name}`
+        )
+      )
     }
   }
   if (query.status === "error")
@@ -248,6 +254,8 @@ export function GitHubRegistrySetup({
   ]
   const namespace = owner ?? (owners.length === 1 ? owners[0] : "")
   const repository = namespace.trim().toLowerCase()
+  const validOwner = /^[a-z0-9][a-z0-9_-]{0,38}$/.test(repository)
+  const hintId = useId()
   const saved = (registries.data?.connections ?? []).filter(
     (c) =>
       c.cloud === "registry" &&
@@ -268,7 +276,7 @@ export function GitHubRegistrySetup({
     )
   if (!registries.data) return <p>Loading registry connections…</p>
 
-  const ready = selected || (repository && username.trim() && token.trim())
+  const ready = selected || (validOwner && username.trim() && token.trim())
   function submit(e: FormEvent) {
     e.preventDefault()
     e.stopPropagation()
@@ -315,6 +323,8 @@ export function GitHubRegistrySetup({
             <Input
               value={namespace}
               list={listId}
+              aria-invalid={!!repository && !validOwner}
+              aria-describedby={hintId}
               required
               autoCapitalize="none"
               spellCheck={false}
@@ -322,6 +332,23 @@ export function GitHubRegistrySetup({
               onChange={(e) => setOwner(e.target.value)}
             />
           </label>
+          <p
+            id={hintId}
+            className={
+              repository && !validOwner
+                ? "text-xs text-destructive"
+                : "text-xs text-muted-foreground"
+            }
+          >
+            {repository && !validOwner ? (
+              "Enter just the GitHub user or organization, without a repository path. Loomplane adds the service name."
+            ) : (
+              <>
+                Images publish to{" "}
+                <code>ghcr.io/{repository || "owner"}/&lt;service&gt;</code>.
+              </>
+            )}
+          </p>
           <datalist id={listId}>
             {owners.map((account) => (
               <option key={account} value={account} />

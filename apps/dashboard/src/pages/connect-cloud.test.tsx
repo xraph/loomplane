@@ -373,10 +373,19 @@ it("connects GitHub Packages with the publishing user's token and selected desti
   await user.type(screen.getByLabelText("GitHub username"), "publisher")
   expect(connect).toHaveProperty("disabled", true)
   await user.clear(destination)
-  await user.type(destination, "Another-Team")
+  await user.type(destination, "wakflo/wakflo")
   await user.type(
     screen.getByLabelText("Personal access token (classic)"),
     "test-credential{Enter}"
+  )
+  expect(connect).toHaveProperty("disabled", true)
+  expect(screen.getByText(/without a repository path/)).toBeTruthy()
+  expect(posted).toHaveLength(0)
+  await user.clear(destination)
+  await user.type(destination, "Another-Team")
+  await user.type(
+    screen.getByLabelText("Personal access token (classic)"),
+    "{Enter}"
   )
   await waitFor(() => expect(navigate).toHaveBeenCalled())
   expect(posted.map((p) => p.body)).toEqual([

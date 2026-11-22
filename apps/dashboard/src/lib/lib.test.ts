@@ -69,6 +69,24 @@ describe("errors", () => {
     )
   })
 
+  it("shows the server's problem detail and identifies registry failures without one", () => {
+    expect(
+      messageOf(
+        new HTTPError(503, "HTTP 503", "", {
+          detail: "Registry token service timed out",
+        }),
+        "fallback"
+      )
+    ).toBe("Registry token service timed out.")
+    expect(
+      messageOf(
+        new HTTPError(503, "HTTP 503", "", {}),
+        "fallback",
+        "Could not verify registry access"
+      )
+    ).toBe("Could not verify registry access (HTTP 503).")
+  })
+
   it("falls back for what it can't explain", () => {
     expect(statusOf(new Error("boom"))).toBe(0)
     expect(messageOf(undefined, "Try again.")).toBe("Try again.")
