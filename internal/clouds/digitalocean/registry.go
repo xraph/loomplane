@@ -45,8 +45,10 @@ func (c *Client) RegistryLogin(ctx context.Context, token, name string) (user, p
 		return "", "", loginErr
 	}
 	raw, err := base64.StdEncoding.DecodeString(config.Auths[RegistryHost].Auth)
-	user, password, ok := strings.Cut(string(raw), ":")
-	if err != nil || !ok || user == "" || password == "" {
+	// DigitalOcean's Docker config can encode a line ending after the token.
+	login := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	user, password, ok := strings.Cut(login, ":")
+	if err != nil || !ok || user == "" || password == "" || strings.ContainsAny(login, "\r\n") {
 		return "", "", errors.New("DigitalOcean did not return Docker credentials for its registry")
 	}
 	return user, password, nil

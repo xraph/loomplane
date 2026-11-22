@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -25,13 +26,17 @@ type Result struct {
 // It leaves no image, manifest or blob in the registry.
 func (c *Client) Check(ctx context.Context) (*Result, error) {
 	out := &Result{Details: maps.Clone(c.Config.Details), Missing: []string{}}
-	base := "/v2/" + c.Config.Repository + "/loomplane-check"
-	for _, check := range []struct{ method, path, permission string }{
-		{http.MethodGet, "/v2/", "registry:api"},
-		{http.MethodGet, base + "/tags/list", "registry:pull"},
-		{http.MethodPost, base + "/blobs/uploads/", "registry:push"},
+	repository := c.Config.Repository + "/loomplane-check"
+	base := "/v2/" + repository
+	for _, check := range []struct{ method, path, permission, actions string }{
+		{http.MethodGet, "/v2/", "registry:api", ""},
+		{http.MethodGet, base + "/tags/list", "registry:pull", "pull"},
+		{http.MethodPost, base + "/blobs/uploads/", "registry:push", "pull,push"},
 	} {
-		response, err := c.request(ctx, check.method, check.path)
+		response, err := c.requestScoped(ctx, check.method, check.path, repository, check.actions, nil)
+		if errors.Is(err, ErrRejected) {
+			return nil, fmt.Errorf("%s check: %w", check.permission, err)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -41,7 +46,7 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		out.Details[capability] = "ready"
 		switch {
 		case status == http.StatusUnauthorized:
-			return nil, ErrRejected
+			return nil, fmt.Errorf("%s check: %w (HTTP 401)", check.permission, ErrRejected)
 		case status == http.StatusForbidden:
 			out.Details[capability] = "unavailable"
 			out.Missing = append(out.Missing, check.permission)
@@ -56,7 +61,7 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			cancel, cancelErr := c.request(context.WithoutCancel(ctx), http.MethodDelete, cancelPath)
+			cancel, cancelErr := c.requestFor(context.WithoutCancel(ctx), http.MethodDelete, cancelPath, repository)
 			if cancelErr != nil {
 				return nil, fmt.Errorf("cancel empty registry upload: %w", cancelErr)
 			}
@@ -85,10 +90,6 @@ func (c *Client) uploadPath(location, base string) (string, error) {
 		return "", ErrInvalid
 	}
 	return u.RequestURI(), nil
-}
-
-func (c *Client) request(ctx context.Context, method, path string) (*http.Response, error) {
-	return c.requestFor(ctx, method, path, c.Config.Repository+"/loomplane-check")
 }
 
 func (c *Client) requestFor(ctx context.Context, method, path, repository string) (*http.Response, error) {
@@ -160,7 +161,14 @@ func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions
 	}
 	query := realm.Query()
 	query.Set("service", params["service"])
-	query.Set("scope", "repository:"+repository+":"+actions)
+	// Some registries, including GHCR, require a repository scope even
+	// for /v2/. Use the configured probe repository for that read.
+	if actions == "" && params["scope"] != "" {
+		actions = "pull"
+	}
+	if actions != "" {
+		query.Set("scope", "repository:"+repository+":"+actions)
+	}
 	realm.RawQuery = query.Encode()
 	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodGet, realm.String(), http.NoBody)
 	if err != nil {
@@ -175,7 +183,7 @@ func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions
 	}
 	defer tokenResponse.Body.Close()
 	if tokenResponse.StatusCode == 401 || tokenResponse.StatusCode == 403 {
-		return "", ErrRejected
+		return "", fmt.Errorf("%w at the token service (HTTP %d)", ErrRejected, tokenResponse.StatusCode)
 	}
 	if tokenResponse.StatusCode != 200 {
 		return "", fmt.Errorf("registry token service returned HTTP %d", tokenResponse.StatusCode)

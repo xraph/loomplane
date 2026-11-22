@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -111,19 +112,26 @@ func TestRegistry_rejectsUnsafeConfiguration(t *testing.T) {
 }
 
 func TestRegistry_approvedTokenServiceUsesReviewedRepositoryScope(t *testing.T) {
-	var scope string
+	var scopes []string
+	var rootChallenge string
 	realm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != "deploy" || pass != "password" {
 			t.Error("missing token-service authentication")
 		}
-		scope = r.URL.Query().Get("scope")
+		scopes = append(scopes, r.URL.Query().Get("scope"))
 		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "scoped-token"})
 	}))
 	defer realm.Close()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer scoped-token" {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="`+realm.URL+`/token",service="registry",scope="repository:other:pull,push"`)
+			challenge := `Bearer realm="` + realm.URL + `/token",service="registry"`
+			if r.URL.Path == "/v2/" {
+				challenge += rootChallenge
+			} else {
+				challenge += `,scope="repository:other:pull,push"`
+			}
+			w.Header().Set("WWW-Authenticate", challenge)
 			w.WriteHeader(401)
 			return
 		}
@@ -142,8 +150,15 @@ func TestRegistry_approvedTokenServiceUsesReviewedRepositoryScope(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = New(cfg).Check(t.Context()); err != nil || scope != "repository:team/loomplane-check:pull,push" {
-		t.Fatalf("token scope: %s %v", scope, err)
+	want := []string{"", "repository:team/loomplane-check:pull", "repository:team/loomplane-check:pull,push", "repository:team/loomplane-check:pull,push"}
+	if _, err = New(cfg).Check(t.Context()); err != nil || !slices.Equal(scopes, want) {
+		t.Fatalf("token scopes: %q %v", scopes, err)
+	}
+	rootChallenge = `,scope="repository:user/image:pull"`
+	scopes = nil
+	want[0] = "repository:team/loomplane-check:pull"
+	if _, err = New(cfg).Check(t.Context()); err != nil || !slices.Equal(scopes, want) {
+		t.Fatalf("token scopes with scoped API challenge: %q %v", scopes, err)
 	}
 }
 

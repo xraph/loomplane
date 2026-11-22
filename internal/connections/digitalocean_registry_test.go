@@ -43,7 +43,7 @@ func TestDigitalOceanRegistryUsesCurrentAccountGrant(t *testing.T) {
 				t.Error("expected expiring read/write credentials")
 			}
 			calls++
-			auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("docker:temporary-docker-%d", calls)))
+			auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("docker:temporary-docker-%d\n", calls)))
 			_ = json.NewEncoder(w).Encode(map[string]any{"auths": map[string]any{digitalocean.RegistryHost: map[string]string{"auth": auth}}})
 		default:
 			http.NotFound(w, req)
@@ -71,7 +71,8 @@ func TestDigitalOceanRegistryUsesCurrentAccountGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, raw, err := r.s.Credential(ctx, "org", c.ID)
-	if err != nil || !strings.Contains(string(raw), "temporary-docker-3") {
+	var login struct{ Username, Password string }
+	if err != nil || json.Unmarshal(raw, &login) != nil || login.Username != "docker" || login.Password != "temporary-docker-3" {
 		t.Fatalf("new registry login: %v", err)
 	}
 	row := r.store.rows[parent.ID]
