@@ -1,3 +1,4 @@
+import { ScaleResourceDialog } from "./provider-resources/scale-dialog"
 // A project's Deployments tab and its loomplane.yaml setting. The tab lists
 // every plan made for the project and where each service runs; a plan is
 // approved or rejected on its own deployment page, never here.
@@ -335,7 +336,7 @@ export function RowGlyph({ row }: { row: PlacementRow }) {
   return <BoxIcon />
 }
 
-function WhereServicesRun({ project }: { project: Project }) {
+export function WhereServicesRun({ project }: { project: Project }) {
   const environments = useQuery(useEnvironmentsList, {
     path: { id: project.id },
   })
@@ -347,6 +348,7 @@ function WhereServicesRun({ project }: { project: Project }) {
   const can = useProjectCan(project.id)
   const edit = useMutation(useManifestsEdit)
   const save = useMutation(useManifestsSave)
+  const [scaling, setScaling] = useState<PlacementRow | null>(null)
   const [removing, setRemoving] = useState<PlacementRow | null>(null)
   const [removalError, setRemovalError] = useState("")
   const [checking, setChecking] = useState(false)
@@ -356,11 +358,39 @@ function WhereServicesRun({ project }: { project: Project }) {
     : (list[0]?.name ?? "")
   const ctx = usePlacementContext(project.id)
   const manifest = current.data?.manifest
-  const rows =
-    manifest && view.data?.graph
-      ? placementRows(manifest, view.data.graph, view.data.excluded ?? [])
-      : []
+  const rows = manifest
+    ? placementRows(manifest, view.data?.graph, view.data?.excluded ?? [])
+    : []
 
+  const scalable = (row: PlacementRow) => {
+    if (
+      !manifest ||
+      row.section !== "resources" ||
+      manifest.resources?.[row.name]?.existingResource ||
+      manifest.resources?.[row.name]?.existing_resource
+    )
+      return undefined
+    const placement = placementSettings(manifest, row, environment)
+    return ctx.catalog.find(
+      (p) =>
+        p.name === placement.provider &&
+        p.provisions?.some(
+          (o) => o.kind === row.kind && o.settings?.some((f) => f.capacity)
+        )
+    )
+  }
+  const scaleProvider = scaling && scalable(scaling)
+  const scalePlacement =
+    scaling && manifest && placementSettings(manifest, scaling, environment)
+  const scaleAccounts = ctx.connections.filter(
+    (c) =>
+      c.status === "ready" && c.cloud === (scaleProvider && scaleProvider.cloud)
+  )
+  const scaleAccount = scalePlacement?.target
+    ? scaleAccounts.find((c) => c.id === scalePlacement.target)
+    : scaleAccounts.length === 1
+      ? scaleAccounts[0]
+      : undefined
   const remove = async () => {
     if (!removing || !manifest || !current.data || checking) return
     setChecking(true)
@@ -437,7 +467,14 @@ function WhereServicesRun({ project }: { project: Project }) {
       [view, "The service graph"],
       [ctx.providers, "Targets"],
     ] as const)
-      if (q.status === "error")
+      if (
+        q.status === "error" &&
+        !(
+          what === "The service graph" &&
+          project.kind === "service" &&
+          statusOf(q.error) === 404
+        )
+      )
         return (
           <QueryError
             error={q.error}
@@ -448,7 +485,12 @@ function WhereServicesRun({ project }: { project: Project }) {
     if (
       !environments.data ||
       !current.data ||
-      !view.data ||
+      (!view.data &&
+        !(
+          project.kind === "service" &&
+          view.status === "error" &&
+          statusOf(view.error) === 404
+        )) ||
       !ctx.providers.data
     )
       return <Skeleton className="h-32 rounded-xl" />
@@ -459,7 +501,7 @@ function WhereServicesRun({ project }: { project: Project }) {
           run.
         </CloudEmpty>
       )
-    if (!view.data.graph)
+    if (!view.data?.graph && !rows.length)
       return (
         <CloudEmpty kind="notice" title="Analyze your repositories first">
           Where a service runs is chosen once an analysis has found it.
@@ -518,6 +560,16 @@ function WhereServicesRun({ project }: { project: Project }) {
                 >
                   Change
                 </Button>
+                {can("project:update") && scalable(row) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    aria-label={`Scale ${row.name}`}
+                    onClick={() => setScaling(row)}
+                  >
+                    Scale
+                  </Button>
+                )}
                 {can("project:update") && row.section !== "gateways" && (
                   <RowMenu label={`More actions for ${row.name}`}>
                     <DropdownMenuItem
@@ -555,6 +607,24 @@ function WhereServicesRun({ project }: { project: Project }) {
         )}
       </CloudSectionHead>
       {body()}
+      {scaling &&
+        scaleProvider &&
+        scalePlacement &&
+        current.data &&
+        manifest && (
+          <ScaleResourceDialog
+            projectId={project.id}
+            env={environment}
+            name={scaling.name}
+            revision={current.data.revision}
+            manifest={manifest}
+            provider={scaleProvider}
+            region={scalePlacement.region}
+            account={scaleAccount}
+            close={() => setScaling(null)}
+            saved={() => void current.refetch()}
+          />
+        )}
       {removing && (
         <CloudConfirm
           open

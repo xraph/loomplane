@@ -81,6 +81,21 @@ beforeEach(() => {
               },
             ],
           })
+        case "/api/v1/provider-resources":
+          return Response.json({
+            resources: [
+              {
+                id: "resource_shared",
+                name: "shared-cache",
+                kind: "redis",
+                provider: "digitalocean",
+                region: "nyc3",
+                status: "online",
+                observed_at: new Date().toISOString(),
+                endpoint_id: "endpoint_1",
+              },
+            ],
+          })
         case "/api/v1/catalog/kinds":
           return Response.json({
             kinds: [
@@ -322,4 +337,30 @@ it("adds a service on a target of another Cloud instead of a provider", async ()
       needs: ["db"],
     },
   })
+})
+
+it("attaches a workspace resource by identity and plans its consumers", async () => {
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("tab", { name: "Workspace services" })
+  )
+  await user.click(await screen.findByRole("button", { name: /shared-cache/ }))
+  await user.click(await screen.findByRole("checkbox", { name: /api/ }))
+  await user.click(
+    await screen.findByRole("button", { name: "Add and plan staging" })
+  )
+  await waitFor(() =>
+    expect(writes.map((w) => w.body)).toEqual([
+      {
+        add_resource: {
+          name: "shared-cache",
+          kind: "redis",
+          existing_resource: "resource_shared",
+          needed_by: ["api"],
+        },
+      },
+      { environment: "staging" },
+    ])
+  )
 })

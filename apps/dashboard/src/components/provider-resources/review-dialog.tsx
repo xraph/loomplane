@@ -1,3 +1,4 @@
+import { ResourceFields, useResourceFields } from "./capacity-fields"
 import { BoxIcon } from "lucide-react"
 import { useState, type FormEvent } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -329,27 +330,18 @@ function ResourceReviewForm({
       candidate.version === version &&
       candidate.access !== "cloud-sql-psc-connector"
   )
-  const [settingValues, setSettingValues] = useState<Record<string, string>>({})
-  const settingKey = `${provider?.name}:${kind}:${account?.connection.id}`
-  const settingFields = account?.offer.settings ?? []
-  const settings = Object.fromEntries(
-    settingFields.map((field) => [
-      field.name,
-      settingValues[`${settingKey}:${field.name}`] ?? field.default ?? "",
-    ])
+  const settingFields = resource ? [] : (account?.offer.settings ?? [])
+  const form = useResourceFields(
+    provider?.name,
+    kind,
+    account?.connection.id,
+    region,
+    settingFields,
+    {},
+    version
   )
-  const settingsValid =
-    !!resource ||
-    settingFields.every((field) => {
-      const value = settings[field.name].trim()
-      if (!value) return !field.required
-      if (!field.pattern) return true
-      try {
-        return new RegExp(field.pattern).test(value)
-      } catch {
-        return false
-      }
-    })
+  const settings = form.values
+  const settingsValid = form.valid
   const [name, setName] = useState(() =>
     freeName(
       resource?.name
@@ -438,8 +430,8 @@ function ResourceReviewForm({
     <form onSubmit={(event) => void submit(event)} className="grid gap-3">
       {!projectId && (
         <p className="text-xs text-muted-foreground">
-          After provisioning, open this resource in provider inventory and
-          choose Attach to project for each project that needs it.
+          After provisioning, choose Add service in each project that needs it,
+          then open Workspace services.
         </p>
       )}
       <fieldset
@@ -590,36 +582,18 @@ function ResourceReviewForm({
               <p className="text-xs text-muted-foreground">
                 {account.offer.creates}
               </p>
-              {settingFields.length > 0 && (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {settingFields.map((field) => (
-                    <div
-                      key={`${settingKey}:${field.name}`}
-                      className="grid gap-1.5"
-                    >
-                      <Label htmlFor={`resource-setting-${field.name}`}>
-                        {field.title}
-                        {!field.required ? " (optional)" : ""}
-                      </Label>
-                      <Input
-                        id={`resource-setting-${field.name}`}
-                        value={settings[field.name]}
-                        disabled={pending}
-                        required={field.required}
-                        pattern={field.pattern || undefined}
-                        onChange={(event) =>
-                          setSettingValues((previous) => ({
-                            ...previous,
-                            [`${settingKey}:${field.name}`]: event.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
+              <ResourceFields form={form} disabled={pending} />
               {profile ? (
-                <ManagedDatabaseSettings profile={profile} />
+                <ManagedDatabaseSettings
+                  profile={{
+                    ...profile,
+                    computeClass:
+                      settings.compute_class ?? profile.computeClass,
+                    storageGb: Number(
+                      settings.storage_gib ?? profile.storageGb
+                    ),
+                  }}
+                />
               ) : (
                 <p className="text-xs text-muted-foreground">
                   Review your requested settings and provider costs in the plan

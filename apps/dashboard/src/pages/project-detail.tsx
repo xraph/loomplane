@@ -61,7 +61,11 @@ import {
   CloudSectionHead,
 } from "@/components/cloud-targets/infrastructure-ui"
 import { DatabaseGateways } from "@/components/database-gateway"
-import { DeployTab, ManifestSettings } from "@/components/deploy"
+import {
+  DeployTab,
+  ManifestSettings,
+  WhereServicesRun,
+} from "@/components/deploy"
 import {
   AddServiceButton,
   AddServiceProvider,
@@ -682,15 +686,19 @@ function Body({
               <AddServiceButton size="sm" />
             </div>
           )}
-          {discovered((g) =>
-            view ? (
-              <ProjectServices
-                project={project}
-                environments={environments.list ?? []}
-                view={view}
-              />
-            ) : (
-              <ServicesTable graph={g} onSelect={setSelected} />
+          {project.kind === "service" && !hasRepositories ? (
+            <WhereServicesRun project={project} />
+          ) : (
+            discovered((g) =>
+              view ? (
+                <ProjectServices
+                  project={project}
+                  environments={environments.list ?? []}
+                  view={view}
+                />
+              ) : (
+                <ServicesTable graph={g} onSelect={setSelected} />
+              )
             )
           )}
           <Resources project={project} environments={environments.list} />

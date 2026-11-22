@@ -159,17 +159,17 @@ export function excludedNames(
 /** Match the planner's source resolution, including repository qualification. */
 export function placementRows(
   m: Manifest,
-  g: Graph,
+  g: Graph | undefined,
   /** Services the project excludes; see excludedNames. */
   excluded: Excluded[] = []
 ): PlacementRow[] {
   const rows: PlacementRow[] = []
-  const skip = excludedNames(m, g, excluded)
+  const skip = g ? excludedNames(m, g, excluded) : new Set<string>()
   for (const [name, entry] of Object.entries(m.services ?? {}) as [
     string,
     Entry,
   ][]) {
-    if (skip.has(name)) continue
+    if (!g || skip.has(name)) continue
     const repo = repoOf(entry, g)
     const matches = matching(g.services, entry, repo)
     const found =

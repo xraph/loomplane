@@ -1,3 +1,8 @@
+import { useNow } from "@/lib/use-runs"
+import {
+  ResourceFields,
+  useResourceFields,
+} from "./provider-resources/capacity-fields"
 // Add a service to a project in one place: something analysis found in
 // its code, a database or other kind from the catalog, or any source path.
 // Every choice is filled in from what the project already has, the YAML it
@@ -27,6 +32,7 @@ import {
   useManifestsCurrent,
   useManifestsSuggestions,
   useProvidersList,
+  useProviderResourcesList,
   useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import type {
@@ -34,6 +40,7 @@ import type {
   KindInfo,
   Manifest,
   Plan,
+  ProviderResource,
   Project,
   ServiceSuggestion,
   Target,
@@ -90,6 +97,7 @@ import {
   runnersOf,
   scopeConflicts,
   serviceKinds,
+  slug,
 } from "@/lib/add-service"
 import {
   freeName,
@@ -103,11 +111,22 @@ import { diffLines, hunks } from "@/lib/diff"
 import { kindLabel } from "@/lib/architecture"
 import { useProjectCan } from "@/lib/project-permissions"
 import { useNavigate } from "@/lib/router"
+import { providerResourceReadiness } from "@/lib/provider-resources"
+import { useOrganization } from "@/lib/organization"
+import { QueryError } from "@/components/query-error"
+import {
+  ZeroState,
+  ZeroStateHeader,
+  ZeroStateTitle,
+  ZeroStateDescription,
+} from "@/components/zero-state"
+
 import { cn } from "@/lib/utils"
 
-export type AddServiceStart = "code" | "catalog" | "source"
+export type AddServiceStart = "code" | "catalog" | "source" | "workspace"
 
 type Step =
+  | { at: "workspace"; resource: ProviderResource }
   | { at: "choose" }
   | { at: "service"; suggestion?: ServiceSuggestion }
   | { at: "catalog"; info: KindInfo }
@@ -191,9 +210,11 @@ function Body({
       ? `Add a service to ${project.name}`
       : step.at === "catalog"
         ? `Add ${catalogKind(step.info.name)?.title ?? step.info.title}`
-        : step.suggestion
-          ? `Add ${step.suggestion.service.name}`
-          : "Add a service from your code"
+        : step.at === "workspace"
+          ? `Attach ${step.resource.name}`
+          : step.suggestion
+            ? `Add ${step.suggestion.service.name}`
+            : "Add a service from your code"
 
   return (
     <>
@@ -237,6 +258,8 @@ function Body({
             tab={tab}
             onTab={setTab}
             onSuggestion={(s) => setStep({ at: "service", suggestion: s })}
+            manifest={manifest}
+            onWorkspace={(resource) => setStep({ at: "workspace", resource })}
             onKind={(info) => setStep({ at: "catalog", info })}
             onSource={() => setStep({ at: "service" })}
           />
@@ -246,7 +269,9 @@ function Body({
             key={
               step.at === "catalog"
                 ? `kind:${step.info.name}`
-                : `svc:${step.suggestion?.id ?? ""}`
+                : step.at === "workspace"
+                  ? step.resource.id
+                  : `svc:${step.suggestion?.id ?? ""}`
             }
             project={project}
             manifest={manifest}
@@ -264,6 +289,8 @@ function Body({
 }
 
 function Choose({
+  manifest,
+  onWorkspace,
   project,
   tab,
   onTab,
@@ -272,6 +299,8 @@ function Choose({
   onSource,
 }: {
   project: Project
+  manifest: Manifest
+  onWorkspace: (resource: ProviderResource) => void
   tab: AddServiceStart
   onTab: (tab: AddServiceStart) => void
   onSuggestion: (s: ServiceSuggestion) => void
@@ -281,14 +310,22 @@ function Choose({
   const suggestions = useQuery(useManifestsSuggestions, {
     path: { id: project.id },
   })
+  const { can } = useOrganization()
   const found = suggestions.data?.services ?? []
   return (
     <Tabs value={tab} onValueChange={(v) => onTab(v as AddServiceStart)}>
-      <TabsList variant="line" aria-label="Where the service comes from">
+      <TabsList
+        className="h-auto flex-wrap"
+        variant="line"
+        aria-label="Where the service comes from"
+      >
         <TabsTrigger value="code">
           From your code
           {found.length > 0 && <TabsCount>{found.length}</TabsCount>}
         </TabsTrigger>
+        {can("infrastructure:read") && (
+          <TabsTrigger value="workspace">Workspace services</TabsTrigger>
+        )}
         <TabsTrigger value="catalog">Catalog</TabsTrigger>
         <TabsTrigger value="source">Any source path</TabsTrigger>
       </TabsList>
@@ -354,6 +391,11 @@ function Choose({
           </ul>
         )}
       </TabsContent>
+      <TabsContent value="workspace" className="pt-3">
+        {tab === "workspace" && can("infrastructure:read") && (
+          <WorkspaceServices manifest={manifest} onPick={onWorkspace} />
+        )}
+      </TabsContent>
       <TabsContent value="catalog" className="pt-4">
         <Catalog onKind={onKind} />
       </TabsContent>
@@ -408,6 +450,86 @@ function SuggestionButton({
       </span>
       <span className="text-xs font-medium text-brand">Add</span>
     </button>
+  )
+}
+
+function WorkspaceServices({
+  manifest,
+  onPick,
+}: {
+  manifest: Manifest
+  onPick: (resource: ProviderResource) => void
+}) {
+  const now = useNow(60000)
+  const inventory = useQuery(useProviderResourcesList)
+  if (inventory.status === "error")
+    return (
+      <QueryError
+        error={inventory.error}
+        fallback="Workspace services could not be loaded."
+        retry={inventory.refetch}
+      />
+    )
+  if (!inventory.data)
+    return <Skeleton className="h-14" aria-label="Loading workspace services" />
+  const resources = inventory.data.resources.filter(
+    (resource) => resource && resource.status !== "missing"
+  )
+  if (!resources.length)
+    return (
+      <ZeroState variant="compact" preview={false}>
+        <ZeroStateHeader>
+          <ZeroStateTitle>No workspace services yet</ZeroStateTitle>
+          <ZeroStateDescription>
+            Create a provider-managed resource in Services or sync a connected
+            account in Integrations.
+          </ZeroStateDescription>
+        </ZeroStateHeader>
+      </ZeroState>
+    )
+  return (
+    <div className="grid gap-1">
+      {resources.map((resource) => {
+        if (!resource) return null
+        const readiness = providerResourceReadiness(resource, now)
+        const attached = Object.values(manifest.resources ?? {}).some(
+          (entry) =>
+            (entry?.existingResource ?? entry?.existing_resource) ===
+            resource.id
+        )
+        const reason = attached
+          ? "Already attached"
+          : readiness.discovery !== "Observed"
+            ? "Sync provider inventory"
+            : resource.connectionState === "native_binding_required"
+              ? "Native binding required"
+              : resource.connectionState === "identity_verification_needed" ||
+                  !resource.endpointId
+                ? "Verify access in provider inventory"
+                : ""
+        return (
+          <Button
+            type="button"
+            key={resource.id}
+            variant="outline"
+            disabled={!!reason}
+            onClick={() => onPick(resource)}
+            className="h-auto w-full justify-start gap-2 py-2 text-left whitespace-normal"
+          >
+            <CloudGlyph cloud={resource.provider} />
+            <span className="min-w-0 flex-1">
+              <span className="block">{resource.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {[resource.kind, resource.provider, resource.region]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </span>
+            <span className="text-xs">{reason || "Attach"}</span>
+          </Button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -530,11 +652,16 @@ function Configure({
 
   const suggestion = step.at === "service" ? step.suggestion : undefined
   const info = step.at === "catalog" ? step.info : undefined
+  const existing = step.at === "workspace" ? step.resource : undefined
   const module = info ? catalogKind(info.name) : undefined
   const AddDialog = module?.addDialog
 
   const [name, setName] = useState(() =>
-    info ? freeName(info.name, taken) : (suggestion?.service.name ?? "")
+    existing
+      ? freeName(slug(existing.name), taken)
+      : info
+        ? freeName(info.name, taken)
+        : (suggestion?.service.name ?? "")
   )
   const [nameTouched, setNameTouched] = useState(false)
   const [source, setSource] = useState(suggestion?.service.source ?? "")
@@ -579,6 +706,29 @@ function Configure({
     : []
   const chosenPlacement =
     placements.find((p) => p.key === placement) ?? placements[0]
+  const offering = providers.data?.providers.find(
+    (p) => p.name === chosenPlacement?.provider
+  )
+  const managedAccounts = (connections.data?.connections ?? []).filter(
+    (c) => c.cloud === offering?.cloud && c.status === "ready"
+  )
+  const [accountId, setAccountId] = useState("")
+  const managedAccount =
+    managedAccounts.find((c) => c.id === accountId) ?? managedAccounts[0]
+  const capacityRegion =
+    managedAccount?.details?.region ||
+    manifest.defaults?.region ||
+    offering?.regions?.[0] ||
+    ""
+  const capacity = useResourceFields(
+    offering?.name,
+    info?.name,
+    managedAccount?.id,
+    capacityRegion,
+    offering?.provisions?.find((p) => p.kind === info?.name)?.settings ?? [],
+    {},
+    version
+  )
   const runners = runnersOf(providers.data?.providers ?? [], serviceKind)
   // A Cloud target fits when its provider runs this kind of service, or
   // any kind when analysis will decide.
@@ -635,13 +785,29 @@ function Configure({
       ...(only ? { enabledIn: environment, only: true } : {}),
       ...(neededBy.length ? { neededBy } : {}),
     }
+    if (existing)
+      return {
+        addResource: {
+          name: trimmed,
+          kind: existing.kind,
+          existingResource: existing.id,
+          ...scope,
+        },
+      }
     if (info) {
-      if (!chosenPlacement) return undefined
+      if (!chosenPlacement || !capacity.valid) return undefined
       return {
         addResource: {
           name: trimmed,
           kind: info.name,
           provider: chosenPlacement.provider,
+          ...(capacity.fields.length
+            ? {
+                settings: capacity.values,
+                target: managedAccount?.id,
+                region: capacityRegion,
+              }
+            : {}),
           ...(chosenPlacement.target ? { target: chosenPlacement.target } : {}),
           ...(version ? { version } : {}),
           ...(chosenPlacement.target ? { uses: usesOf(info, picks) } : {}),
@@ -736,7 +902,12 @@ function Configure({
 
   return (
     <form onSubmit={onSubmit} className="grid gap-5">
-      {info ? (
+      {existing ? (
+        <p className="text-sm">
+          Share {existing.name} from {existing.provider} with {project.name}.
+          Its owner manages its capacity.
+        </p>
+      ) : info ? (
         <Field label="Where it runs">
           {connections.status === "error" || providers.status === "error" ? (
             <Alert variant="destructive">
@@ -960,6 +1131,26 @@ function Configure({
         </div>
       )}
 
+      {info && capacity.fields.length > 0 && (
+        <>
+          {managedAccounts.length > 1 && (
+            <Field label="Provider account">
+              <select
+                aria-label="Provider account"
+                value={managedAccount?.id ?? ""}
+                onChange={(e) => setAccountId(e.target.value)}
+              >
+                {managedAccounts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <ResourceFields form={capacity} />
+        </>
+      )}
       {info &&
         chosenPlacement?.target &&
         (info.dependencies ?? []).length > 0 && (
@@ -1019,7 +1210,7 @@ function Configure({
         )}
       </div>
 
-      {!info && (
+      {!info && !existing && (
         <Wiring
           label="It needs"
           help="Each one it needs gets it an address in a variable, and deploys first."
@@ -1031,14 +1222,14 @@ function Configure({
       )}
       <Wiring
         label="Used by"
-        help={`Each service picked gets ${trimmed || "its"} address${info ? "" : ` in ${trimmed ? envVarFor({ name: trimmed }, "services") : "a variable"}`}.`}
+        help={`Each service picked gets ${trimmed || "its"} address${info || existing ? "" : ` in ${trimmed ? envVarFor({ name: trimmed }, "services") : "a variable"}`}.`}
         options={services.filter((e) => e.name !== trimmed)}
         value={neededBy}
         onChange={setNeededBy}
         hint={() =>
-          info
+          info || existing
             ? envVarFor(
-                { name: trimmed || info.name, kind: info.name },
+                { name: trimmed, kind: info?.name ?? existing?.kind },
                 "resources"
               )
             : envVarFor({ name: trimmed || "service" }, "services")
