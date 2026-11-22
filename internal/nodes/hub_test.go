@@ -307,6 +307,18 @@ func (n *fakeNode) send(msg any) {
 	}
 }
 
+func (n *fakeNode) leave() {
+	n.t.Helper()
+	// The hub can revoke the node and close before yamux acknowledges the write.
+	err := nodeproto.EncodeControl(n.ctrl, nodeproto.Leave{})
+	if err != nil && !errors.Is(err, yamux.ErrSessionShutdown) {
+		n.t.Fatal(err)
+	}
+	if m := n.next(); m != (nodeproto.Revoked{}) {
+		n.t.Fatalf("expected Revoked after Leave, got %#v", m)
+	}
+}
+
 // next returns the next control message from the hub.
 func (n *fakeNode) next() any {
 	n.t.Helper()
@@ -979,10 +991,7 @@ func TestLeaveRevokes(t *testing.T) {
 	n := r.connect("node_1", priv, "")
 	n.next()
 	waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
-	n.send(nodeproto.Leave{})
-	if m := n.next(); m != (nodeproto.Revoked{}) {
-		t.Fatalf("message %#v", m)
-	}
+	n.leave()
 	n.closedWithin(time.Second)
 	got := r.node("node_1")
 	if got.Status != StatusRevoked || got.RevokedBy != "node_1" {
@@ -991,13 +1000,14 @@ func TestLeaveRevokes(t *testing.T) {
 	if r.node("node_2").Status == StatusRevoked {
 		t.Fatal("leave revoked another node")
 	}
-	found := false
-	for _, e := range r.audit.list() {
-		found = found || (e.action == "node.left" && e.actor == "node_1")
-	}
-	if !found {
-		t.Fatalf("audit %+v", r.audit.list())
-	}
+	waitFor(t, "node.left audit for node_1", func() bool {
+		for _, e := range r.audit.list() {
+			if e.action == "node.left" && e.actor == "node_1" {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func TestUpdateNotifiesLiveNode(t *testing.T) {
@@ -1238,29 +1248,13 @@ func TestSilentSessionIsClosed(t *testing.T) {
 // Revoked, or the WebSocket closes with the unauthorized code. The hub may
 // not close the connection under the write.
 func TestLeaveAlwaysTellsTheNode(t *testing.T) {
-	for i := range 40 {
+	for range 40 {
 		r := newHubRig(t, newFakeStore(), "a")
 		priv := seedNode(t, r.store, "node_1", "web-1")
 		n := r.connect("node_1", priv, "")
 		n.next()
 		waitFor(t, "online", func() bool { return r.hub.Online("node_1") })
-		// The hub can answer and close before yamux acks the write, and yamux
-		// then reports a shutdown for a Leave that went out. What the node
-		// reads next is the test.
-		if err := nodeproto.EncodeControl(n.ctrl, nodeproto.Leave{}); err != nil && !errors.Is(err, yamux.ErrSessionShutdown) {
-			t.Fatalf("round %d: %v", i, err)
-		}
-		select {
-		case m, ok := <-n.msgs:
-			if !ok {
-				t.Fatalf("round %d: the control stream closed before Revoked arrived", i)
-			}
-			if m != (nodeproto.Revoked{}) {
-				t.Fatalf("round %d: message %#v", i, m)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatalf("round %d: neither Revoked nor a close", i)
-		}
+		n.leave()
 	}
 }
 
