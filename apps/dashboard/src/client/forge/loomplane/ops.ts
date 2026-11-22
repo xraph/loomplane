@@ -1313,6 +1313,20 @@ export const ops = {
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connections.databaseSizes': {
+    method: 'GET',
+    path: '/api/v1/connections/{id}/database-sizes/{kind}/{region}',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DatabaseSizes'],
+  },
+  'connections.digitalOceanDatabaseCapacity': {
+    method: 'GET',
+    path: '/api/v1/connections/{id}/digitalocean-database-capacity',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DatabaseCapacity'],
+  },
   'connections.digitalOceanRegistries': {
     method: 'GET',
     path: '/api/v1/connections/{id}/digitalocean-registries',

@@ -52,6 +52,24 @@ func (s *Service) DigitalOceanRegistries(ctx context.Context, p security.Princip
 	return DigitalOceanRegistryNames{Names: names}, registryAccessError(err)
 }
 
+func (s *Service) DigitalOceanDatabaseCapacity(ctx context.Context, p security.Principal, id string) (digitalocean.DatabaseCapacity, error) {
+	if err := s.authz.Require(ctx, p, security.InfrastructureRead, ""); err != nil {
+		return digitalocean.DatabaseCapacity{}, err
+	}
+	client, _, token, err := s.digitalOceanAccount(ctx, p.OrgID, id)
+	if err != nil {
+		return digitalocean.DatabaseCapacity{}, err
+	}
+	options, err := client.DatabaseCapacity(ctx, string(token))
+	if errors.Is(err, digitalocean.ErrRejected) {
+		return options, fmt.Errorf("%w: DigitalOcean needs database read access to list sizes", ErrInvalid)
+	}
+	if err != nil {
+		return options, fmt.Errorf("%w: DigitalOcean could not list database sizes", ErrUnavailable)
+	}
+	return options, nil
+}
+
 func registryAccessError(err error) error {
 	if err == nil {
 		return nil

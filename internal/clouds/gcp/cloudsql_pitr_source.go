@@ -13,7 +13,7 @@ import (
 // A returned instance still needs endpoint, DNS and SQL verification.
 func (s *Session) EnsureSQLPITRSource(ctx context.Context, spec SQLInstanceSpec, endpoint manageddb.CloudSQLSourceEndpoint, track SQLMutation) (*SQLInstance, error) {
 	profile, err := manageddb.CloudSQLPSCPostgres("17")
-	if err != nil || !endpoint.Valid(spec.Region) || !sqlNativeName(spec.Name) || len(spec.Name) > 63 || spec.DatabaseVersion != "POSTGRES_17" || spec.Tier != profile.ComputeClass || spec.Storage == nil || spec.Storage.SizeGB != profile.StorageGB || spec.Storage.Type != profile.StorageType || spec.Storage.RetainedBackups != profile.BackupRetentionValue || spec.Storage.RecoveryDays != profile.PointInTimeRecoveryDays || !validSQLSourceIntent(spec.Intent) || spec.Inspect == nil || track.Check == nil {
+	if err != nil || !endpoint.Valid(spec.Region) || !sqlNativeName(spec.Name) || len(spec.Name) > 63 || spec.DatabaseVersion != "POSTGRES_17" || !slices.Contains(manageddb.CapacityFields("cloud-sql", "postgres")[0].Options, spec.Tier) || spec.Storage == nil || spec.Storage.SizeGB != profile.StorageGB || spec.Storage.Type != profile.StorageType || spec.Storage.RetainedBackups != profile.BackupRetentionValue || spec.Storage.RecoveryDays != profile.PointInTimeRecoveryDays || !validSQLSourceIntent(spec.Intent) || spec.Inspect == nil || track.Check == nil {
 		return nil, ErrSQLPITRUnavailable
 	}
 	if guardErr := track.check(ctx); guardErr != nil {

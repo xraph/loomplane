@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ func (s *Session) EnsureDBSubnetGroup(ctx context.Context, name string, subnets 
 
 // DBInstanceSpec is an RDS instance Loomplane creates.
 type DBInstanceSpec struct {
+	Resize        bool
 	ResourceID    string
 	Intent        string
 	Existing      bool
@@ -64,15 +66,16 @@ type DBInstanceSpec struct {
 
 // DBInstance is an RDS instance as it is.
 type DBInstance struct {
-	Recovery      *DBRecoverySettings
-	Tags          map[string]string
-	ID            string
-	ResourceID    string
-	Engine        string
-	EngineVersion string
-	Status        string
-	Address       string
-	Port          int32
+	PendingChanges bool
+	Recovery       *DBRecoverySettings
+	Tags           map[string]string
+	ID             string
+	ResourceID     string
+	Engine         string
+	EngineVersion  string
+	Status         string
+	Address        string
+	Port           int32
 }
 
 // GetDBInstance reads an instance. It returns an error IsNotFound
@@ -93,6 +96,7 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 
 func readDBInstance(in rdstypes.DBInstance) *DBInstance {
 	db := &DBInstance{ID: sdk.ToString(in.DBInstanceIdentifier), ResourceID: sdk.ToString(in.DbiResourceId), Engine: sdk.ToString(in.Engine), EngineVersion: sdk.ToString(in.EngineVersion), Status: sdk.ToString(in.DBInstanceStatus), Tags: map[string]string{}}
+	db.PendingChanges = in.PendingModifiedValues != nil && !reflect.DeepEqual(*in.PendingModifiedValues, rdstypes.PendingModifiedValues{})
 	db.Recovery = readDBRecoverySettings(in)
 	for _, tag := range in.TagList {
 		db.Tags[sdk.ToString(tag.Key)] = sdk.ToString(tag.Value)
@@ -180,13 +184,42 @@ func (s *Session) EnsureDBInstance(ctx context.Context, spec DBInstanceSpec, tra
 		}
 		spec.ResourceID = db.ResourceID
 	}
+	requested := false
 	for {
 		if checkErr := checkDBInstance(db, spec); checkErr != nil {
 			return nil, checkErr
 		}
 		switch db.Status {
 		case "available":
-			return db, nil
+			if !spec.Resize {
+				return db, nil
+			}
+			live := db.Recovery
+			if live == nil || live.Class == "" || live.StorageGB <= 0 || db.ResourceID == "" {
+				return nil, errors.New("RDS did not confirm the current size and identity")
+			}
+			if live.StorageGB > spec.StorageGB {
+				return nil, errors.New("RDS storage cannot be reduced in place")
+			}
+			if live.Class == spec.Class && live.StorageGB == spec.StorageGB {
+				return db, nil
+			}
+			if !requested {
+				if db.PendingChanges {
+					return nil, errors.New("RDS has pending changes. Wait for them to finish before resizing")
+				}
+				change := &rds.ModifyDBInstanceInput{DBInstanceIdentifier: sdk.String(spec.ID), ApplyImmediately: sdk.Bool(true)}
+				if live.Class != spec.Class {
+					change.DBInstanceClass = sdk.String(spec.Class)
+				}
+				if live.StorageGB != spec.StorageGB {
+					change.AllocatedStorage = sdk.Int32(spec.StorageGB)
+				}
+				if _, err = s.rdsWrites().ModifyDBInstance(ctx, change); err != nil {
+					return nil, err
+				}
+				requested = true
+			}
 		case "failed", "incompatible-parameters", "incompatible-restore", "incompatible-network", "storage-full", "deleting":
 			return nil, fmt.Errorf("RDS database is %s", db.Status)
 		}

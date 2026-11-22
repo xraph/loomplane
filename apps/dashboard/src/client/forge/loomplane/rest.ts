@@ -2918,6 +2918,29 @@ export class RESTClient extends Client {
     },
 
     /**
+     * List database sizes in the account and region
+     */
+    databaseSizes: async (id: string, kind: string, region: string, version?: string, instance?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DatabaseSizes> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/database-sizes/${encodeURIComponent(String(kind))}/${encodeURIComponent(String(region))}`;
+      const queryParams: Record<string, any> = {};
+      queryParams["version"] = version;
+      queryParams["instance"] = instance;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DatabaseSizes"],
+      };
+
+      return this.request<types.DatabaseSizes>(config);
+    },
+
+    /**
      * Remove a cloud connection and its credential
      */
     delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
@@ -2931,6 +2954,22 @@ export class RESTClient extends Client {
       };
 
       await this.request(config);
+    },
+
+    /**
+     * List database sizes and node counts in this DigitalOcean account
+     */
+    digitalOceanDatabaseCapacity: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DatabaseCapacity> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/digitalocean-database-capacity`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DatabaseCapacity"],
+      };
+
+      return this.request<types.DatabaseCapacity>(config);
     },
 
     /**

@@ -1,6 +1,7 @@
 package azure
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -47,13 +48,20 @@ var flexibleEngines = map[string]flexibleEngine{
 // FlexibleServer is a Postgres or MySQL flexible server to make: Engine
 // is "postgres" or "mysql", and Login and Password are its admin user.
 type FlexibleServer struct {
-	Engine, Name, Location, Version, Login, Password string
+	Engine, Name, Location, Version, Login, Password, SKU string
+	StorageGB                                             int
 }
 
 // Server is what Azure says of a flexible server.
 type Server struct {
+	SKU struct {
+		Name string `json:"name"`
+	} `json:"sku"`
 	ID         string `json:"id"`
 	Properties struct {
+		Storage struct {
+			Size int `json:"storageSizeGB"`
+		} `json:"storage"`
 		State   string `json:"state"`
 		Version string `json:"version"`
 		FQDN    string `json:"fullyQualifiedDomainName"`
@@ -106,12 +114,12 @@ func (s *Session) EnsureFlexibleServer(ctx context.Context, fs FlexibleServer) (
 	body := map[string]any{
 		"location": fs.Location,
 		"tags":     map[string]string{"managed-by": "loomplane"},
-		"sku":      map[string]string{"name": "Standard_B1ms", "tier": "Burstable"},
+		"sku":      map[string]string{"name": cmp.Or(fs.SKU, "Standard_B1ms"), "tier": "Burstable"},
 		"properties": map[string]any{
 			"version":                    fs.Version,
 			"administratorLogin":         fs.Login,
 			"administratorLoginPassword": fs.Password,
-			"storage":                    map[string]any{"storageSizeGB": e.storageGB},
+			"storage":                    map[string]any{"storageSizeGB": cmp.Or(fs.StorageGB, e.storageGB)},
 			"network":                    map[string]any{"publicNetworkAccess": "Enabled"},
 			"highAvailability":           map[string]any{"mode": "Disabled"},
 		},
@@ -179,6 +187,9 @@ func (s *Session) DeleteFlexibleServer(ctx context.Context, id string) error {
 
 // RedisCluster is what Azure says of a Managed Redis cluster.
 type RedisCluster struct {
+	SKU struct {
+		Name string `json:"name"`
+	} `json:"sku"`
 	ID         string `json:"id"`
 	Properties struct {
 		ProvisioningState string `json:"provisioningState"`
@@ -211,6 +222,10 @@ func (s *Session) ownsRedis(id string) bool {
 // that doesn't offer Managed Redis, or its size, fails with a message
 // that says to choose another.
 func (s *Session) EnsureManagedRedis(ctx context.Context, name, location string) (host, key string, err error) {
+	return s.EnsureManagedRedisSize(ctx, name, location, managedRedisSKU)
+}
+
+func (s *Session) EnsureManagedRedisSize(ctx context.Context, name, location, sku string) (host, key string, err error) {
 	if rerr := s.register(ctx, cacheNamespace); rerr != nil {
 		return "", "", rerr
 	}
@@ -219,14 +234,14 @@ func (s *Session) EnsureManagedRedis(ctx context.Context, name, location string)
 	body := map[string]any{
 		"location":   location,
 		"tags":       map[string]string{"managed-by": "loomplane"},
-		"sku":        map[string]string{"name": managedRedisSKU},
+		"sku":        map[string]string{"name": sku},
 		"properties": map[string]any{"minimumTlsVersion": "1.2"},
 	}
 	if _, perr := s.do(ctx, http.MethodPut, path, managedRedisVersion, body, nil); perr != nil {
 		var ae *APIError
 		if errors.As(perr, &ae) && (strings.EqualFold(ae.Code, "SkuNotAvailable") || strings.EqualFold(ae.Code, "LocationNotAvailableForResourceType")) {
 			return "", "", fmt.Errorf("azure managed redis (%s) isn't available in %s for this subscription; choose another region for this resource, such as %s: %w",
-				managedRedisSKU, location, otherRedisRegion(location), perr)
+				sku, location, otherRedisRegion(location), perr)
 		}
 		return "", "", fmt.Errorf("make %s: %w", what, perr)
 	}
@@ -316,6 +331,80 @@ func (s *Session) DeleteManagedRedis(ctx context.Context, id string) error {
 		progress(ctx, "Deleting the Managed Redis cluster")
 		if werr := s.wait(ctx); werr != nil {
 			return werr
+		}
+	}
+}
+
+// ResizeFlexibleServer changes only compute and storage on the bound server.
+func (s *Session) ResizeFlexibleServer(ctx context.Context, id, sku string, storage int) error {
+	engine, ok := s.ownsServer(id)
+	if !ok {
+		return errors.New("invalid flexible server binding")
+	}
+	sku = cmp.Or(sku, "Standard_B1ms")
+	storage = cmp.Or(storage, engine.storageGB)
+	var srv Server
+	read := func() error {
+		return s.provisioned(ctx, id, engine.version, "the flexible server", &srv, func() string { return srv.Properties.State })
+	}
+	if err := read(); err != nil {
+		return err
+	}
+	if !strings.EqualFold(id, srv.ID) || srv.SKU.Name == "" || srv.Properties.Storage.Size <= 0 {
+		return errors.New("could not confirm the Azure database identity and capacity")
+	}
+	if srv.Properties.Storage.Size > storage {
+		return errors.New("database storage cannot be reduced in place")
+	}
+	if srv.SKU.Name == sku && srv.Properties.Storage.Size == storage {
+		return nil
+	}
+	body := map[string]any{"sku": map[string]string{"name": sku, "tier": "Burstable"}, "properties": map[string]any{"storage": map[string]int{"storageSizeGB": storage}}}
+	if _, err := s.do(ctx, http.MethodPatch, id, engine.version, body, nil); err != nil {
+		return err
+	}
+	for {
+		if err := read(); err != nil {
+			return err
+		}
+		if strings.EqualFold(id, srv.ID) && srv.SKU.Name == sku && srv.Properties.Storage.Size == storage {
+			return nil
+		}
+		if err := s.wait(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *Session) ResizeManagedRedis(ctx context.Context, id, sku string) error {
+	if !s.ownsRedis(id) {
+		return errors.New("invalid managed Redis binding")
+	}
+	var cluster RedisCluster
+	read := func() error {
+		return s.provisioned(ctx, id, managedRedisVersion, "the Redis cluster", &cluster, func() string { return cluster.Properties.ProvisioningState })
+	}
+	if err := read(); err != nil {
+		return err
+	}
+	if !strings.EqualFold(id, cluster.ID) || cluster.SKU.Name == "" {
+		return errors.New("could not confirm the Azure cache identity and capacity")
+	}
+	if cluster.SKU.Name == sku {
+		return nil
+	}
+	if _, err := s.do(ctx, http.MethodPatch, id, managedRedisVersion, map[string]any{"sku": map[string]string{"name": sku}}, nil); err != nil {
+		return err
+	}
+	for {
+		if err := read(); err != nil {
+			return err
+		}
+		if strings.EqualFold(id, cluster.ID) && cluster.SKU.Name == sku {
+			return nil
+		}
+		if err := s.wait(ctx); err != nil {
+			return err
 		}
 	}
 }

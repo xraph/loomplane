@@ -290,6 +290,10 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 		},
 	}
 	for i := range all {
+		for j := range all[i].Provisions {
+			offer := &all[i].Provisions[j]
+			offer.Settings = append(offer.Settings, manageddb.CapacityFields(all[i].Name, offer.Kind)...)
+		}
 		switch all[i].Cloud {
 		case "digitalocean":
 			all[i].Infrastructure = digitalocean.InfrastructureCapabilities()

@@ -630,6 +630,17 @@ func (p *planner) planResources() {
 		p.configureEdgeResource(name, base, r, cfg, a, prov)
 		p.configureCatalog(name, base, r, cfg, a)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
+		if a.Op == Create || a.Op == Update {
+			var selected []string
+			for _, field := range offer.Settings {
+				if value := cfg.Settings[field.Name]; field.Capacity && value != "" {
+					selected = append(selected, field.Title+" "+value)
+				}
+			}
+			if len(selected) > 0 {
+				a.Reason += " " + strings.Join(selected, ", ") + "."
+			}
+		}
 		p.resources[name] = a
 		p.actions = append(p.actions, a)
 	}

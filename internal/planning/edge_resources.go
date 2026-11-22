@@ -28,6 +28,9 @@ func (p *planner) providerResourceSettings(name, base string, r manifest.Resourc
 	}
 	for _, s := range offer.Settings {
 		value := r.Settings[s.Name]
+		if value == "" && s.Capacity {
+			continue
+		}
 		if value == "" {
 			value = s.Default
 		}
@@ -35,7 +38,7 @@ func (p *planner) providerResourceSettings(name, base string, r manifest.Resourc
 			continue
 		}
 		pattern, err := regexp.Compile("^(?:" + s.Pattern + ")$")
-		if err != nil || value == "" || !pattern.MatchString(value) {
+		if err != nil || value == "" || (len(s.Options) > 0 && !slices.Contains(s.Options, value)) || (s.Pattern != "" && !pattern.MatchString(value)) {
 			p.problem(Finding{Code: "resource-setting-invalid", Subject: ResourceSubject, Name: name, Path: base + ".settings." + s.Name, Message: "Supply a valid " + s.Title + " for " + name + "."})
 			continue
 		}

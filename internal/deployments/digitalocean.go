@@ -564,7 +564,11 @@ func doSize(size *manifest.Size) string {
 
 func (d *DigitalOcean) applyDatabase(ctx context.Context, job *Job) (*Outcome, error) {
 	cfg := job.Action.Resource
-	spec := digitalocean.DatabaseSpec{Name: DigitalOceanName(job), Size: doDatabaseSize, NumNodes: 1, Version: cfg.Version}
+	nodes, err := strconv.Atoi(cmp.Or(cfg.Settings["nodes"], "1"))
+	if err != nil || nodes < 1 || nodes > 3 {
+		return nil, fmt.Errorf("choose one to three database nodes")
+	}
+	spec := digitalocean.DatabaseSpec{Name: DigitalOceanName(job), Size: cmp.Or(cfg.Settings["size"], doDatabaseSize), NumNodes: nodes, Version: cfg.Version}
 	switch cfg.Kind {
 	case "postgres":
 		spec.Engine = digitalocean.Postgres
@@ -581,7 +585,20 @@ func (d *DigitalOcean) applyDatabase(ctx context.Context, job *Job) (*Outcome, e
 	token := strings.TrimSpace(string(job.Credential))
 	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
 	job.Progress(StepDeploying, "Making "+spec.Name+" on DigitalOcean")
-	db, err := d.Client.EnsureDatabase(ctx, token, spec)
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	var db *digitalocean.Database
+	if resize {
+		id, ok := strings.CutPrefix(job.Binding.ExternalID, doDatabasePrefix)
+		if !ok || id == "" {
+			return nil, errors.New("invalid DigitalOcean database binding")
+		}
+		db, err = d.Client.ResizeDatabase(ctx, token, id, spec)
+	} else {
+		db, err = d.Client.EnsureDatabase(ctx, token, spec)
+	}
 	if err != nil {
 		return nil, err
 	}

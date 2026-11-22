@@ -5639,6 +5639,104 @@
         }
       }
     },
+    "/api/v1/connections/{id}/database-sizes/{kind}/{region}": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "List database sizes in the account and region",
+        "operationId": "connections.databaseSizes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "Path parameter: kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region",
+            "in": "path",
+            "description": "Path parameter: region",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instance",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Database sizes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseSizes"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/digitalocean-database-capacity": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "List database sizes and node counts in this DigitalOcean account",
+        "operationId": "connections.digitalOceanDatabaseCapacity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Database capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseCapacity"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}/digitalocean-registries": {
       "get": {
         "tags": [
@@ -25833,6 +25931,25 @@
           }
         }
       },
+      "DatabaseCapacity": {
+        "type": "object",
+        "required": [
+          "pg",
+          "mysql",
+          "valkey"
+        ],
+        "properties": {
+          "mysql": {
+            "$ref": "#/components/schemas/EngineCapacity"
+          },
+          "pg": {
+            "$ref": "#/components/schemas/EngineCapacity"
+          },
+          "valkey": {
+            "$ref": "#/components/schemas/EngineCapacity"
+          }
+        }
+      },
       "DatabaseGateway": {
         "type": "object",
         "properties": {
@@ -25880,6 +25997,38 @@
           },
           "trust": {
             "type": "string"
+          }
+        }
+      },
+      "DatabaseLayout": {
+        "type": "object",
+        "required": [
+          "num_nodes",
+          "sizes"
+        ],
+        "properties": {
+          "num_nodes": {
+            "type": "integer"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DatabaseSizes": {
+        "type": "object",
+        "required": [
+          "sizes"
+        ],
+        "properties": {
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -27499,6 +27648,27 @@
         ],
         "type": "object",
         "x-forge-envelope": "endpoints"
+      },
+      "EngineCapacity": {
+        "type": "object",
+        "required": [
+          "regions",
+          "layouts"
+        ],
+        "properties": {
+          "layouts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatabaseLayout"
+            }
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       },
       "EnrollmentBody": {
         "type": "object",
@@ -38789,11 +38959,20 @@
           "pattern"
         ],
         "properties": {
+          "capacity": {
+            "type": "boolean"
+          },
           "default": {
             "type": "string"
           },
           "name": {
             "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "pattern": {
             "type": "string"

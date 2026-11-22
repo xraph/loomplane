@@ -47,6 +47,16 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 		state.ResourceID = job.Binding.PhysicalID
 	}
 	stages := []string{"instance", "database", "user", "ready"}
+	if mode == "apply" && job.Action.Resource != nil {
+		resize, resizeErr := reviewedResize(job)
+		if resizeErr != nil {
+			return nil, resizeErr
+		}
+		if resize {
+			state.Stage = "resize"
+			stages = append(stages, "resize")
+		}
+	}
 	if mode == "remove" {
 		state.Stage = "remove"
 		stages = []string{"remove", "removed"}

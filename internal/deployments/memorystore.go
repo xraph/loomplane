@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -56,7 +57,18 @@ func (m *Memorystore) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	// with a letter, at most 40 long.
 	id := shortName(job.Action.Name + "-" + job.Deployment.Environment + "-" + idSuffix(job.Deployment.ProjectID))
 	job.Progress(StepDeploying, "Creating the cache; this takes several minutes")
-	in, err := s.EnsureRedis(ctx, cfg.Region, id)
+	memory, err := strconv.Atoi(cmp.Or(cfg.Settings["memory_gib"], "1"))
+	if err != nil {
+		return nil, err
+	}
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	if resize && job.Binding.ExternalID != cfg.Region+"/"+id {
+		return nil, fmt.Errorf("Memorystore binding identity changed")
+	}
+	in, err := s.EnsureRedis(ctx, cfg.Region, id, memory, resize)
 	if err != nil {
 		return nil, err
 	}

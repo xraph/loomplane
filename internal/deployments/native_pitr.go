@@ -47,7 +47,7 @@ func cloudSQLPITRSourceSpec(cfg *planning.ResourceConfig, name string) gcp.SQLIn
 
 func (n *NativeDatabases) cloudSQLPITRWindow(ctx context.Context, b *planning.Binding, cfg *planning.ResourceConfig, conn *connections.Connection, credential []byte) (*recovery.NativePoint, error) {
 	profile, err := manageddb.CloudSQLPSCPostgres("17")
-	if err != nil || cfg.Managed == nil || cfg.Managed.Profile != *profile || !cfg.Managed.CloudSQLPSC.Valid(cfg.Region) {
+	if err != nil || cfg.Managed == nil || !manageddb.MatchesProfile(cfg.Managed.Profile, *profile, cfg.Settings) || !cfg.Managed.CloudSQLPSC.Valid(cfg.Region) {
 		return nil, recovery.ErrNativePITRUnavailable
 	}
 	key, err := gcp.ParseKey(credential)

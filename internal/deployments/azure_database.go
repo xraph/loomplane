@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -125,6 +126,24 @@ func (a *AzureDatabase) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	location := cmp.Or(job.Action.Region, cfg.Region, azureRegion)
+	storage, err := strconv.Atoi(cmp.Or(cfg.Settings["storage_gib"], "0"))
+	if err != nil {
+		return nil, err
+	}
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	if resize {
+		id := job.Binding.ExternalID
+		if !strings.EqualFold(id, s.FlexibleServerPath(cfg.Kind, a.serverName(s, job, cfg.Kind))) {
+			return nil, errors.New("flexible server binding identity changed")
+		}
+		if resizeErr := s.ResizeFlexibleServer(ctx, id, cfg.Settings["sku"], storage); resizeErr != nil {
+			return nil, resizeErr
+		}
+		return &Outcome{ExternalID: id, Revision: cfg.Kind}, nil
+	}
 	fresh, err := azurePassword()
 	if err != nil {
 		return nil, err
@@ -155,7 +174,7 @@ func (a *AzureDatabase) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	job.Progress(StepDeploying, "Making the "+engine.title+" flexible server "+name+"; this takes several minutes")
 	fqdn, err := s.EnsureFlexibleServer(ctx, azure.FlexibleServer{
 		Engine: cfg.Kind, Name: name, Location: location, Version: cmp.Or(cfg.Version, engine.version),
-		Login: azureDatabaseLogin, Password: password,
+		SKU: cfg.Settings["sku"], StorageGB: storage, Login: azureDatabaseLogin, Password: password,
 	})
 	if err != nil {
 		return nil, err
@@ -298,6 +317,20 @@ func (a *AzureRedis) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	location := cmp.Or(job.Action.Region, cfg.Region, azureRegion)
 	// Cluster names are DNS names across Azure, like flexible servers'.
 	name := azureGlobalName(job, s.Credential().SubscriptionID, s.ManagedRedisPath)
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	if resize {
+		id := job.Binding.ExternalID
+		if !strings.EqualFold(id, s.ManagedRedisPath(name)) {
+			return nil, errors.New("managed Redis binding identity changed")
+		}
+		if resizeErr := s.ResizeManagedRedis(ctx, id, cmp.Or(cfg.Settings["sku"], "Balanced_B0")); resizeErr != nil {
+			return nil, resizeErr
+		}
+		return &Outcome{ExternalID: id, Revision: azureRedisRevision}, nil
+	}
 	state := azureRedisState{ClusterID: s.ManagedRedisPath(name)}
 	if cerr := azureDatabaseCheckpoint(job, state); cerr != nil {
 		return nil, cerr
@@ -309,7 +342,7 @@ func (a *AzureRedis) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, fmt.Errorf("make resource group %s: %w", s.Credential().ResourceGroup, gerr)
 	}
 	job.Progress(StepDeploying, "Making the Managed Redis cluster "+name+"; this takes several minutes")
-	host, key, err := s.EnsureManagedRedis(ctx, name, location)
+	host, key, err := s.EnsureManagedRedisSize(ctx, name, location, cmp.Or(job.Action.Resource.Settings["sku"], "Balanced_B0"))
 	if err != nil {
 		return nil, err
 	}

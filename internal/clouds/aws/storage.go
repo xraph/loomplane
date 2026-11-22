@@ -96,6 +96,7 @@ func (s *Session) EnsureCacheSubnetGroup(ctx context.Context, name string, subne
 
 // CacheSpec is a Redis replication group Loomplane creates.
 type CacheSpec struct {
+	Resize      bool
 	ID          string
 	NodeType    string
 	AuthToken   string
@@ -105,10 +106,11 @@ type CacheSpec struct {
 
 // Cache is a Redis replication group as it is.
 type Cache struct {
-	ID      string
-	Status  string
-	Address string
-	Port    int32
+	NodeType string
+	ID       string
+	Status   string
+	Address  string
+	Port     int32
 }
 
 // GetCache reads a replication group. It returns an error IsNotFound
@@ -122,7 +124,7 @@ func (s *Session) GetCache(ctx context.Context, id string) (*Cache, error) {
 		return nil, fmt.Errorf("cache %s: %w", id, ErrNotFound)
 	}
 	g := out.ReplicationGroups[0]
-	c := &Cache{ID: sdk.ToString(g.ReplicationGroupId), Status: sdk.ToString(g.Status)}
+	c := &Cache{NodeType: sdk.ToString(g.CacheNodeType), ID: sdk.ToString(g.ReplicationGroupId), Status: sdk.ToString(g.Status)}
 	if len(g.NodeGroups) > 0 && g.NodeGroups[0].PrimaryEndpoint != nil {
 		c.Address, c.Port = sdk.ToString(g.NodeGroups[0].PrimaryEndpoint.Address), sdk.ToInt32(g.NodeGroups[0].PrimaryEndpoint.Port)
 	}
@@ -132,7 +134,7 @@ func (s *Session) GetCache(ctx context.Context, id string) (*Cache, error) {
 // EnsureCache creates the replication group if there isn't one, with TLS
 // and the auth token, and waits until it's available.
 func (s *Session) EnsureCache(ctx context.Context, spec CacheSpec) (*Cache, error) {
-	if _, err := s.GetCache(ctx, spec.ID); IsNotFound(err) {
+	if _, err := s.GetCache(ctx, spec.ID); IsNotFound(err) && !spec.Resize {
 		_, err = elasticache.NewFromConfig(s.cfg).CreateReplicationGroup(ctx, &elasticache.CreateReplicationGroupInput{
 			ReplicationGroupId: sdk.String(spec.ID), ReplicationGroupDescription: sdk.String("Created by Loomplane"),
 			Engine: sdk.String("redis"), CacheNodeType: sdk.String(spec.NodeType), NumCacheClusters: sdk.Int32(1),
@@ -145,6 +147,7 @@ func (s *Session) EnsureCache(ctx context.Context, spec CacheSpec) (*Cache, erro
 	} else if err != nil {
 		return nil, fmt.Errorf("read cache %s: %w", spec.ID, err)
 	}
+	requested := false
 	for {
 		c, err := s.GetCache(ctx, spec.ID)
 		if err != nil {
@@ -152,7 +155,19 @@ func (s *Session) EnsureCache(ctx context.Context, spec CacheSpec) (*Cache, erro
 		}
 		switch c.Status {
 		case "available":
-			return c, nil
+			if !spec.Resize || c.NodeType == spec.NodeType {
+				return c, nil
+			}
+			if c.ID != spec.ID {
+				return nil, fmt.Errorf("ElastiCache identity changed")
+			}
+			if !requested {
+				_, err = elasticache.NewFromConfig(s.cfg).ModifyReplicationGroup(ctx, &elasticache.ModifyReplicationGroupInput{ReplicationGroupId: sdk.String(spec.ID), CacheNodeType: sdk.String(spec.NodeType), ApplyImmediately: sdk.Bool(true)})
+				if err != nil {
+					return nil, err
+				}
+				requested = true
+			}
 		case "create-failed", "deleting":
 			return nil, fmt.Errorf("cache %s is %s", spec.ID, c.Status)
 		}

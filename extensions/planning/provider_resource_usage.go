@@ -188,7 +188,7 @@ func providerResourceBinding(b *plan.Binding, c *connections.Connection) (provid
 	}
 	if (b.Provider == "rds" || b.Provider == "cloud-sql") && b.PlanID != "" && out.Incarnation != "" && cfg.Managed != nil && cfg.Region == b.Region {
 		profile, err := manageddb.PostgresSource(b.Provider, cfg.Version, cfg.Region, cfg.Managed.CloudSQLPSC)
-		out.OwnershipVerified = err == nil && cfg.Kind == "postgres" && cfg.Managed.Profile == *profile
+		out.OwnershipVerified = err == nil && cfg.Kind == "postgres" && manageddb.MatchesProfile(cfg.Managed.Profile, *profile, cfg.Settings)
 	}
 	return out, true
 }

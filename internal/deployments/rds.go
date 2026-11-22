@@ -126,7 +126,11 @@ func (r *RDS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	job.Progress(StepDeploying, "Creating the database instance; this takes several minutes")
 	db := databaseName(job.Action.Name)
-	in, err := s.EnsureDBInstance(ctx, aws.DBInstanceSpec{
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	in, err := s.EnsureDBInstance(ctx, aws.DBInstanceSpec{Resize: resize,
 		ResourceID: state.ResourceID, Intent: state.Intent, Existing: existing,
 		ID: instance, Engine: eng.engine, EngineVersion: cfg.Version, Class: request.ComputeClass,
 		StorageGB: request.StorageGB, Database: db, User: sqlUser, Password: password,

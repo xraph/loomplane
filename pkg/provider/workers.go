@@ -17,9 +17,11 @@ type DurableObjectClass struct {
 
 // ResourceSetting is a public provisioning option, never a credential value.
 type ResourceSetting struct {
-	Name     string `json:"name"`
-	Title    string `json:"title"`
-	Pattern  string `json:"pattern"`
-	Required bool   `json:"required,omitempty"`
-	Default  string `json:"default,omitempty"`
+	Name     string   `json:"name"`
+	Title    string   `json:"title"`
+	Capacity bool     `json:"capacity,omitempty"`
+	Options  []string `json:"options,omitempty"`
+	Pattern  string   `json:"pattern"`
+	Required bool     `json:"required,omitempty"`
+	Default  string   `json:"default,omitempty"`
 }

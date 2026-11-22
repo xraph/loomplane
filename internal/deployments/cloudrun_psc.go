@@ -82,7 +82,7 @@ func prepareCloudRunPSC(job *Job) (*cloudRunPSC, error) {
 		}
 		profile, err := manageddb.CloudSQLPSCPostgres(resource.Version)
 		identity := connections.AccountIdentity(job.Connection.Cloud, job.Connection.Account, job.Connection.Details)
-		if err != nil || resource.Managed.Profile != *profile || resource.Kind != "postgres" || resource.Provider != "cloud-sql" || resource.Region != binding.Region || binding.ConnectionID == "" || binding.ConnectionID != resource.Managed.ConnectionID || identity == "" || resource.Managed.AccountIdentity != identity {
+		if err != nil || !manageddb.MatchesProfile(resource.Managed.Profile, *profile, resource.Settings) || resource.Kind != "postgres" || resource.Provider != "cloud-sql" || resource.Region != binding.Region || binding.ConnectionID == "" || binding.ConnectionID != resource.Managed.ConnectionID || identity == "" || resource.Managed.AccountIdentity != identity {
 			return nil, errCloudRunPSCReview
 		}
 		reviewed := false

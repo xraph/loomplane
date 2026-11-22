@@ -7,6 +7,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
@@ -214,6 +215,12 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	); err != nil {
 		return err
 	}
+	if err := g.GET("/connections/:id/database-sizes/:kind/:region", e.databaseSizes, forge.WithName("connections.databaseSizes"), forge.WithQuerySchema(DatabaseSizeQuery{}), forge.WithSummary("List database sizes in the account and region"), forge.WithResponseSchema(http.StatusOK, "Database sizes", connections.DatabaseSizes{})); err != nil {
+		return err
+	}
+	if err := g.GET("/connections/:id/digitalocean-database-capacity", e.digitalOceanDatabaseCapacity, forge.WithName("connections.digitalOceanDatabaseCapacity"), forge.WithSummary("List database sizes and node counts in this DigitalOcean account"), forge.WithResponseSchema(http.StatusOK, "Database capacity", digitalocean.DatabaseCapacity{})); err != nil {
+		return err
+	}
 	if err := g.GET("/connections/:id/digitalocean-registries", e.digitalOceanRegistries, forge.WithName("connections.digitalOceanRegistries"), forge.WithSummary("List registries in this DigitalOcean account"), forge.WithResponseSchema(http.StatusOK, "Registry names", connections.DigitalOceanRegistryNames{})); err != nil {
 		return err
 	}
@@ -415,4 +422,32 @@ func (e *Extension) digitalOceanRegistries(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, names)
+}
+func (e *Extension) digitalOceanDatabaseCapacity(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	capacity, err := e.svc.DigitalOceanDatabaseCapacity(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, capacity)
+}
+
+func (e *Extension) databaseSizes(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	sizes, err := e.svc.DatabaseSizes(c.Request().Context(), p, c.Param("id"), c.Param("kind"), c.Param("region"), c.Query("version"), c.Query("instance"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, sizes)
+}
+
+type DatabaseSizeQuery struct {
+	Version  string `query:"version" json:"version,omitempty"`
+	Instance string `query:"instance" json:"instance,omitempty"`
 }

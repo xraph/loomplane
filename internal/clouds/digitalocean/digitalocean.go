@@ -629,6 +629,8 @@ type DatabaseSpec struct {
 
 // Database is a Managed Database cluster.
 type Database struct {
+	Size       string `json:"size"`
+	NumNodes   int    `json:"num_nodes"`
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Engine     string `json:"engine"`

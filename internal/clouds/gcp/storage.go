@@ -113,10 +113,11 @@ func (s *Session) DeleteBucket(ctx context.Context, name string) error {
 
 // RedisInstance is a Memorystore instance as it is.
 type RedisInstance struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-	Host  string `json:"host"`
-	Port  int    `json:"port"`
+	MemoryGiB int    `json:"memorySizeGb"`
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
 }
 
 func (s *Session) redisPath(region, id string) string {
@@ -135,11 +136,11 @@ func (s *Session) GetRedis(ctx context.Context, region, id string) (*RedisInstan
 
 // EnsureRedis creates a Basic tier instance on the project's default
 // network with AUTH on, if there isn't one, and waits until it's ready.
-func (s *Session) EnsureRedis(ctx context.Context, region, id string) (*RedisInstance, error) {
-	if _, err := s.GetRedis(ctx, region, id); IsNotFound(err) {
+func (s *Session) EnsureRedis(ctx context.Context, region, id string, memoryGiB int, resize bool) (*RedisInstance, error) {
+	if _, err := s.GetRedis(ctx, region, id); IsNotFound(err) && !resize {
 		u := s.c.url("redis.googleapis.com", "/v1/projects/"+s.key.ProjectID+"/locations/"+region+"/instances?instanceId="+url.QueryEscape(id))
 		err = s.do(ctx, http.MethodPost, u, map[string]any{
-			"tier": "BASIC", "memorySizeGb": 1, "redisVersion": "REDIS_7_2",
+			"tier": "BASIC", "memorySizeGb": memoryGiB, "redisVersion": "REDIS_7_2",
 			"authorizedNetwork": "projects/" + s.key.ProjectID + "/global/networks/default",
 			"connectMode":       "DIRECT_PEERING", "authEnabled": true,
 			"labels": map[string]string{"managed-by": "loomplane"},
@@ -150,6 +151,7 @@ func (s *Session) EnsureRedis(ctx context.Context, region, id string) (*RedisIns
 	} else if err != nil {
 		return nil, fmt.Errorf("read redis %s: %w", id, err)
 	}
+	requested := false
 	for {
 		in, err := s.GetRedis(ctx, region, id)
 		if err != nil {
@@ -157,7 +159,15 @@ func (s *Session) EnsureRedis(ctx context.Context, region, id string) (*RedisIns
 		}
 		switch in.State {
 		case "READY":
-			return in, nil
+			if !resize || in.MemoryGiB == memoryGiB {
+				return in, nil
+			}
+			if !requested {
+				if err := s.do(ctx, http.MethodPatch, s.c.url("redis.googleapis.com", s.redisPath(region, id)+"?updateMask=memory_size_gb"), map[string]any{"memorySizeGb": memoryGiB}, nil); err != nil {
+					return nil, err
+				}
+				requested = true
+			}
 		case "DELETING", "FAILING_OVER":
 			return nil, fmt.Errorf("redis %s is %s", id, in.State)
 		}

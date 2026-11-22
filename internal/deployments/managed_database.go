@@ -15,7 +15,7 @@ func managedDatabaseReview(cfg *planning.ResourceConfig, conn *connections.Conne
 		return nil
 	}
 	profile, err := manageddb.PostgresSource(target, cfg.Version, cfg.Region, cfg.Managed.CloudSQLPSC)
-	if err != nil || cfg.Kind != "postgres" || cfg.Provider != target || cfg.Managed.Profile != *profile {
+	if err != nil || cfg.Kind != "postgres" || cfg.Provider != target || !manageddb.MatchesProfile(cfg.Managed.Profile, *profile, cfg.Settings) {
 		return fmt.Errorf("managed database review changed: request a fresh reviewed profile")
 	}
 	cloud := connections.AWS
@@ -71,7 +71,7 @@ func managedDatabaseRequest(job *Job, target string) (provider.ManagedDatabasePr
 	if err != nil {
 		return defaults, err
 	}
-	if old.Managed != nil && (cfg.Managed == nil || *old.Managed != *cfg.Managed || cfg.Region != old.Region || cfg.Kind != old.Kind || cfg.Version != old.Version) {
+	if old.Managed != nil && (cfg.Managed == nil || !old.Managed.AllowsCapacityChange(*cfg.Managed) || cfg.Region != old.Region || cfg.Kind != old.Kind || cfg.Version != old.Version) {
 		return defaults, fmt.Errorf("managed database review changed: moving or upgrading requires a tested restore into a fresh service")
 	}
 	if cfg.Managed != nil {
@@ -80,5 +80,5 @@ func managedDatabaseRequest(job *Job, target string) (provider.ManagedDatabasePr
 		}
 		return cfg.Managed.Profile, nil
 	}
-	return defaults, nil
+	return manageddb.SizedProfile(defaults, cfg.Settings)
 }

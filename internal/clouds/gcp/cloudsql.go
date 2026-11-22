@@ -311,6 +311,39 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, t
 	return in, nil
 }
 
+func (s *Session) ResizeSQLInstance(ctx context.Context, spec SQLInstanceSpec, track SQLMutation) error {
+	in, err := s.GetSQLInstance(ctx, spec.Name)
+	if err != nil {
+		return err
+	}
+	if inspectErr := spec.Inspect(in); inspectErr != nil {
+		return inspectErr
+	}
+	if in.DatabaseVersion != spec.DatabaseVersion || in.Settings.Version == "" {
+		return errors.New("instance version changed before resizing Cloud SQL")
+	}
+	if track.Resume == "" && in.Settings.Tier == spec.Tier {
+		return nil
+	}
+	err = s.mutateSQL(ctx, spec.Name, "Resizing the database instance", track, func(op *sqlOperation) (bool, error) {
+		return false, s.do(ctx, http.MethodPatch, s.sqlPath("/instances/"+url.PathEscape(spec.Name)), map[string]any{"settings": map[string]string{"tier": spec.Tier, "settingsVersion": in.Settings.Version}}, op)
+	}, "UPDATE")
+	if err != nil {
+		return err
+	}
+	in, err = s.GetSQLInstance(ctx, spec.Name)
+	if err != nil {
+		return err
+	}
+	if inspectErr := spec.Inspect(in); inspectErr != nil {
+		return inspectErr
+	}
+	if in.Settings.Tier != spec.Tier {
+		return errors.New("could not confirm the selected Cloud SQL machine type")
+	}
+	return nil
+}
+
 // EnsureDatabase creates a database on an instance, if it isn't there.
 func (s *Session) EnsureDatabase(ctx context.Context, instance, name string, track SQLMutation) error {
 	return s.mutateSQL(ctx, instance, "Creating the database", track, func(op *sqlOperation) (bool, error) {

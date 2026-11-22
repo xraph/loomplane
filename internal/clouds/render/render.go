@@ -438,6 +438,7 @@ type DatastoreSpec struct {
 
 // Datastore is a Postgres database or Key Value instance.
 type Datastore struct {
+	Plan          string `json:"plan"`
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Status        string `json:"status"`
@@ -500,6 +501,35 @@ func (c *Client) EnsureDatastore(ctx context.Context, key Key, spec DatastoreSpe
 		}
 	}
 	return d, nil
+}
+
+func (c *Client) ResizeDatastore(ctx context.Context, key Key, spec DatastoreSpec, id string) (*Datastore, error) {
+	requested := false
+	for {
+		d, err := c.GetDatastore(ctx, key, spec.Kind, id)
+		if err != nil {
+			return nil, err
+		}
+		if id == "" || d.ID != id {
+			return nil, fmt.Errorf("the Render datastore identity changed")
+		}
+		if d.Status == resourceAvailable {
+			if d.Plan == spec.Plan {
+				return d, nil
+			}
+			if !requested {
+				if err := c.do(ctx, key, http.MethodPatch, "/"+spec.Kind+"/"+url.PathEscape(id), nil, map[string]string{"plan": spec.Plan}, nil); err != nil {
+					return nil, err
+				}
+				requested = true
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(c.poll):
+		}
+	}
 }
 
 // Address is a datastore's address inside Render's private network,

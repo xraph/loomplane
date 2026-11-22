@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -458,9 +459,9 @@ func (r *Render) applyDatastore(ctx context.Context, job *Job) (*Outcome, error)
 	spec := render.DatastoreSpec{Name: RenderName(job), Region: cfg.Region}
 	switch cfg.Kind {
 	case "postgres":
-		spec.Kind, spec.Plan, spec.Version = render.Postgres, renderPostgresPlan, cfg.Version
+		spec.Kind, spec.Plan, spec.Version = render.Postgres, cmp.Or(cfg.Settings["plan"], renderPostgresPlan), cfg.Version
 	case "redis":
-		spec.Kind, spec.Plan = render.KeyValue, renderKeyValuePlan
+		spec.Kind, spec.Plan = render.KeyValue, cmp.Or(cfg.Settings["plan"], renderKeyValuePlan)
 	default:
 		return nil, fmt.Errorf("%w: render provisions postgres and redis, not %s", ErrNoExecutor, cfg.Kind)
 	}
@@ -475,7 +476,20 @@ func (r *Render) applyDatastore(ctx context.Context, job *Job) (*Outcome, error)
 	}
 	ctx = progress.With(ctx, func(m string) { job.Progress(StepDeploying, m) })
 	job.Progress(StepDeploying, "Making "+spec.Name+" on Render")
-	d, err := r.Client.EnsureDatastore(ctx, key, spec)
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	var d *render.Datastore
+	if resize {
+		kind, id, ok := datastoreID(job.Binding.ExternalID)
+		if !ok || kind != spec.Kind {
+			return nil, fmt.Errorf("invalid Render datastore binding")
+		}
+		d, err = r.Client.ResizeDatastore(ctx, key, spec, id)
+	} else {
+		d, err = r.Client.EnsureDatastore(ctx, key, spec)
+	}
 	if err != nil {
 		return nil, err
 	}

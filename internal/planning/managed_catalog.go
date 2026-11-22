@@ -2,7 +2,7 @@ package planning
 
 import (
 	"encoding/json"
-	"reflect"
+
 	"slices"
 
 	"github.com/xraph/loomplane/internal/connections"
@@ -18,6 +18,16 @@ type ManagedDatabaseConfig struct {
 	ConnectionID    string                          `json:"connection_id"`
 	AccountIdentity string                          `json:"account_identity"`
 	CloudSQLPSC     provider.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty,omitzero"`
+}
+
+// AllowsCapacityChange preserves all reviewed identity, access, and recovery settings.
+func (c ManagedDatabaseConfig) AllowsCapacityChange(next ManagedDatabaseConfig) bool {
+	if next.Profile.StorageGB < c.Profile.StorageGB {
+		return false
+	}
+	c.Profile.StorageGB = next.Profile.StorageGB
+	c.Profile.ComputeClass = next.Profile.ComputeClass
+	return c == next
 }
 
 func (p *planner) configureManagedCatalog(name, base string, resource manifest.Resource, cfg *ResourceConfig, action *Action) {
@@ -87,8 +97,13 @@ func (p *planner) configureManagedCatalog(name, base string, resource manifest.R
 		p.problem(Finding{Code: "managed-account-unverified", Subject: ResourceSubject, Name: name, Path: base, Message: "Check this cloud connection's account identity before creating a managed database."})
 		return
 	}
-	cfg.Managed = &ManagedDatabaseConfig{Profile: *profile, ConnectionID: conn.ID, AccountIdentity: identity, CloudSQLPSC: endpoint}
-	if old.Managed != nil && (binding.Provider != cfg.Provider || binding.Region != cfg.Region || binding.ConnectionID != conn.ID || old.Kind != cfg.Kind || old.Version != cfg.Version || old.Region != cfg.Region || !reflect.DeepEqual(old.Managed, cfg.Managed)) {
+	sized, err := manageddb.SizedProfile(*profile, cfg.Settings)
+	if err != nil {
+		p.problem(Finding{Code: "resource-setting-invalid", Subject: ResourceSubject, Name: name, Path: base + ".settings", Message: err.Error()})
+		return
+	}
+	cfg.Managed = &ManagedDatabaseConfig{Profile: sized, ConnectionID: conn.ID, AccountIdentity: identity, CloudSQLPSC: endpoint}
+	if old.Managed != nil && (binding.Provider != cfg.Provider || binding.Region != cfg.Region || binding.ConnectionID != conn.ID || old.Kind != cfg.Kind || old.Version != cfg.Version || old.Region != cfg.Region || !old.Managed.AllowsCapacityChange(*cfg.Managed)) {
 		p.problem(Finding{Code: "database-migration-required", Subject: ResourceSubject, Name: name, Path: base, Message: "Moving or upgrading a persistent database needs a tested restore into a fresh service. Its existing data will remain in place."})
 	}
 }

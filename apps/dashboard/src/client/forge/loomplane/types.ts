@@ -1842,6 +1842,12 @@ export interface DNSZone {
   verified: boolean;
 }
 
+export interface DatabaseCapacity {
+  mysql: EngineCapacity;
+  pg: EngineCapacity;
+  valkey: EngineCapacity;
+}
+
 export interface DatabaseGateway {
   cloudTags?: string[];
   environments?: Record<string, any>;
@@ -1855,6 +1861,15 @@ export interface DatabaseGatewayConfig {
   resources: string[];
   suffix: string;
   trust?: string;
+}
+
+export interface DatabaseLayout {
+  numNodes: number;
+  sizes: string[];
+}
+
+export interface DatabaseSizes {
+  sizes: string[];
 }
 
 export interface DbgatewayRouteStatus {
@@ -2328,6 +2343,11 @@ export interface EnableBitbucketWebhookInputBody {
 
 export interface EndpointList {
   endpoints: (CatalogconnectEndpoint | null)[];
+}
+
+export interface EngineCapacity {
+  layouts: DatabaseLayout[];
+  regions: string[];
 }
 
 export interface EnrollmentBody {
@@ -5548,8 +5568,10 @@ export interface ResourceConfig {
 }
 
 export interface ResourceSetting {
+  capacity?: boolean;
   default?: string;
   name: string;
+  options?: string[];
   pattern: string;
   required?: boolean;
   title: string;

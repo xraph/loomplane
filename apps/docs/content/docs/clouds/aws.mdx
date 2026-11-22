@@ -23,6 +23,8 @@ You can add an ACM certificate ARN for the same region as an optional setting. P
 | IAM and logs | `iam:AttachRolePolicy`, `CreateRole`, `GetRole`, `PassRole`, `PutRolePolicy`; `logs:CreateLogGroup` |
 | Secrets | `secretsmanager:CreateSecret`, `PutSecretValue` |
 | RDS | `rds:CreateDBInstance`, `CreateDBSubnetGroup`, `DeleteDBInstance`, `DescribeDBInstances`, `DescribeDBSnapshots`, `AddTagsToResource` |
+| RDS sizing | `rds:DescribeOrderableDBInstanceOptions` to list sizes and `rds:ModifyDBInstance` to apply a resize |
+| ElastiCache scaling | `elasticache:ListAllowedNodeTypeModifications` to list sizes and `elasticache:ModifyReplicationGroup` to apply a resize |
 | ElastiCache | `elasticache:CreateCacheSubnetGroup`, `CreateReplicationGroup`, `DeleteReplicationGroup`, `DescribeReplicationGroups` |
 | S3 | `s3:CreateBucket`, `DeleteBucket`, `DeleteObject`, `ListBucket`, `PutBucketPublicAccessBlock`, `PutObject` |
 

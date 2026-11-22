@@ -1,6 +1,7 @@
 package deployments
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -76,7 +77,14 @@ func (e *ElastiCache) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	job.Progress(StepDeploying, "Creating the cache; this takes several minutes")
-	c, err := s.EnsureCache(ctx, aws.CacheSpec{ID: cacheID(job), NodeType: cacheNode, AuthToken: token, SubnetGroup: subnets, Group: group})
+	resize, err := reviewedResize(job)
+	if err != nil {
+		return nil, err
+	}
+	if resize && job.Binding.ExternalID != cacheID(job) {
+		return nil, fmt.Errorf("ElastiCache binding identity changed")
+	}
+	c, err := s.EnsureCache(ctx, aws.CacheSpec{Resize: resize, ID: cacheID(job), NodeType: cmp.Or(job.Action.Resource.Settings["node_type"], cacheNode), AuthToken: token, SubnetGroup: subnets, Group: group})
 	if err != nil {
 		return nil, err
 	}

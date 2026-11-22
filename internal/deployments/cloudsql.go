@@ -144,6 +144,14 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	var in *gcp.SQLInstance
 	psc := cfg.Managed != nil && cfg.Managed.CloudSQLPSC != (manageddb.CloudSQLSourceEndpoint{})
+	if state.Stage == "resize" {
+		if resizeErr := s.ResizeSQLInstance(ctx, spec, state.guarded(s, false)); resizeErr != nil {
+			return nil, resizeErr
+		}
+		if advanceErr := state.advance("instance"); advanceErr != nil {
+			return nil, advanceErr
+		}
+	}
 	if state.Stage == "instance" {
 		if psc {
 			in, err = s.EnsureSQLPITRSource(ctx, spec, cfg.Managed.CloudSQLPSC, state.guarded(s, job.Binding == nil))
