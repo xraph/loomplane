@@ -4,14 +4,7 @@
 // the form's choices make irrelevant stays out of sight. It fills a page of
 // its own, or a dialog where a connection is wanted without leaving.
 import { CheckIcon, UploadIcon } from "lucide-react"
-import {
-  type FormEvent,
-  type ReactNode,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from "react"
+import { type ReactNode, useEffect, useId, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
@@ -26,7 +19,7 @@ import type { Connection, Setting } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import {
   DigitalOceanRegistrySetup,
-  GitHubRegistryAccounts,
+  GitHubRegistrySetup,
 } from "@/components/registry-accounts"
 import { CopyButton } from "@/components/runs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -141,29 +134,27 @@ export function SelfHostedConnect({
     setError("")
   }
 
-  const submit = async (e: FormEvent) => {
-    // A form in a dialog can sit inside another form's dialog.
-    e.preventDefault()
-    e.stopPropagation()
+  const save = async (
+    connection = {
+      name: name.trim(),
+      credential: connectCredential(cloud, secret),
+      settings: connectSettings(cloud, values, registry),
+    }
+  ) => {
     setError("")
-    const settings = connectSettings(cloud, values, registry)
+    const { settings, credential } = connection
     try {
       const c: Connection = replacing
         ? await replace.mutateAsync({
             path: { id: replacing.id },
-            body: { credential: connectCredential(cloud, secret), settings },
+            body: { credential, settings },
           })
         : inCluster
           ? await createInCluster.mutateAsync({
               body: { name: name.trim(), settings },
             })
           : await create.mutateAsync({
-              body: {
-                cloud,
-                name: name.trim(),
-                credential: connectCredential(cloud, secret),
-                settings,
-              },
+              body: { cloud, ...connection },
             })
       invalidate(useConnectionsList)
       toast.success(
@@ -210,30 +201,49 @@ export function SelfHostedConnect({
       : "Check and connect"
   const page = layout === "page"
 
-  if (!replacing && cloud === "registry" && preset?.id === "docr")
+  if (
+    !replacing &&
+    cloud === "registry" &&
+    (preset?.id === "docr" || preset?.id === "ghcr")
+  ) {
+    const connected = (c: Connection) => {
+      onDirtyChange?.(false)
+      onConnected(c)
+    }
     return (
       <div className="grid min-w-0 gap-4">
         <Presets cloud={cloud} chosen={preset} onChoose={apply} />
-        <DigitalOceanRegistrySetup
-          onConnected={(c) => {
-            onDirtyChange?.(false)
-            onConnected(c)
-          }}
-          onCancel={onCancel}
-        />
+        {preset.id === "docr" ? (
+          <DigitalOceanRegistrySetup
+            onConnected={connected}
+            onCancel={onCancel}
+          />
+        ) : (
+          <GitHubRegistrySetup
+            onConnected={connected}
+            onCancel={onCancel}
+            busy={busy}
+            error={error}
+            onSubmit={save}
+          />
+        )}
       </div>
     )
-  const github = !replacing && cloud === "registry" && preset?.id === "ghcr"
-  const form = (
+  }
+  return (
     <form
-      onSubmit={(e) => void submit(e)}
+      onSubmit={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        void save()
+      }}
       className={cn(
         "grid items-start gap-5",
         page && "lg:grid-cols-[minmax(0,1fr)_320px]"
       )}
     >
       <div className="grid min-w-0 gap-4">
-        {!replacing && !github && (
+        {!replacing && (
           <Presets cloud={cloud} chosen={preset} onChoose={apply} />
         )}
         {/* Beside the form when there's room; otherwise folded under the
@@ -299,22 +309,6 @@ export function SelfHostedConnect({
       )}
     </form>
   )
-  if (!github) return form
-  return (
-    <div className="grid min-w-0 gap-4">
-      <Presets cloud={cloud} chosen={preset} onChoose={apply} />
-      <GitHubRegistryAccounts
-        prefix={values.repository ?? ""}
-        choose={set("repository")}
-        onConnected={(c) => {
-          onDirtyChange?.(false)
-          onConnected(c)
-        }}
-      >
-        {form}
-      </GitHubRegistryAccounts>
-    </div>
-  )
 }
 
 function OtherSettings({
@@ -362,16 +356,21 @@ function Presets({
     <section aria-labelledby="presets" className="grid gap-2.5">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <h2 id="presets" className="text-sm font-semibold">
-          Start from
+          {cloud === "registry" ? "Registry provider" : "Start from"}
         </h2>
-        <span className="text-[12.5px] text-muted-foreground">
-          Fills the usual values. You can change any of them.
-        </span>
+        {cloud !== "registry" && (
+          <span className="text-[12.5px] text-muted-foreground">
+            Fills the usual values. You can change any of them.
+          </span>
+        )}
       </div>
       <div
         role="radiogroup"
         aria-labelledby="presets"
-        className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3"
+        className={cn(
+          "grid gap-2.5 sm:grid-cols-2",
+          cloud === "registry" ? "grid-cols-2 xl:grid-cols-4" : "xl:grid-cols-3"
+        )}
       >
         {presets[cloud].map((p) => {
           const on = chosen?.id === p.id
@@ -391,7 +390,12 @@ function Presets({
                 {p.label}
                 {on && <CheckIcon className="ml-auto size-4 text-primary" />}
               </span>
-              <span className="text-[12.5px] leading-relaxed text-muted-foreground">
+              <span
+                className={cn(
+                  "text-[12.5px] leading-relaxed text-muted-foreground",
+                  cloud === "registry" && "hidden sm:block"
+                )}
+              >
                 {p.description}
               </span>
             </button>

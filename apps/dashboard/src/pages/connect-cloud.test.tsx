@@ -76,6 +76,8 @@ function stub(methods: string[], posted: Posted[]) {
           { status: 201 }
         )
       }
+      if (path.endsWith("/github"))
+        return Response.json({ installations: [{ id: 1, account: "Wakflo" }] })
       if (path.includes("connection-clouds"))
         return Response.json({
           clouds: [
@@ -343,11 +345,49 @@ it("reuses a checked GitHub registry from the GitHub Packages preset", async () 
   await userEvent.click(
     await screen.findByRole("radio", { name: /GitHub Packages/ })
   )
-  await userEvent.click(
-    await screen.findByRole("button", { name: /Use Team images/ })
-  )
+  const method = await screen.findByLabelText("Sign in with")
+  expect(method).toHaveProperty("value", "gh-images")
+  await userEvent.selectOptions(method, "new")
+  expect(
+    screen.getByRole("button", { name: "Check and connect" })
+  ).toHaveProperty("disabled", true)
+  await userEvent.selectOptions(method, "gh-images")
+  expect(screen.queryByLabelText("Personal access token (classic)")).toBeNull()
+  await userEvent.click(screen.getByRole("button", { name: "Use registry" }))
   expect(navigate).toHaveBeenCalledWith({
     to: "/clouds/accounts/$id",
     params: { id: "gh-images" },
   })
+})
+
+it("connects GitHub Packages with the publishing user's token and selected destination", async () => {
+  const posted: Posted[] = []
+  stub(["token"], posted)
+  page("registry")
+  const user = userEvent.setup()
+  await user.click(screen.getByRole("radio", { name: /GitHub Packages/ }))
+  const destination = await screen.findByLabelText("Publish images under")
+  await waitFor(() => expect(destination).toHaveProperty("value", "wakflo"))
+  expect(screen.queryByLabelText("Endpoint")).toBeNull()
+  const connect = screen.getByRole("button", { name: "Check and connect" })
+  await user.type(screen.getByLabelText("GitHub username"), "publisher")
+  expect(connect).toHaveProperty("disabled", true)
+  await user.clear(destination)
+  await user.type(destination, "Another-Team")
+  await user.type(
+    screen.getByLabelText("Personal access token (classic)"),
+    "test-credential{Enter}"
+  )
+  await waitFor(() => expect(navigate).toHaveBeenCalled())
+  expect(posted.map((p) => p.body)).toEqual([
+    {
+      cloud: "registry",
+      name: "GitHub Packages · another-team",
+      settings: { endpoint: "https://ghcr.io", repository: "another-team" },
+      credential: JSON.stringify({
+        username: "publisher",
+        password: "test-credential",
+      }),
+    },
+  ])
 })

@@ -1,4 +1,4 @@
-import { type ReactNode, useId, useState } from "react"
+import { type FormEvent, useId, useState } from "react"
 import {
   useConnectionsList,
   useConnectionsCreate,
@@ -16,6 +16,8 @@ import {
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { QueryError } from "@/components/query-error"
+import { Input } from "@/components/ui/input"
+import { connectCredential } from "@/lib/connect-presets"
 import { Link } from "@/lib/router"
 
 type Connected = { onConnected: (connection: Connection) => void }
@@ -216,28 +218,46 @@ function AccountRegistries({
   )
 }
 
-export function GitHubRegistryAccounts({
-  prefix,
-  children,
-  choose,
+export function GitHubRegistrySetup({
+  busy,
+  error,
+  onSubmit,
+  onCancel,
   onConnected,
 }: Connected & {
-  prefix: string
-  children: ReactNode
-  choose: (owner: string) => void
+  busy: boolean
+  error: string
+  onSubmit: (connection: {
+    name: string
+    credential: string
+    settings: Record<string, string>
+  }) => Promise<void>
+  onCancel: () => void
 }) {
-  const [another, setAnother] = useState(false)
   const github = useQuery(useGithubStatus)
   const registries = useQuery(useConnectionsList)
-  const owners = (github.data?.installations ?? []).map((i) =>
-    i.account.toLowerCase()
-  )
+  const listId = useId()
+  const [method, setMethod] = useState("")
+  const [owner, setOwner] = useState<string>()
+  const [username, setUsername] = useState("")
+  const [token, setToken] = useState("")
+  const owners = [
+    ...new Set(
+      (github.data?.installations ?? []).map((i) => i.account.toLowerCase())
+    ),
+  ]
+  const namespace = owner ?? (owners.length === 1 ? owners[0] : "")
+  const repository = namespace.trim().toLowerCase()
   const saved = (registries.data?.connections ?? []).filter(
     (c) =>
       c.cloud === "registry" &&
       c.status === "ready" &&
       c.details?.endpoint === "https://ghcr.io"
   )
+  const selected =
+    method === "new"
+      ? undefined
+      : (saved.find((c) => c.id === method) ?? saved[0])
   if (registries.status === "error")
     return (
       <QueryError
@@ -247,50 +267,120 @@ export function GitHubRegistryAccounts({
       />
     )
   if (!registries.data) return <p>Loading registry connections…</p>
-  if (saved.length > 0 && !another)
-    return (
-      <section className="grid gap-2 rounded-lg border p-3 text-sm">
-        <h3 className="font-medium">Connected GitHub registries</h3>
-        {saved.map((c) => (
-          <Button
-            type="button"
-            variant="outline"
-            key={c.id}
-            className="justify-self-start"
-            onClick={() => onConnected(c)}
-          >
-            Use {c.name} · {String(c.details?.repository ?? "")}
-          </Button>
-        ))}
-        <Button
-          type="button"
-          variant="ghost"
-          className="justify-self-start"
-          onClick={() => setAnother(true)}
-        >
-          Connect another registry
-        </Button>
-      </section>
-    )
+
+  const ready = selected || (repository && username.trim() && token.trim())
+  function submit(e: FormEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (busy || !ready) return
+    if (selected) {
+      onConnected(selected)
+      return
+    }
+    void onSubmit({
+      name: `GitHub Packages · ${repository}`,
+      settings: { endpoint: "https://ghcr.io", repository },
+      credential: connectCredential("registry", {
+        auth: "password",
+        username,
+        password: token.trim(),
+      }),
+    })
+  }
   return (
-    <>
-      {owners.length > 0 && (
+    <form
+      aria-label="GitHub Packages sign-in"
+      onSubmit={submit}
+      className="grid w-full max-w-3xl gap-4 rounded-xl border bg-card p-4 text-sm"
+    >
+      <h3 className="font-semibold">GitHub Packages sign-in</h3>
+      {saved.length > 0 && (
         <AccountSelect
-          label="Connected GitHub account"
-          value={prefix}
-          options={[...new Set(owners)].map((owner) => ({
-            value: owner,
-            label: owner,
-          }))}
-          choose={choose}
+          label="Sign in with"
+          value={selected?.id ?? "new"}
+          options={[
+            ...saved.map((c) => ({
+              value: c.id,
+              label: `${c.name} · ghcr.io/${c.details?.repository ?? ""}`,
+            })),
+            { value: "new", label: "New publishing token" },
+          ]}
+          choose={setMethod}
         />
       )}
-      <p className="text-sm text-muted-foreground">
-        GitHub authorizes repository access and package publishing separately.
-        For the first push from your builder, use a classic token with
-        write:packages.
-      </p>
-      {children}
-    </>
+      {!selected && (
+        <>
+          <label className="grid gap-1 font-medium">
+            Publish images under
+            <Input
+              value={namespace}
+              list={listId}
+              required
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="GitHub user or organization"
+              onChange={(e) => setOwner(e.target.value)}
+            />
+          </label>
+          <datalist id={listId}>
+            {owners.map((account) => (
+              <option key={account} value={account} />
+            ))}
+          </datalist>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1 font-medium">
+              GitHub username
+              <Input
+                value={username}
+                required
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+            </label>
+            <label className="grid gap-1 font-medium">
+              Personal access token (classic)
+              <Input
+                type="password"
+                required
+                value={token}
+                autoComplete="new-password"
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Your builder needs package write access to publish images.{" "}
+            <a
+              className="underline"
+              href="https://github.com/settings/tokens/new?scopes=write:packages"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Create a classic token with write:packages
+            </a>
+            .
+          </p>
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+        </>
+      )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={!ready || busy}>
+          {selected
+            ? "Use registry"
+            : busy
+              ? "Checking access…"
+              : "Check and connect"}
+        </Button>
+      </div>
+    </form>
   )
 }
