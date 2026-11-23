@@ -19627,6 +19627,290 @@
           }
         }
       }
+    },
+    "/api/v1/runner-pools": {
+      "get": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "The organization's runner pools and their runners",
+        "operationId": "runnerPools.list",
+        "responses": {
+          "200": {
+            "description": "RunnerPoolList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnersPoolList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "Create a runner pool for the organization or one project",
+        "operationId": "runnerPools.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildrunnerPoolInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "RunnerPoolView",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runner-pools/{id}": {
+      "get": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "One runner pool and its runners",
+        "operationId": "runnerPools.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunnerPoolView",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "Remove a runner pool once none of its runners is joined",
+        "operationId": "runnerPools.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "Replace a runner pool's settings, such as whether it is the default",
+        "operationId": "runnerPools.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PoolSettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "RunnerPoolView",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runner-pools/{id}/join-tokens": {
+      "post": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "Make a single-use token for one runner to join the pool, and the command that uses it",
+        "operationId": "runnerPools.joinToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnersJoinTokenRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "RunnerJoinToken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnersJoinToken"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/runner-pools": {
+      "get": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "The global runner pools, for a platform admin",
+        "operationId": "platformRunnerPools.list",
+        "responses": {
+          "200": {
+            "description": "RunnerPoolList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnersPoolList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "Create a global runner pool, for a platform admin",
+        "operationId": "platformRunnerPools.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildrunnerPoolInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "RunnerPoolView",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/runner-pools/{id}/join-tokens": {
+      "post": {
+        "tags": [
+          "Runners"
+        ],
+        "summary": "Make a single-use token for one global runner to join, for a platform admin",
+        "operationId": "platformRunnerPools.joinToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnersJoinTokenRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "RunnerJoinToken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnersJoinToken"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -33835,6 +34119,15 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "pool_connection": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
           }
         }
       },
@@ -34795,6 +35088,12 @@
             "type": "string"
           },
           "minted_by_key_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "role": {
             "type": "string"
           }
         }
@@ -44530,6 +44829,358 @@
             "type": "integer"
           },
           "error": {
+            "type": "string"
+          }
+        }
+      },
+      "RunnersJoinTokenRequestBody": {
+        "properties": {
+          "lifetime_minutes": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/extensions/runners.JoinTokenRequest"
+      },
+      "BuildrunnerPoolInputBody": {
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "cloud_connection_id": {
+                "type": "string"
+              },
+              "default": {
+                "type": "boolean"
+              },
+              "idle_timeout_minutes": {
+                "type": "integer"
+              },
+              "image": {
+                "type": "string"
+              },
+              "max_age_minutes": {
+                "type": "integer"
+              },
+              "max_builds": {
+                "type": "integer"
+              },
+              "max_runners": {
+                "type": "integer"
+              },
+              "min_warm": {
+                "type": "integer"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "registry": {
+                "type": "string"
+              },
+              "sizes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "spot": {
+                "type": "boolean"
+              },
+              "toolchain_sha256": {
+                "type": "string"
+              },
+              "toolchain_url": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "settings"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/buildrunner.PoolInput"
+      },
+      "RunnersPoolList": {
+        "properties": {
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolView"
+            }
+          }
+        },
+        "required": [
+          "pools"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/extensions/runners.PoolList"
+      },
+      "RunnersJoinToken": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at",
+          "command"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/extensions/runners.JoinToken"
+      },
+      "PoolView": {
+        "type": "object",
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "mode",
+          "settings",
+          "revision",
+          "created_at",
+          "updated_at",
+          "runners"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "runners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunnerView"
+            }
+          },
+          "runtime_identity": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PoolSettings"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PoolSettings": {
+        "type": "object",
+        "properties": {
+          "cloud_connection_id": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "idle_timeout_minutes": {
+            "type": "integer"
+          },
+          "image": {
+            "type": "string"
+          },
+          "max_age_minutes": {
+            "type": "integer"
+          },
+          "max_builds": {
+            "type": "integer"
+          },
+          "max_runners": {
+            "type": "integer"
+          },
+          "min_warm": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "spot": {
+            "type": "boolean"
+          },
+          "toolchain_sha256": {
+            "type": "string"
+          },
+          "toolchain_url": {
+            "type": "string"
+          }
+        }
+      },
+      "RunnerView": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "pool_id",
+          "org_id",
+          "builds",
+          "created_at",
+          "name",
+          "status",
+          "takes_builds"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "builds": {
+            "type": "integer"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "last_build_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "runtime_identity": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "takes_builds": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PoolSettingsBody": {
+        "type": "object",
+        "properties": {
+          "cloud_connection_id": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "idle_timeout_minutes": {
+            "type": "integer"
+          },
+          "image": {
+            "type": "string"
+          },
+          "max_age_minutes": {
+            "type": "integer"
+          },
+          "max_builds": {
+            "type": "integer"
+          },
+          "max_runners": {
+            "type": "integer"
+          },
+          "min_warm": {
+            "type": "integer"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "spot": {
+            "type": "boolean"
+          },
+          "toolchain_sha256": {
+            "type": "string"
+          },
+          "toolchain_url": {
             "type": "string"
           }
         }

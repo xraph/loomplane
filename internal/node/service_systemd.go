@@ -235,6 +235,12 @@ func (m *systemdManager) Stop(ctx context.Context) error {
 	return m.systemctl(ctx, "stop", m.unitName())
 }
 
+// Disable stops the node and keeps it from starting at boot, until Start
+// enables it again.
+func (m *systemdManager) Disable(ctx context.Context) error {
+	return m.systemctl(ctx, "disable", "--now", m.unitName())
+}
+
 func (m *systemdManager) Remove(ctx context.Context) error {
 	// A unit that was never loaded fails to disable; the file is what matters.
 	derr := m.systemctl(ctx, "disable", "--now", m.unitName())

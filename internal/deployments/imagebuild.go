@@ -18,6 +18,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/buildpolicy"
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
@@ -84,6 +85,9 @@ type ImageArtifact struct {
 	Operation    string `json:"operation"`
 	Tag          string `json:"tag"`
 	Architecture string `json:"architecture,omitempty"`
+	// Runner is the runner a runner pool's build went to, saved before the
+	// build VM is asked for, so a retry goes back to the runner holding it.
+	Runner string `json:"runner,omitempty"`
 }
 
 type ImageBuilder struct {
@@ -102,6 +106,11 @@ type ImageBuilder struct {
 	// Gate refuses a customer source build the workspace may not run yet.
 	// Nil means metering.AllowAll.
 	Gate metering.Gate
+	// Runners reach runner pools' runners. Nil refuses runner builds.
+	Runners RunnerPools
+	// AWS builds on CodeBuild for a service whose builder is an AWS
+	// connection. Nil refuses those builds.
+	AWS *aws.Client
 }
 
 func (b *ImageBuilder) gate() metering.Gate {
@@ -134,15 +143,18 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || state == nil || save == nil {
 		return "", errors.New("the service needs reviewed remote build settings")
 	}
-	// Managed Kubernetes builds run on the workspace's own cluster, and the
-	// deploy gates refuse first, so they aren't gated here.
-	if job.Action.Service.ManagedKubernetesBuild() {
-		return b.buildInKubernetes(ctx, job, state, save)
+	backend := builderBackendFor(job.Action.Service)
+	run := &imageBuild{job: job, state: state, save: save}
+	if backend.whole {
+		return backend.build(ctx, b, run)
 	}
 	target := job.Action.Service.BuildTarget
 	reused := reusedReference(job.Action.Service) != ""
-	collector := job.Collector("image-build", job.LogAttempt())
-	defer func() { err = collector.safeError(err) }()
+	run.collector = job.Collector("image-build", job.LogAttempt())
+	// The backend may replace run.collector, so this reads it when Build
+	// returns, not now.
+	defer func() { err = run.collector.safeError(err) }()
+	collector := run.collector
 	var registryConfig *registry.Config
 	if target.Registry != "" {
 		connection, raw, credentialErr := b.connection(ctx, job, target.Registry, connections.Registry, target.RegistrySettings, target.Image != "" || reused)
@@ -161,7 +173,7 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", errors.New("registry trust settings changed since review; plan again")
 		}
 	}
-	if platformSourceBuild(target) {
+	if backend.platformRegistry {
 		// Loomplane Cloud builds into, and reuses from, the workspace's own
 		// repository in the platform registry. It never goes through the
 		// workspace's connections.
@@ -206,17 +218,24 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 		}
 		return state.Reference, nil
 	}
-	if platformSourceBuild(target) {
-		return b.buildOnPlatform(ctx, job, state, save, registryConfig)
-	}
+	run.registry = registryConfig
 	// Platform Cloud gates its own builds when it places them. A build on
 	// the workspace's own builder is gated here, before anything connects.
-	if gateErr := b.gate().CanRun(ctx, job.Deployment.OrgID, metering.KindBuild, false); gateErr != nil {
-		return "", gateErr
+	if backend.gated {
+		if gateErr := b.gate().CanRun(ctx, job.Deployment.OrgID, metering.KindBuild, false); gateErr != nil {
+			return "", gateErr
+		}
 	}
-	if target.BuilderCloud == connections.Firecracker {
-		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
-	}
+	return backend.build(ctx, b, run)
+}
+
+// buildWithDocker builds on a Docker daemon: a server connection or a
+// node's, checked as a builder, pushing to the reviewed registry when there
+// is one.
+func (b *ImageBuilder) buildWithDocker(ctx context.Context, run *imageBuild) (reference string, err error) {
+	job, state, save, registryConfig := run.job, run.state, run.save, run.registry
+	target := job.Action.Service.BuildTarget
+	collector := run.collector
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")
 	}
@@ -258,6 +277,7 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	state.SourceID, state.Builder, state.Registry, state.Attempt, state.Operation = job.SourceID, target.Builder, target.Registry, job.LogAttempt(), operation.String()
 	state.Architecture = details["architecture"]
 	collector = job.Collector(state.Operation, state.Attempt)
+	run.collector = collector
 	defer func() {
 		if err != nil {
 			collector.RecordState(context.WithoutCancel(ctx), "", "incomplete", err.Error())

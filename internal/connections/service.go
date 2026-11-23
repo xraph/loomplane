@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/relay"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -133,9 +134,15 @@ func (s *Service) checker(cloud string) (Checker, error) {
 // check asks the cloud about a credential. A credential the cloud refused
 // is ErrInvalid, with the cloud's reason; a cloud it couldn't reach is
 // ErrUnavailable.
-func (s *Service) check(ctx context.Context, cloud string, c Checker, credential []byte, settings map[string]string) (Check, error) {
+func (s *Service) check(ctx context.Context, orgID, cloud string, c Checker, credential []byte, settings map[string]string) (Check, error) {
 	if _, err := c.Parse(credential, settings); err != nil {
 		return Check{}, err
+	}
+	// A connection may relay only through a pool of its own organization.
+	if pool := settings[relay.SettingKey]; pool != "" {
+		if err := relay.CheckOwner(ctx, orgID, pool); err != nil {
+			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
 	}
 	res, err := c.Check(ctx, credential, settings)
 	switch {
@@ -205,6 +212,9 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if in.RegistryAccountID != "" {
 		return s.createAccountRegistry(ctx, p, in)
 	}
+	if strings.TrimSpace(in.Cloud) == Runner {
+		return nil, fmt.Errorf("%w: create a runner pool under Runners; its connection comes with it", ErrInvalid)
+	}
 	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken, "")
 }
 
@@ -252,7 +262,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.check(ctx, cloud, checker, checked, settings)
+	res, err := s.check(ctx, p.OrgID, cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +385,7 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
 			return nil, err
 		}
-	} else if c.Method == MethodDigitalOceanRegistry {
+	} else if c.Method == MethodDigitalOceanRegistry || c.Method == MethodAWSRegistry || c.Method == MethodGCPRegistry {
 		cred, err = s.accountRegistryCredential(ctx, c)
 		switch {
 		case errors.Is(err, ErrChanged), errors.Is(err, ErrNotFound), errors.Is(err, ErrNotReady):
@@ -390,13 +400,15 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		if cred, err = nodeCredential(c); err != nil {
 			return nil, err
 		}
+	} else if c.Method == MethodRunner {
+		cred = runnerCredential
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
 	}
 	now := s.now().UTC()
 	var res Check
 	if err == nil {
-		res, err = s.check(ctx, c.Cloud, checker, cred, c.Details)
+		res, err = s.check(ctx, c.OrgID, c.Cloud, checker, cred, c.Details)
 	}
 	if err != nil && legacyPersonalVercel(c) {
 		// A failed legacy upgrade preserves the old row as well as its token.
@@ -485,6 +497,9 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if c.Method == MethodNode {
 		return nil, fmt.Errorf("%w: a node connection has no credential to replace; the node's own key is what connects it", ErrInvalid)
 	}
+	if c.Method == MethodRunner {
+		return nil, fmt.Errorf("%w: a runner pool has no credential to replace; its runners' own keys are what connect it", ErrInvalid)
+	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
@@ -501,7 +516,7 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 		if revealErr != nil {
 			return nil, revealErr
 		}
-		oldCheck, checkErr := s.check(ctx, c.Cloud, checker, oldCredential, c.Details)
+		oldCheck, checkErr := s.check(ctx, c.OrgID, c.Cloud, checker, oldCredential, c.Details)
 		if checkErr != nil {
 			return nil, fmt.Errorf("verify the existing Vercel token before replacement: %w", checkErr)
 		}
@@ -520,7 +535,7 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if checked == nil {
 		checked = cred
 	}
-	res, err := s.checkPreparationIdentity(ctx, c.Cloud, checker, checked, settings)
+	res, err := s.checkPreparationIdentity(ctx, c.OrgID, c.Cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +549,7 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 		if err != nil {
 			return nil, err
 		}
-		res, err = s.check(ctx, c.Cloud, checker, checked, settings)
+		res, err = s.check(ctx, c.OrgID, c.Cloud, checker, checked, settings)
 		if err != nil {
 			return nil, err
 		}
@@ -641,7 +656,7 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
 			return nil, nil, err
 		}
-	} else if c.Method == MethodDigitalOceanRegistry {
+	} else if c.Method == MethodDigitalOceanRegistry || c.Method == MethodAWSRegistry || c.Method == MethodGCPRegistry {
 		if cred, err = s.accountRegistryCredential(ctx, c); err != nil {
 			return nil, nil, err
 		}
@@ -655,6 +670,8 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		if cred, err = nodeCredential(c); err != nil {
 			return nil, nil, err
 		}
+	} else if c.Method == MethodRunner {
+		cred = runnerCredential
 	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err
 	}

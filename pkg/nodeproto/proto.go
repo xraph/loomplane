@@ -50,13 +50,17 @@ const (
 	EndpointKube        Endpoint = "kube"
 	EndpointFirecracker Endpoint = "firecracker"
 	EndpointPublic      Endpoint = "public"
+	// EndpointRelay is TCP from a runner's own network to Target, a
+	// host:port, so a deploy reaches a host only the runner can. The runner
+	// dials only addresses its owner allowed.
+	EndpointRelay Endpoint = "relay"
 )
 
 // Valid reports whether e is a known endpoint.
 func (e Endpoint) Valid() bool {
 	switch e {
 	case EndpointControl, EndpointProbe, EndpointDocker, EndpointDial,
-		EndpointKube, EndpointFirecracker, EndpointPublic:
+		EndpointKube, EndpointFirecracker, EndpointPublic, EndpointRelay:
 		return true
 	}
 	return false
@@ -66,7 +70,7 @@ func (e Endpoint) Valid() bool {
 // Control is always on, and public is granted by ingress mode, so neither is
 // in the list.
 func AllowableEndpoints() []Endpoint {
-	return []Endpoint{EndpointProbe, EndpointDocker, EndpointDial, EndpointKube, EndpointFirecracker}
+	return []Endpoint{EndpointProbe, EndpointDocker, EndpointDial, EndpointKube, EndpointFirecracker, EndpointRelay}
 }
 
 // Ingress modes a node can run.

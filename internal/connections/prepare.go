@@ -77,11 +77,11 @@ func (KubernetesChecker) PreparationIdentity(ctx context.Context, raw []byte, se
 	return Check{Account: cfg.Context + "/" + cfg.Namespace, Details: cfg.Details}, nil
 }
 
-func (s *Service) checkPreparationIdentity(ctx context.Context, cloud string, checker Checker, raw []byte, settings map[string]string) (Check, error) {
+func (s *Service) checkPreparationIdentity(ctx context.Context, orgID, cloud string, checker Checker, raw []byte, settings map[string]string) (Check, error) {
 	if identity, ok := checker.(interface {
 		PreparationIdentity(context.Context, []byte, map[string]string) (Check, error)
 	}); ok {
 		return identity.PreparationIdentity(ctx, raw, settings)
 	}
-	return s.check(ctx, cloud, checker, raw, settings)
+	return s.check(ctx, orgID, cloud, checker, raw, settings)
 }

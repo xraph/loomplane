@@ -162,6 +162,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},
+		connections.Runner:       connections.RunnerChecker{},
 	}
 	// A provider plugin's cloud is connected through the plugin.
 	plugs, err := e.plugins.Plugins()

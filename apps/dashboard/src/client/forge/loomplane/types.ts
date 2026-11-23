@@ -508,6 +508,30 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface BuildrunnerPoolInputBody {
+  mode?: string;
+  name: string;
+  projectId?: string;
+  scope: string;
+  settings: {
+  cloudConnectionId?: string;
+  default?: boolean;
+  idleTimeoutMinutes?: number;
+  image?: string;
+  maxAgeMinutes?: number;
+  maxBuilds?: number;
+  maxRunners?: number;
+  minWarm?: number;
+  provider?: string;
+  region?: string;
+  registry?: string;
+  sizes?: string[];
+  spot?: boolean;
+  toolchainSha256?: string;
+  toolchainUrl?: string;
+};
+}
+
 export interface CLIOrganization {
   id: string;
   name: string;
@@ -4089,6 +4113,9 @@ export interface NodeJoined {
   name?: string;
   nodeId: string;
   orgId: string;
+  poolConnection?: string;
+  poolId?: string;
+  role?: string;
 }
 
 export interface NodeList {
@@ -4360,6 +4387,8 @@ export interface PendingNodeJoinToken {
   labels?: Record<string, any>;
   mintedBy: string;
   mintedByKeyId?: string;
+  poolId?: string;
+  role?: string;
 }
 
 export interface PinStatus {
@@ -4637,6 +4666,60 @@ export interface PoolMember {
   gpus?: number;
   memoryBytes: number;
   serverId: string;
+}
+
+export interface PoolSettings {
+  cloudConnectionId?: string;
+  default?: boolean;
+  idleTimeoutMinutes?: number;
+  image?: string;
+  maxAgeMinutes?: number;
+  maxBuilds?: number;
+  maxRunners?: number;
+  minWarm?: number;
+  provider?: string;
+  region?: string;
+  registry?: string;
+  sizes?: string[];
+  spot?: boolean;
+  toolchainSha256?: string;
+  toolchainUrl?: string;
+}
+
+export interface PoolSettingsBody {
+  cloudConnectionId?: string;
+  default?: boolean;
+  idleTimeoutMinutes?: number;
+  image?: string;
+  maxAgeMinutes?: number;
+  maxBuilds?: number;
+  maxRunners?: number;
+  minWarm?: number;
+  provider?: string;
+  region?: string;
+  registry?: string;
+  sizes?: string[];
+  spot?: boolean;
+  toolchainSha256?: string;
+  toolchainUrl?: string;
+}
+
+export interface PoolView {
+  architecture?: string;
+  connectionId?: string;
+  createdAt: string;
+  createdBy?: string;
+  id: string;
+  mode: string;
+  name: string;
+  orgId?: string;
+  projectId?: string;
+  revision: number;
+  runners: RunnerView[];
+  runtimeIdentity?: string;
+  scope: string;
+  settings: PoolSettings;
+  updatedAt: string;
 }
 
 export interface Port {
@@ -5944,6 +6027,37 @@ export interface RouteVerification {
   dnsError?: string;
   tls: boolean;
   tlsError?: string;
+}
+
+export interface RunnerView {
+  architecture?: string;
+  builds: number;
+  checkedAt?: string;
+  createdAt: string;
+  evidence?: Record<string, any>;
+  lastBuildAt?: string;
+  name: string;
+  nodeId: string;
+  orgId: string;
+  poolId: string;
+  reason?: string;
+  runtimeIdentity?: string;
+  status: string;
+  takesBuilds: boolean;
+}
+
+export interface RunnersJoinToken {
+  command: string;
+  expiresAt: string;
+  token: string;
+}
+
+export interface RunnersJoinTokenRequestBody {
+  lifetimeMinutes?: number;
+}
+
+export interface RunnersPoolList {
+  pools: PoolView[];
 }
 
 export interface RunningExec {

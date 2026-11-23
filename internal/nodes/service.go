@@ -104,6 +104,10 @@ type Service struct {
 	// Phase 2 fills it. Update doesn't wait for it, so it runs the check
 	// on its own. It may be nil.
 	CheckAddress func(n *Node)
+	// Runners records a runner's pool as it joins and returns the
+	// connection its builds run under. Without it, runner tokens can't be
+	// spent: the join fails and asks for a new token.
+	Runners RunnerJoiner
 	// Log receives failures nobody else sees. Nil means slog.Default().
 	Log *slog.Logger
 	// clock is what time it is. Nil means time.Now. Tests set it.
@@ -124,6 +128,16 @@ func (s *Service) log() *slog.Logger {
 	return slog.Default()
 }
 
+// RunnerJoiner records a joining runner in its pool. The runner pool service
+// satisfies it.
+type RunnerJoiner interface {
+	JoinRunner(ctx context.Context, orgID, poolID, nodeID string) (connection string, err error)
+}
+
+// RoleRunner is a runner's role: a node that builds images in Firecracker
+// microVMs and relays deploys, and never runs a workload.
+const RoleRunner = "runner"
+
 // JoinRequest is what a machine sends to join.
 type JoinRequest struct {
 	Token     string
@@ -138,6 +152,9 @@ type JoinRequest struct {
 	Inventory       nodeproto.Inventory
 	NodeVersion     string
 	ProtocolVersion int
+	// Role is RoleRunner when the machine joins as a runner. A token for
+	// one role refuses the other before it is spent.
+	Role string
 }
 
 // JoinResult is what a machine learns on joining.
@@ -148,6 +165,11 @@ type JoinResult struct {
 	IdentityGeneration int64
 	Endpoints          []nodeproto.Endpoint
 	CloudID            string
+	// Role, PoolID and PoolConnection are set for a runner: its pool, and
+	// the connection its builds run under.
+	Role           string
+	PoolID         string
+	PoolConnection string
 }
 
 // Update changes a node. Nil and empty fields stay as they are.
@@ -194,6 +216,12 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	if err != nil {
 		return nil, err
 	}
+	switch tokenRunner, joinRunner := peek.Scope.Role == RoleRunner, in.Role == RoleRunner; {
+	case tokenRunner && !joinRunner:
+		return nil, fmt.Errorf("%w: this token is for a runner; run loomplane runner start with it", ErrInvalid)
+	case !tokenRunner && joinRunner:
+		return nil, fmt.Errorf("%w: this token is for a node, not a runner; mint a runner's token from its pool", ErrInvalid)
+	}
 	if known, kerr := s.Store.KeyKnown(ctx, fp); kerr != nil {
 		return nil, kerr
 	} else if known {
@@ -222,6 +250,9 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	role := "node"
 	if claim.Scope.Edge {
 		role = "edge"
+	}
+	if claim.Scope.Role == RoleRunner {
+		role = RoleRunner
 	}
 	labels := map[string]string{}
 	maps.Copy(labels, in.Labels)
@@ -252,8 +283,23 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrMintNewToken, err)
 	}
+	poolConnection := ""
+	if role == RoleRunner {
+		if s.Runners == nil {
+			err = errors.New("runner pools aren't available here")
+		} else {
+			poolConnection, err = s.Runners.JoinRunner(ctx, n.OrgID, claim.Scope.PoolID, n.ID)
+		}
+		if err != nil {
+			rb := security.Principal{OrgID: n.OrgID, UserID: joinRollback}
+			if rerr := s.revoke(context.WithoutCancel(ctx), n, joinRollback, rb, "node.revoked"); rerr != nil {
+				s.log().Error("nodes: rolling back a runner join whose pool refused it", "node", n.ID, "org", n.OrgID, "error", rerr)
+			}
+			return nil, fmt.Errorf("%w: joining the runner pool: %w", ErrMintNewToken, err)
+		}
+	}
 	cloudID := claim.Scope.CloudID
-	if s.Adopt != nil {
+	if s.Adopt != nil && role != RoleRunner {
 		err := s.Adopt(ctx, n, claim)
 		if errors.Is(err, ErrAdoptionRefused) {
 			// The node joins all the same, into no Cloud.
@@ -270,10 +316,33 @@ func (s *Service) Join(ctx context.Context, in JoinRequest) (*JoinResult, error)
 		}
 	}
 	s.record(ctx, "node.joined", security.ActorPrincipal(claim.OrgID, claim.MintedBy), *n, map[string]string{"role": role})
-	return &JoinResult{NodeID: n.ID, OrgID: n.OrgID, Name: n.Name, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: cloudID}, nil
+	res := &JoinResult{NodeID: n.ID, OrgID: n.OrgID, Name: n.Name, IdentityGeneration: n.IdentityGeneration, Endpoints: n.Endpoints, CloudID: cloudID}
+	if role == RoleRunner {
+		res.Role, res.PoolID, res.PoolConnection = RoleRunner, claim.Scope.PoolID, poolConnection
+	}
+	return res, nil
 }
 
 const joinRollback = "system:join-rollback"
+
+// runnerPoolActor is who revokes a runner whose on-demand machine is gone.
+const runnerPoolActor = "system:runner-pool"
+
+// RevokeRunner revokes a runner whose on-demand machine its pool removed, so
+// its key can't connect again. It revokes only runners.
+func (s *Service) RevokeRunner(ctx context.Context, orgID, nodeID string) error {
+	n, err := s.Store.Get(ctx, orgID, nodeID)
+	if err != nil {
+		return err
+	}
+	if n.Role != RoleRunner {
+		return fmt.Errorf("%w: %s isn't a runner", ErrInvalid, nodeID)
+	}
+	if n.Status == StatusRevoked {
+		return nil
+	}
+	return s.revoke(ctx, n, runnerPoolActor, security.Principal{OrgID: orgID, UserID: runnerPoolActor}, "node.revoked")
+}
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 

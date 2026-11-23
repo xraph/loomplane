@@ -137,16 +137,25 @@ func (r *cmdRig) run(args ...string) error {
 
 func TestCommandsGroup(t *testing.T) {
 	cmds := Commands(Options{})
-	if len(cmds) != 1 || cmds[0].Name() != "node" {
+	if len(cmds) != 2 || cmds[0].Name() != "node" || cmds[1].Name() != "runner" {
 		t.Fatalf("Commands returned %d commands", len(cmds))
 	}
 	names := make([]string, 0, len(cmds[0].Subcommands()))
 	for _, s := range cmds[0].Subcommands() {
 		names = append(names, s.Name())
 	}
-	for _, want := range []string{"join", "run", "status", "leave", "allow", "list", "revoke", "drain", "update", "verify-release"} {
+	for _, want := range []string{"start", "stop", "join", "run", "status", "leave", "allow", "list", "revoke", "drain", "update", "verify-release"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("no node %s; have %v", want, names)
+		}
+	}
+	runner := make([]string, 0, len(cmds[1].Subcommands()))
+	for _, s := range cmds[1].Subcommands() {
+		runner = append(runner, s.Name())
+	}
+	for _, want := range []string{"start", "stop", "status", "leave", "run", "relay"} {
+		if !slices.Contains(runner, want) {
+			t.Errorf("no runner %s; have %v", want, runner)
 		}
 	}
 }

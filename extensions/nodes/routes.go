@@ -65,6 +65,9 @@ type JoinTokenRequest struct {
 	// instance edge.
 	EdgeScope string `json:"edge_scope,omitempty"`
 	CloudID   string `json:"cloud_id,omitempty"`
+	// Role "runner" with PoolID makes the machine a runner of that pool.
+	Role   string `json:"role,omitempty"`
+	PoolID string `json:"pool_id,omitempty"`
 	// LifetimeMinutes is how long the token can be used. It defaults to, and
 	// is capped at, an hour.
 	LifetimeMinutes int `json:"lifetime_minutes,omitempty"`
@@ -93,6 +96,9 @@ type NodeJoin struct {
 	Inventory       nodeproto.Inventory  `json:"inventory"`
 	NodeVersion     string               `json:"node_version"`
 	ProtocolVersion int                  `json:"protocol_version"`
+	// Role is "runner" when the machine joins as a runner. A token for one
+	// role refuses the other before it is spent.
+	Role string `json:"role,omitempty"`
 }
 
 // NodeJoined is what a machine learns on joining.
@@ -105,6 +111,11 @@ type NodeJoined struct {
 	// Name is the node's name, which node leave asks for before it
 	// deletes the node's volumes.
 	Name string `json:"name,omitempty"`
+	// Role, PoolID and PoolConnection are a runner's: its pool and the
+	// connection its builds run under.
+	Role           string `json:"role,omitempty"`
+	PoolID         string `json:"pool_id,omitempty"`
+	PoolConnection string `json:"pool_connection,omitempty"`
 }
 
 // routes mounts the nodes API. Everything but join sits behind the guard.
@@ -251,7 +262,7 @@ func (e *Extension) createJoinToken(c forge.Context) error {
 	if err = c.BindJSON(&in); err != nil && !errors.Is(err, io.EOF) {
 		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON, or empty")
 	}
-	scope := apikeys.NodeJoinScope{CloudID: in.CloudID, Labels: in.Labels, Endpoints: in.Endpoints, Edge: in.Edge, EdgeScope: in.EdgeScope}
+	scope := apikeys.NodeJoinScope{CloudID: in.CloudID, Labels: in.Labels, Endpoints: in.Endpoints, Edge: in.Edge, EdgeScope: in.EdgeScope, Role: in.Role, PoolID: in.PoolID}
 	tok, err := e.minter.CreateNodeJoinToken(c.Request().Context(), p, scope, time.Duration(in.LifetimeMinutes)*time.Minute)
 	if err != nil {
 		return e.fail(c, err)
@@ -336,7 +347,7 @@ func (e *Extension) join(c forge.Context) error {
 	}
 	res, err := e.svc.Join(c.Request().Context(), nodes.JoinRequest{
 		Token: in.Token, Name: in.Name, PublicKey: key, Signature: sig, Endpoints: in.Endpoints, Labels: in.Labels,
-		Inventory: in.Inventory, NodeVersion: in.NodeVersion, ProtocolVersion: in.ProtocolVersion,
+		Inventory: in.Inventory, NodeVersion: in.NodeVersion, ProtocolVersion: in.ProtocolVersion, Role: in.Role,
 	})
 	if err != nil {
 		return e.fail(c, err)
@@ -344,6 +355,7 @@ func (e *Extension) join(c forge.Context) error {
 	return c.JSON(http.StatusCreated, NodeJoined{
 		NodeID: res.NodeID, OrgID: res.OrgID, IdentityGeneration: res.IdentityGeneration,
 		Endpoints: res.Endpoints, CloudID: res.CloudID, Name: res.Name,
+		Role: res.Role, PoolID: res.PoolID, PoolConnection: res.PoolConnection,
 	})
 }
 

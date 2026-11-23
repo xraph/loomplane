@@ -5,6 +5,7 @@ package nodes
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -50,6 +51,10 @@ type Extension struct {
 
 	guard identity.Guard
 
+	// runners records a joining runner in its pool. Nil refuses runner
+	// join tokens.
+	runners nodes.RunnerJoiner
+
 	// sums are the sha256 of each loomctl archive of this release, verified
 	// against its signature; node.sh carries them. fetchSums is replaced in
 	// tests.
@@ -76,6 +81,19 @@ func New(cfg config.Config, replica string) *Extension {
 	e.hub, e.hubErr = nodes.NewHub(hc), err
 	return e
 }
+
+// RevokeRunner revokes a runner whose on-demand machine its pool removed.
+// It is the runner pool service's revoker.
+func (e *Extension) RevokeRunner(ctx context.Context, orgID, nodeID string) error {
+	if e.svc == nil {
+		return errors.New("nodes aren't available yet")
+	}
+	return e.svc.RevokeRunner(ctx, orgID, nodeID)
+}
+
+// SetRunners gives the extension the runner pool service, which records a
+// joining runner in its pool. Call it before the platform starts.
+func (e *Extension) SetRunners(r nodes.RunnerJoiner) { e.runners = r }
 
 // Hub is the hub that holds this replica's node sessions. Later extensions
 // open streams to nodes through it.
@@ -134,7 +152,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		Audit: auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()},
 		// A join token scoped to a Cloud is the approval to adopt the node
 		// into it; the first connect does the adopting.
-		Adopt: infra.RecordNodeAdoption,
+		Adopt:   infra.RecordNodeAdoption,
+		Runners: e.runners,
 	}
 	// An adopted node's address check settles its ingress through the
 	// service, which sends the mode the way an update does.

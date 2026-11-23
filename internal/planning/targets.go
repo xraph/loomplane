@@ -1,6 +1,7 @@
 package planning
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -21,7 +22,7 @@ func OwnedCloud(cloud string) bool {
 // permission-check metadata can change without changing a destination.
 func ReviewedConnectionSettings(cloud string, details map[string]string) map[string]string {
 	keys := reviewedPlacementKeys(cloud, details)
-	if cloud == "firecracker" {
+	if cloud == "firecracker" || cloud == "runner" {
 		keys = append(keys, "runtime_identity")
 	}
 	if details["managed_attachment_id"] != "" {
@@ -56,18 +57,22 @@ func reviewedPlacementKeys(cloud string, details map[string]string) []string {
 			keys = []string{"account_uuid"}
 		}
 	case "server":
-		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
+		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id", "via_pool_id"}
 		if details["node_id"] != "" {
 			// A node has no SSH to pin, and DDNS moves its advertised
 			// address, so neither is reviewed.
 			keys = []string{"docker_socket", "architecture", "docker_id"}
 		}
 	case "kubernetes":
-		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
+		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname", "via_pool_id"}
 	case "firecracker":
-		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "ingress_address"}
+		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "ingress_address", "via_pool_id"}
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
+	case "runner":
+		// A runner pool: its runners share one runtime identity and
+		// architecture, which the pool pins, and host_id names the pool.
+		keys = []string{"pool_id", "pool_scope", "pool_revision", "host_id", "isolation", "architecture"}
 	}
 	return keys
 }
@@ -79,7 +84,7 @@ func PublicReviewedSettings(details map[string]string) map[string]string {
 		return nil
 	}
 	out := map[string]string{}
-	for _, cloud := range []string{"azure", "digitalocean", "server", "kubernetes", "firecracker", "registry"} {
+	for _, cloud := range []string{"azure", "digitalocean", "server", "kubernetes", "firecracker", "registry", "runner"} {
 		for _, key := range reviewedPlacementKeys(cloud, details) {
 			if value, ok := details[key]; ok {
 				out[key] = value
@@ -97,6 +102,13 @@ func PublicReviewedSettings(details map[string]string) map[string]string {
 // ReviewedBuildSettings pins build policy without changing runtime placement.
 func ReviewedBuildSettings(cloud string, details map[string]string) map[string]string {
 	out := ReviewedConnectionSettings(cloud, details)
+	// CodeBuild builds in the account the plan reviewed, and no other.
+	if cloud == "aws" && details["account_id"] != "" {
+		if out == nil {
+			out = map[string]string{}
+		}
+		out["account_id"] = details["account_id"]
+	}
 	if cloud == "server" || cloud == "kubernetes" {
 		for _, key := range []string{"build_workers", "build_runtime_class", "build_runtime_identity"} {
 			if value := details[key]; value != "" {
@@ -126,6 +138,8 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 		code, message = role+"-cloud", fmt.Sprintf("%s needs a %s %s, but %s is a %s connection.", name, cloudTitle(cloud), role, p.in.Connections[i].Name, cloudTitle(p.in.Connections[i].Cloud))
 	case p.in.Connections[i].Details["managed_attachment_id"] != "" && (p.in.ProjectID == "" || p.in.Connections[i].Details["managed_project_id"] != p.in.ProjectID):
 		code, message = role+"-project", "This managed namespace belongs to another project."
+	case p.in.Connections[i].Cloud == "runner" && p.in.Connections[i].Details["project_id"] != "" && p.in.Connections[i].Details["project_id"] != p.in.ProjectID:
+		code, message = role+"-project", "This runner pool serves another project. Choose one of this project's pools or an organization pool."
 	case !p.in.Connections[i].Ready && (!pullOnly || !p.in.Connections[i].PullReady):
 		code, message = role+"-not-ready", fmt.Sprintf("%s's %s connection %s isn't ready. Check it under Integrations.", name, role, p.in.Connections[i].Name)
 	default:
@@ -199,6 +213,10 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	}
 	if c != nil {
 		cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
+		if pool := c.Details["via_pool_id"]; pool != "" && p.in.Runners != nil && p.in.Runners[pool].Online == 0 {
+			p.warn(Finding{Code: "relay-pool-offline", Subject: ServiceSubject, Name: name, Path: base + ".target",
+				Message: "This target is reached through a runner pool with no runner online, so the deploy will fail until one is. Start one on the target's network with: sudo loomplane runner start"})
+		}
 	}
 	p.serviceGPU(name, base, prov, set, cfg, c)
 	if prov.Cloud == "firecracker" {
@@ -231,20 +249,30 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	} else if build.Image == "" {
 		if build.Builder == "" && (prov.Cloud == "server" || prov.Cloud == "firecracker") {
 			build.Builder = cfg.Target
-		}
-		builderCloud := "server"
-		for _, option := range p.in.Connections {
-			if option.ID == build.Builder && option.Cloud == "firecracker" {
-				builderCloud = "firecracker"
-				build.BuilderCloud = builderCloud
+			// A default runner pool builds instead, unless an
+			// administrator made the target a dedicated builder.
+			if d := p.in.BuildDefault; d != nil && d.Builder != "" && (c == nil || c.Details["build_workers"] != "dedicated") {
+				if d.Connection != nil && !slices.ContainsFunc(p.in.Connections, func(o ConnectionOption) bool { return o.ID == d.Connection.ID }) {
+					p.in.Connections = append(p.in.Connections, *d.Connection)
+				}
+				build.Builder = d.Builder
+				if build.Registry == "" {
+					build.Registry = d.Registry
+				}
+				p.warn(Finding{Code: "runner-default", Subject: ServiceSubject, Name: name, Path: base + ".build.builder",
+					Message: "No builder is named, so " + d.Source + " builds this service in Firecracker microVMs. Name build.builder to choose another."})
 			}
+		}
+		builderCloud := p.builderCloud(build.Builder)
+		if builderCloud != "server" {
+			build.BuilderCloud = builderCloud
 		}
 		if builder := p.targetConnection(name, base+".build.builder", "builder", builderCloud, build.Builder); builder != nil {
 			build.BuilderSettings = ReviewedBuildSettings(builder.Cloud, builder.Details)
 			if err := buildpolicy.CheckBackend(builder.Details, builder.Cloud, builder.Pooled); err != nil {
 				p.problem(Finding{Code: "build-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: err.Error()})
 			}
-			if (prov.Cloud == "firecracker" || builder.Cloud == "firecracker") && c != nil && builder.Details["architecture"] != c.Details["architecture"] {
+			if (prov.Cloud == "firecracker" || builder.Cloud == "firecracker" || builder.Cloud == "runner") && c != nil && builder.Details["architecture"] != c.Details["architecture"] {
 				p.problem(Finding{Code: "build-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "Choose a builder with the same architecture as the application host."})
 			}
 			if cfg.CapacityIntent != nil && builder.Details["architecture"] != cfg.CapacityIntent.Demand.Architecture {
@@ -258,6 +286,13 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		}
 		if build.Registry == "" {
 			p.targetConnection(name, base+".build.registry", "registry", "registry", build.Registry)
+		}
+		if builderCloud == "aws" {
+			p.checkCodeBuildRegistry(name, base, build)
+		}
+		if a, ok := p.in.Runners[build.Builder]; builderCloud == "runner" && p.in.Runners != nil && (!ok || (a.Build == 0 && !a.OnDemand)) {
+			p.warn(Finding{Code: "runner-pool-offline", Subject: ServiceSubject, Name: name, Path: base + ".build.builder",
+				Message: "No runner of this pool is online with the toolchain it pins, so the build will wait up to 20 minutes for one. Start one with: sudo loomplane runner start"})
 		}
 	}
 	if build.Registry != "" {
@@ -295,6 +330,69 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if cfg.Public && prov.Cloud == "kubernetes" && c != nil && c.Details["ingress"] != "ready" {
 		p.problem(Finding{Code: "ingress-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".endpoint", Message: "This connection needs namespace ingress permissions to deploy a public service. Check the connection after granting them."})
 	}
+}
+
+// builderClouds are the clouds a build.builder connection may belong to
+// besides a Docker server. A plan records the builder's cloud for these, so
+// the build step picks the backend that matches. A Docker server builder
+// leaves it empty, as plans always have.
+var builderClouds = []string{"firecracker", "runner", "aws"}
+
+// builderCloud is the cloud of the connection id names as a builder: one of
+// builderClouds, else "server", which the builder check then holds it to.
+func (p *planner) builderCloud(id string) string {
+	for _, option := range p.in.Connections {
+		if option.ID == id && slices.Contains(builderClouds, option.Cloud) {
+			return option.Cloud
+		}
+	}
+	return "server"
+}
+
+// checkCodeBuildRegistry holds a CodeBuild build to its own account's ECR
+// repositories under the loomplane prefix, which is where CodeBuild pushes
+// and where the target must pull from.
+func (p *planner) checkCodeBuildRegistry(name, base string, build *BuildTarget) {
+	builder := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == build.Builder })
+	reg := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == build.Registry })
+	if builder < 0 || reg < 0 {
+		return
+	}
+	account := p.in.Connections[builder].Details["account_id"]
+	d := p.in.Connections[reg].Details
+	if account == "" || !strings.HasPrefix(d["endpoint"], "https://"+account+".dkr.ecr.") || d["repository"] != "loomplane" {
+		p.problem(Finding{Code: "codebuild-registry", Subject: ServiceSubject, Name: name, Path: base + ".build.registry",
+			Message: "CodeBuild pushes to the loomplane ECR repositories of its own account. Choose an ECR registry connection for that account with the repository prefix loomplane."})
+	}
+}
+
+// RunnerAvailability is how many runners of a pool are online, and how many
+// of those may take its builds now. OnDemand pools start runners when a
+// build needs one.
+type RunnerAvailability struct {
+	Online, Build int
+	OnDemand      bool
+}
+
+// RunnerCounts finds an organization's pools' online runners, keyed by
+// pool ID and by connection. The runner pool service satisfies it.
+type RunnerCounts interface {
+	RunnerCounts(ctx context.Context, orgID string) (map[string]RunnerAvailability, error)
+}
+
+// BuildDefault is the runner pool services build on when their manifest
+// names no builder: a project's default pool, else the organization's.
+type BuildDefault struct {
+	// Builder is the pool's runner connection; Registry the registry it
+	// pushes to when the manifest names none.
+	Builder  string `json:"builder"`
+	Registry string `json:"registry,omitempty"`
+	// Source says which pool, for people: "the project's runner pool
+	// builds".
+	Source string `json:"source"`
+	// Connection is what a plan names a pool with no connection of its own
+	// by: a platform pool of global runners.
+	Connection *ConnectionOption `json:"-"`
 }
 
 // ManagedKubernetesBuild uses the cluster's managed registry when the service

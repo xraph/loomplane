@@ -112,6 +112,9 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	// buildDefaults finds the runner pool services build on when their
+	// manifest names no builder. Nil means none does.
+	buildDefaults       BuildDefaults
 	variableMappings    func(context.Context, string, string, string, string) (map[string]map[string]string, error)
 	dropletPostgres     DropletPostgresProbe
 	gate                metering.Gate
@@ -233,6 +236,15 @@ type Deps struct {
 }
 
 // NewService returns a Service.
+// BuildDefaults finds the runner pool a project's services build on when
+// their manifest names no builder. The runner pool service satisfies it.
+type BuildDefaults interface {
+	BuildDefault(ctx context.Context, orgID, projectID string) (*BuildDefault, error)
+}
+
+// SetBuildDefaults gives the service where default runner pools come from.
+func (s *Service) SetBuildDefaults(d BuildDefaults) { s.buildDefaults = d }
+
 func NewService(d Deps) *Service {
 	if st, ok := d.Store.(*PgStore); ok {
 		if wake, available := d.Capacity.(cloudinfra.CapacityCloudWakeup); available {
@@ -959,7 +971,21 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 				return nil, "", err
 			}
 		}
+		var buildDefault *BuildDefault
+		if s.buildDefaults != nil {
+			if buildDefault, err = s.buildDefaults.BuildDefault(ctx, plan.OrgID, plan.ProjectID); err != nil {
+				return nil, "", err
+			}
+		}
+		var runners map[string]RunnerAvailability
+		if counts, ok := s.buildDefaults.(RunnerCounts); ok {
+			if runners, err = counts.RunnerCounts(ctx, plan.OrgID); err != nil {
+				return nil, "", err
+			}
+		}
 		result = Compute(Input{
+			Runners:          runners,
+			BuildDefault:     buildDefault,
 			ResourceMappings: mappings,
 			appliedMoves:     moves, appliedMoveProblems: moveProblems,
 			ResourceEndpoints: s.resourceEndpointPins(ctx, plan, resolved),

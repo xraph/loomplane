@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/xraph/loomplane/internal/relay"
 )
 
 // ErrInvalid marks a credential or configuration that cannot be used safely.
@@ -199,6 +201,15 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 		if settings["registry_ingress_address"] == "automatic" {
 			details["registry_ingress_address"] = "automatic"
 		}
+	}
+	// A cluster whose API server only a runner can reach is dialed through
+	// the runner's pool. TLS to the API server runs end to end, verified
+	// against the kubeconfig's CA as ever.
+	if pool := strings.TrimSpace(settings[relay.SettingKey]); pool != "" {
+		if !relay.ValidPool(pool) {
+			return nil, fmt.Errorf("%w: %s must be a runner pool's ID", ErrInvalid, relay.SettingKey)
+		}
+		details[relay.SettingKey], rc.Dial = pool, relay.DialFunc(pool)
 	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
 }

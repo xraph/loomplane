@@ -82,6 +82,15 @@ type Options struct {
 	// settle is how long node update watches the service after starting it
 	// on a new binary. Zero means updateSettle; tests make it short.
 	settle time.Duration
+	// runnerSvc, kvm and runRunner are the runner's service, its KVM check
+	// and how it runs in the foreground.
+	runnerSvc RunnerService
+	kvm       func() error
+	runRunner func(ctx context.Context, st State) error
+	// toolchainRoot and toolchainHTTP are where runner start unpacks a
+	// toolchain bundle and how it downloads one.
+	toolchainRoot string
+	toolchainHTTP *http.Client
 }
 
 type cmds struct {
@@ -141,12 +150,42 @@ func Commands(opts Options) []cli.Command {
 	if o.settle == 0 {
 		o.settle = updateSettle
 	}
+	if o.runnerSvc == nil {
+		o.runnerSvc = newSystemdRunner(execRunner{})
+	}
+	if o.kvm == nil {
+		o.kvm = kvmReady
+	}
+	if o.runRunner == nil {
+		o.runRunner = c.runRunnerForeground
+	}
+	if o.toolchainRoot == "" {
+		o.toolchainRoot = DefaultToolchainRoot
+	}
 
 	stateFlag := cli.NewStringFlag("state-dir", "", "Where the node keeps its identity and config (default: "+DefaultStateDir(o.goos, o.home)+")", "")
 	jsonFlag := cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 	urlFlag := cli.NewStringFlag("url", "", "Loomplane's address", "")
 	keyFlag := cli.NewStringFlag("key", "", "An API key, to act as you; "+envKey+" works too", "")
+	joinFlags := func(extra ...cli.Flag) []cli.Flag {
+		return append([]cli.Flag{urlFlag,
+			cli.NewStringFlag("token", "", "A join token ("+envToken+" works too, and keeps it out of the process list); without one, node join mints one with your login or --key", ""),
+			keyFlag,
+			cli.NewStringFlag("name", "", "The node's name; the server picks the hostname if empty", ""),
+			cli.NewStringSliceFlag("label", "", "A label, as key=value; repeat it for each", nil),
+			cli.NewStringSliceFlag("allow", "", "What Loomplane may use here: docker, dial, probe, kube or firecracker", nil),
+			cli.NewStringFlag("cloud", "", "The cloud account this node joins", ""),
+			cli.NewStringFlag("builder", "", "dedicated makes this node a dedicated build worker", ""),
+			cli.NewBoolFlag("edge", "", "Make this node an edge, which serves traffic", false),
+			cli.NewBoolFlag("foreground", "", "Run in this terminal instead of installing a service", false),
+			stateFlag}, extra...)
+	}
 	return []cli.Command{cli.NewCommand("node", "Join this machine to Loomplane as a node", nil,
+		cli.WithSubcommand(cli.NewCommand("start", "Join this machine as a node if it hasn't, and start it; it survives reboots until node stop", c.guard(c.nodeStart),
+			cli.WithUsage("node start --url https://loomplane.example.com --token lpj_... [--allow docker,probe] [--once]"),
+			cli.WithFlags(joinFlags(cli.NewBoolFlag("once", "", "Run in this terminal until stopped, and install nothing", false))...))),
+		cli.WithSubcommand(cli.NewCommand("stop", "Stop the node and keep it stopped across reboots, until node start", c.guard(c.nodeStop),
+			cli.WithFlags(stateFlag))),
 		cli.WithSubcommand(cli.NewCommand("join", "Join this machine to Loomplane and run it as a service", c.guard(c.join),
 			cli.WithUsage("node join --url https://loomplane.example.com --token lpj_... [--allow docker,dial,probe]"),
 			cli.WithFlags(urlFlag,
@@ -192,7 +231,7 @@ func Commands(opts Options) []cli.Command {
 		cli.WithSubcommand(cli.NewCommand("drain", "Stop new placements on a node's server, by name or id, after showing what runs there", c.guard(c.drain),
 			cli.WithUsage("node drain <name-or-id> [--yes]"),
 			cli.WithFlags(urlFlag, keyFlag, cli.NewBoolFlag("yes", "", "Drain without asking", false)))),
-	)}
+	), c.runnerCommand()}
 }
 
 // guard refuses a system the node does not run on, and turns a revoked node's
@@ -397,7 +436,7 @@ func (c *cmds) join(ctx cli.CommandContext) error {
 	default:
 		return fmt.Errorf("--builder %q: the only choice is dedicated", b)
 	}
-	token, cloud, edge, foreground := ctx.String("token"), ctx.String("cloud"), ctx.Bool("edge"), ctx.Bool("foreground")
+	token, cloud, edge, foreground := ctx.String("token"), ctx.String("cloud"), ctx.Bool("edge"), ctx.Bool("foreground") || ctx.Bool("once")
 	if token == "" {
 		token = strings.TrimSpace(c.opts.Getenv(envToken))
 	}
@@ -548,7 +587,7 @@ func checkJoinDir(dir string) error {
 // socket, the macOS log and the temp files an atomic write leaves behind.
 func ownStateFile(name string) bool {
 	switch name {
-	case identityFile, configFile, ceilingFile, "bin", controlSocket, "node.log":
+	case identityFile, configFile, ceilingFile, "bin", controlSocket, "node.log", stoppedFile:
 		return true
 	}
 	return strings.HasPrefix(name, "."+configFile+".tmp-") || strings.HasPrefix(name, "."+identityFile+".tmp-") ||

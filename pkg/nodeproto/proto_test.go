@@ -64,7 +64,29 @@ func TestEndpoints(t *testing.T) {
 			t.Errorf("%q must not be allowable", e)
 		}
 	}
-	if got := len(AllowableEndpoints()); got != 5 {
-		t.Errorf("got %d allowable endpoints, want 5", got)
+	if got := len(AllowableEndpoints()); got != 6 {
+		t.Errorf("got %d allowable endpoints, want 6", got)
+	}
+}
+
+func TestRelayTarget(t *testing.T) {
+	for target, ok := range map[string]bool{
+		"10.0.0.5:22":        true,
+		"db.internal:5432":   true,
+		"[fd00::1]:443":      true,
+		"":                   false,
+		"10.0.0.5":           false,
+		":22":                false,
+		"10.0.0.5:0":         false,
+		"10.0.0.5:65536":     false,
+		"10.0.0.5:ssh":       false,
+		"user@10.0.0.5:22":   false,
+		"10.0.0.5/32:22":     false,
+		"host with space:22": false,
+	} {
+		err := StreamHeader{Endpoint: EndpointRelay, Target: target}.Validate()
+		if (err == nil) != ok {
+			t.Errorf("relay target %q: ok=%v, err=%v", target, ok, err)
+		}
 	}
 }

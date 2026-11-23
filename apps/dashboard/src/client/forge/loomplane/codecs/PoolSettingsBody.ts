@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_PoolSettingsBody_sizes } from './PoolSettingsBody.sizes';
+
+export const codec_PoolSettingsBody: Codec = {"kind": "object", "fields": {"cloud_connection_id": {"ts": "cloudConnectionId"}, "default": {"ts": "default"}, "idle_timeout_minutes": {"ts": "idleTimeoutMinutes"}, "image": {"ts": "image"}, "max_age_minutes": {"ts": "maxAgeMinutes"}, "max_builds": {"ts": "maxBuilds"}, "max_runners": {"ts": "maxRunners"}, "min_warm": {"ts": "minWarm"}, "provider": {"ts": "provider"}, "region": {"ts": "region"}, "registry": {"ts": "registry"}, "sizes": {"ts": "sizes", "codec": () => codec_PoolSettingsBody_sizes}, "spot": {"ts": "spot"}, "toolchain_sha256": {"ts": "toolchainSha256"}, "toolchain_url": {"ts": "toolchainUrl"}}};

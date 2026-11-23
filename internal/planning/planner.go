@@ -24,6 +24,14 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
+	// BuildDefault is the runner pool a service on a server or Firecracker
+	// target builds on when its manifest names no builder. Nil keeps the
+	// target building itself.
+	BuildDefault *BuildDefault
+	// Runners are the organization's runner pools' online runners, by
+	// pool ID and connection, so a plan warns about one no runner serves.
+	// Nil skips the warning.
+	Runners          map[string]RunnerAvailability
 	ResourceMappings map[string]map[string]string
 	// Server-derived applied actions for explicit unconstrained pool moves.
 	appliedMoves           map[string]Action
@@ -151,7 +159,7 @@ type ConnectionHost struct {
 var connectionRegions = map[string]bool{"aws": true}
 
 // cloudTitles name the clouds connections are for, for people.
-var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry", platformRuntime: "Loomplane Cloud"}
+var cloudTitles = map[string]string{"gcp": "Google Cloud", "vercel": "Vercel", "aws": "AWS", "render": "Render", "digitalocean": "DigitalOcean", "azure": "Microsoft Azure", "server": "SSH server", "kubernetes": "Kubernetes", "registry": "image registry", "runner": "runner pool", platformRuntime: "Loomplane Cloud"}
 
 func cloudTitle(cloud string) string {
 	if t, ok := cloudTitles[cloud]; ok {

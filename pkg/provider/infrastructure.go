@@ -120,9 +120,12 @@ type ServerSpec struct {
 	SSHKeys     []string `json:"ssh_keys,omitempty"`
 	// FirewallTag, when set, puts the server in a ManagementFirewall from
 	// the moment it exists.
-	FirewallTag   string `json:"firewall_tag,omitempty"`
-	UserData      string `json:"-"`
-	ReconcileOnly bool   `json:"-"`
+	FirewallTag string `json:"firewall_tag,omitempty"`
+	// Tags are more provider tags the server carries from creation, such
+	// as the runner pool an on-demand runner belongs to.
+	Tags          []string `json:"tags,omitempty"`
+	UserData      string   `json:"-"`
+	ReconcileOnly bool     `json:"-"`
 }
 
 func (s ServerSpec) String() string { return "[server creation intent]" }

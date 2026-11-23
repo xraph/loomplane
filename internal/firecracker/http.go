@@ -16,6 +16,23 @@ type Handler struct {
 	// Platform is the platform client certificates the host trusts, or nil
 	// on a per-org host.
 	Platform *PlatformTrust
+	// Node is the peer every request comes from when the host is served
+	// over a Loomplane node's own connection, which carries no client
+	// certificate: a runner serves its pool's builds this way. The node
+	// transport has already authenticated Loomplane, so a request without
+	// TLS is this peer's.
+	Node *Peer
+	// BuildsOnly refuses everything but build VMs. A runner never runs
+	// workloads, routes or tunnels.
+	BuildsOnly bool
+	// NodeAnyOrg lets Node's builds come from any organization, under
+	// Node's connection: a global runner builds for every workspace the
+	// platform owner enabled. Each build VM still runs under its own
+	// organization's scope and limits.
+	NodeAnyOrg bool
+	// Capabilities, when set, completes what the host reports about
+	// itself, as a runner reports SMT and platform mode.
+	Capabilities func(Capabilities) Capabilities
 }
 
 func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +48,9 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
+	}
+	if peer == nil && !platform && r.TLS == nil && a.Node != nil {
+		peer = a.Node
 	}
 	if peer == nil && !platform {
 		http.Error(w, "host client identity is not authorized", http.StatusForbidden)
@@ -48,6 +68,9 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		c.Version = ProtocolVersion
 		c.Limits = a.Host.Limits
+		if a.Capabilities != nil {
+			c = a.Capabilities(c)
+		}
 		if platform && r.URL.Query().Get("trust") == "1" {
 			c.PlatformFingerprints = a.Platform.Fingerprints()
 		}
@@ -86,8 +109,13 @@ func (a Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, err)
 		return
 	}
-	if !q.Scope.Valid() || (platform && q.Scope.Connection != PlatformConnection) || (!platform && (q.Scope.Org != peer.Org || q.Scope.Connection != peer.Connection)) {
+	anyOrg := !platform && a.NodeAnyOrg && peer == a.Node
+	if !q.Scope.Valid() || (platform && q.Scope.Connection != PlatformConnection) || (!platform && ((q.Scope.Org != peer.Org && !anyOrg) || q.Scope.Connection != peer.Connection)) {
 		http.Error(w, "scope is not authorized", http.StatusForbidden)
+		return
+	}
+	if a.BuildsOnly && (r.URL.Path == "/v1/tunnel" || r.URL.Path == "/v1/route" || (r.URL.Path == "/v1/apply" && q.Spec.Kind != "build")) {
+		http.Error(w, "this host runs only build VMs", http.StatusForbidden)
 		return
 	}
 	var result any

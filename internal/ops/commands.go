@@ -46,11 +46,12 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 	return append(serverCommands(settings), node.Commands(node.Options{Version: buildinfo.Version})...)
 }
 
-// IsNodeCommand reports whether cmd is the node command or one under it. Those
-// run without the Forge app, so the binary skips building it for them.
+// IsNodeCommand reports whether cmd is the node or runner command, or one
+// under them. Those run without the Forge app, so the binary skips building
+// it for them.
 func IsNodeCommand(cmd cli.Command) bool {
 	for ; cmd != nil; cmd = cmd.Parent() {
-		if cmd.Name() == "node" {
+		if cmd.Name() == "node" || cmd.Name() == "runner" {
 			return true
 		}
 	}

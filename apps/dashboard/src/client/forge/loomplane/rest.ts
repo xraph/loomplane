@@ -6988,6 +6988,61 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly platformRunnerPools = {
+    /**
+     * Create a global runner pool, for a platform admin
+     */
+    create: async (body: types.BuildrunnerPoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PoolView> => {
+      let __path = `/api/v1/platform/runner-pools`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["BuildrunnerPoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PoolView"],
+      };
+
+      return this.request<types.PoolView>(config);
+    },
+
+    /**
+     * Make a single-use token for one global runner to join, for a platform admin
+     */
+    joinToken: async (id: string, body: types.RunnersJoinTokenRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RunnersJoinToken> => {
+      let __path = `/api/v1/platform/runner-pools/${encodeURIComponent(String(id))}/join-tokens`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RunnersJoinTokenRequestBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RunnersJoinToken"],
+      };
+
+      return this.request<types.RunnersJoinToken>(config);
+    },
+
+    /**
+     * The global runner pools, for a platform admin
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RunnersPoolList> => {
+      let __path = `/api/v1/platform/runner-pools`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RunnersPoolList"],
+      };
+
+      return this.request<types.RunnersPoolList>(config);
+    },
+
+  };
+
   public readonly projectAutonomy = {
     /**
      * Set whether the agent may promote a project's releases to production without asking, and the staging soak it needs
@@ -7812,6 +7867,111 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.RollbackTarget>(config);
+    },
+
+  };
+
+  public readonly runnerPools = {
+    /**
+     * Create a runner pool for the organization or one project
+     */
+    create: async (body: types.BuildrunnerPoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PoolView> => {
+      let __path = `/api/v1/runner-pools`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["BuildrunnerPoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PoolView"],
+      };
+
+      return this.request<types.PoolView>(config);
+    },
+
+    /**
+     * Remove a runner pool once none of its runners is joined
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/runner-pools/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * One runner pool and its runners
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PoolView> => {
+      let __path = `/api/v1/runner-pools/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PoolView"],
+      };
+
+      return this.request<types.PoolView>(config);
+    },
+
+    /**
+     * Make a single-use token for one runner to join the pool, and the command that uses it
+     */
+    joinToken: async (id: string, body: types.RunnersJoinTokenRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RunnersJoinToken> => {
+      let __path = `/api/v1/runner-pools/${encodeURIComponent(String(id))}/join-tokens`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RunnersJoinTokenRequestBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RunnersJoinToken"],
+      };
+
+      return this.request<types.RunnersJoinToken>(config);
+    },
+
+    /**
+     * The organization's runner pools and their runners
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RunnersPoolList> => {
+      let __path = `/api/v1/runner-pools`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RunnersPoolList"],
+      };
+
+      return this.request<types.RunnersPoolList>(config);
+    },
+
+    /**
+     * Replace a runner pool's settings, such as whether it is the default
+     */
+    update: async (id: string, body: types.PoolSettingsBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PoolView> => {
+      let __path = `/api/v1/runner-pools/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["PoolSettingsBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["PoolView"],
+      };
+
+      return this.request<types.PoolView>(config);
     },
 
   };

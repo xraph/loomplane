@@ -27,3 +27,8 @@ func smtActive(root string) (bool, error) {
 	}
 	return false, fmt.Errorf("%w: SMT state is unreadable", ErrUnavailable)
 }
+
+// SMTActive reports whether simultaneous multithreading is on, on this
+// machine. A runner that serves every workspace reports it, because the
+// platform policy refuses a host with SMT on.
+func SMTActive() (bool, error) { return smtActive("/sys/devices/system/cpu/smt") }

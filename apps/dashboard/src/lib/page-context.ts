@@ -45,6 +45,7 @@ const named: Record<string, string> = {
   "/teams": "Teams",
   "/domains": "Domains",
   "/nodes": "Nodes",
+  "/runners": "Runners",
   "/integrations": "Integrations",
   "/agent/requests": "the agent's requests",
   "/agent/reports": "the agent's reports",

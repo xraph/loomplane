@@ -1,0 +1,168 @@
+---
+title: Runners
+description: Build services in Firecracker microVMs on machines you own, and deploy to servers, clusters and hosts only those machines can reach.
+---
+
+A runner builds your services and deploys them for targets that can't build for themselves, such as an EC2 instance, a Droplet or a server on a private network. Every build runs in its own Firecracker microVM, which is removed when the build ends. Nothing from one build is left for the next.
+
+A runner is a [node](/docs/clouds/nodes) with the runner role. It joins, updates and is revoked the way a node is, dials out to Loomplane and opens no port. A machine is a node or a runner, never both: a node serves production, and a runner runs builds from your repositories.
+
+## What a runner needs
+
+- Linux, as root, with `/dev/kvm`. That means bare metal, or a VM with nested virtualization on. DigitalOcean Droplets have it today. On AWS, use a C8i, M8i or R8i instance with nested virtualization, or a `.metal` instance.
+- The Firecracker toolchain: the Firecracker and jailer binaries, a guest kernel and the Loomplane guest image, the CNI plugins, cgroup v2, `nft`, `ip` and `mkfs.ext4`. Its host config is the same file the Firecracker host agent reads, at `/etc/loomplane-runner/firecracker.json` by default.
+
+The runner checks all of this before it joins, so a machine that can't be a runner doesn't spend its join token.
+
+## Make a pool
+
+Runners belong to a pool. Create one under Runners in the dashboard, or over the API:
+
+```bash
+curl -X POST https://loomplane.example.com/api/v1/runner-pools \
+  -H "Authorization: Bearer $LOOMPLANE_API_KEY" \
+  -d '{"name": "builds-amd64", "scope": "organization"}'
+```
+
+A pool serves every project in the organization, or one project when you create it with `"scope": "project"` and a `project_id`. Its response has a `connection_id`: that's what a service names as its builder.
+
+## Start a runner
+
+Make a join token for the pool (Runners, Add runner), then run the command it gives you on the machine:
+
+```bash
+sudo LOOMPLANE_JOIN_TOKEN=lpj_... loomplane runner start --url https://loomplane.example.com
+```
+
+`runner start` joins the machine if it hasn't joined, installs the `loomplane-runner` service and starts it. The service comes back after a crash and after a reboot. Only `runner stop` or `runner leave` stops it for good.
+
+| Flag | What it does |
+|---|---|
+| `--url` | Where Loomplane is |
+| `--token` | A runner's join token. `LOOMPLANE_JOIN_TOKEN` works too and keeps it out of the process list |
+| `--key`, `--pool` | Mint a token with your API key instead of passing one |
+| `--name` | The runner's name. Loomplane uses the hostname if you don't |
+| `--firecracker-config` | The Firecracker host config. Default `/etc/loomplane-runner/firecracker.json` |
+| `--relay-allow` | A network deploys may be relayed to, as a CIDR. Repeat it for each |
+| `--once` | Run in this terminal until you stop it, and install nothing |
+| `--state-dir` | Where the runner keeps its files. Default `/var/lib/loomplane-runner` |
+
+The first runner in a pool that passes its check pins the pool's Firecracker toolchain and architecture. A later runner with another toolchain joins, but takes no builds until it matches, and the Runners page says why.
+
+## Build on a runner
+
+Name the pool's connection as the service's builder:
+
+```yaml
+version: 1
+services:
+  api:
+    source: go:cmd/api
+    provider: server
+    target: conn_ec2_prod
+    build:
+      builder: conn_runner_pool
+      registry: conn_registry
+```
+
+The plan pins the pool, its toolchain and its architecture. A pool whose runners show another toolchain later, or whose architecture isn't the server's, can't take the build: the plan says so, and an approved plan has to be planned again.
+
+At deploy time Loomplane picks an online runner, the one that built least recently first. It asks the runner's Firecracker host for a fresh build microVM, sends it the approved source and a push token for one repository, and waits for the image digest. The deploy step then pulls that digest onto the server. When every runner is busy, the build waits up to 20 minutes for one to be free, and its step says how many builds are ahead of it. A plan warns when the pool it builds on has no runner online, or when a target relays through a pool with none, so you can start one before you approve.
+
+## Default pools
+
+A service whose manifest names no builder builds on a default pool, if there is one:
+
+1. its project's default pool;
+2. else its organization's default pool;
+3. else Loomplane's global runners, when the platform owner has enabled Loomplane Cloud for your workspace.
+
+Make a pool the default with `"default": true` in its settings: when you create it, from its Edit button under Runners, or with `PATCH /api/v1/runner-pools/{id}`. Give it a `registry` connection to push to when the manifest names none. Only one pool of an organization, and one of each project, is the default. A server an administrator marked as a dedicated builder keeps building itself. The plan always says which pool builds a service and why.
+
+## On-demand pools
+
+An on-demand pool starts runners in your DigitalOcean or AWS account when builds need them, and removes them after. Create it with `"mode": "on_demand"`:
+
+```json
+{
+  "name": "burst",
+  "scope": "organization",
+  "mode": "on_demand",
+  "settings": {
+    "provider": "digitalocean",
+    "cloud_connection_id": "conn_...",
+    "region": "nyc3",
+    "sizes": ["s-2vcpu-4gb-amd"],
+    "max_runners": 3,
+    "min_warm": 0,
+    "toolchain_url": "https://releases.example.com/loomplane-runner-toolchain-amd64.tar.gz",
+    "toolchain_sha256": "..."
+  }
+}
+```
+
+- **Cold runners** start when a build finds none free, take that one build, and go.
+- **Warm runners** (`min_warm`) stay up and take builds as they come. One is replaced after `max_builds` builds (50 by default) or `max_age_minutes` (a day).
+- A runner that never joins within ten minutes, goes offline, or sits idle past `idle_timeout_minutes` is removed, and its key revoked. A machine Loomplane didn't record is removed too.
+- `max_runners` caps how many run at once. Builds beyond it wait for one to be free.
+
+Each machine boots with root's password locked and SSH off, installs the signed loomctl, installs the pinned toolchain bundle after checking its sha256, and joins with a token that works once, for fifteen minutes, for that machine only. The token is minted as the pool's creator, so it stops working if they can no longer manage nodes.
+
+On AWS, set `"provider": "aws"`, an `image` (an Ubuntu 24.04 AMI ID) and instance types with nested virtualization, such as `c8i.large`. Instances launch with no instance profile, IMDSv2 required with a hop limit of one, and a security group that lets nothing in. `"spot": true` asks for spot instances. DigitalOcean has no spot Droplets, so a DigitalOcean pool refuses it.
+
+Build a toolchain bundle from the same reviewed Firecracker set a host runs with `deployments/firecracker/build-runner-toolchain.sh`, and publish it at an https URL.
+
+## Global runners
+
+The platform owner can run pools for every workspace: create one under Runners, Global runners, or with `POST /api/v1/platform/runner-pools`, as a signed-in platform admin, mark it the default, and join runners to it with a token from `POST /api/v1/platform/runner-pools/{id}/join-tokens`. Global runners must run the Firecracker host in platform mode: SMT off, outbound mail denied, and per-workspace VM, vCPU and memory limits. Each runner shows that before every build.
+
+A workspace builds on global runners only when the platform owner enabled Loomplane Cloud for it and hasn't suspended it, and only when its project and organization have no default pool of their own. Each build runs in its own microVM under the workspace's own limits, is gated like Loomplane Cloud usage, and is billed as build minutes on the workspace's plan. Global builds push to the workspace's own registry, so a service that builds on them names `build.registry`.
+
+## CodeBuild
+
+A service on a server, node or Firecracker host in AWS can build on CodeBuild instead of a runner: name the AWS connection as `build.builder`, and an ECR registry connection for the same account with the repository prefix `loomplane` as `build.registry`. CodeBuild builds in AWS's own isolation, in your account, and the target pulls the image from ECR.
+
+## Registries
+
+Besides a registry with a stored credential, a registry connection can mint a short-lived login from an account you've connected:
+
+| Registry | Settings | The login |
+|---|---|---|
+| DigitalOcean Container Registry | `repository` | read-write, an hour |
+| Amazon ECR | `region`, `repository` (a prefix) | narrowed by a session policy to the repositories under the prefix, pull and push, an hour |
+| Google Artifact Registry | `location`, `repository` (`project/repository`) | the connection's access token, an hour. It carries the service account's permissions, so give the connection a service account that may only use that repository |
+
+Create one with `registry_account_id` set to the account's connection.
+
+## Deploy to hosts only a runner can reach
+
+A server, Kubernetes or Firecracker connection can relay through a pool. Set `via_pool_id` to the pool's ID in the connection's settings. Loomplane then dials the host through an online runner of that pool, from inside the runner's network. SSH and TLS run end to end through the runner, with the host key or CA pinned as ever, so the runner only carries ciphertext.
+
+A runner relays only to networks its owner allowed on the machine:
+
+```bash
+sudo loomplane runner relay allow 10.0.0.0/16
+```
+
+It never relays to cloud metadata addresses, link-local or loopback, whatever you allow. A connection can only relay through a pool of its own organization, and moving it to another pool makes plans that reviewed the old one stale.
+
+## Commands
+
+`loomplane runner` and `loomctl runner` have the same subcommands.
+
+| Command | What it does |
+|---|---|
+| `start` | Joins if needed and starts the runner. It survives reboots until `stop` |
+| `stop` | Stops the runner and keeps it stopped, across reboots, until `start`. Builds it was running are retried on another runner |
+| `status` | Shows the pool, the KVM check, what it relays to, and whether it runs |
+| `relay allow CIDR...` | Lets the runner relay to more networks. Needs root |
+| `leave` | Tells Loomplane to revoke the runner, and removes its service and config |
+| `run` | Runs the runner in the foreground. The service uses this |
+
+## Security
+
+- Every build runs in a fresh Firecracker microVM under the jailer, with its own disks, which are deleted after the build.
+- A runner never serves Docker. Loomplane can ask it for build microVMs and relayed connections, and nothing else.
+- Build microVMs can't reach cloud metadata, private networks or the runner's own addresses.
+- A runner serves only its own pool's builds. A request for another pool or organization is refused.
+- Push tokens are minted per build for one repository, and never touch the runner's disk.

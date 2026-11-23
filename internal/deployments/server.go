@@ -26,6 +26,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/registry"
@@ -74,6 +75,12 @@ type OwnedTarget struct {
 	// NodeStreams reach joined nodes, for server connections that are a
 	// node's. Nil reaches only SSH servers.
 	NodeStreams server.NodeStreams
+	// Runners reach runner pools for builds that name one. Nil refuses
+	// runner builds.
+	Runners RunnerPools
+	// AWS builds on CodeBuild for a service whose builder is an AWS
+	// connection. Nil refuses those builds.
+	AWS *aws.Client
 	// ServerConnect replaces server.Connect, for tests. Nil is server.Connect.
 	ServerConnect func(context.Context, *server.Config, server.NodeStreams) (*server.Client, error)
 	Backend       func(string, string) owned.Backend
@@ -501,7 +508,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, Gate: e.Gate, reconnect: e.reconnect}
+		builder = &ImageBuilder{Connect: e.ServerConnect, NodeStreams: e.NodeStreams, FirecrackerAuthority: e.FirecrackerAuthority, Gate: e.Gate, Runners: e.Runners, AWS: e.AWS, reconnect: e.reconnect}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"

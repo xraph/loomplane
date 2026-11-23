@@ -35,12 +35,13 @@ func (c *Client) closeIdle() {
 	}
 }
 
-func drainAndClose(body io.ReadCloser) {
+func drainBody(body io.Reader) {
 	if body == nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
-	_ = body.Close()
+	if _, err := io.Copy(io.Discard, io.LimitReader(body, 64<<10)); err != nil {
+		return
+	}
 }
 
 // Check verifies pull access and starts then cancels an empty push upload.
@@ -83,7 +84,8 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 			cachedChallenge = challenge
 		}
 		status, location := response.StatusCode, response.Header.Get("Location")
-		drainAndClose(response.Body)
+		drainBody(response.Body)
+		_ = response.Body.Close()
 		capability := strings.TrimPrefix(check.permission, "registry:")
 		out.Details[capability] = "ready"
 		switch {
@@ -129,7 +131,8 @@ func (c *Client) cancelCheckUpload(ctx context.Context, location, repository str
 		// A transport error may contain the signed upload location.
 		return errors.New("could not cancel the registry test upload")
 	}
-	defer drainAndClose(response.Body)
+	defer response.Body.Close()
+	defer drainBody(response.Body)
 	switch response.StatusCode {
 	case http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
 		return nil
@@ -205,7 +208,8 @@ func (c *Client) requestScopedWithChallenge(ctx context.Context, method, path, r
 		// Pre-fetched bearer token for this exact challenge was refused.
 		return response, challenge, nil
 	}
-	drainAndClose(response.Body)
+	drainBody(response.Body)
+	_ = response.Body.Close()
 	token, err := c.bearerToken(ctx, challenge, repository, actions)
 	if err != nil {
 		return nil, "", err
@@ -273,7 +277,8 @@ func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions
 	if err != nil {
 		return "", fmt.Errorf("reach registry token service: %w", err)
 	}
-	defer drainAndClose(tokenResponse.Body)
+	defer tokenResponse.Body.Close()
+	defer drainBody(tokenResponse.Body)
 	if tokenResponse.StatusCode == 401 || tokenResponse.StatusCode == 403 {
 		return "", tokenDenial(tokenResponse, repository, actions)
 	}

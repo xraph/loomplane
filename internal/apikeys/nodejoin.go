@@ -62,7 +62,18 @@ type NodeJoinScope struct {
 	Endpoints []nodeproto.Endpoint
 	Edge      bool
 	EdgeScope string
+	// Role is RoleRunner for a runner, and empty for any other node.
+	Role string
+	// PoolID is the runner pool a runner joins. Only a runner has one.
+	PoolID string
 }
+
+// RoleRunner is the join scope Role of a runner: a node that builds images
+// in Firecracker microVMs and relays deploys, and never runs a workload.
+const RoleRunner = "runner"
+
+// runnerEndpoints are all a runner may be allowed.
+var runnerEndpoints = []nodeproto.Endpoint{nodeproto.EndpointProbe, nodeproto.EndpointFirecracker, nodeproto.EndpointRelay}
 
 // NodeJoinToken is a new join token, with the secret, which is never shown again.
 type NodeJoinToken struct {
@@ -115,6 +126,7 @@ func (s *Service) CreateNodeJoinToken(ctx context.Context, p security.Principal,
 		Metadata: map[string]any{
 			"kind": string(security.KindNodeJoin), "cloud_id": scope.CloudID, "labels": scope.Labels,
 			"endpoints": endpoints, "edge": scope.Edge, "edge_scope": scope.EdgeScope,
+			"role": scope.Role, "pool_id": scope.PoolID,
 			"minted_by_key_id": p.KeyID,
 		},
 	})
@@ -195,6 +207,29 @@ func validNodeJoinScope(sc *NodeJoinScope) error {
 		}
 	}
 	sc.Endpoints = endpoints
+	switch sc.Role {
+	case "":
+		if sc.PoolID != "" {
+			return fmt.Errorf("%w: only a runner joins a runner pool", ErrInvalid)
+		}
+	case RoleRunner:
+		if sc.PoolID == "" || len(sc.PoolID) > maxJoinField {
+			return fmt.Errorf("%w: a runner joins a runner pool; name one", ErrInvalid)
+		}
+		if sc.Edge || sc.CloudID != "" || sc.Labels["build_workers"] != "" {
+			return fmt.Errorf("%w: a runner can't also be an edge, join a Cloud as a server or be a dedicated Docker builder", ErrInvalid)
+		}
+		if len(sc.Endpoints) == 0 {
+			sc.Endpoints = slices.Clone(runnerEndpoints)
+		}
+		for _, e := range sc.Endpoints {
+			if !slices.Contains(runnerEndpoints, e) {
+				return fmt.Errorf("%w: a runner can be allowed only probe, firecracker and relay, not %q", ErrInvalid, e)
+			}
+		}
+	default:
+		return fmt.Errorf("%w: the join role is a runner or nothing", ErrInvalid)
+	}
 	switch sc.EdgeScope {
 	case "":
 		if sc.Edge {
@@ -350,6 +385,8 @@ func (s *Service) nodeJoinClaim(k *key.Key) (*NodeJoinClaim, error) {
 		Endpoints     []string          `json:"endpoints"`
 		Edge          bool              `json:"edge"`
 		EdgeScope     string            `json:"edge_scope"`
+		Role          string            `json:"role"`
+		PoolID        string            `json:"pool_id"`
 		MintedByKeyID string            `json:"minted_by_key_id"`
 	}
 	// Metadata is native values in memory and decoded JSON in Postgres; a
@@ -358,7 +395,7 @@ func (s *Service) nodeJoinClaim(k *key.Key) (*NodeJoinClaim, error) {
 	if err != nil || json.Unmarshal(b, &meta) != nil {
 		return nil, ErrRejected
 	}
-	scope := NodeJoinScope{CloudID: meta.CloudID, Labels: meta.Labels, Edge: meta.Edge, EdgeScope: meta.EdgeScope}
+	scope := NodeJoinScope{CloudID: meta.CloudID, Labels: meta.Labels, Edge: meta.Edge, EdgeScope: meta.EdgeScope, Role: meta.Role, PoolID: meta.PoolID}
 	for _, e := range meta.Endpoints {
 		scope.Endpoints = append(scope.Endpoints, nodeproto.Endpoint(e))
 	}
@@ -380,6 +417,8 @@ type PendingNodeJoinToken struct {
 	Endpoints     []nodeproto.Endpoint `json:"endpoints"`
 	Edge          bool                 `json:"edge"`
 	EdgeScope     string               `json:"edge_scope,omitempty"`
+	Role          string               `json:"role,omitempty"`
+	PoolID        string               `json:"pool_id,omitempty"`
 	CreatedAt     time.Time            `json:"created_at"`
 	ExpiresAt     time.Time            `json:"expires_at"`
 }
@@ -482,7 +521,7 @@ func pendingNodeJoinToken(k *key.Key, c *NodeJoinClaim) PendingNodeJoinToken {
 	}
 	t := PendingNodeJoinToken{
 		ID: k.ID.String(), Hint: k.Hint, MintedBy: c.MintedBy, MintedByKeyID: c.MintedByKeyID,
-		CloudID: c.Scope.CloudID, Labels: c.Scope.Labels, Endpoints: eps, Edge: c.Scope.Edge, EdgeScope: c.Scope.EdgeScope,
+		CloudID: c.Scope.CloudID, Labels: c.Scope.Labels, Endpoints: eps, Edge: c.Scope.Edge, EdgeScope: c.Scope.EdgeScope, Role: c.Scope.Role, PoolID: c.Scope.PoolID,
 		CreatedAt: k.CreatedAt,
 	}
 	if k.ExpiresAt != nil {

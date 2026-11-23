@@ -560,7 +560,7 @@ func (s *Service) probeKeyless(ctx context.Context, c *Connection, report *Refre
 		return nil, true
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, renewTimeout)
-	res, err := s.check(checkCtx, c.Cloud, checker, cred, c.Details)
+	res, err := s.check(checkCtx, c.OrgID, c.Cloud, checker, cred, c.Details)
 	cancel()
 	switch {
 	case err == nil && c.Status == StatusFailed:

@@ -110,6 +110,12 @@ func (s *Service) createAccountRegistry(ctx context.Context, p security.Principa
 	if err != nil {
 		return nil, err
 	}
+	if parent.Cloud == AWS {
+		return s.createECRRegistry(ctx, p, in, parent)
+	}
+	if parent.Cloud == GCP {
+		return s.createArtifactRegistry(ctx, p, in, parent)
+	}
 	if parent.Cloud != DigitalOcean {
 		return nil, ErrInvalid
 	}
@@ -130,6 +136,12 @@ func (s *Service) createAccountRegistry(ctx context.Context, p security.Principa
 }
 
 func (s *Service) accountRegistryCredential(ctx context.Context, c *Connection) ([]byte, error) {
+	if c.Method == MethodAWSRegistry {
+		return s.awsRegistryCredential(ctx, c)
+	}
+	if c.Method == MethodGCPRegistry {
+		return s.gcpRegistryCredential(ctx, c)
+	}
 	ref, err := s.secrets.Reveal(ctx, c.OrgID, c.ID)
 	if err != nil {
 		return nil, err

@@ -454,3 +454,47 @@ func TestPeekJoinTokenDoesNotSpend(t *testing.T) {
 		t.Fatalf("peek of an API key: %v", err)
 	}
 }
+
+func TestRunnerJoinScope(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope NodeJoinScope
+		ok    bool
+	}{
+		{"a runner in a pool", NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1"}, true},
+		{"a runner with its own endpoints", NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1", Endpoints: []nodeproto.Endpoint{nodeproto.EndpointFirecracker}}, true},
+		{"a runner without a pool", NodeJoinScope{Role: RoleRunner}, false},
+		{"a runner that is also an edge", NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1", Edge: true}, false},
+		{"a runner that joins a Cloud as a server", NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1", CloudID: "cloud_1"}, false},
+		{"a runner that is a dedicated Docker builder", NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1", Labels: map[string]string{"build_workers": "dedicated"}}, false},
+		{"a runner allowed docker", NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1", Endpoints: []nodeproto.Endpoint{nodeproto.EndpointDocker}}, false},
+		{"a node with a pool", NodeJoinScope{PoolID: "rpool_1"}, false},
+		{"an unknown role", NodeJoinScope{Role: "builder", PoolID: "rpool_1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := tc.scope
+			if err := validNodeJoinScope(&sc); (err == nil) != tc.ok {
+				t.Fatalf("ok=%v: %v", tc.ok, err)
+			}
+		})
+	}
+	sc := NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1"}
+	if err := validNodeJoinScope(&sc); err != nil || len(sc.Endpoints) != 3 {
+		t.Fatalf("a runner with no endpoints gets probe, firecracker and relay: %v %v", sc.Endpoints, err)
+	}
+}
+
+func TestRunnerJoinTokenCarriesItsPool(t *testing.T) {
+	svc := joinService(t, nil)
+	tok, err := svc.CreateNodeJoinToken(t.Context(), security.Principal{UserID: "admin", OrgID: "org"}, NodeJoinScope{Role: RoleRunner, PoolID: "rpool_1"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := svc.ConsumeNodeJoinToken(t.Context(), tok.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.Scope.Role != RoleRunner || claim.Scope.PoolID != "rpool_1" || len(claim.Scope.Endpoints) != 3 {
+		t.Fatalf("claim scope %+v", claim.Scope)
+	}
+}

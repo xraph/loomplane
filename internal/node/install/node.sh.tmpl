@@ -1,7 +1,9 @@
 #!/bin/sh
-# Installs loomctl and joins this machine to Loomplane as a node.
+# Installs loomctl and joins this machine to Loomplane as a node, or as a
+# runner with LOOMPLANE_ROLE=runner.
 #
 #   curl -fsSL {{.URLComment}}/install/node.sh | LOOMPLANE_JOIN_TOKEN=lpj_... sh -s -- --allow probe
+#   curl -fsSL {{.URLComment}}/install/node.sh | LOOMPLANE_ROLE=runner LOOMPLANE_JOIN_TOKEN=lpj_... sh
 #
 # The join token comes in LOOMPLANE_JOIN_TOKEN, which keeps it out of the
 # process list (--token works too). Everything after -- goes to loomctl node
@@ -143,11 +145,22 @@ say "Installed $dest"
 
 rm -rf "$tmp"
 trap - EXIT HUP INT TERM
+# LOOMPLANE_ROLE=runner makes the machine a runner instead of a node: the
+# script then runs loomctl runner start, which builds in Firecracker
+# microVMs and so needs Linux, root and KVM.
+role="node join"
+if [ "${LOOMPLANE_ROLE:-}" = runner ]; then
+	[ "$os" = linux ] || fail "a runner builds in Firecracker microVMs, which need Linux with KVM"
+	role="runner start"
+fi
 if [ "$os" = linux ] && [ "$(id -u)" -ne 0 ]; then
 	have sudo || fail "joining needs root on Linux, and sudo is not installed: run this script as root"
 	if [ -n "${LOOMPLANE_JOIN_TOKEN:-}" ]; then
-		exec sudo --preserve-env=LOOMPLANE_JOIN_TOKEN "$dest" node join --url "$LOOMPLANE_URL" "$@"
+		# shellcheck disable=SC2086 # role is two words on purpose
+		exec sudo --preserve-env=LOOMPLANE_JOIN_TOKEN "$dest" $role --url "$LOOMPLANE_URL" "$@"
 	fi
-	exec sudo "$dest" node join --url "$LOOMPLANE_URL" "$@"
+	# shellcheck disable=SC2086
+	exec sudo "$dest" $role --url "$LOOMPLANE_URL" "$@"
 fi
-exec "$dest" node join --url "$LOOMPLANE_URL" "$@"
+# shellcheck disable=SC2086
+exec "$dest" $role --url "$LOOMPLANE_URL" "$@"

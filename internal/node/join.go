@@ -38,6 +38,19 @@ type JoinOptions struct {
 	Out io.Writer
 	// Detect tunes machine detection; the zero value inspects this machine.
 	Detect DetectOptions
+	// Runner joins the machine as a runner. The token must be a runner's,
+	// or the join is refused before it is spent.
+	Runner *RunnerJoin
+}
+
+// RunnerJoin is what a runner keeps beyond what a node does.
+type RunnerJoin struct {
+	// FirecrackerConfig is the host config it builds with.
+	FirecrackerConfig string
+	// Relay is the networks its relay may reach, as CIDR prefixes.
+	Relay []string
+	// Ephemeral runners are started for builds and removed after.
+	Ephemeral bool
 }
 
 // Join detects this machine, checks its clock against Loomplane's, joins with
@@ -91,8 +104,12 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 	if !ok {
 		return nil, errors.New("the identity key is not an ed25519 key")
 	}
+	role := ""
+	if o.Runner != nil {
+		role = RoleRunner
+	}
 	res, err := client.NodeJoin(ctx, base, client.JoinRequest{
-		Token: o.Token, Name: o.Name, Labels: o.Labels, Endpoints: eps, Inventory: inv,
+		Token: o.Token, Name: o.Name, Labels: o.Labels, Endpoints: eps, Inventory: inv, Role: role,
 		PublicKey:   base64.StdEncoding.EncodeToString(pub),
 		Signature:   base64.StdEncoding.EncodeToString(nodeproto.SignJoin(priv, o.Token, o.Name)),
 		NodeVersion: buildinfo.Version, ProtocolVersion: nodeproto.Version,
@@ -106,14 +123,23 @@ func Join(ctx context.Context, o JoinOptions) (*Config, error) {
 	}
 	cfg := Config{URL: base, NodeID: res.NodeID, OrgID: res.OrgID, Name: res.Name, IdentityGeneration: res.IdentityGeneration,
 		Endpoints: granted, IngressMode: nodeproto.IngressNone}
-	if inv.Docker != nil {
+	ceiling := Ceiling{NodeID: res.NodeID, Endpoints: granted}
+	if o.Runner != nil {
+		if res.Role != RoleRunner || res.PoolConnection == "" {
+			return nil, fmt.Errorf("joined as node %s, but Loomplane didn't make it a runner of a pool; revoke it and join again with a runner's token", res.NodeID)
+		}
+		cfg.Role, cfg.PoolID, cfg.PoolConnection = RoleRunner, res.PoolID, res.PoolConnection
+		cfg.FirecrackerConfig, cfg.Ephemeral = o.Runner.FirecrackerConfig, o.Runner.Ephemeral
+		ceiling.Relay = o.Runner.Relay
+	}
+	if inv.Docker != nil && o.Runner == nil {
 		// Detected, whether or not it was allowed: the service user needs
 		// the socket's group, and the runtime looks for Docker here first.
 		cfg.DockerSocket = inv.Docker.Socket
 	}
 	// The ceiling first: a node.json with no allow.json beside it serves
 	// nothing, which is the safe way round if the second write fails.
-	if err = o.State.SaveCeiling(Ceiling{NodeID: res.NodeID, Endpoints: granted}, -1); err != nil {
+	if err = o.State.SaveCeiling(ceiling, -1); err != nil {
 		return nil, fmt.Errorf("joined as node %s, but saving its allowlist in %s failed: %w; revoke that node in Loomplane and join again", res.NodeID, o.State.Dir, err)
 	}
 	if err = o.State.SaveConfig(cfg); err != nil {

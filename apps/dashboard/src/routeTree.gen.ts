@@ -56,6 +56,7 @@ import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
 import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ReleaseReportsIdRouteImport } from "./routes/release-reports.$id"
 import { Route as ResourcesIndexRouteImport } from "./routes/resources.index"
+import { Route as RunnersIndexRouteImport } from "./routes/runners.index"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as ServicesCatalogRouteImport } from "./routes/services.catalog"
@@ -317,6 +318,11 @@ const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
   path: "/resources/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const RunnersIndexRoute = RunnersIndexRouteImport.update({
+  id: "/runners/",
+  path: "/runners/",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ServicesIndexRoute = ServicesIndexRouteImport.update({
   id: "/services/",
   path: "/services/",
@@ -507,6 +513,7 @@ export interface FileRoutesByFullPath {
   "/notifications/": typeof NotificationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
+  "/runners/": typeof RunnersIndexRoute
   "/services/": typeof ServicesIndexRoute
   "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
@@ -580,6 +587,7 @@ export interface FileRoutesByTo {
   "/notifications": typeof NotificationsIndexRoute
   "/projects": typeof ProjectsIndexRoute
   "/resources": typeof ResourcesIndexRoute
+  "/runners": typeof RunnersIndexRoute
   "/services": typeof ServicesIndexRoute
   "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
@@ -655,6 +663,7 @@ export interface FileRoutesById {
   "/notifications/": typeof NotificationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/resources/": typeof ResourcesIndexRoute
+  "/runners/": typeof RunnersIndexRoute
   "/services/": typeof ServicesIndexRoute
   "/agent/reports/$id": typeof AgentReportsIdRoute
   "/ai/models/$": typeof AiModelsSplatRoute
@@ -731,6 +740,7 @@ export interface FileRouteTypes {
     | "/notifications/"
     | "/projects/"
     | "/resources/"
+    | "/runners/"
     | "/services/"
     | "/agent/reports/$id"
     | "/ai/models/$"
@@ -804,6 +814,7 @@ export interface FileRouteTypes {
     | "/notifications"
     | "/projects"
     | "/resources"
+    | "/runners"
     | "/services"
     | "/agent/reports/$id"
     | "/ai/models/$"
@@ -878,6 +889,7 @@ export interface FileRouteTypes {
     | "/notifications/"
     | "/projects/"
     | "/resources/"
+    | "/runners/"
     | "/services/"
     | "/agent/reports/$id"
     | "/ai/models/$"
@@ -953,6 +965,7 @@ export interface RootRouteChildren {
   NotificationsIndexRoute: typeof NotificationsIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
+  RunnersIndexRoute: typeof RunnersIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
   AgentReportsIdRoute: typeof AgentReportsIdRoute
   AiModelsSplatRoute: typeof AiModelsSplatRoute
@@ -1297,6 +1310,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ResourcesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/runners/": {
+      id: "/runners/"
+      path: "/runners"
+      fullPath: "/runners/"
+      preLoaderRoute: typeof RunnersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/services/": {
       id: "/services/"
       path: "/services"
@@ -1555,6 +1575,7 @@ const rootRouteChildren: RootRouteChildren = {
   NotificationsIndexRoute: NotificationsIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
+  RunnersIndexRoute: RunnersIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
   AgentReportsIdRoute: AgentReportsIdRoute,
   AiModelsSplatRoute: AiModelsSplatRoute,

@@ -39,14 +39,16 @@ func (c *Client) DockerAuth(ctx context.Context, repository, actions string) ([]
 			return nil, fmt.Errorf("reach registry for scoped authentication: %w", err)
 		}
 		challenge := response.Header.Get("WWW-Authenticate")
-		drainAndClose(response.Body)
+		drainBody(response.Body)
+		_ = response.Body.Close()
 		bearer := response.StatusCode == http.StatusUnauthorized && strings.HasPrefix(strings.ToLower(challenge), "bearer ")
 		if c.Config.ScopedOnly && !bearer {
 			if method == http.MethodPost && response.StatusCode == http.StatusAccepted {
 				// Cancel the upload the anonymous probe opened, then refuse.
 				if cancelPath, cancelErr := c.uploadPath(response.Header.Get("Location"), "/v2/"+repository); cancelErr == nil {
 					if cancel, deleteErr := c.requestFor(context.WithoutCancel(ctx), http.MethodDelete, cancelPath, repository); deleteErr == nil {
-						drainAndClose(cancel.Body)
+						drainBody(cancel.Body)
+						_ = cancel.Body.Close()
 					}
 				}
 			}
@@ -64,7 +66,8 @@ func (c *Client) DockerAuth(ctx context.Context, repository, actions string) ([]
 			if cancelErr != nil {
 				return nil, fmt.Errorf("cancel registry authentication probe: %w", cancelErr)
 			}
-			drainAndClose(cancel.Body)
+			drainBody(cancel.Body)
+			_ = cancel.Body.Close()
 			if cancel.StatusCode != http.StatusNoContent && cancel.StatusCode != http.StatusNotFound {
 				return nil, fmt.Errorf("cancel registry authentication probe returned HTTP %d", cancel.StatusCode)
 			}

@@ -69,7 +69,24 @@ type Config struct {
 	// Name is the node's name as it joined. node leave --purge-volumes asks
 	// for it before deleting data. A rename in Loomplane doesn't reach it.
 	Name string `json:"name,omitempty"`
+	// Role is "runner" on a runner, and empty on every other node. A
+	// runner builds in Firecracker microVMs and relays deploys; it never
+	// runs workloads.
+	Role string `json:"role,omitempty"`
+	// PoolID and PoolConnection are the runner pool this runner joined and
+	// the connection that names the pool in plans. Build VMs run under
+	// PoolConnection's scope.
+	PoolID         string `json:"pool_id,omitempty"`
+	PoolConnection string `json:"pool_connection,omitempty"`
+	// FirecrackerConfig is the host config a runner builds with, in the
+	// Firecracker host agent's format.
+	FirecrackerConfig string `json:"firecracker_config,omitempty"`
+	// Ephemeral runners leave Loomplane when they stop.
+	Ephemeral bool `json:"ephemeral,omitempty"`
 }
+
+// RoleRunner is a runner's Role.
+const RoleRunner = "runner"
 
 func (s State) uid() int {
 	if s.euid != nil {

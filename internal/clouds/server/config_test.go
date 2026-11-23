@@ -57,3 +57,27 @@ func TestParseConfig_pinsTheHostAndKeepsCredentialsPrivate(t *testing.T) {
 		})
 	}
 }
+
+func TestParseConfig_relaysThroughARunnerPool(t *testing.T) {
+	host, _ := testKey(t)
+	_, raw := testKey(t)
+	settings := map[string]string{"host": "10.0.0.5", "user": "deploy", "host_key": string(ssh.MarshalAuthorizedKey(host.PublicKey()))}
+	cfg, err := ParseConfig(raw, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dial != nil || cfg.Details["via_pool_id"] != "" {
+		t.Fatal("a server with no relay pool dials through one")
+	}
+	settings["via_pool_id"] = "rpool_01h2xcejqtf2nbrexx3vqjhp41"
+	if cfg, err = ParseConfig(raw, settings); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dial == nil || cfg.Details["via_pool_id"] != settings["via_pool_id"] {
+		t.Fatalf("relayed config: %+v", cfg.Details)
+	}
+	settings["via_pool_id"] = "conn_not_a_pool"
+	if _, err = ParseConfig(raw, settings); err == nil {
+		t.Fatal("a relay through something that isn't a pool was accepted")
+	}
+}

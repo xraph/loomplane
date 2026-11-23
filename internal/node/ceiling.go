@@ -25,6 +25,9 @@ const ceilingFile = "allow.json"
 type Ceiling struct {
 	NodeID    string               `json:"node_id"`
 	Endpoints []nodeproto.Endpoint `json:"endpoints"`
+	// Relay is the networks a runner may relay deploys to, as CIDR
+	// prefixes. Only the owner widens it, on the machine.
+	Relay []string `json:"relay,omitempty"`
 }
 
 // errCeilingUntrusted means allow.json exists but belongs to someone the

@@ -1,0 +1,20 @@
+[Unit]
+Description=Loomplane runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# A runner runs Firecracker under the jailer, which needs root for KVM,
+# cgroups, network namespaces and tap devices. Every build runs in its own
+# microVM as an unprivileged jailed user.
+User=root
+ExecStart={{.Exec}} runner run --state-dir {{.StateDir}}
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=77
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -19,6 +19,9 @@ type NodeJoinScope struct {
 	// instance edge.
 	EdgeScope string `json:"edge_scope,omitempty"`
 	CloudID   string `json:"cloud_id,omitempty"`
+	// Role "runner" with PoolID makes the machine a runner of that pool.
+	Role   string `json:"role,omitempty"`
+	PoolID string `json:"pool_id,omitempty"`
 	// LifetimeMinutes is how long the token can be used. Zero means an hour,
 	// which is also the most Loomplane allows.
 	LifetimeMinutes int `json:"lifetime_minutes,omitempty"`
@@ -45,6 +48,8 @@ type JoinRequest struct {
 	Inventory       nodeproto.Inventory  `json:"inventory"`
 	NodeVersion     string               `json:"node_version"`
 	ProtocolVersion int                  `json:"protocol_version"`
+	// Role is "runner" when the machine joins as a runner.
+	Role string `json:"role,omitempty"`
 }
 
 // JoinResult is what a machine learns on joining.
@@ -55,6 +60,10 @@ type JoinResult struct {
 	IdentityGeneration int64                `json:"identity_generation"`
 	Endpoints          []nodeproto.Endpoint `json:"endpoints"`
 	CloudID            string               `json:"cloud_id,omitempty"`
+	// Role, PoolID and PoolConnection are a runner's.
+	Role           string `json:"role,omitempty"`
+	PoolID         string `json:"pool_id,omitempty"`
+	PoolConnection string `json:"pool_connection,omitempty"`
 }
 
 // Node is one machine joined to an organization.

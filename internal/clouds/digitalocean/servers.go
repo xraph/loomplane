@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -138,6 +139,22 @@ func (c *Client) ListServers(ctx context.Context, credential provider.Infrastruc
 	}
 	return c.listInfrastructureServers(ctx, credential, "")
 }
+
+// extraTagPattern is a tag a server spec may add: Loomplane's own prefix,
+// then what DigitalOcean allows in a tag.
+var extraTagPattern = regexp.MustCompile(`^loomplane-[a-zA-Z0-9_:-]{1,200}$`)
+
+// ListServersTagged lists the servers carrying tag.
+func (c *Client) ListServersTagged(ctx context.Context, credential provider.InfrastructureCredential, tag string) ([]provider.InfrastructureServer, error) {
+	if !extraTagPattern.MatchString(tag) {
+		return nil, provider.ErrInfrastructureInvalid
+	}
+	if err := c.infrastructureIdentity(ctx, credential); err != nil {
+		return nil, err
+	}
+	return c.listInfrastructureServers(ctx, credential, tag)
+}
+
 func (c *Client) listInfrastructureServers(ctx context.Context, credential provider.InfrastructureCredential, tag string) ([]provider.InfrastructureServer, error) {
 	result := []provider.InfrastructureServer{}
 	seen := map[int64]bool{}
@@ -208,6 +225,11 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 	if strings.TrimSpace(spec.OperationID) == "" || len(spec.OperationID) > 256 || spec.Name == "" || spec.Region == "" || spec.Size == "" || spec.Image == "" || (spec.FirewallTag != "" && !firewallTagPattern.MatchString(spec.FirewallTag)) {
 		return result, provider.ErrInfrastructureInvalid
 	}
+	for _, t := range spec.Tags {
+		if !extraTagPattern.MatchString(t) {
+			return result, provider.ErrInfrastructureInvalid
+		}
+	}
 	if err := c.infrastructureIdentity(ctx, credential); err != nil {
 		return result, err
 	}
@@ -252,6 +274,7 @@ func (c *Client) CreateServer(ctx context.Context, credential provider.Infrastru
 	if spec.FirewallTag != "" {
 		in.Tags = append(in.Tags, spec.FirewallTag)
 	}
+	in.Tags = append(in.Tags, spec.Tags...)
 	var out struct {
 		Droplet droplet             `json:"droplet"`
 		Links   infrastructureLinks `json:"links"`

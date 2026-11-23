@@ -11,9 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	poolrelay "github.com/xraph/loomplane/internal/relay"
 )
 
 type Credential struct{ CA, Certificate, Key string }
@@ -42,8 +45,41 @@ func NewClient(raw []byte, settings map[string]string) (*Client, error) {
 	}
 	endpoint.Path = ""
 	sum := sha256.Sum256([]byte(c.CA))
-	return &Client{Endpoint: endpoint.String(), HostID: settings["host_id"], Details: map[string]string{"endpoint": endpoint.String(), "host_id": settings["host_id"], "host_ca": hex.EncodeToString(sum[:])}, HTTP: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{cert}}, MaxIdleConns: 8, IdleConnTimeout: time.Minute, ResponseHeaderTimeout: 35 * time.Minute}, Timeout: 36 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("host redirects are not permitted") }}}, nil
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{cert}}, MaxIdleConns: 8, IdleConnTimeout: time.Minute, ResponseHeaderTimeout: 35 * time.Minute}
+	details := map[string]string{"endpoint": endpoint.String(), "host_id": settings["host_id"], "host_ca": hex.EncodeToString(sum[:])}
+	// A host only a runner can reach is dialed through the runner's pool.
+	// Mutual TLS runs end to end, as ever.
+	if pool := settings[poolrelay.SettingKey]; pool != "" {
+		if !poolrelay.ValidPool(pool) {
+			return nil, ErrInvalid
+		}
+		details[poolrelay.SettingKey], transport.DialContext = pool, poolrelay.DialFunc(pool)
+	}
+	return &Client{Endpoint: endpoint.String(), HostID: settings["host_id"], Details: details, HTTP: &http.Client{Transport: transport, Timeout: 36 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("host redirects are not permitted") }}}, nil
 }
+
+// NewStreamClient reaches a host served over a Loomplane node's own
+// connection, as a runner serves its builds: dial opens one stream to it.
+// The node transport is already authenticated and encrypted, so this speaks
+// plain HTTP over the stream. hostID is the host's own ID, which Check holds
+// it to.
+func NewStreamClient(hostID string, dial func(context.Context) (net.Conn, error)) (*Client, error) {
+	if !identifier.MatchString(hostID) || dial == nil {
+		return nil, ErrInvalid
+	}
+	transport := &http.Transport{
+		DialContext:           func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
+		MaxIdleConns:          8,
+		IdleConnTimeout:       time.Minute,
+		ResponseHeaderTimeout: 35 * time.Minute,
+	}
+	return &Client{Endpoint: "http://" + streamHost, HostID: hostID, Details: map[string]string{"host_id": hostID}, HTTP: &http.Client{Transport: transport, Timeout: 36 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("host redirects are not permitted") }}}, nil
+}
+
+// streamHost is the host name a stream client's requests carry. Nothing
+// resolves it: every connection is a node stream.
+const streamHost = "runner.loomplane.invalid"
+
 func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
 func (c *Client) call(ctx context.Context, method, path string, in, out any, source io.Reader) error {
 	var body io.Reader

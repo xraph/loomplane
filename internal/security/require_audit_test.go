@@ -19,6 +19,7 @@ import (
 // project passes that project's ID instead, so a team's grant there
 // counts. A new Require(..., "") has to be added here on purpose.
 var workspaceChecks = map[string]int{
+	"internal/buildrunner/service.go:ListPools":                 1,
 	"internal/aisettings/service.go:Get":                        2,
 	"internal/aisettings/service.go:Update":                     1,
 	"internal/aisettings/service.go:PutProviderKey":             1,
@@ -235,8 +236,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 109 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, the server builder, DigitalOcean registry and database capacity checks, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 110 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, the server builder, DigitalOcean registry and database capacity checks and listing runner pools, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string

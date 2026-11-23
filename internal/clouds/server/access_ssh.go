@@ -32,7 +32,13 @@ func dialSSH(ctx context.Context, cfg *Config) (*sshAccess, error) {
 	if cfg == nil || cfg.Signer == nil || cfg.HostKey == nil {
 		return nil, ErrInvalid
 	}
-	conn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", cfg.Address)
+	dial := cfg.Dial
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 15 * time.Second}).DialContext
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	conn, err := dial(dialCtx, "tcp", cfg.Address)
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("reach SSH server: %w", err)
 	}

@@ -5,6 +5,8 @@ description: Join a machine to Loomplane as a node, deploy and build on its Dock
 
 A node is a machine that joins your organization and keeps one connection open to Loomplane. It dials out and opens no port, so a laptop behind a router and a server behind a firewall join the same way.
 
+A machine can instead join as a [runner](/docs/clouds/runners), which builds in Firecracker microVMs and relays deploys. A machine is a node or a runner, never both.
+
 <Callout>
   A node can join, report on itself, update and be revoked. With `docker` allowed it also takes deploys and builds, and it can serve a domain directly if it has a public address. Relaying traffic for nodes behind NAT, and Kubernetes through a node, come later.
 </Callout>
@@ -161,7 +163,9 @@ It lists what runs on the node first, and warns about any database with no backu
 
 | Command | What it does |
 |---|---|
-| `join` | Joins this machine and installs the service |
+| `start` | Joins this machine if it hasn't, and starts the node. It survives reboots until `stop`. `--once` runs it in this terminal instead |
+| `stop` | Stops the node and keeps it stopped, across reboots, until `start`. What it runs keeps running |
+| `join` | Joins this machine and installs the service. `start` does the same when the machine hasn't joined |
 | `run` | Runs the node in the foreground. The service uses this |
 | `status` | Shows the node's config, key fingerprint, endpoints and whether it runs. `--json` is for scripts |
 | `allow ENDPOINT...` | Widens `allow.json` and tells the node. Needs root on Linux |

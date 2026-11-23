@@ -52,7 +52,7 @@ func (s *Service) RefreshRegistry(ctx context.Context, org, id string) (*Connect
 	if err != nil {
 		return nil, nil, err
 	}
-	checked, err := s.check(ctx, c.Cloud, checker, raw, c.Details)
+	checked, err := s.check(ctx, c.OrgID, c.Cloud, checker, raw, c.Details)
 	if err != nil {
 		return nil, nil, err
 	}

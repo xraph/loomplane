@@ -320,3 +320,30 @@ func TestScriptVerifiesBeforeItUnpacks(t *testing.T) {
 		t.Fatalf("a bad archive must fail the check, not the unpack. err %v\n%s", err, out)
 	}
 }
+
+// LOOMPLANE_ROLE=runner installs the same verified loomctl, then starts a
+// runner with the token kept out of argv.
+func TestScriptStartsARunner(t *testing.T) {
+	r := newShRig(t, "linux", "x86_64", "1000")
+	r.stub("sudo", `echo "sudo $*" >> "$LOG"
+case "$1" in --preserve-env=LOOMPLANE_JOIN_TOKEN) shift ;; esac
+exec "$@"`)
+	out, err := r.run(true, []string{"LOOMPLANE_ROLE=runner", "LOOMPLANE_JOIN_TOKEN=lpj_secret"})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := r.joined(); got != "runner start --url https://loom.example.com" {
+		t.Fatalf("loomctl ran with %q\n%s", got, out)
+	}
+	if log := r.logged(); strings.Contains(log, "lpj_secret") {
+		t.Fatalf("the token reached a command line:\n%s", log)
+	}
+}
+
+func TestScriptRefusesARunnerOffLinux(t *testing.T) {
+	r := newShRig(t, "darwin", "arm64", "501")
+	out, err := r.run(true, []string{"LOOMPLANE_ROLE=runner", "LOOMPLANE_JOIN_TOKEN=lpj_secret"})
+	if err == nil || !strings.Contains(out, "need Linux with KVM") {
+		t.Fatalf("a runner started on macOS: %v\n%s", err, out)
+	}
+}

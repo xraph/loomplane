@@ -26,6 +26,10 @@ const (
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"
 	Cloudflare   = "cloudflare"
+	// Runner is a runner pool: Loomplane nodes with the runner role that
+	// build each image in a fresh Firecracker microVM. Its details come
+	// from the pool's own records, so it has no credential.
+	Runner = "runner"
 )
 
 // cloudTitles name the clouds that can be signed in to or connected

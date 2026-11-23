@@ -4,6 +4,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/xraph/loomplane/internal/buildpolicy"
+	"github.com/xraph/loomplane/internal/relay"
 )
 
 var (
@@ -34,6 +36,9 @@ type Config struct {
 	Signer                ssh.Signer
 	Node                  *NodeTarget
 	Details               map[string]string
+	// Dial reaches Address. Nil dials TCP from Loomplane's own network; a
+	// connection relayed through a runner pool dials through a runner.
+	Dial func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // RecordedDetails applies transport defaults while retaining the recorded
@@ -113,9 +118,18 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	if checkErr := checkAdvertiseHost(advertise); checkErr != nil {
 		return nil, checkErr
 	}
-	return &Config{Address: net.JoinHostPort(host, strconv.Itoa(port)), User: user, Socket: socket, HostKey: pub, Signer: signer, Details: map[string]string{
+	cfg := &Config{Address: net.JoinHostPort(host, strconv.Itoa(port)), User: user, Socket: socket, HostKey: pub, Signer: signer, Details: map[string]string{
 		"build_workers": settings["build_workers"], "host": host, "port": strconv.Itoa(port), "user": user, "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), "docker_socket": socket, "advertise_host": advertise,
-	}}, nil
+	}}
+	// A server only a runner can reach is dialed through the runner's
+	// pool. SSH runs end to end, with the host key pinned as ever.
+	if pool := strings.TrimSpace(settings[relay.SettingKey]); pool != "" {
+		if !relay.ValidPool(pool) {
+			return nil, fmt.Errorf("%w: %s must be a runner pool's ID", ErrInvalid, relay.SettingKey)
+		}
+		cfg.Details[relay.SettingKey], cfg.Dial = pool, relay.DialFunc(pool)
+	}
+	return cfg, nil
 }
 
 // dockerSocket is the daemon socket settings name, by default Docker's own.

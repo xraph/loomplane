@@ -21,7 +21,7 @@ func TestNodeShRendersURLAndVersion(t *testing.T) {
 		t.Fatalf("content type %q", ct)
 	}
 	body := out.Body.String()
-	for _, want := range []string{"#!/bin/sh", "set -eu", "LOOMPLANE_URL='" + publicURL + "'", "LOOMPLANE_VERSION='v1.8.0'", `node join --url "$LOOMPLANE_URL" "$@"`} {
+	for _, want := range []string{"#!/bin/sh", "set -eu", "LOOMPLANE_URL='" + publicURL + "'", "LOOMPLANE_VERSION='v1.8.0'", `role="node join"`, `role="runner start"`, `$role --url "$LOOMPLANE_URL" "$@"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the script lacks %q", want)
 		}

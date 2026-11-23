@@ -50,3 +50,53 @@ func TestCheckPlatform(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckRunner(t *testing.T) {
+	org := func() map[string]string {
+		return map[string]string{"isolation": "firecracker", "build_isolation": "ready", "runtime_identity": strings.Repeat("b", 64), "host_id": "runner-1", "pool_scope": "organization"}
+	}
+	platform := func() map[string]string {
+		d := org()
+		d["pool_scope"] = "platform"
+		d["platform"] = "true"
+		d["smt_active"] = "false"
+		d["denied_ports"] = "25, 465,587"
+		d["per_org_vms"], d["per_org_vcpus"], d["per_org_memory_mib"] = "4", "8", "8192"
+		return d
+	}
+	for _, tc := range []struct {
+		name    string
+		details map[string]string
+		mutate  func(map[string]string)
+		allowed bool
+	}{
+		{"organization pool with microVM evidence", org(), nil, true},
+		{"project pool", org(), func(d map[string]string) { d["pool_scope"] = "project" }, true},
+		{"no isolation kind", org(), func(d map[string]string) { delete(d, "isolation") }, false},
+		{"container isolation is never enough", org(), func(d map[string]string) { d["isolation"] = "container" }, false},
+		{"check not passed", org(), func(d map[string]string) { d["build_isolation"] = "pending" }, false},
+		{"short runtime identity", org(), func(d map[string]string) { d["runtime_identity"] = "abc" }, false},
+		{"no host id", org(), func(d map[string]string) { d["host_id"] = "" }, false},
+		{"dedicated docker claim does not help", org(), func(d map[string]string) { d["isolation"] = ""; d["build_workers"] = "dedicated" }, false},
+		{"platform pool passing the platform policy", platform(), nil, true},
+		{"platform pool with SMT on", platform(), func(d map[string]string) { d["smt_active"] = "true" }, false},
+		{"platform pool not reporting SMT", platform(), func(d map[string]string) { delete(d, "smt_active") }, false},
+		{"platform pool allowing mail", platform(), func(d map[string]string) { d["denied_ports"] = "25,465" }, false},
+		{"platform pool without per-org limits", platform(), func(d map[string]string) { d["per_org_vms"] = "0" }, false},
+		{"platform pool not in platform mode", platform(), func(d map[string]string) { d["platform"] = "" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.mutate != nil {
+				tc.mutate(tc.details)
+			}
+			err := CheckBackend(tc.details, "runner", false)
+			if (err == nil) != tc.allowed {
+				t.Fatalf("allowed=%v: %v", tc.allowed, err)
+			}
+			// A runner's evidence is its own: pooled never changes the answer.
+			if pooledErr := CheckBackend(tc.details, "runner", true); (pooledErr == nil) != (err == nil) {
+				t.Fatalf("pooled changed the result: %v vs %v", pooledErr, err)
+			}
+		})
+	}
+}

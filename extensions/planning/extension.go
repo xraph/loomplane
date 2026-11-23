@@ -104,13 +104,15 @@ type Extension struct {
 	// and meter an edition that bills provides.
 	container forge.Container
 	// metering is the Gate and Meter handed out before Start chooses them.
-	metering            metering.Late
-	cfg                 config.Config
-	engineOf            func() *engine.Engine
-	ctrlplane           func() *app.CtrlPlane
-	deployments         *orchestration.Deployments
-	plugins             *plugins.Set
-	streams             server.NodeStreams
+	metering    metering.Late
+	cfg         config.Config
+	engineOf    func() *engine.Engine
+	ctrlplane   func() *app.CtrlPlane
+	deployments *orchestration.Deployments
+	plugins     *plugins.Set
+	streams     server.NodeStreams
+	// runners reach runner pools for builds that name one.
+	runners             deployments.RunnerPools
 	manifests           *manifests.Service
 	plans               *planning.Service
 	memberPrerequisites *planning.MemberPrerequisiteService
@@ -143,6 +145,13 @@ type Extension struct {
 // deployment workflow the platform gave Dispatch; ctrlplane is Ctrl
 // Plane, which runs Cloud Run services. streams reach joined nodes, which
 // deploy and build on their Docker; nil reaches only SSH servers.
+// WithRunners gives the extension the runner pool service its builds
+// reach runners through. Call it before the platform starts.
+func (e *Extension) WithRunners(r deployments.RunnerPools) *Extension {
+	e.runners = r
+	return e
+}
+
 func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestration.Deployments, ctrlplane func() *app.CtrlPlane, plugs *plugins.Set, streams server.NodeStreams) *Extension {
 	return &Extension{
 		plugins:       plugs,
@@ -419,6 +428,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	clusterTarget := &deployments.OwnedTarget{Gate: &e.metering, Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: managedControllers, Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey, NodeStreams: e.streams}
 	firecrackerTarget := &deployments.OwnedTarget{Gate: &e.metering, Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore, NodeStreams: e.streams}
 	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
+	serverTarget.Runners, clusterTarget.Runners, firecrackerTarget.Runners = e.runners, e.runners, e.runners
+	serverTarget.AWS, clusterTarget.AWS, firecrackerTarget.AWS = awsClient(), awsClient(), awsClient()
 	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
 	firecrackerTarget.Bindings = planStore.ListBindings
 	executors[connections.Firecracker] = firecrackerTarget
@@ -542,6 +553,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		// Render resources with no record as a move into their environment.
 		NativeFallbacks: deployStore,
 	})
+	if d, ok := e.runners.(planning.BuildDefaults); ok {
+		e.plans.SetBuildDefaults(d)
+	}
 
 	e.memberPrerequisites = &planning.MemberPrerequisiteService{Variables: variables, Store: planStore, Authz: authz, Projects: prj, Principal: principal, Audit: auditor, Observer: &planning.KubernetesPrerequisiteObserver{Credentials: clouds}}
 	e.plans.BindPlacementGroupPrerequisites(e.memberPrerequisites)

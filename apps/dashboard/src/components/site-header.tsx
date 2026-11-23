@@ -52,6 +52,7 @@ export type Crumb = {
     | "/ai/models"
     | "/assistant"
     | "/nodes"
+    | "/runners"
 }
 
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {

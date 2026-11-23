@@ -51,6 +51,7 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
 	releaseprepext "github.com/xraph/loomplane/extensions/releaseprep"
+	runnersext "github.com/xraph/loomplane/extensions/runners"
 	"github.com/xraph/loomplane/extensions/web"
 	"github.com/xraph/loomplane/internal/buildinfo"
 	"github.com/xraph/loomplane/internal/config"
@@ -163,13 +164,22 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// open streams to nodes through nodes.Hub(). The replica is named the way
 	// Dispatch names this process: host and pid.
 	nodes := nodesext.New(cfg, owner())
+	// Runner pools build in runners' microVMs and relay deploys. Planning
+	// reaches runners through the service, and a joining runner is
+	// recorded in its pool by it.
+	runners := runnersext.New(cfg, nodes.Hub(), jobs.Engine)
+	nodes.SetRunners(runners.Service())
+	runners.SetRevoker(nodes)
+	ident := identity.New(cfg)
+	// Global runner pools are a platform admin's.
+	runners.SetAdmins(ident)
 
 	exts := []forge.Extension{
 		newSchemaGuard(cfg),
 		db,
 		newFiles(cfg),
 		notificationsext.NewDelivery(cfg),
-		identity.New(cfg),
+		ident,
 		notificationsext.New(cfg),
 		jobs,
 		ctrl,
@@ -179,9 +189,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		fleetext.New(cfg),
 		connectionsext.New(cfg, plugs, nodes.Hub()),
 		cloudinfraext.New(cfg, deployments, nodes.Hub()),
+		runners,
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
-		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs, nodes.Hub()),
+		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs, nodes.Hub()).WithRunners(runners.Service()),
 		octopusext.New(cfg, jobs.Engine),
 		platformcloudext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),

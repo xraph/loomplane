@@ -3,6 +3,9 @@ package nodeproto
 import (
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 )
 
 // Targets of the docker endpoint.
@@ -73,6 +76,9 @@ func (h StreamHeader) Validate() error {
 	if len(h.Arg) > MaxArgSize {
 		return fmt.Errorf("nodeproto: arg is %d bytes, over the %d byte limit", len(h.Arg), MaxArgSize)
 	}
+	if h.Endpoint == EndpointRelay {
+		return validRelayTarget(h.Target)
+	}
 	if h.Endpoint != EndpointDocker || h.Target != DockerTargetFenced {
 		return nil
 	}
@@ -94,4 +100,18 @@ func (h StreamHeader) Validate() error {
 		return nil
 	}
 	return fmt.Errorf("nodeproto: unknown fence mode %q", f.Mode)
+}
+
+// validRelayTarget accepts host:port with a port from 1 to 65535 and a host
+// that is a name or an address, nothing else.
+func validRelayTarget(target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil || host == "" || len(target) > 300 || strings.ContainsAny(host, " /\\\x00@") {
+		return fmt.Errorf("nodeproto: relay target %q is not host:port", target)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("nodeproto: relay target %q has no valid port", target)
+	}
+	return nil
 }
