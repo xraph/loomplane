@@ -10,6 +10,10 @@ import type {
   Provider,
   Target,
 } from "@/client/forge/loomplane/types"
+import {
+  existingResourceId,
+  resourceEnabledIn,
+} from "@/lib/replace-resource"
 
 export type PlacementFields = {
   /** cloud names the Cloud cloudTarget or cloudTags resolve in; none is the default. */
@@ -20,6 +24,7 @@ export type PlacementFields = {
   cloud_target?: string
   cloudTags?: string[]
   cloud_tags?: string[]
+  existingResource?: string
   provider?: string
   region?: string
   enabled?: boolean
@@ -228,6 +233,15 @@ export function placementSettings(
 ): PlacementFields & { provider: string; region: string; enabled: boolean } {
   const d = m.defaults
   const s = row.entry
+  const existing = existingResourceId(s as Record<string, unknown>)
+  if (row.section === "resources" && existing) {
+    return {
+      provider: "",
+      region: "",
+      enabled: resourceEnabledIn(s as Record<string, unknown>, environment),
+      existingResource: existing,
+    }
+  }
   let provider = s.provider || d?.provider || ""
   let region = s.region || (provider === d?.provider ? d?.region || "" : "")
   const o = s.environments?.[environment]
@@ -489,6 +503,8 @@ export function runsOn(
 ): RunsOn {
   const provider = (name: string) => catalog.find((p) => p.name === name)
   if (!value.enabled) return { name: `Off in ${environment}`, where: "" }
+  if (value.existingResource)
+    return { name: "Existing resource", where: "Managed externally" }
   // cloudTargets are the default Cloud's; another Cloud's target is named,
   // not looked up there.
   if (value.cloud && (value.cloudTarget || value.cloudTags?.length))

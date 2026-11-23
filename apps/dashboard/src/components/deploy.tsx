@@ -19,6 +19,7 @@ import {
   useManifestsSave,
   usePlansList,
   useProjectsGraph,
+  useProviderResourcesList,
   useProvidersList,
 } from "@/client/forge/loomplane/hooks"
 import type {
@@ -28,6 +29,7 @@ import type {
   Plan,
   Project,
   Provider,
+  ProviderResource,
 } from "@/client/forge/loomplane/types"
 import {
   useInvalidate,
@@ -51,6 +53,10 @@ import {
   CloudSectionHead,
 } from "@/components/cloud-targets/infrastructure-ui"
 import {
+  ResourceEditDialog,
+  type ResourceEditMode,
+} from "@/components/deployment-resource-actions"
+import {
   PlacementPanel,
   RunsOnCell,
   usePlacementContext,
@@ -58,6 +64,15 @@ import {
 import { ManifestHistory } from "@/components/manifest-history"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone as RunTone } from "@/components/runs"
+import { Wiring } from "@/components/service-wiring"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
 import {
@@ -70,8 +85,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { entries, envVarFor, slug } from "@/lib/add-service"
 import { AddServiceButton } from "@/lib/add-service-context"
 import { lockLabel, resourceLabel } from "@/lib/architecture"
+import { freeName, takenNames } from "@/lib/catalog-add"
 import {
   useDeploymentDraft,
   useDeploymentWrites,
@@ -80,6 +97,11 @@ import { cloudLabel } from "@/lib/clouds"
 import { formatDate, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
+import { providerResourceReadiness } from "@/lib/provider-resources"
+import {
+  compatibleResourceKind,
+  existingResourceId,
+} from "@/lib/replace-resource"
 import {
   placementRows,
   placementSettings,
@@ -349,6 +371,10 @@ export function WhereServicesRun({ project }: { project: Project }) {
   const edit = useMutation(useManifestsEdit)
   const save = useMutation(useManifestsSave)
   const [scaling, setScaling] = useState<PlacementRow | null>(null)
+  const [resourceEdit, setResourceEdit] = useState<{
+    name: string
+    mode: ResourceEditMode
+  } | null>(null)
   const [removing, setRemoving] = useState<PlacementRow | null>(null)
   const [removalError, setRemovalError] = useState("")
   const [checking, setChecking] = useState(false)
@@ -556,7 +582,12 @@ export function WhereServicesRun({ project }: { project: Project }) {
                   size="sm"
                   variant="outline"
                   aria-label={`Change where ${row.name} runs`}
-                  onClick={() => setOpen(row)}
+                  onClick={() =>
+                    row.section === "resources" &&
+                    existingResourceId(row.entry as Record<string, unknown>)
+                      ? setResourceEdit({ name: row.name, mode: "placement" })
+                      : setOpen(row)
+                  }
                 >
                   Change
                 </Button>
@@ -572,6 +603,30 @@ export function WhereServicesRun({ project }: { project: Project }) {
                 )}
                 {can("project:update") && row.section !== "gateways" && (
                   <RowMenu label={`More actions for ${row.name}`}>
+                    {row.section === "resources" && (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setResourceEdit({
+                              name: row.name,
+                              mode: "modify",
+                            })
+                          }
+                        >
+                          Modify settings
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setResourceEdit({
+                              name: row.name,
+                              mode: "replace",
+                            })
+                          }
+                        >
+                          Use existing resource
+                        </DropdownMenuItem>
+                      </>
+                    )}
                     <DropdownMenuItem
                       variant="destructive"
                       onClick={() => {
@@ -640,6 +695,16 @@ export function WhereServicesRun({ project }: { project: Project }) {
           This removes the entry across environments. Replace dependencies that
           use it first. Entries already deployed stay in the manifest.
         </CloudConfirm>
+      )}
+      {resourceEdit && (
+        <ResourceEditDialog
+          projectId={project.id}
+          environment={environment}
+          name={resourceEdit.name}
+          edit={resourceEdit.mode}
+          close={() => setResourceEdit(null)}
+          onSaved={() => void current.refetch()}
+        />
       )}
       {manifest && current.data && (
         <PlacementPanel
@@ -1001,10 +1066,12 @@ export function FindingActions({
   finding: f,
   project,
   environment,
+  replan,
 }: {
   finding: Finding
   project: Project
   environment: string
+  replan?: () => Promise<void>
 }) {
   const { can: workspaceCan } = useOrganization()
   const can = useProjectCan(project.id)
@@ -1033,7 +1100,7 @@ export function FindingActions({
     f.name &&
     (f.code === "unconfirmed-resource" || f.code === "unprovided-resource")
   )
-    return <ResourceChoice project={project} kind={f.name} />
+    return <ResourceChoice project={project} kind={f.name} replan={replan} />
   return null
 }
 
@@ -1097,11 +1164,21 @@ function ConnectionPicker({
  * ResourceChoice answers a finding about a resource the manifest doesn't
  * provision: add one, or ignore the kind. Either saves a new revision.
  */
-function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
+function ResourceChoice({
+  project,
+  kind,
+  replan,
+}: {
+  project: Project
+  kind: string
+  replan?: () => Promise<void>
+}) {
+  const canReadInventory = useOrganization().can("infrastructure:read")
   const current = useQuery(useManifestsCurrent, { path: { id: project.id } })
   const providers = useQuery(useProvidersList)
   const save = useMutation(useManifestsEdit)
   const invalidate = useInvalidate()
+  const [pickingExisting, setPickingExisting] = useState(false)
   const manifest = current.data?.manifest
   const catalog = providers.data?.providers
   if (!manifest || !catalog) return null
@@ -1115,7 +1192,8 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
     try {
       await save.mutateAsync({ path: { id: project.id }, body })
       invalidate(useManifestsCurrent)
-      toast.success(`${done}. Plan again to see the result.`)
+      if (replan) await replan()
+      else toast.success(`${done}. Plan again to see the result.`)
     } catch (err) {
       toast.error(messageOf(err, "The manifest wasn't saved."))
     }
@@ -1137,6 +1215,16 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
           Add {resourceLabel(kind)}
         </Button>
       )}
+      {canReadInventory && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={save.isPending}
+          onClick={() => setPickingExisting(true)}
+        >
+          Use existing
+        </Button>
+      )}
       <Button
         size="sm"
         variant="outline"
@@ -1150,7 +1238,197 @@ function ResourceChoice({ project, kind }: { project: Project; kind: string }) {
       >
         It doesn&apos;t use {resourceLabel(kind)}
       </Button>
+      {pickingExisting && (
+        <UseExistingForFinding
+          project={project}
+          kind={kind}
+          manifest={manifest}
+          replan={replan}
+          onClose={() => setPickingExisting(false)}
+        />
+      )}
     </span>
+  )
+}
+
+function UseExistingForFinding({
+  project,
+  kind,
+  manifest,
+  replan,
+  onClose,
+}: {
+  project: Project
+  kind: string
+  manifest: Manifest
+  replan?: () => Promise<void>
+  onClose: () => void
+}) {
+  const inventory = useQuery(useProviderResourcesList)
+  const save = useMutation(useManifestsEdit)
+  const invalidate = useInvalidate()
+  const now = useNow(60000)
+  const [choice, setChoice] = useState("")
+  const [neededBy, setNeededBy] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState("")
+
+  const allInventory = (inventory.data?.resources ?? []).filter(
+    (r): r is ProviderResource => !!r
+  )
+  const attachedIds = new Set(
+    Object.values(manifest.resources ?? {})
+      .map((e) => existingResourceId(e as Record<string, unknown>))
+      .filter((id): id is string => !!id)
+  )
+  const ready = allInventory.filter(
+    (r) =>
+      compatibleResourceKind(r.kind, kind) &&
+      providerResourceReadiness(r, now).discovery === "Observed" &&
+      !!r.endpointId &&
+      ![
+        "native_binding_required",
+        "identity_verification_needed",
+      ].includes(r.connectionState) &&
+      !attachedIds.has(r.id)
+  )
+  const readyIds = new Set(ready.map((r) => r.id))
+  const unreadyCount = allInventory.filter(
+    (r) =>
+      r.status !== "missing" &&
+      compatibleResourceKind(r.kind, kind) &&
+      !readyIds.has(r.id) &&
+      !attachedIds.has(r.id)
+  ).length
+  const options = ready.map((r) => ({
+    value: r.id,
+    label: [r.name, r.provider, r.region].filter(Boolean).join(" · "),
+  }))
+  const chosen = ready.find((r) => r.id === choice)
+  const serviceEntries = entries(manifest).filter(
+    (e) => e.section === "services"
+  )
+  const taken = takenNames(manifest)
+  const targetName = chosen ? freeName(slug(chosen.name), taken) : kind
+
+  const submit = async () => {
+    if (!chosen || busy) return
+    setBusy(true)
+    setError("")
+    try {
+      if (!saved) {
+        await save.mutateAsync({
+          path: { id: project.id },
+          body: {
+            addResource: {
+              name: targetName,
+              kind,
+              existingResource: chosen.id,
+              ...(neededBy.length ? { neededBy } : {}),
+            },
+          },
+        })
+        setSaved(true)
+        invalidate(useManifestsCurrent)
+        if (!replan) {
+          toast.success(
+            `Attached ${chosen.name} to the manifest. Plan again to see the result.`
+          )
+        }
+      }
+      if (replan) await replan()
+      onClose()
+    } catch (err) {
+      setError(messageOf(err, "Couldn't attach the existing resource."))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            Use an existing {resourceLabel(kind)} resource
+          </DialogTitle>
+          <DialogDescription>
+            Attach a verified workspace resource to {project.name}&apos;s
+            loomplane.yaml without provisioning a new one.
+          </DialogDescription>
+        </DialogHeader>
+        <Select
+          items={options}
+          value={choice || null}
+          onValueChange={(v) => setChoice(v ?? "")}
+        >
+          <SelectTrigger
+            className="w-full"
+            aria-label="Existing resource"
+            disabled={busy || saved}
+          >
+            <SelectValue
+              placeholder={`Choose an existing ${resourceLabel(kind)} resource`}
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {inventory.status === "error" ? (
+          <QueryError
+            error={inventory.error}
+            retry={inventory.refetch}
+            fallback="Couldn't load workspace resources."
+          />
+        ) : !inventory.data ? (
+          <p role="status">Loading workspace resources…</p>
+        ) : !options.length ? (
+          <p className="text-sm text-muted-foreground">
+            No verified {resourceLabel(kind)} workspace resources are available
+            to attach.
+          </p>
+        ) : null}
+        {unreadyCount > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {unreadyCount === 1
+              ? "1 compatible workspace resource needs sync or verified credentials in "
+              : `${unreadyCount} compatible workspace resources need sync or verified credentials in `}
+            <Link to="/integrations" className="underline underline-offset-4">
+              Integrations
+            </Link>{" "}
+            before attaching.
+          </p>
+        )}
+        <fieldset disabled={busy || saved} className="min-w-0">
+          <Wiring
+            label="Used by"
+            help={`Each service picked gets ${targetName}'s address in ${envVarFor({ name: targetName, kind }, "resources")}.`}
+            options={serviceEntries}
+            value={neededBy}
+            onChange={setNeededBy}
+            hint={() => envVarFor({ name: targetName, kind }, "resources")}
+          />
+        </fieldset>
+        {error && <p role="alert">{error}</p>}
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={busy || (!saved && !chosen)}
+            onClick={() => void submit()}
+          >
+            {replan ? "Attach and plan again" : "Attach resource"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

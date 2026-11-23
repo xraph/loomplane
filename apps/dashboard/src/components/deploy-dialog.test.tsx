@@ -443,3 +443,137 @@ it("does not silently change an unavailable environment preset", async () => {
     screen.queryByRole("button", { name: "Review plan" })
   ).not.toBeInTheDocument()
 })
+
+it("renders the Resources table on DeployScreen and keeps dependent services selected after editing a resource", async () => {
+  const writes: { method: string; url: string; body: unknown }[] = []
+  let revision = 1
+  let currentManifest: Record<string, unknown> = {
+    version: 1,
+    services: {
+      api: { repo: "frontend", source: "apps/api", provider: "vercel" },
+      web: {
+        repo: "frontend",
+        source: "apps/web",
+        provider: "vercel",
+        needs: ["postgres"],
+      },
+    },
+    resources: {
+      postgres: { kind: "postgres", provider: "digitalocean" },
+    },
+  }
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      if (init?.body) {
+        const parsed = JSON.parse(String(init.body))
+        writes.push({ method, url, body: parsed })
+        if (method === "PUT" && url.endsWith("/manifest")) {
+          revision++
+          currentManifest = (parsed as { manifest: Record<string, unknown> })
+            .manifest
+          return json({
+            id: `r${revision}`,
+            revision,
+            yaml: "",
+            manifest: currentManifest,
+          })
+        }
+      }
+      if (url.endsWith("/projects"))
+        return json({ projects: [{ id: "p", name: "Shop" }] })
+      if (url.endsWith("/environments"))
+        return json({ environments: [{ id: "e", name: "preview" }] })
+      if (url.endsWith("/manifest"))
+        return json({
+          id: `r${revision}`,
+          revision,
+          yaml: "version: 1\n",
+          manifest: currentManifest,
+        })
+      if (url.endsWith("/graph"))
+        return json({
+          project_id: "p",
+          excluded: [],
+          graph: {
+            sources: [{ alias: "frontend", commit_sha: "new1" }],
+            services: [graphService("api"), graphService("web")],
+          },
+        })
+      if (url.includes("/bindings"))
+        return json({
+          bindings: [
+            { subject: "service", name: "api", commit_sha: "old1" },
+            { subject: "service", name: "web", commit_sha: "new1" },
+          ],
+        })
+      if (url.endsWith("/providers"))
+        return json({
+          providers: [
+            provider,
+            {
+              name: "digitalocean",
+              title: "DigitalOcean",
+              cloud: "digitalocean",
+              available: true,
+              provisions: [{ kind: "postgres" }],
+            },
+          ],
+        })
+      if (url.endsWith("/sources"))
+        return json({
+          sources: [
+            {
+              id: "s1",
+              alias: "frontend",
+              repository: "https://github.com/acme/web",
+            },
+          ],
+        })
+      if (url.endsWith("/deployed"))
+        return json({ sources: [{ alias: "frontend" }] })
+      if (url.endsWith("/plans") && method === "POST")
+        return json({ id: "plan_one", status: "planning" })
+      return json({})
+    }
+  )
+
+  mount({ project: "p", environment: "preview" })
+  const resourcesTable = await screen.findByRole("table", {
+    name: "Resources in preview",
+  })
+  expect(within(resourcesTable).getByText("postgres")).toBeInTheDocument()
+  expect(within(resourcesTable).getByText("automatic region")).toBeInTheDocument()
+  expect(
+    within(resourcesTable).getAllByText("DigitalOcean").length
+  ).toBeGreaterThan(0)
+
+  // web matches new1 so it starts unchecked before postgres is touched.
+  const webBox = screen.getByRole("checkbox", { name: "Deploy web" })
+  await vi.waitFor(() =>
+    expect(screen.getByRole("checkbox", { name: "Deploy api" })).toBeChecked()
+  )
+  expect(webBox).not.toBeChecked()
+
+  await userEvent.click(
+    within(resourcesTable).getByRole("button", { name: "Manage postgres" })
+  )
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "Remove from manifest" })
+  )
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Save manifest" })
+  )
+
+  await vi.waitFor(() =>
+    expect(
+      writes.some((w) => w.method === "PUT" && w.url.endsWith("/manifest"))
+    ).toBe(true)
+  )
+  await vi.waitFor(() => expect(webBox).toBeChecked())
+  expect(
+    screen.queryByRole("table", { name: "Resources in preview" })
+  ).not.toBeInTheDocument()
+})

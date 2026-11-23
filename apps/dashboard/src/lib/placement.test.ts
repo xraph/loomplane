@@ -480,3 +480,47 @@ it("drops services with every need and route that names them", () => {
   // The original isn't touched.
   expect(Object.keys(m.services!)).toEqual(["api", "web"])
 })
+
+it("handles existing_resource placement settings and runsOn labels without inheriting defaults", () => {
+  const m: Manifest = {
+    version: 1,
+    defaults: { provider: "cloud-sql", region: "us-central1" },
+    resources: {
+      shared: { kind: "postgres", existing_resource: "providerresource_1" },
+      scoped: {
+        kind: "redis",
+        existing_resource: "providerresource_2",
+        environments: { production: { enabled: true } },
+      },
+    },
+  }
+  const rows = placementRows(m, graph)
+  const sharedRow = rows.find((r) => r.name === "shared")!
+  const scopedRow = rows.find((r) => r.name === "scoped")!
+
+  const sharedProd = placementSettings(m, sharedRow, "production")
+  expect(sharedProd).toEqual({
+    provider: "",
+    region: "",
+    enabled: true,
+    existingResource: "providerresource_1",
+  })
+  expect(runsOn(sharedProd, "production", [], [], [])).toEqual({
+    name: "Existing resource",
+    where: "Managed externally",
+  })
+
+  const scopedStaging = placementSettings(m, scopedRow, "staging")
+  expect(scopedStaging.enabled).toBe(false)
+  expect(runsOn(scopedStaging, "staging", [], [], [])).toEqual({
+    name: "Off in staging",
+    where: "",
+  })
+
+  const scopedProd = placementSettings(m, scopedRow, "production")
+  expect(scopedProd.enabled).toBe(true)
+  expect(runsOn(scopedProd, "production", [], [], [])).toEqual({
+    name: "Existing resource",
+    where: "Managed externally",
+  })
+})

@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
@@ -597,4 +598,203 @@ test("old and unknown tabs fall back", () => {
   expect(validate({ tab: "logs" })).toEqual({ tab: "logs" })
   expect(validate({ tab: "nope" })).toEqual({})
   expect(validate({})).toEqual({})
+})
+
+test("offers Manage menu for top-level resources on Changes, Services, and named resource problems", async () => {
+  serve(
+    {
+      ...plan(undefined, "blocked"),
+      problems: [
+        {
+          code: "provider-cant-provision",
+          subject: "resource",
+          name: "postgres",
+          path: "resources.postgres.provider",
+          message: "Provider cannot provision postgres.",
+        },
+        {
+          code: "host-port-required",
+          subject: "service",
+          name: "api",
+          path: "services.api.endpoint.host_port",
+          message: "Set a host port for api.",
+        },
+      ],
+      actions: [
+        {
+          id: "resource:postgres",
+          name: "postgres",
+          op: "create",
+          step: 1,
+          provider: "digitalocean",
+          creates: "Postgres",
+          subject: "resource",
+          reason: "Needed by api.",
+          resource: { kind: "postgres", provider: "digitalocean" },
+        },
+        {
+          id: "resource:n8n--postgres",
+          name: "n8n--postgres",
+          op: "create",
+          step: 1,
+          provider: "server",
+          creates: "Postgres",
+          subject: "resource",
+          reason: "Component of n8n.",
+          resource: {
+            kind: "postgres",
+            provider: "server",
+            component: { resource: "n8n", dependency: "postgres" },
+          },
+        },
+        {
+          id: "resource:old-db",
+          name: "old-db",
+          op: "delete",
+          step: 2,
+          provider: "digitalocean",
+          creates: "Postgres",
+          subject: "resource",
+          reason: "Removed from manifest.",
+        },
+      ],
+    },
+    {},
+    "changes"
+  )
+
+  const changesTable = await screen.findByRole("table", { name: "Changes" })
+  // One in the problem callout, one in the Changes table row.
+  expect(screen.getAllByRole("button", { name: "Manage postgres" })).toHaveLength(
+    2
+  )
+  expect(
+    within(changesTable).getByRole("button", { name: "Manage postgres" })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Manage n8n--postgres" })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("button", { name: "Manage old-db" })
+  ).not.toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Fix plan" })).toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole("tab", { name: "Services" }))
+  const servicesTable = await screen.findByRole("table", { name: "Services" })
+  expect(
+    within(servicesTable).getByRole("button", { name: "Manage postgres" })
+  ).toBeInTheDocument()
+  expect(
+    within(servicesTable).queryByRole("button", { name: "Manage n8n--postgres" })
+  ).not.toBeInTheDocument()
+  expect(
+    within(servicesTable).queryByRole("button", { name: "Manage old-db" })
+  ).not.toBeInTheDocument()
+})
+
+test("removing a resource from a service-scoped plan replans with affected services", async () => {
+  const posts: { url: string; body: unknown }[] = []
+  let saved = false
+  const initialManifest = {
+    version: 1,
+    services: {
+      web: { source: "cmd/web" },
+      api: { source: "cmd/api", needs: ["postgres"] },
+    },
+    resources: { postgres: { kind: "postgres", provider: "digitalocean" } },
+  }
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost").pathname
+      const method = init?.method ?? "GET"
+      if (method === "PUT" && url.endsWith("/manifest")) {
+        saved = true
+        const body = JSON.parse(String(init?.body)) as { manifest: unknown }
+        return new Response(
+          JSON.stringify({ id: "rev_2", revision: 2, manifest: body.manifest }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (method === "POST") {
+        posts.push({ url, body: JSON.parse(String(init?.body)) })
+        return new Response(JSON.stringify({ id: "plan_2" }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (url.endsWith("/plans/plan_1")) {
+        return new Response(
+          JSON.stringify({
+            ...plan(),
+            services: ["web"],
+            actions: [
+              {
+                id: "resource:postgres",
+                name: "postgres",
+                op: "create",
+                step: 1,
+                provider: "digitalocean",
+                creates: "Postgres",
+                subject: "resource",
+                reason: "In manifest.",
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.endsWith("/projects/proj_1")) {
+        return new Response(
+          JSON.stringify({ id: "proj_1", name: "Shop", slug: "shop" }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.endsWith("/manifest")) {
+        return new Response(
+          JSON.stringify({
+            id: saved ? "rev_2" : "rev_1",
+            revision: saved ? 2 : 1,
+            manifest: initialManifest,
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.endsWith("/environments")) {
+        return new Response(
+          JSON.stringify({
+            environments: [{ id: "e1", name: "production" }],
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(JSON.stringify({}), {
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+  )
+
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeploymentPage id="plan_1" tab="changes" />
+    </ClientProvider>
+  )
+
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole("button", { name: "Manage postgres" }))
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Remove from manifest" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: "Save and plan again" })
+  )
+
+  await waitFor(() =>
+    expect(posts).toContainEqual({
+      url: "/api/v1/projects/proj_1/plans",
+      body: {
+        environment: "production",
+        services: ["web", "api"],
+      },
+    })
+  )
 })

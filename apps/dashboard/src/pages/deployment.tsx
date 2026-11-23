@@ -32,6 +32,7 @@ import { BuildLogPanel, type LogSource } from "@/components/build-log-panel"
 import { CanaryPanel } from "@/components/canary"
 import { providerName } from "@/components/cloud-detail/clusters"
 import {
+  ActionsCell,
   Cell,
   CloudCallout,
   CloudPageHeader,
@@ -67,6 +68,7 @@ import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { PlanVariableMapping } from "@/components/plan-variable-mapping"
 import { PlanRepairs, repairable } from "@/components/plan-repairs"
+import { DeploymentResourceActions } from "@/components/deployment-resource-actions"
 import { ReplanServices } from "@/components/replan-services"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -224,6 +226,29 @@ function Loaded({
   }
 
   const live = isLive(run)
+  const canReplan =
+    run.status !== "running" &&
+    run.status !== "paused" &&
+    can("deployment:create")
+  const replanForResource = async (affectedServices: string[] = []) => {
+    const scoped = planServices(plan)
+    const nextServices =
+      scoped.length > 0 && affectedServices.length > 0
+        ? [...new Set([...scoped, ...affectedServices])]
+        : scoped
+    await planAgain(nextServices)
+  }
+  const resourceActions = (name: string) =>
+    can("project:update") &&
+    !plan.cloudSyncId &&
+    (!plan.kind || plan.kind === "release") ? (
+      <DeploymentResourceActions
+        name={name}
+        projectId={plan.projectId}
+        environment={plan.environment}
+        replan={canReplan ? replanForResource : undefined}
+      />
+    ) : null
   const sources = logSources(run)
   const showLogs = (id: string) => {
     setSource(sources.some((s) => s.id === id) ? id : "all")
@@ -315,6 +340,8 @@ function Loaded({
           </TabsList>
           <TabsContent value="changes">
             <ChangesTab
+              resourceActions={resourceActions}
+              replan={canReplan ? () => planAgain() : undefined}
               run={run}
               repair={
                 deciding &&
@@ -382,7 +409,7 @@ function Loaded({
             />
           </TabsContent>
           <TabsContent value="services">
-            <ServicesTab run={run} onLogs={showLogs} />
+            <ServicesTab resourceActions={resourceActions} run={run} onLogs={showLogs} />
           </TabsContent>
           <TabsContent value="details">
             <DetailsTab run={run} now={now} />
@@ -947,13 +974,26 @@ function kindOf(a: Action): string {
   return a.resource?.version ? `${kind} ${a.resource.version}` : kind
 }
 
+function isManageableResourceAction(a: Action): boolean {
+  return (
+    a.subject === "resource" &&
+    a.op !== "delete" &&
+    !a.resource?.component &&
+    !a.name.includes("--")
+  )
+}
+
 function ChangesTab({
   run,
   servicePicker,
+  resourceActions,
+  replan,
   repair,
 }: {
   run: Run
   repair?: () => void
+  replan?: () => Promise<void>
+  resourceActions: (name: string) => ReactNode
   servicePicker: ReactNode
 }) {
   const connections = useQuery(useConnectionsList)
@@ -985,6 +1025,7 @@ function ChangesTab({
         finding={f}
         project={run.project}
         environment={run.environment}
+        replan={replan}
       />
     )
   return (
@@ -997,7 +1038,14 @@ function ChangesTab({
               tone="error"
               title={f.message}
               action={
-                repair && repairable(f) ? (
+                f.subject === "resource" &&
+                !!f.name &&
+                f.path?.startsWith(`resources.${f.name}`) ? (
+                  <div className="flex items-center gap-1">
+                    {fix(f)}
+                    {resourceActions(f.name)}
+                  </div>
+                ) : repair && repairable(f) ? (
                   <Button size="sm" variant="outline" onClick={repair}>
                     Fix plan
                   </Button>
@@ -1044,8 +1092,8 @@ function ChangesTab({
         ) : (
           <CloudTable
             label="Changes"
-            columns="110px minmax(0,1fr) minmax(0,1.3fr) minmax(0,1.4fr)"
-            head={["Change", "What", "Where", "Why"]}
+            columns="110px minmax(0,1fr) minmax(0,1.2fr) minmax(0,1.3fr) 44px"
+            head={["Change", "What", "Where", "Why", ""]}
             minWidth={760}
           >
             {[...p.actions]
@@ -1067,6 +1115,9 @@ function ChangesTab({
                       </span>
                     ))}
                   </Cell>
+                  <ActionsCell>
+                    {isManageableResourceAction(a) && resourceActions(a.name)}
+                  </ActionsCell>
                 </CloudTableRow>
               ))}
           </CloudTable>
@@ -1121,7 +1172,9 @@ function serviceState(s: ThreadStep): { word: string; tone: Tone } {
 function ServicesTab({
   run,
   onLogs,
+  resourceActions,
 }: {
+  resourceActions: (name: string) => ReactNode
   run: Run
   onLogs: (source: string) => void
 }) {
@@ -1145,7 +1198,7 @@ function ServicesTab({
       ) : (
         <CloudTable
           label="Services"
-          columns="minmax(0,1fr) 150px minmax(0,1.2fr) minmax(0,1.2fr) 80px"
+          columns="minmax(0,1fr) 150px minmax(0,1.2fr) minmax(0,1.2fr) 116px"
           head={["Service", "State", "Runs on", "Address", ""]}
           minWidth={760}
         >
@@ -1171,7 +1224,8 @@ function ServicesTab({
                     "No address yet"
                   )}
                 </Cell>
-                <div role="cell" className="flex justify-end">
+                <div role="cell" className="flex items-center justify-end gap-1">
+                  {isManageableResourceAction(a) && resourceActions(a.name)}
                   {s && (
                     <Button
                       size="sm"

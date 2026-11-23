@@ -816,3 +816,187 @@ it("removes the manually added database through a guarded manifest revision", as
     remove_resource: "resource",
   })
 })
+
+it("attaches an existing workspace resource from an unprovided-resource finding", async () => {
+  const writes: unknown[] = []
+  const replan = vi.fn().mockResolvedValue(undefined)
+  const now = new Date().toISOString()
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/manifest/edits") && init?.method === "POST") {
+        writes.push(JSON.parse(String(init.body)))
+        return json({ id: "r2", revision: 2 })
+      }
+      if (url.endsWith("/manifest")) {
+        return json({
+          id: "r1",
+          revision: 1,
+          yaml: "version: 1\n",
+          manifest: {
+            version: 1,
+            services: { api: { source: "cmd/api" } },
+          },
+        })
+      }
+      if (url.endsWith("/providers")) return json({ providers: [] })
+      if (url.endsWith("/provider-resources")) {
+        return json({
+          resources: [
+            {
+              id: "providerresource_pg",
+              name: "Prod PG",
+              kind: "postgres",
+              provider: "digitalocean",
+              region: "nyc3",
+              endpointId: "ep_1",
+              connectionState: "ready",
+              observationState: "observed",
+              observedAt: now,
+            },
+          ],
+        })
+      }
+      return json({})
+    }
+  )
+
+  render(
+    <ClientProvider client={forgeClient}>
+      <FindingActions
+        finding={
+          { code: "unprovided-resource", name: "postgres", message: "" } as Finding
+        }
+        project={{ id: "p", name: "Shop" } as Project}
+        environment="production"
+        replan={replan}
+      />
+    </ClientProvider>
+  )
+
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole("button", { name: "Use existing" }))
+  await user.click(
+    await screen.findByRole("combobox", { name: "Existing resource" })
+  )
+  await user.click(
+    await screen.findByRole("option", { name: "Prod PG · digitalocean · nyc3" })
+  )
+  await user.click(screen.getByRole("checkbox", { name: /api/ }))
+  await user.click(
+    screen.getByRole("button", { name: "Attach and plan again" })
+  )
+
+  await vi.waitFor(() => expect(replan).toHaveBeenCalledOnce())
+  expect(writes).toEqual([
+    {
+      add_resource: {
+        name: "prod-pg",
+        kind: "postgres",
+        existing_resource: "providerresource_pg",
+        needed_by: ["api"],
+      },
+    },
+  ])
+})
+
+it("displays Existing resource for external attachments and exposes resource menu actions in WhereServicesRun", async () => {
+  const saves: unknown[] = []
+  const manifest: Manifest = {
+    version: 1,
+    services: { worker: { source: "go:cmd/worker", provider: "render" } },
+    resources: {
+      "shared-db": {
+        kind: "postgres",
+        existing_resource: "providerresource_1",
+      },
+    },
+  }
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/manifest") && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { manifest: Manifest }
+        saves.push(body)
+        return json({ id: "r2", revision: 2, manifest: body.manifest, yaml: "" })
+      }
+      if (url.endsWith("/manifest")) {
+        return json({ id: "r1", revision: 1, yaml: "version: 1\n", manifest })
+      }
+      if (url.endsWith("/environments")) {
+        return json({ environments: [{ id: "e1", name: "production" }] })
+      }
+      if (url.endsWith("/graph")) {
+        return json({
+          project_id: "p",
+          graph: {
+            services: [
+              {
+                id: "svc:go:cmd/worker",
+                entrypoint: "cmd/worker",
+                path: ".",
+                kind: "worker",
+                deployable: true,
+              },
+            ],
+            sources: [],
+          },
+        })
+      }
+      if (url.endsWith("/providers")) return json({ providers: [] })
+      if (url.endsWith("/connections")) return json({ connections: [] })
+      return json({})
+    }
+  )
+
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeployTab project={{ id: "p", name: "Example" } as Project} />
+    </ClientProvider>
+  )
+
+  const table = await screen.findByRole("table", {
+    name: "Where services run in production",
+  })
+  expect(within(table).getByText("Existing resource")).toBeInTheDocument()
+  expect(within(table).getByText("Managed externally")).toBeInTheDocument()
+
+  const user = userEvent.setup()
+  await user.click(
+    within(table).getByRole("button", { name: "More actions for shared-db" })
+  )
+  expect(
+    await screen.findByRole("menuitem", { name: "Modify settings" })
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("menuitem", { name: "Use existing resource" })
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("menuitem", { name: "Remove from manifest" })
+  ).toBeInTheDocument()
+  await user.keyboard("{Escape}")
+
+  await user.click(
+    within(table).getByRole("button", { name: "Change where shared-db runs" })
+  )
+  await user.click(
+    await screen.findByRole("switch", { name: "Enable shared-db in production" })
+  )
+  await user.click(screen.getByRole("button", { name: "Save manifest" }))
+
+  await vi.waitFor(() => expect(saves).toHaveLength(1))
+  expect(saves[0]).toMatchObject({
+    base_revision: 1,
+    manifest: {
+      resources: {
+        "shared-db": {
+          kind: "postgres",
+          existing_resource: "providerresource_1",
+          environments: { production: { enabled: false } },
+        },
+      },
+    },
+  })
+})

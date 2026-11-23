@@ -110,7 +110,13 @@ export function usePlacementSave(projectId: string) {
     environments: Environment[]
   ) => {
     const placed = edits.filter((e) => Object.keys(e.changes).length > 0)
-    if (placed.length === 1 && !cloudChoice(placed[0].changes)) {
+    const resourceTargetEdit = (e: PlacementEdit) =>
+      e.row.section === "resources" && e.changes.target !== undefined
+    if (
+      placed.length === 1 &&
+      !cloudChoice(placed[0].changes) &&
+      !resourceTargetEdit(placed[0])
+    ) {
       const e = placed[0]
       await edit.mutateAsync({
         path: { id: projectId },
@@ -159,18 +165,45 @@ function placedManifest(
   e: PlacementEdit
 ): Manifest {
   const choice = cloudChoice(e.changes)
-  if (!choice || e.row.section !== "services")
-    return applyPlacement(m, e.row, e.environment, e.changes)
-  const adopted = adoptServiceTarget(
-    m,
-    e.row.name,
-    choice,
-    { environment: e.environment, environments },
-    e.changes.cloud
-  )
-  const rest = { ...e.changes }
-  for (const key of cloudOwnedFields) delete rest[key]
-  return applyPlacement(adopted, e.row, e.environment, rest)
+  if (choice && e.row.section === "services") {
+    const adopted = adoptServiceTarget(
+      m,
+      e.row.name,
+      choice,
+      { environment: e.environment, environments },
+      e.changes.cloud
+    )
+    const rest = { ...e.changes }
+    for (const key of cloudOwnedFields) delete rest[key]
+    return applyPlacement(adopted, e.row, e.environment, rest)
+  }
+  const next = applyPlacement(m, e.row, e.environment, e.changes)
+  if (e.row.section === "resources" && e.changes.target === "") {
+    const entry = next.resources?.[e.row.name] as
+      | {
+          provider?: string
+          target?: string
+          environments?: Record<string, { provider?: string; target?: string }>
+        }
+      | undefined
+    const o = entry?.environments?.[e.environment]
+    const baseProvider = entry?.provider || next.defaults?.provider || ""
+    const changedProvider = !!o?.provider && o.provider !== baseProvider
+    if (entry?.target && !changedProvider) {
+      const oldTarget = entry.target
+      if (environments.length > 1) {
+        entry.environments = entry.environments ?? {}
+        for (const env of environments) {
+          if (env.name === e.environment) continue
+          const other = entry.environments[env.name]
+          if (other?.provider || other?.target) continue
+          entry.environments[env.name] = { ...other, target: oldTarget }
+        }
+      }
+      delete entry.target
+    }
+  }
+  return next
 }
 
 /**
@@ -300,9 +333,11 @@ export function PlacementPanel({
   environments,
   mode,
   pending,
+  saveLabel,
   onUse,
   onDiscard,
   onClose,
+  onSaved,
   onPendingChange,
 }: {
   projectId: string
@@ -315,10 +350,12 @@ export function PlacementPanel({
   mode: "pending" | "save"
   /** pending is the change already waiting for this row, on the deploy screen. */
   pending?: PendingPlacement
+  saveLabel?: string
   onUse?: (change: PendingPlacement) => void
   /** onDiscard drops the pending change, when there is one. */
   onDiscard?: () => void
   onClose: () => void
+  onSaved?: () => void | Promise<void>
   onPendingChange?: (pending: boolean) => void
 }) {
   return (
@@ -340,9 +377,11 @@ export function PlacementPanel({
             environments={environments}
             mode={mode}
             pending={pending}
+            saveLabel={saveLabel}
             onUse={onUse}
             onDiscard={onDiscard}
             onClose={onClose}
+            onSaved={onSaved}
             onPendingChange={onPendingChange}
           />
         )}
@@ -360,9 +399,11 @@ function PlacementForm({
   environments,
   mode,
   pending,
+  saveLabel,
   onUse,
   onDiscard,
   onClose,
+  onSaved,
   onPendingChange,
 }: {
   projectId: string
@@ -373,9 +414,11 @@ function PlacementForm({
   environments: Environment[]
   mode: "pending" | "save"
   pending?: PendingPlacement
+  saveLabel?: string
   onUse?: (change: PendingPlacement) => void
   onDiscard?: () => void
   onClose: () => void
+  onSaved?: () => void | Promise<void>
   onPendingChange?: (pending: boolean) => void
 }) {
   const { providers, cloudTargets, cloudName, otherClouds } =
@@ -389,7 +432,9 @@ function PlacementForm({
         <SheetDescription>
           {mode === "pending"
             ? `Becomes ${environment}'s standing setting when you review the plan. Nothing saves before that.`
-            : `Saving makes this ${environment}'s standing setting. Nothing moves until the next deploy.`}
+            : saveLabel
+              ? `Saving updates ${environment}'s setting and starts a new plan to review.`
+              : `Saving makes this ${environment}'s standing setting. Nothing moves until the next deploy.`}
         </SheetDescription>
       </SheetHeader>
       {providers.status === "error" ? (
@@ -418,9 +463,11 @@ function PlacementForm({
           otherClouds={otherClouds}
           mode={mode}
           pending={pending}
+          saveLabel={saveLabel}
           onUse={onUse}
           onDiscard={onDiscard}
           onClose={onClose}
+          onSaved={onSaved}
           onPendingChange={onPendingChange}
         />
       )}
@@ -443,9 +490,11 @@ function PlacementChoices({
   otherClouds,
   mode,
   pending,
+  saveLabel,
   onUse,
   onDiscard,
   onClose,
+  onSaved,
   onPendingChange,
 }: {
   projectId: string
@@ -460,9 +509,11 @@ function PlacementChoices({
   otherClouds: Profile[]
   mode: "pending" | "save"
   pending?: PendingPlacement
+  saveLabel?: string
   onUse?: (change: PendingPlacement) => void
   onDiscard?: () => void
   onClose: () => void
+  onSaved?: () => void | Promise<void>
   onPendingChange?: (pending: boolean) => void
 }) {
   const { can } = useOrganization()
@@ -474,6 +525,7 @@ function PlacementChoices({
   )
   const [account, setAccount] = useState(pending?.account)
   const [error, setError] = useState<string>()
+  const [saving, setSaving] = useState(false)
   const [tagsText, setTagsText] = useState<string>()
   const value = { ...settings, ...changes }
   const targets = compatibleTargets(row, catalog)
@@ -508,7 +560,7 @@ function PlacementChoices({
         value.cloudTarget
     : `Tagged ${value.cloudTags?.join(", ")}${value.cloud ? ` in ${value.cloud}` : ""}`
   const dirty = Object.keys(changes).length > 0 || !!account
-  const disabled = !can("project:update") || placement.pending
+  const disabled = !can("project:update") || placement.pending || saving
   // A panel that saves at once holds back plans until it's saved or closed.
   useDeploymentDraft(mode === "save" && dirty, onPendingChange)
   const cloudRun = row.section === "services" && value.provider === "cloud-run"
@@ -519,17 +571,36 @@ function PlacementChoices({
     !cloudRun ||
     routeEmpty ||
     cloudSQLApplicationNetworkValid(route, value.region)
-  const owned =
+  const ownedService =
     row.section === "services" &&
     (selected?.cloud === "server" || selected?.cloud === "kubernetes")
+  const ownedResource =
+    row.section === "resources" &&
+    (selected?.cloud === "server" || selected?.cloud === "kubernetes")
   const accounts = connections.data?.connections ?? []
+  const resourceCloudAccounts =
+    row.section === "resources" && selected && !ownedResource
+      ? targetConnections(accounts, selected.cloud)
+      : []
+  const resourceAccountPin =
+    row.section === "resources" &&
+    selected &&
+    !ownedResource &&
+    (resourceCloudAccounts.length > 1 ||
+      !!value.target ||
+      changes.target !== undefined)
   const managedRegistry =
     selected?.cloud === "kubernetes"
       ? accounts.find((c) => c.id === value.target)?.details.registry_hostname
       : undefined
-  // Owned clouds pick an account per service; the rest per environment.
+  // Owned clouds pick an account per service; the rest per environment (unless a resource pins one).
   const accountCloud =
-    value.enabled && !cloudChosen && selected && !owned
+    value.enabled &&
+    !cloudChosen &&
+    selected &&
+    !ownedService &&
+    !ownedResource &&
+    !value.target
       ? selected.cloud
       : undefined
   const change = (patch: PlacementFields) =>
@@ -553,6 +624,7 @@ function PlacementChoices({
       return
     }
     setError(undefined)
+    setSaving(true)
     onPendingChange?.(true)
     try {
       await placement.run(
@@ -562,11 +634,15 @@ function PlacementChoices({
       )
       setChanges({})
       setAccount(undefined)
-      toast.success(`Saved where ${row.name} runs in ${environment}`)
+      if (!saveLabel) {
+        toast.success(`Saved where ${row.name} runs in ${environment}`)
+      }
+      await onSaved?.()
       onClose()
     } catch (err) {
       setError(messageOf(err, "The placement wasn't saved."))
     } finally {
+      setSaving(false)
       onPendingChange?.(false)
     }
   }
@@ -627,10 +703,19 @@ function PlacementChoices({
                         ...(value.cloudSqlNetwork
                           ? { cloudSqlNetwork: noRoute }
                           : {}),
-                        ...(owned || v === "server" || v === "kubernetes"
-                          ? { target: "", endpoint: {} }
+                        ...(ownedService ||
+                        ownedResource ||
+                        v === "server" ||
+                        v === "kubernetes" ||
+                        (row.section === "resources" && !!value.target)
+                          ? {
+                              target: "",
+                              ...(row.section === "services"
+                                ? { endpoint: {} }
+                                : {}),
+                            }
                           : {}),
-                        ...(owned && v !== "server" && v !== "kubernetes"
+                        ...(ownedService && v !== "server" && v !== "kubernetes"
                           ? { build: { context: value.build?.context } }
                           : {}),
                       }))
@@ -703,7 +788,7 @@ function PlacementChoices({
                 A Cloud target, or an account directly.
               </span>
             </div>
-            {owned && (
+            {(ownedService || ownedResource) && (
               <ConnectionChoice
                 title={selected?.cloud === "kubernetes" ? "Cluster" : "Server"}
                 label={`Infrastructure for ${row.name}`}
@@ -711,7 +796,20 @@ function PlacementChoices({
                 connections={targetConnections(accounts, selected!.cloud)}
                 disabled={disabled}
                 automatic="Environment default"
-                onChange={(target) => change({ target, endpoint: {} })}
+                onChange={(target) =>
+                  change(ownedService ? { target, endpoint: {} } : { target })
+                }
+              />
+            )}
+            {resourceAccountPin && (
+              <ConnectionChoice
+                title={`${cloudLabel(selected!.cloud)} account`}
+                label={`Account for ${row.name}`}
+                value={value.target}
+                connections={resourceCloudAccounts}
+                disabled={disabled}
+                automatic="Environment default"
+                onChange={(target) => change({ target })}
               />
             )}
             {accountCloud && (
@@ -815,7 +913,7 @@ function PlacementChoices({
                 its source or kind in loomplane.yaml.
               </p>
             )}
-            {(cloudRun || owned) && (
+            {(cloudRun || ownedService) && (
               <Collapsible
                 defaultOpen={!routeValid}
                 className="grid gap-3 rounded-xl ring-1 ring-border"
@@ -854,7 +952,7 @@ function PlacementChoices({
                       )}
                     </>
                   )}
-                  {owned && (
+                  {ownedService && (
                     <OwnedFields
                       row={row}
                       value={value}
@@ -903,8 +1001,10 @@ function PlacementChoices({
           Cancel
         </Button>
         <Button type="submit" disabled={blocked}>
-          {placement.pending && <Spinner />}
-          {mode === "pending" ? "Use this placement" : "Save placement"}
+          {(placement.pending || saving) && <Spinner />}
+          {mode === "pending"
+            ? "Use this placement"
+            : (saveLabel ?? "Save placement")}
         </Button>
       </SheetFooter>
     </form>

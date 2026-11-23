@@ -40,6 +40,7 @@ import {
 import {
   kindLabel,
   ManifestEditor,
+  RowGlyph,
   SuggestedConfiguration,
 } from "@/components/deploy"
 import {
@@ -49,6 +50,8 @@ import {
   usePlacementSave,
   type PendingPlacement,
 } from "@/components/deployment-targets"
+import { DeploymentResourceActions } from "@/components/deployment-resource-actions"
+import { useProjectCan } from "@/lib/project-permissions"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone } from "@/components/runs"
 import { Button } from "@/components/ui/button"
@@ -387,6 +390,7 @@ function DeployScreen({
   const create = useMutation(usePlansCreate)
   const placement = usePlacementSave(project.id)
   const { can } = useOrganization()
+  const projectCan = useProjectCan(project.id)
   const canDeploy = can("deployment:create")
   const { busy, onPendingChange } = useDeploymentWrites(project.id)
   const [environment, setEnvironmentState] = useState(initial)
@@ -412,12 +416,13 @@ function DeployScreen({
   const ctx = usePlacementContext(project.id)
   const manifest = current.data?.manifest
   const graph = view.data?.graph
-  const rows =
-    manifest && graph
-      ? placementRows(manifest, graph, view.data?.excluded ?? []).filter(
-          (r) => r.section === "services"
-        )
-      : []
+  const allRows = manifest
+    ? placementRows(manifest, graph, view.data?.excluded ?? [])
+    : []
+  const rows = graph
+    ? allRows.filter((r) => r.section === "services")
+    : []
+  const resourceRows = allRows.filter((r) => r.section === "resources")
   const excludedCount = view.data?.excluded?.length ?? 0
   const here = pending[environment] ?? {}
   const moves = Object.keys(here).length
@@ -759,6 +764,63 @@ function DeployScreen({
           </p>
         )}
       </section>
+
+      {resourceRows.length > 0 && (
+        <section aria-label="Resources" className="grid gap-2.5">
+          <CloudSectionHead
+            title="Resources"
+            count={resourceRows.length}
+            description="Databases and backing services in loomplane.yaml. Change where one runs, modify it, switch to an existing one, or remove it before planning."
+          />
+          <CloudTable
+            label={`Resources in ${environment}`}
+            columns="minmax(0,1.2fr) minmax(0,1.5fr) 80px"
+            head={["Resource", "Runs on", ""]}
+          >
+            {resourceRows.map((row) => (
+              <CloudTableRow key={row.name}>
+                <NameCell
+                  tile={<RowGlyph row={row} />}
+                  name={row.name}
+                  meta={kindLabel(row)}
+                />
+                <RunsOnCell
+                  runs={runsOn(
+                    placementSettings(manifest!, row, environment),
+                    environment,
+                    ctx.catalog,
+                    ctx.cloudTargets,
+                    ctx.connections
+                  )}
+                />
+                <ActionsCell>
+                  {projectCan("project:update") && !busy && !working && (
+                    <DeploymentResourceActions
+                      projectId={project.id}
+                      environment={environment}
+                      name={row.name}
+                      onSaved={() => {
+                        void current.refetch()
+                        const affected = rows
+                          .filter(
+                            (r) =>
+                              manifest?.services?.[r.name]?.needs?.includes(
+                                row.name
+                              ) && !r.repoGone
+                          )
+                          .map((r) => r.name)
+                        if (affected.length > 0) {
+                          setPicks([...new Set([...picked, ...affected])])
+                        }
+                      }}
+                    />
+                  )}
+                </ActionsCell>
+              </CloudTableRow>
+            ))}
+          </CloudTable>
+        </section>
+      )}
 
       {scope.aliases.length > 1 && (
         <Code project={project} environment={environment} scope={scope} />
