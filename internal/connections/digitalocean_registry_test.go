@@ -90,3 +90,10 @@ func TestDigitalOceanRegistryUsesCurrentAccountGrant(t *testing.T) {
 		t.Fatalf("recheck after disconnection: %+v, %v", checked, err)
 	}
 }
+
+func TestDigitalOceanRegistryUnavailableWrapsUpstreamError(t *testing.T) {
+	err := registryAccessError(fmt.Errorf("dial tcp: %w", context.DeadlineExceeded))
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected wrapped ErrUnavailable and DeadlineExceeded, got %v", err)
+	}
+}

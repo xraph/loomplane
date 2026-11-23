@@ -85,6 +85,27 @@ describe("errors", () => {
         "Could not verify registry access"
       )
     ).toBe("Could not verify registry access (HTTP 503).")
+    expect(
+      messageOf(
+        new HTTPError(503, "Service Unavailable", "", {}),
+        "fallback",
+        "Loomplane could not verify registry access to ghcr.io/wakflo"
+      )
+    ).toBe(
+      "Loomplane could not verify registry access to ghcr.io/wakflo (HTTP 503)."
+    )
+    expect(
+      messageOf(
+        new HTTPError(504, "Gateway Timeout", "", {}),
+        "fallback",
+        "Loomplane could not verify registry access to ghcr.io/wakflo"
+      )
+    ).toBe(
+      "Loomplane could not verify registry access to ghcr.io/wakflo (HTTP 504)."
+    )
+    expect(
+      messageOf(new HTTPError(503, "Service Unavailable", "", {}), "fallback")
+    ).toBe("Loomplane couldn't finish that. Try again in a moment.")
   })
 
   it("falls back for what it can't explain", () => {

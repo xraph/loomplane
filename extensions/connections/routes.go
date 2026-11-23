@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/xraph/forge"
@@ -329,6 +330,18 @@ func (e *Extension) list(c forge.Context) error {
 	return c.JSON(http.StatusOK, out)
 }
 
+func (e *Extension) logConnectionFailure(action, target string, err error) {
+	if e == nil || e.BaseExtension == nil || e.Logger() == nil || err == nil {
+		return
+	}
+	if errors.Is(err, connections.ErrInvalid) || errors.Is(err, connections.ErrNotFound) ||
+		errors.Is(err, connections.ErrExists) || errors.Is(err, connections.ErrChanged) ||
+		errors.Is(err, connections.ErrInUse) {
+		return
+	}
+	e.Logger().Warn(action, forge.F("target", target), forge.F("error", err.Error()))
+}
+
 func (e *Extension) create(c forge.Context) error {
 	p, err := principal(c)
 	if err != nil {
@@ -340,6 +353,7 @@ func (e *Extension) create(c forge.Context) error {
 	}
 	conn, err := e.svc.Create(c.Request().Context(), p, in)
 	if err != nil {
+		e.logConnectionFailure("connect cloud failed", in.Cloud, err)
 		return fail(err)
 	}
 	return c.JSON(http.StatusCreated, conn)
@@ -380,6 +394,7 @@ func (e *Extension) recheck(c forge.Context) error {
 	}
 	conn, err := e.svc.Recheck(c.Request().Context(), p, c.Param("id"))
 	if err != nil {
+		e.logConnectionFailure("check cloud connection failed", c.Param("id"), err)
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, conn)
@@ -396,6 +411,7 @@ func (e *Extension) replace(c forge.Context) error {
 	}
 	conn, err := e.svc.Replace(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
+		e.logConnectionFailure("replace cloud credential failed", c.Param("id"), err)
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, conn)

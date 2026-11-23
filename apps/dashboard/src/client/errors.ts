@@ -7,6 +7,9 @@ export function statusOf(err: unknown): number {
   return 0
 }
 
+const GENERIC_SERVER_STATUS =
+  /^(?:HTTP \d+|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)$/i
+
 /**
  * messageOf turns a failure into a sentence a person can act on: the
  * server's own explanation when there is one.
@@ -29,7 +32,12 @@ export function messageOf(
     return sentence(details.detail.trim())
   }
   const raw = err instanceof Error ? err.message : ""
-  if (raw && !/^HTTP \d+/.test(raw)) return sentence(raw)
+  if (
+    raw &&
+    !(status >= 500 && GENERIC_SERVER_STATUS.test(raw.trim())) &&
+    !/^HTTP \d+/.test(raw)
+  )
+    return sentence(raw)
   if (status >= 500)
     return serverFallback
       ? `${serverFallback} (HTTP ${status}).`

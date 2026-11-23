@@ -103,7 +103,38 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	return cfg, nil
 }
 
+func newTransport(tlsConfig *tls.Config) *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		}
+	}
+	tr.TLSClientConfig = tlsConfig
+	tr.DialContext = (&net.Dialer{Timeout: 4 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.TLSHandshakeTimeout = 4 * time.Second
+	tr.ResponseHeaderTimeout = 6 * time.Second
+	tr.ForceAttemptHTTP2 = true
+	return tr
+}
+
 // New creates a bounded client that never follows credential-bearing redirects.
 func New(cfg *Config) *Client {
-	return &Client{Config: cfg, HTTP: &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: cfg.TLS, DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext}, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+	var tlsConfig *tls.Config
+	if cfg != nil {
+		tlsConfig = cfg.TLS
+	}
+	return &Client{
+		Config: cfg,
+		HTTP: &http.Client{
+			Timeout:       15 * time.Second,
+			Transport:     newTransport(tlsConfig),
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}
 }

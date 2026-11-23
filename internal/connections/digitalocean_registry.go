@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/security"
 )
 
-const MethodDigitalOceanRegistry = "digitalocean_registry"
+const (
+	MethodDigitalOceanRegistry  = "digitalocean_registry"
+	accountRegistryLoginTimeout = 4 * time.Second
+)
 
 type DigitalOceanRegistryNames struct {
 	Names []string `json:"names"`
@@ -80,7 +84,7 @@ func registryAccessError(err error) error {
 	if errors.Is(err, digitalocean.ErrRejected) {
 		return fmt.Errorf("%w: grant registry access to the DigitalOcean account and check it again", ErrInvalid)
 	}
-	return fmt.Errorf("%w: DigitalOcean could not supply registry access", ErrUnavailable)
+	return fmt.Errorf("%w: DigitalOcean could not supply registry access: %w", ErrUnavailable, err)
 }
 
 func (s *Service) registryLogin(ctx context.Context, org string, source digitalOceanRegistrySource) ([]byte, error) {
@@ -110,7 +114,9 @@ func (s *Service) createAccountRegistry(ctx context.Context, p security.Principa
 		return nil, ErrInvalid
 	}
 	source := digitalOceanRegistrySource{Connection: parent.ID, Identity: AccountIdentity(parent.Cloud, parent.Account, parent.Details), Registry: in.Settings["repository"]}
-	login, err := s.registryLogin(ctx, p.OrgID, source)
+	loginCtx, cancelLogin := context.WithTimeout(ctx, accountRegistryLoginTimeout)
+	defer cancelLogin()
+	login, err := s.registryLogin(loginCtx, p.OrgID, source)
 	if err != nil {
 		return nil, err
 	}

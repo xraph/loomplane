@@ -10,8 +10,14 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+)
+
+const (
+	checkTimeout        = 8 * time.Second
+	cancelUploadTimeout = 2 * time.Second
 )
 
 type Client struct {
@@ -23,29 +29,61 @@ type Result struct {
 	Missing []string
 }
 
+func (c *Client) closeIdle() {
+	if c != nil && c.HTTP != nil {
+		c.HTTP.CloseIdleConnections()
+	}
+}
+
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	_ = body.Close()
+}
+
 // Check verifies pull access and starts then cancels an empty push upload.
 // It leaves no image, manifest or blob in the registry.
 func (c *Client) Check(ctx context.Context) (*Result, error) {
+	defer c.closeIdle()
 	// All challenge exchanges share one budget inside the dashboard request.
-	ctx, stop := context.WithTimeout(ctx, 20*time.Second)
+	ctx, stop := context.WithTimeout(ctx, checkTimeout)
 	defer stop()
 	out := &Result{Details: maps.Clone(c.Config.Details), Missing: []string{}}
 	repository := c.Config.Repository + "/loomplane-check"
 	base := "/v2/" + repository
+	var cachedChallenge string
 	for _, check := range []struct{ method, path, permission, actions string }{
 		{http.MethodGet, "/v2/", "registry:api", ""},
 		{http.MethodGet, base + "/tags/list", "registry:pull", "pull"},
 		{http.MethodPost, base + "/blobs/uploads/", "registry:push", "pull,push"},
 	} {
-		response, err := c.requestScoped(ctx, check.method, check.path, repository, check.actions, nil)
+		var reqHeaders http.Header
+		passedChallenge := ""
+		if cachedChallenge != "" && check.actions != "" && c.Config.Token == "" {
+			token, err := c.bearerToken(ctx, cachedChallenge, repository, check.actions)
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, fmt.Errorf("%s timed out waiting for the registry or its token service: %w", check.permission, context.DeadlineExceeded)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("%s check: %w", check.permission, err)
+			}
+			reqHeaders = http.Header{"Authorization": {"Bearer " + token}}
+			passedChallenge = cachedChallenge
+		}
+		response, challenge, err := c.requestScopedWithChallenge(ctx, check.method, check.path, repository, check.actions, reqHeaders, passedChallenge)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, fmt.Errorf("%s timed out waiting for the registry or its token service: %w", check.permission, context.DeadlineExceeded)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s check: %w", check.permission, err)
 		}
+		if challenge != "" {
+			cachedChallenge = challenge
+		}
 		status, location := response.StatusCode, response.Header.Get("Location")
-		_ = response.Body.Close()
+		drainAndClose(response.Body)
 		capability := strings.TrimPrefix(check.permission, "registry:")
 		out.Details[capability] = "ready"
 		switch {
@@ -77,9 +115,11 @@ func (c *Client) cancelCheckUpload(ctx context.Context, location, repository str
 	// The validated location belongs to the same registry and repository.
 	headers := make(http.Header)
 	if accepted != nil {
-		headers.Set("Authorization", accepted.Header.Get("Authorization"))
+		if auth := accepted.Header.Get("Authorization"); auth != "" {
+			headers.Set("Authorization", auth)
+		}
 	}
-	cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), cancelUploadTimeout)
 	defer stop()
 	response, err := c.requestScoped(cleanup, http.MethodDelete, path, repository, "pull,push", headers)
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -89,11 +129,13 @@ func (c *Client) cancelCheckUpload(ctx context.Context, location, repository str
 		// A transport error may contain the signed upload location.
 		return errors.New("could not cancel the registry test upload")
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusNoContent && response.StatusCode != http.StatusNotFound {
+	defer drainAndClose(response.Body)
+	switch response.StatusCode {
+	case http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
 		return fmt.Errorf("cancel empty registry upload returned HTTP %d", response.StatusCode)
 	}
-	return nil
 }
 
 func (c *Client) uploadPath(location, base string) (string, error) {
@@ -118,39 +160,65 @@ func (c *Client) requestFor(ctx context.Context, method, path, repository string
 	return c.requestScoped(ctx, method, path, repository, "pull,push", nil)
 }
 
-func (c *Client) requestScoped(ctx context.Context, method, path, repository, actions string, headers http.Header) (*http.Response, error) {
+func (c *Client) newRequest(ctx context.Context, method, path string, headers http.Header, authHeader string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.Config.Endpoint+path, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
 	for key, values := range headers {
-		req.Header[key] = values
+		req.Header[key] = slices.Clone(values)
 	}
-	if req.Header.Get("Authorization") == "" {
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	} else if req.Header.Get("Authorization") == "" {
 		if c.Config.Token != "" {
 			req.Header.Set("Authorization", "Bearer "+c.Config.Token)
 		} else if c.Config.Username != "" {
 			req.SetBasicAuth(c.Config.Username, c.Config.Password)
 		}
 	}
+	return req, nil
+}
+
+func (c *Client) requestScoped(ctx context.Context, method, path, repository, actions string, headers http.Header) (*http.Response, error) {
+	response, _, err := c.requestScopedWithChallenge(ctx, method, path, repository, actions, headers, "")
+	return response, err
+}
+
+func (c *Client) requestScopedWithChallenge(ctx context.Context, method, path, repository, actions string, headers http.Header, cachedChallenge string) (*http.Response, string, error) {
+	req, err := c.newRequest(ctx, method, path, headers, "")
+	if err != nil {
+		return nil, "", err
+	}
 	response, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach registry: %w", err)
+		return nil, "", fmt.Errorf("reach registry: %w", err)
 	}
 	if response.StatusCode != http.StatusUnauthorized {
-		return response, nil
+		return response, "", nil
 	}
 	challenge := response.Header.Get("WWW-Authenticate")
 	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
-		return response, nil
+		return response, "", nil
 	}
-	_ = response.Body.Close()
+	if headers != nil && headers.Get("Authorization") != "" && cachedChallenge != "" && challenge == cachedChallenge {
+		// Pre-fetched bearer token for this exact challenge was refused.
+		return response, challenge, nil
+	}
+	drainAndClose(response.Body)
 	token, err := c.bearerToken(ctx, challenge, repository, actions)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	return c.HTTP.Do(req)
+	retryReq, err := c.newRequest(ctx, method, path, headers, "Bearer "+token)
+	if err != nil {
+		return nil, "", err
+	}
+	retryResp, err := c.HTTP.Do(retryReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("reach registry: %w", err)
+	}
+	return retryResp, challenge, nil
 }
 
 func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions string) (string, error) {
@@ -205,7 +273,7 @@ func (c *Client) bearerToken(ctx context.Context, challenge, repository, actions
 	if err != nil {
 		return "", fmt.Errorf("reach registry token service: %w", err)
 	}
-	defer tokenResponse.Body.Close()
+	defer drainAndClose(tokenResponse.Body)
 	if tokenResponse.StatusCode == 401 || tokenResponse.StatusCode == 403 {
 		return "", tokenDenial(tokenResponse, repository, actions)
 	}

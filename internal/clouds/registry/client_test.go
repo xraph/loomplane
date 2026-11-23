@@ -303,3 +303,204 @@ func TestRegistryReportsWhichStepExceededTheDeadline(t *testing.T) {
 		t.Fatalf("unexpected timeout: %v", err)
 	}
 }
+
+func TestRegistryClientConfiguresBoundedHTTP2Transport(t *testing.T) {
+	cfg, err := ParseConfig([]byte("{}"), map[string]string{"endpoint": "https://registry.example.com", "repository": "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := New(cfg)
+	tr, ok := client.HTTP.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.HTTP.Transport)
+	}
+	if !tr.ForceAttemptHTTP2 {
+		t.Fatal("expected ForceAttemptHTTP2 to be true")
+	}
+	if tr.Proxy == nil {
+		t.Fatal("expected Proxy to be configured")
+	}
+	if tr.TLSHandshakeTimeout <= 0 {
+		t.Fatalf("expected TLSHandshakeTimeout > 0, got %v", tr.TLSHandshakeTimeout)
+	}
+	if tr.ResponseHeaderTimeout <= 0 {
+		t.Fatalf("expected ResponseHeaderTimeout > 0, got %v", tr.ResponseHeaderTimeout)
+	}
+	if client.HTTP.Timeout <= 0 || client.HTTP.Timeout > 20*time.Second {
+		t.Fatalf("unexpected HTTP client timeout: %v", client.HTTP.Timeout)
+	}
+}
+
+func TestRegistryCheckReusesBearerChallengeAndHandlesFallbacks(t *testing.T) {
+	t.Run("reuses challenge across pull and push checks", func(t *testing.T) {
+		var realmURL string
+		var registryHits []string
+		var tokenScopes []string
+		realm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tokenScopes = append(tokenScopes, r.URL.Query().Get("scope"))
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok-" + r.URL.Query().Get("scope")})
+		}))
+		defer realm.Close()
+		realmURL = realm.URL
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth := r.Header.Get("Authorization")
+			registryHits = append(registryHits, r.Method+" "+r.URL.Path+" bearer="+strings.TrimPrefix(auth, "Bearer "))
+			if !strings.HasPrefix(auth, "Bearer tok-") {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+realmURL+`/token",service="registry"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			switch r.Method {
+			case http.MethodPost:
+				w.Header().Set("Location", "/v2/team/loomplane-check/blobs/uploads/probe")
+				w.WriteHeader(http.StatusAccepted)
+			case http.MethodDelete:
+				w.WriteHeader(http.StatusAccepted)
+			default:
+				w.WriteHeader(http.StatusOK)
+			}
+		}))
+		defer s.Close()
+		cfg, err := ParseConfig([]byte(`{"username":"deploy","password":"pw"}`), map[string]string{
+			"endpoint":      s.URL,
+			"repository":    "team",
+			"auth_endpoint": realmURL + "/token",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = New(cfg).Check(t.Context()); err != nil {
+			t.Fatalf("check failed: %v", err)
+		}
+		wantHits := []string{
+			"GET /v2/ bearer=Basic ZGVwbG95OnB3",
+			"GET /v2/ bearer=tok-",
+			"GET /v2/team/loomplane-check/tags/list bearer=tok-repository:team/loomplane-check:pull",
+			"POST /v2/team/loomplane-check/blobs/uploads/ bearer=tok-repository:team/loomplane-check:pull,push",
+			"DELETE /v2/team/loomplane-check/blobs/uploads/probe bearer=tok-repository:team/loomplane-check:pull,push",
+		}
+		if !slices.Equal(registryHits, wantHits) {
+			t.Fatalf("registry hits = %q, want %q", registryHits, wantHits)
+		}
+		if len(tokenScopes) != 3 {
+			t.Fatalf("token fetches = %q, want 3", tokenScopes)
+		}
+	})
+
+	t.Run("falls back when push endpoint returns a different challenge", func(t *testing.T) {
+		var realmURL string
+		var services []string
+		realm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			svc := r.URL.Query().Get("service")
+			services = append(services, svc)
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok-" + svc})
+		}))
+		defer realm.Close()
+		realmURL = realm.URL
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth := r.Header.Get("Authorization")
+			if r.Method == http.MethodPost {
+				if auth != "Bearer tok-upload-svc" {
+					w.Header().Set("WWW-Authenticate", `Bearer realm="`+realmURL+`/token",service="upload-svc"`)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				w.Header().Set("Location", "/v2/team/loomplane-check/blobs/uploads/probe")
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if auth != "Bearer tok-root-svc" {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+realmURL+`/token",service="root-svc"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer s.Close()
+		cfg, err := ParseConfig([]byte(`{"username":"deploy","password":"pw"}`), map[string]string{
+			"endpoint":      s.URL,
+			"repository":    "team",
+			"auth_endpoint": realmURL + "/token",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = New(cfg).Check(t.Context()); err != nil {
+			t.Fatalf("check failed: %v", err)
+		}
+		wantServices := []string{"root-svc", "root-svc", "root-svc", "upload-svc"}
+		if !slices.Equal(services, wantServices) {
+			t.Fatalf("services = %q, want %q", services, wantServices)
+		}
+	})
+
+	t.Run("does not refetch token when same challenge rejects pre-fetched bearer token", func(t *testing.T) {
+		var realmURL string
+		var tokenCalls int
+		realm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			tokenCalls++
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok"})
+		}))
+		defer realm.Close()
+		realmURL = realm.URL
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v2/" && r.Header.Get("Authorization") == "Bearer tok" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+realmURL+`/token",service="registry"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer s.Close()
+		cfg, err := ParseConfig([]byte(`{"username":"deploy","password":"pw"}`), map[string]string{
+			"endpoint":      s.URL,
+			"repository":    "team",
+			"auth_endpoint": realmURL + "/token",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = New(cfg).Check(t.Context()); !errors.Is(err, ErrRejected) {
+			t.Fatalf("expected ErrRejected, got %v", err)
+		}
+		// One call for /v2/, one pre-fetch for /tags/list, no duplicate retry call on identical 401 challenge.
+		if tokenCalls != 2 {
+			t.Fatalf("expected 2 token calls, got %d", tokenCalls)
+		}
+	})
+}
+
+func TestRegistryCancelCheckUploadAcceptsOCIStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		wantErr bool
+	}{
+		{http.StatusOK, false},
+		{http.StatusAccepted, false},
+		{http.StatusNoContent, false},
+		{http.StatusNotFound, false},
+		{http.StatusInternalServerError, true},
+	} {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete {
+				w.WriteHeader(tc.status)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		cfg, err := ParseConfig([]byte("{}"), map[string]string{"endpoint": s.URL, "repository": "team"})
+		if err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+		err = New(cfg).cancelCheckUpload(t.Context(), "/v2/team/loomplane-check/blobs/uploads/probe", "team/loomplane-check", nil)
+		s.Close()
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("status %d: err=%v wantErr=%v", tc.status, err, tc.wantErr)
+		}
+	}
+}
