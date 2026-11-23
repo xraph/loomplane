@@ -107,6 +107,34 @@ export function AddServiceButton({
  * gets the drafted one on its Deployments tab instead.
  */
 export function FoundServices({ projectId }: { projectId: string }) {
+  const found = useFoundServices(projectId)
+  if (!found) return null
+  return (
+    <CloudCallout
+      icon={SparklesIcon}
+      title={found.title}
+      action={
+        <Button size="sm" variant="outline" onClick={found.open}>
+          Review and add
+        </Button>
+      }
+    >
+      {found.detail}
+    </CloudCallout>
+  )
+}
+
+/**
+ * useFoundServices is what FoundServices says, for a page that lists it
+ * among other things: null when there's nothing to add, or nobody here
+ * may add it.
+ */
+export function useFoundServices(projectId: string): {
+  names: string[]
+  title: string
+  detail: string
+  open: () => void
+} | null {
   const open = useAddService()
   const current = useQuery(useManifestsCurrent, { path: { id: projectId } })
   const found = useQuery(useManifestsSuggestions, { path: { id: projectId } })
@@ -117,17 +145,10 @@ export function FoundServices({ projectId }: { projectId: string }) {
     names.length <= 3
       ? names.join(", ")
       : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`
-  return (
-    <CloudCallout
-      icon={SparklesIcon}
-      title={`Analysis found ${names.length === 1 ? "a service" : `${names.length} services`} that ${names.length === 1 ? "isn't" : "aren't"} in loomplane.yaml`}
-      action={
-        <Button size="sm" variant="outline" onClick={() => open()}>
-          Review and add
-        </Button>
-      }
-    >
-      {listed}. Nothing deploys them until they're added and planned.
-    </CloudCallout>
-  )
+  return {
+    names,
+    title: `Analysis found ${names.length === 1 ? "a service" : `${names.length} services`} that ${names.length === 1 ? "isn't" : "aren't"} in loomplane.yaml`,
+    detail: `${listed}. Nothing deploys them until they're added and planned.`,
+    open: () => open(),
+  }
 }

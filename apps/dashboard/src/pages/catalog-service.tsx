@@ -3,7 +3,6 @@
 // panels its kind's module adds.
 import {
   BoxIcon,
-  ChevronLeftIcon,
   DatabaseIcon,
   LockIcon,
   PlayIcon,
@@ -20,11 +19,11 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Binding, Environment } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
-import { Page } from "@/components/page"
 import { CatalogCapacity } from "@/components/provider-resources/catalog-capacity"
 import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
+import { FramedPage, useFramedCrumbs } from "@/components/project-frame"
 import { SiteHeader } from "@/components/site-header"
 import { buttonVariants } from "@/components/ui/button"
 import {
@@ -87,24 +86,30 @@ export function CatalogService({
     ? list.find((e) => e.id === environmentId)
     : (list.find((e) => e.name === "production") ?? list[0])
   const projectName = project.data?.name ?? "Project"
+  const crumbs = useFramedCrumbs(
+    [
+      {
+        label: "Services",
+        link: (
+          <Link
+            to="/projects/$id"
+            params={{ id: projectId }}
+            search={{ tab: "services" }}
+          />
+        ),
+      },
+      { label: resource },
+    ],
+    [
+      { label: "Projects", to: "/projects" },
+      { label: projectName },
+      { label: resource },
+    ]
+  )
   return (
     <>
-      <SiteHeader
-        crumbs={[
-          { label: "Projects", to: "/projects" },
-          { label: projectName },
-          { label: resource },
-        ]}
-      />
-      <Page>
-        <Link
-          to="/projects/$id"
-          params={{ id: projectId }}
-          className="-mb-2.5 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
-        >
-          <ChevronLeftIcon className="size-3.5" />
-          {projectName}
-        </Link>
+      <SiteHeader crumbs={crumbs} />
+      <FramedPage>
         {environments.status === "error" ? (
           <Failed
             error={environments.error}
@@ -132,7 +137,7 @@ export function CatalogService({
             environment={environment}
           />
         )}
-      </Page>
+      </FramedPage>
     </>
   )
 }

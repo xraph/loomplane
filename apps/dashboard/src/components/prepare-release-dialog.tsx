@@ -63,33 +63,54 @@ export function PrepareRelease({
   environments: Environment[] | undefined
   may: boolean
 }) {
+  const prepare = usePrepareRelease({ project, environments, may })
+  if (!prepare.available) return null
+  return (
+    <>
+      <Button variant="outline" onClick={prepare.open}>
+        <ClipboardCheckIcon />
+        Prepare release
+      </Button>
+      {prepare.dialog}
+    </>
+  )
+}
+
+/**
+ * usePrepareRelease is PrepareRelease without its button, for a menu item
+ * that opens the same dialog. available is false wherever the button
+ * wouldn't show; render dialog beside the trigger.
+ */
+export function usePrepareRelease({
+  project,
+  environments,
+  may,
+}: {
+  project: Project
+  environments: Environment[] | undefined
+  may: boolean
+}) {
   const features = useFeatures()
   const agent = useAgent()
   const { can } = useOrganization()
   const [open, setOpen] = useState(false)
-  if (
-    !features.ai ||
-    !agent.enabled ||
-    !may ||
-    !can("agent:use") ||
-    !canPrepare(environments)
-  )
-    return null
-  return (
-    <>
-      <Button variant="outline" onClick={() => setOpen(true)}>
-        <ClipboardCheckIcon />
-        Prepare release
-      </Button>
-      {open && (
-        <PrepareDialog
-          project={project}
-          environments={environments ?? []}
-          onClose={() => setOpen(false)}
-        />
-      )}
-    </>
-  )
+  const available =
+    features.ai &&
+    agent.enabled &&
+    may &&
+    can("agent:use") &&
+    canPrepare(environments)
+  return {
+    available,
+    open: () => setOpen(true),
+    dialog: available && open && (
+      <PrepareDialog
+        project={project}
+        environments={environments ?? []}
+        onClose={() => setOpen(false)}
+      />
+    ),
+  }
 }
 
 type Conflict = { kind: "plan" | "running"; message: string }

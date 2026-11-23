@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
+import { ProjectFrame } from "@/components/project-frame"
 import { ProjectService } from "@/pages/project-service"
 
 vi.mock("@/lib/organization", () => ({
@@ -213,6 +214,10 @@ function serve(fixture: Fixture = {}) {
                 ]
               : [],
         })
+      // The project's frame counts its variables and lists its analyses.
+      if (path === "/api/v1/projects/p/variables")
+        return json({ variables: [] })
+      if (path === "/api/v1/projects/p/analyses") return json({ analyses: [] })
       if (path === "/api/v1/projects/p/domain-routes")
         return json({ routes: fixture.routes?.() ?? [] })
       if (path === "/api/v1/projects/p/domains")
@@ -222,12 +227,13 @@ function serve(fixture: Fixture = {}) {
   )
   render(
     <ClientProvider client={forgeClient}>
-      <ProjectService
-        projectId="p"
-        name="web"
+      <ProjectFrame
+        id="p"
         environment="production"
-        tab={fixture.tab}
-      />
+        place={{ tab: "services", environmentScoped: true }}
+      >
+        <ProjectService name="web" tab={fixture.tab} />
+      </ProjectFrame>
     </ClientProvider>
   )
   return writes
@@ -564,17 +570,19 @@ test("the header says where the service stands and deploys only it", async () =>
   expect(
     await screen.findByRole("heading", { level: 1, name: "web" })
   ).toBeVisible()
-  expect(screen.getByRole("button", { name: "acme-shop" })).toBeVisible()
+  // The project's frame names the project; the way back is to its services.
+  expect(screen.getByRole("button", { name: "All services" })).toBeVisible()
   const header = screen.getByRole("banner")
   expect(await within(header).findByText("Live")).toBeVisible()
   expect(
-    within(header).getByRole("link", { name: "Deploy to production" })
+    within(header).getByRole("link", { name: "Deploy web to production" })
   ).toHaveAttribute(
     "href",
     "/deployments/new?project=p&environment=production&service=web"
   )
+  // The environment is the project's, chosen above the page.
   expect(
-    screen.getByRole("tablist", { name: "Environment" })
+    screen.getByRole("combobox", { name: "Environment" })
   ).toBeInTheDocument()
   await userEvent.click(
     within(header).getByRole("button", { name: "More service actions" })

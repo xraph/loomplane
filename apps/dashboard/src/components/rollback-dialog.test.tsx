@@ -115,8 +115,8 @@ it("creates the rollback plan and opens it", async () => {
   )
   await vi.waitFor(() =>
     expect(navigate).toHaveBeenCalledWith({
-      to: "/deployments/$id",
-      params: { id: "plan_rb" },
+      to: "/projects/$id/deployments/$runId",
+      params: { id: "p", runId: "plan_rb" },
     })
   )
   expect(calls.filter((c) => c.method === "POST")).toEqual([

@@ -201,7 +201,8 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       isActive: path === "/projects",
     },
     {
-      title: "Services",
+      // Catalog, not Services: a project's services are its own code.
+      title: "Catalog",
       icon: <ServicesIcon />,
       link: <Link to="/services" />,
       isActive: path.startsWith("/services"),
@@ -470,7 +471,10 @@ function Projects({
           icon: style.icon,
           color: style.color,
           link: <Link to="/projects/$id" params={{ id: p.id }} />,
-          isActive: path === `/projects/${p.id}`,
+          // Every page of a project is inside it: a service, a deployment.
+          isActive:
+            path === `/projects/${p.id}` ||
+            path.startsWith(`/projects/${p.id}/`),
           attention,
         }
       })}

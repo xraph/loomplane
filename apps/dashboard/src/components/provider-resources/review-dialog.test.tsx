@@ -238,8 +238,8 @@ test("wires every service you tick in the edit that adds the resource", async ()
   )
   await waitFor(() =>
     expect(navigate).toHaveBeenCalledWith({
-      to: "/deployments/$id",
-      params: { id: "plan_1" },
+      to: "/projects/$id/deployments/$runId",
+      params: { id: "p", runId: "plan_1" },
     })
   )
   expect(edits).toHaveLength(1)
@@ -314,8 +314,8 @@ test("reviews a standalone workspace resource with no application projects and r
   )
   await waitFor(() =>
     expect(navigate).toHaveBeenCalledWith({
-      to: "/deployments/$id",
-      params: { id: "standalone-plan" },
+      to: "/projects/$id/deployments/$runId",
+      params: { id: "owner", runId: "standalone-plan" },
     })
   )
   expect(writes).toEqual([

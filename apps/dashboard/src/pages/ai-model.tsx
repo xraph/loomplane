@@ -21,9 +21,10 @@ import {
 } from "@/components/ai/models/model-overview"
 import { ModelSettings } from "@/components/ai/models/model-settings"
 import { ModelsIcon } from "@/components/icons"
-import { Page, PageHeading } from "@/components/page"
+import { PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
 import { StatusPill } from "@/components/runs"
+import { FramedPage, useFramedCrumbs } from "@/components/project-frame"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -74,16 +75,30 @@ export function AIModel({
   // What a change, a cancel or a removal said. It stays when the model is
   // gone, since that's often when it matters most.
   const [notice, setNotice] = useState<ModelNotice>()
+  const crumbs = useFramedCrumbs(
+    [
+      {
+        label: "Services",
+        link: (
+          <Link
+            to="/projects/$id"
+            params={{ id: projectId }}
+            search={{ tab: "services" }}
+          />
+        ),
+      },
+      { label: resource },
+    ],
+    [
+      { label: "Models", to: "/ai/models" },
+      { label: project.data?.name ?? "Project" },
+      { label: resource },
+    ]
+  )
   return (
     <>
-      <SiteHeader
-        crumbs={[
-          { label: "Models", to: "/ai/models" },
-          { label: project.data?.name ?? "Project" },
-          { label: resource },
-        ]}
-      />
-      <Page className="gap-6">
+      <SiteHeader crumbs={crumbs} />
+      <FramedPage className="gap-6">
         {notice && (
           <Notice notice={notice} onClose={() => setNotice(undefined)} />
         )}
@@ -110,7 +125,7 @@ export function AIModel({
             notify={setNotice}
           />
         )}
-      </Page>
+      </FramedPage>
     </>
   )
 }

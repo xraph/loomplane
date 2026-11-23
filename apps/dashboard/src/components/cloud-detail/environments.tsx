@@ -144,7 +144,7 @@ export function EnvironmentsOnCloud({
                       <Link
                         to="/projects/$id"
                         params={{ id: env.projectId }}
-                        search={{ tab: "cloud" }}
+                        search={{ tab: "settings", section: "clouds" }}
                         aria-label={`Open ${env.projectName}'s Clouds`}
                       />
                     }

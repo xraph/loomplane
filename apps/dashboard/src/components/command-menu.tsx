@@ -252,14 +252,14 @@ const pages: Page[] = [
   },
   {
     to: "/services",
-    label: "Services",
+    label: "Catalog",
     icon: <ServicesIcon />,
     search: "services deployed running managed",
     keys: "G S",
   },
   {
     to: "/services/catalog",
-    label: "Service catalog",
+    label: "Browse the catalog",
     icon: <ServicesIcon />,
     search:
       "services catalog databases caches postgres redis managed provider one click create deploy",
@@ -406,7 +406,10 @@ export function CommandMenu({
             searching={search.trim() !== ""}
             go={(r) => {
               onOpenChange(false)
-              void navigate({ to: "/deployments/$id", params: { id: r.id } })
+              void navigate({
+                to: "/projects/$id/deployments/$runId",
+                params: { id: r.projectId, runId: r.id },
+              })
             }}
           />
           <CommandGroup heading="Go to">

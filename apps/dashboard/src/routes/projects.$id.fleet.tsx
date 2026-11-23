@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { FleetDetail } from "@/pages/fleet-detail"
-export const Route = createFileRoute("/projects/$id_/fleet")({
+export const Route = createFileRoute("/projects/$id/fleet")({
   component: FleetRoute,
 })
 function FleetRoute() {

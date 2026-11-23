@@ -174,7 +174,7 @@ test("each environment says what it is doing and offers the next step", async ()
   // A plan waiting on someone is reviewed, not deployed again.
   expect(stage.getByRole("link", { name: "Review" })).toHaveAttribute(
     "href",
-    "/deployments/plan_1"
+    "/projects/p/deployments/plan_1"
   )
   expect(stage.queryByRole("link", { name: "Deploy" })).toBeNull()
   expect(stage.getByText(/1 plan to approve/)).toBeInTheDocument()

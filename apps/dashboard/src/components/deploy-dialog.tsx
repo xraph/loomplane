@@ -419,9 +419,7 @@ function DeployScreen({
   const allRows = manifest
     ? placementRows(manifest, graph, view.data?.excluded ?? [])
     : []
-  const rows = graph
-    ? allRows.filter((r) => r.section === "services")
-    : []
+  const rows = graph ? allRows.filter((r) => r.section === "services") : []
   const resourceRows = allRows.filter((r) => r.section === "resources")
   const excludedCount = view.data?.excluded?.length ?? 0
   const here = pending[environment] ?? {}
@@ -505,7 +503,10 @@ function DeployScreen({
       }
       const p = await create.mutateAsync({ path: { id: project.id }, body })
       invalidate(usePlansList)
-      void navigate({ to: "/deployments/$id", params: { id: p.id } })
+      void navigate({
+        to: "/projects/$id/deployments/$runId",
+        params: { id: project.id, runId: p.id },
+      })
       toast.success(`Planning ${project.name} to ${environment}`, {
         description: "Review the plan, then approve it to deploy.",
       })

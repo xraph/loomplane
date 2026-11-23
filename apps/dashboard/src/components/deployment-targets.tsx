@@ -649,7 +649,7 @@ function PlacementChoices({
   const projectClouds = {
     to: "/projects/$id",
     params: { id: projectId },
-    search: { tab: "cloud" },
+    search: { tab: "settings", section: "clouds" },
   } as const
 
   return (

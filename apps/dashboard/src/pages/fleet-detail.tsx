@@ -9,7 +9,8 @@ import { useQuery } from "@/client/hooks"
 import { FleetList, type FleetQuery } from "@/components/fleets/fleet-list"
 import { FleetReadState } from "@/components/fleets/read-state"
 import { useFleetRefresh } from "@/components/fleets/use-fleet-refresh"
-import { Page, PageHeading } from "@/components/page"
+import { PageHeading } from "@/components/page"
+import { FramedPage, useFramedCrumbs } from "@/components/project-frame"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 
@@ -17,19 +18,21 @@ export function FleetDetail({ projectID }: { projectID: string }) {
   const fleet = useQuery(useFleetsGet, { path: { project_id: projectID } })
   const allowed = ![401, 403, 404].includes(statusOf(fleet.error))
   useFleetRefresh(allowed, fleet.refetch)
+  const crumbs = useFramedCrumbs(
+    [{ label: "Instance fleet" }],
+    [
+      { label: "Projects", to: "/projects" },
+      {
+        label: "Project",
+        link: <Link to="/projects/$id" params={{ id: projectID }} />,
+      },
+      { label: "Instance fleet" },
+    ]
+  )
   return (
     <>
-      <SiteHeader
-        crumbs={[
-          { label: "Projects", to: "/projects" },
-          {
-            label: "Project",
-            link: <Link to="/projects/$id" params={{ id: projectID }} />,
-          },
-          { label: "Instance fleet" },
-        ]}
-      />
-      <Page>
+      <SiteHeader crumbs={crumbs} />
+      <FramedPage>
         <PageHeading
           title="Instance fleet"
           description="Review each instance's release and current state."
@@ -45,7 +48,7 @@ export function FleetDetail({ projectID }: { projectID: string }) {
         ) : (
           <Instances key={projectID} projectID={projectID} />
         )}
-      </Page>
+      </FramedPage>
     </>
   )
 }

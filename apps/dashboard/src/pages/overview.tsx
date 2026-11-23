@@ -289,7 +289,12 @@ function Waiting({
       <div className="mt-auto flex flex-wrap gap-2">
         <Button
           nativeButton={false}
-          render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+          render={
+            <Link
+              to="/projects/$id/deployments/$runId"
+              params={{ id: run.projectId, runId: run.id }}
+            />
+          }
         >
           Review plan
         </Button>
@@ -318,7 +323,12 @@ function InFlight({ run, count }: { run: Run; count: number }) {
         <Button
           variant="outline"
           nativeButton={false}
-          render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+          render={
+            <Link
+              to="/projects/$id/deployments/$runId"
+              params={{ id: run.projectId, runId: run.id }}
+            />
+          }
         >
           Watch deploy
         </Button>
@@ -404,7 +414,12 @@ function LastRelease({ run, now }: { run?: Run; now: number }) {
             <Button
               variant="outline"
               nativeButton={false}
-              render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+              render={
+                <Link
+                  to="/projects/$id/deployments/$runId"
+                  params={{ id: run.projectId, runId: run.id }}
+                />
+              }
             >
               View deploy
             </Button>

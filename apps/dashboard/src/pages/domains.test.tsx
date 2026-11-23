@@ -626,7 +626,7 @@ it("keeps the list through a failed refresh", async () => {
   expect(screen.queryByText("Domain access is restricted")).toBeNull()
 })
 
-it("puts Domains between Services and Clouds in the sidebar", async () => {
+it("puts Domains between Catalog and Clouds in the sidebar", async () => {
   stubFetch({})
   render(
     <Wrapped>
@@ -638,12 +638,12 @@ it("puts Domains between Services and Clouds in the sidebar", async () => {
   const links = screen
     .getAllByRole("link")
     .map((a) => a.textContent?.trim())
-    .filter((t) => ["Services", "Domains", "Clouds"].includes(t ?? ""))
-  expect(links).toEqual(["Services", "Domains", "Clouds"])
+    .filter((t) => ["Catalog", "Domains", "Clouds"].includes(t ?? ""))
+  expect(links).toEqual(["Catalog", "Domains", "Clouds"])
   const domains = screen.getByRole("link", { name: "Domains" })
   expect(domains.getAttribute("href")).toBe("/domains")
   expect(domains.hasAttribute("data-active")).toBe(true)
   expect(
-    screen.getByRole("link", { name: "Services" }).hasAttribute("data-active")
+    screen.getByRole("link", { name: "Catalog" }).hasAttribute("data-active")
   ).toBe(false)
 })

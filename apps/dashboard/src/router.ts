@@ -5,6 +5,7 @@ import {
   PageLoading,
   PageNotFound,
 } from "@/components/route-feedback"
+import type { ProjectTab } from "@/lib/project-nav"
 import { workspaceRewrite } from "@/lib/workspace-url"
 import { routeTree } from "./routeTree.gen"
 
@@ -33,5 +34,12 @@ export const router = createDashboardRouter()
 declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router
+  }
+  // What a page under a project tells the project's frame about itself.
+  interface StaticDataRouteOption {
+    /** The project view its nav marks, such as Services for a service. */
+    projectTab?: ProjectTab
+    /** Whether it shows one environment, so the nav offers the others. */
+    environmentScoped?: boolean
   }
 }

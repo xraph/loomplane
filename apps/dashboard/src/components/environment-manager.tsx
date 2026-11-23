@@ -405,8 +405,8 @@ function EnvironmentRow({
       <Cell className="truncate text-muted-foreground">
         {latest ? (
           <Link
-            to="/deployments/$id"
-            params={{ id: (waiting[0] ?? latest).id }}
+            to="/projects/$id/deployments/$runId"
+            params={{ id: project.id, runId: (waiting[0] ?? latest).id }}
             className="underline-offset-2 hover:text-foreground hover:underline"
           >
             {lastDeploy}
@@ -444,7 +444,10 @@ function EnvironmentRow({
             size="sm"
             nativeButton={false}
             render={
-              <Link to="/deployments/$id" params={{ id: waiting[0].id }} />
+              <Link
+                to="/projects/$id/deployments/$runId"
+                params={{ id: project.id, runId: waiting[0].id }}
+              />
             }
           >
             Review

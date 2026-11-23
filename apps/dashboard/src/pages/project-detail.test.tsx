@@ -4,7 +4,8 @@ import { afterEach, expect, test, vi } from "vitest"
 
 import type { Environment, Project } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
-import { ProjectDetail, Resources } from "@/pages/project-detail"
+import { Resources } from "@/pages/project-detail"
+import { ProjectPage } from "@/test-fixtures/project-page"
 
 // What the workspace role may do; the tests that change it say so.
 const workspace = vi.hoisted(() => ({
@@ -156,17 +157,47 @@ test("a resource shows its state in every environment", async () => {
 })
 
 test("old and unknown tabs open the page somewhere it has", async () => {
+  const { Route } = await import("@/routes/projects.$id.index")
+  const validate = Route.options.validateSearch as (
+    search: Record<string, unknown>
+  ) => Record<string, unknown>
+  const none = { tab: undefined, section: undefined }
+  expect(validate({ tab: "graph" })).toEqual(none)
+  expect(validate({ tab: "deploy" })).toEqual({ ...none, tab: "deployments" })
+  expect(validate({ tab: "variables" })).toEqual({ ...none, tab: "variables" })
+  // Clouds and analyses moved into Settings, backups onto each database.
+  expect(validate({ tab: "cloud" })).toEqual({
+    tab: "settings",
+    section: "clouds",
+  })
+  expect(validate({ tab: "analyses" })).toEqual({
+    tab: "settings",
+    section: "source",
+  })
+  expect(validate({ tab: "backups" })).toEqual({ ...none, tab: "services" })
+  expect(validate({ tab: "settings", section: "access" })).toEqual({
+    tab: "settings",
+    section: "access",
+  })
+  // A section means something only on Settings.
+  expect(validate({ tab: "services", section: "access" })).toEqual({
+    ...none,
+    tab: "services",
+  })
+  expect(validate({ tab: "nonsense" })).toEqual(none)
+})
+
+test("the environment belongs to every page of the project", async () => {
   const { Route } = await import("@/routes/projects.$id")
   const validate = Route.options.validateSearch as (
     search: Record<string, unknown>
   ) => Record<string, unknown>
-  expect(validate({ tab: "graph" })).toEqual({ tab: "overview" })
-  expect(validate({ tab: "deploy" })).toEqual({ tab: "deployments" })
-  expect(validate({ tab: "variables", environment: "staging" })).toEqual({
-    tab: "variables",
+  expect(validate({ environment: "staging" })).toEqual({
     environment: "staging",
   })
-  expect(validate({ tab: "nonsense" })).toEqual({})
+  expect(validate({ environment: "x".repeat(65) })).toEqual({
+    environment: undefined,
+  })
 })
 
 test("a team grant on the project shows its buttons", async () => {
@@ -189,7 +220,7 @@ test("a team grant on the project shows its buttons", async () => {
   })
   render(
     <ClientProvider client={forgeClient}>
-      <ProjectDetail id="p" />
+      <ProjectPage id="p" />
     </ClientProvider>
   )
   expect(
@@ -217,7 +248,7 @@ test("without the team grant the button stays hidden", async () => {
   })
   render(
     <ClientProvider client={forgeClient}>
-      <ProjectDetail id="p" />
+      <ProjectPage id="p" />
     </ClientProvider>
   )
   await screen.findByRole("heading", { name: /Shop/ })

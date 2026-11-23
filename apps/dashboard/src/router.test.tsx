@@ -1,6 +1,7 @@
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { requestedWorkspace, setWorkspaceSlug } from "@/lib/workspace-url"
@@ -34,10 +35,27 @@ vi.mock("@/pages/deployments", () => ({
   ),
 }))
 vi.mock("@/pages/deployment", () => ({
-  DeploymentPage: ({ id }: { id: string }) => <h1>Deployment {id}</h1>,
+  deploymentTabOf: () => undefined,
+  DeploymentPage: ({ id, projectId }: { id: string; projectId?: string }) => (
+    <h1>
+      Deployment {id}
+      {projectId ? ` of ${projectId}` : ""}
+    </h1>
+  ),
+  // The real one asks the API for the deployment's project, then moves.
+  DeploymentRedirect: ({ id }: { id: string }) => <h1>Deployment {id}</h1>,
+}))
+// The frame loads the project; here it only names it around the page.
+vi.mock("@/components/project-frame", () => ({
+  ProjectFrame: ({ id, children }: { id: string; children: ReactNode }) => (
+    <>
+      <h1>Project {id}</h1>
+      {children}
+    </>
+  ),
 }))
 vi.mock("@/pages/project-detail", () => ({
-  ProjectDetail: ({ id }: { id: string }) => <h1>Project {id}</h1>,
+  ProjectViews: ({ tab }: { tab?: string }) => <p>View {tab ?? "overview"}</p>,
 }))
 vi.mock("@/pages/domain-detail", () => ({
   DomainDetailPage: ({ zoneId }: { zoneId: string }) => (
@@ -116,6 +134,25 @@ describe("dashboard routes", () => {
       await screen.findByRole("heading", {
         name: "Service app of p1 in no environment",
       })
+    ).toBeInTheDocument()
+  })
+
+  it("opens an old project tab where its content went", async () => {
+    const { router } = await open("/projects/p1?tab=cloud")
+    expect(await screen.findByText("View settings")).toBeInTheDocument()
+    expect(router.state.location.search).toEqual({
+      tab: "settings",
+      section: "clouds",
+    })
+  })
+
+  it("opens a deployment inside its project", async () => {
+    await open("/projects/p1/deployments/plan_9?tab=logs")
+    expect(
+      await screen.findByRole("heading", { name: "Deployment plan_9 of p1" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", { name: "Project p1" })
     ).toBeInTheDocument()
   })
 

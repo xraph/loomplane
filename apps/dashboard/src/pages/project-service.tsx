@@ -2,13 +2,10 @@ import { BoxIcon, DatabaseIcon, EyeOffIcon, RocketIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf, statusOf } from "@/client/errors"
+import { messageOf } from "@/client/errors"
 import {
-  useEnvironmentsList,
   useManifestsCurrent,
   useManifestsEdit,
-  useProjectsGet,
-  useProjectsGraph,
 } from "@/client/forge/loomplane/hooks"
 import type {
   Binding,
@@ -30,7 +27,6 @@ import {
   NameCell,
   PageMenu,
   RowMenu,
-  Segments,
 } from "@/components/cloud-targets/cloud-page"
 import {
   CloudEmpty,
@@ -41,7 +37,6 @@ import { aliasOf, BindingAlias } from "@/components/binding-alias"
 import { AddHostnameDialog } from "@/components/domains/add-hostname-dialog"
 import { EdgeCacheDialog } from "@/components/domains/edge-cache-dialog"
 import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
-import { Page } from "@/components/page"
 import {
   ExcludeDialog,
   ServiceStatePill,
@@ -55,7 +50,8 @@ import { StatusPill, toneOf, type Tone } from "@/components/runs"
 import { ServiceAddress } from "@/components/service-address"
 import { ServiceBuildSettings } from "@/components/service-build-settings"
 import { ServiceScaling } from "@/components/service-scaling"
-import { SiteHeader, type Crumb } from "@/components/site-header"
+import { projectCrumbs, useProjectFrame } from "@/components/project-frame"
+import { SiteHeader } from "@/components/site-header"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -104,91 +100,66 @@ import { useUrlTab } from "@/lib/use-url-tab"
 const outlineSm = buttonVariants({ size: "sm", variant: "outline" })
 
 /**
- * ProjectService is one service of a project: where it runs in each
- * environment, what's running now, its deployments, domains and what it
- * uses, and the setting that excludes it.
+ * ProjectService is one service of a project, inside the project's frame:
+ * where it runs in the environment the frame shows, what's running now,
+ * its deployments, domains and what it uses, and the setting that
+ * excludes it.
  */
 export function ProjectService({
-  projectId,
   name,
-  environment,
   tab,
 }: {
-  projectId: string
   name: string
-  environment?: string
   /** The tab the page opens on; Overview when unset. */
   tab?: ServiceTab
 }) {
-  const project = useQuery(useProjectsGet, { path: { id: projectId } })
-  const environments = useQuery(useEnvironmentsList, {
-    path: { id: projectId },
-  })
-  const view = useQuery(useProjectsGraph, { path: { id: projectId } })
-  const missing = project.status === "error" && statusOf(project.error) === 404
-  const crumbs: Crumb[] = [
-    { label: "Projects", to: "/projects" },
-    project.data
-      ? {
-          label: project.data.name,
-          link: <Link to="/projects/$id" params={{ id: projectId }} />,
-        }
-      : { label: "Project" },
-    { label: name },
-  ]
-
+  const { project, environments, environment, view, viewError, refetchView } =
+    useProjectFrame()
   return (
     <>
-      <SiteHeader crumbs={crumbs} />
-      <Page>
-        {missing ? (
-          <CloudEmpty
-            kind="notice"
-            icon={BoxIcon}
-            title="No such project here"
-            action={
-              <Link to="/projects" className={outlineSm}>
-                Back to projects
-              </Link>
-            }
-          >
-            It may have been deleted, or it belongs to another workspace.
-          </CloudEmpty>
-        ) : project.status === "error" ? (
-          <QueryError
-            error={project.error}
-            fallback="The project couldn't be loaded."
-            retry={project.refetch}
-          />
-        ) : environments.status === "error" ? (
-          <QueryError
-            error={environments.error}
-            fallback="The project's environments couldn't be loaded."
-            retry={environments.refetch}
-          />
-        ) : view.status === "error" ? (
-          <QueryError
-            error={view.error}
-            fallback="The project's services couldn't be loaded."
-            retry={view.refetch}
-          />
-        ) : project.data && environments.data && view.data ? (
-          <Loaded
-            project={project.data}
-            environments={environments.data.environments}
-            view={view.data}
-            name={name}
-            environment={environment}
-            tab={tab}
-          />
-        ) : (
-          <div className="grid gap-5" aria-busy="true">
-            <Skeleton className="h-11 w-72" />
-            <Skeleton className="h-8 w-60 rounded-[10px]" />
-            <Skeleton className="h-72 rounded-xl" />
-          </div>
+      <SiteHeader
+        crumbs={projectCrumbs(
+          project,
+          {
+            label: "Services",
+            link: (
+              <Link
+                to="/projects/$id"
+                params={{ id: project.id }}
+                search={{ tab: "services" }}
+              />
+            ),
+          },
+          { label: name }
         )}
-      </Page>
+      />
+      {environments.error !== undefined && !environments.list ? (
+        <QueryError
+          error={environments.error}
+          fallback="The project's environments couldn't be loaded."
+          retry={environments.refetch}
+        />
+      ) : viewError !== undefined && !view ? (
+        <QueryError
+          error={viewError}
+          fallback="The project's services couldn't be loaded."
+          retry={refetchView}
+        />
+      ) : environments.list && view ? (
+        <Loaded
+          project={project}
+          environments={environments.list}
+          view={view}
+          name={name}
+          env={environment}
+          tab={tab}
+        />
+      ) : (
+        <div className="grid gap-5" aria-busy="true">
+          <Skeleton className="h-11 w-72" />
+          <Skeleton className="h-72 rounded-xl" />
+        </div>
+      )}
     </>
   )
 }
@@ -198,14 +169,15 @@ function Loaded({
   environments,
   view,
   name,
-  environment,
+  env,
   tab: initialTab,
 }: {
   project: Project
   environments: Environment[]
   view: ProjectView
   name: string
-  environment?: string
+  /** The environment the frame shows; undefined when there's none. */
+  env?: Environment
   tab?: ServiceTab
 }) {
   const can = useProjectCan(project.id)
@@ -222,12 +194,8 @@ function Loaded({
 
   const row = rows.find((r) => r.service.name === name)
   const excluded = (view.excluded ?? []).find((x) => x.service.name === name)
-  const env =
-    environments.find((e) => e.name === environment) ??
-    environments.find((e) => e.kind === "production") ??
-    environments[0]
   const parent = {
-    label: project.name,
+    label: "All services",
     onClick: () =>
       void navigate({
         to: "/projects/$id",
@@ -380,7 +348,12 @@ function Loaded({
           icon={BoxIcon}
           title="No environments yet"
           action={
-            <Button size="sm" variant="outline" onClick={parent.onClick}>
+            <Button
+              size="sm"
+              variant="outline"
+              nativeButton={false}
+              render={<Link to="/projects/$id" params={{ id: project.id }} />}
+            >
               Open {project.name}
             </Button>
           }
@@ -405,16 +378,6 @@ function Loaded({
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const here = touched.filter((r) => r.environment === env.name)
   const latest = here[0]
-  const pickEnvironment = (next: string) =>
-    void navigate({
-      to: "/projects/$id/services/$service",
-      params: { id: project.id, service: name },
-      search: {
-        environment: next,
-        tab: tab === "overview" ? undefined : tab,
-      },
-    })
-
   return (
     <>
       <CloudPageHeader
@@ -441,19 +404,12 @@ function Loaded({
                 className={buttonVariants()}
               >
                 <RocketIcon />
-                Deploy to {env.name}
+                Deploy {s.name} to {env.name}
               </Link>
             )}
             {menu}
           </>
         }
-      />
-
-      <Segments
-        label="Environment"
-        value={env.name}
-        onChange={pickEnvironment}
-        items={environments.map((e) => ({ id: e.name, label: e.name }))}
       />
 
       <Tabs
@@ -698,8 +654,8 @@ function RunningNow({
       >
         {latest && (
           <Link
-            to="/deployments/$id"
-            params={{ id: latest.id }}
+            to="/projects/$id/deployments/$runId"
+            params={{ id: latest.projectId, runId: latest.id }}
             className={outlineSm}
           >
             Open deployment
@@ -881,8 +837,8 @@ function RunList({
                   mono
                   name={
                     <Link
-                      to="/deployments/$id"
-                      params={{ id: r.id }}
+                      to="/projects/$id/deployments/$runId"
+                      params={{ id: r.projectId, runId: r.id }}
                       className="underline-offset-2 hover:underline"
                     >
                       {shas || "No commit"}
@@ -904,8 +860,8 @@ function RunList({
                 </Cell>
                 <ActionsCell>
                   <Link
-                    to="/deployments/$id"
-                    params={{ id: r.id }}
+                    to="/projects/$id/deployments/$runId"
+                    params={{ id: r.projectId, runId: r.id }}
                     className={outlineSm}
                   >
                     Open

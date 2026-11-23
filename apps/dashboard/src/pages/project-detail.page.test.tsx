@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
-import { type ProjectTab, ProjectDetail } from "@/pages/project-detail"
+import type { ProjectTab } from "@/lib/project-nav"
+import { ProjectPage } from "@/test-fixtures/project-page"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => true }),
@@ -19,12 +20,14 @@ vi.mock("@/lib/router", () => ({
     children,
     to,
     className,
+    "aria-current": current,
   }: {
     children: React.ReactNode
     to: string
     className?: string
+    "aria-current"?: "page"
   }) => (
-    <a href={to} className={className}>
+    <a href={to} className={className} aria-current={current}>
       {children}
     </a>
   ),
@@ -79,7 +82,7 @@ function open(
   })
   render(
     <ClientProvider client={forgeClient}>
-      <ProjectDetail id="p" tab={tab} />
+      <ProjectPage id="p" tab={tab} />
     </ClientProvider>
   )
 }
@@ -95,21 +98,16 @@ test("the header names the project, its state and the way to deploy", async () =
     "href",
     "/deployments/new"
   )
-  const tabs = screen.getByRole("tablist", { name: "Project views" })
+  const nav = screen.getByRole("navigation", { name: "Project views" })
   expect(
-    within(tabs)
-      .getAllByRole("tab")
+    within(nav)
+      .getAllByRole("link")
       .map((t) => t.textContent?.replace(/\d+$/, ""))
-  ).toEqual([
-    "Overview",
-    "Services",
-    "Deployments",
-    "Variables",
-    "Clouds",
-    "Analyses",
-    "Backups",
-    "Settings",
-  ])
+  ).toEqual(["Overview", "Services", "Deployments", "Variables", "Settings"])
+  expect(within(nav).getByRole("link", { name: "Overview" })).toHaveAttribute(
+    "aria-current",
+    "page"
+  )
 })
 
 test("variables with no environments asks for one instead of loading", async () => {

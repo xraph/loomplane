@@ -35,8 +35,8 @@ const named: Record<string, string> = {
   "/": "Overview",
   "/deployments": "Deployments",
   "/projects": "Projects",
-  "/services": "Services",
-  "/services/catalog": "the service catalog",
+  "/services": "Catalog",
+  "/services/catalog": "Browse the catalog",
   "/clouds": "Clouds",
   "/infrastructure": "Infrastructure",
   "/activity": "Activity",
@@ -92,6 +92,13 @@ export function pageContextOf(
         projectId,
         service: seg[3],
         ...(env ? { environment: env } : {}),
+      })
+    if (seg[2] === "deployments" && seg[3])
+      return ctx({
+        kind: "deployment",
+        path: `${base}/deployments/${encodeURIComponent(seg[3])}`,
+        label: `Deployment ${seg[3]} in ${project}`,
+        planId: seg[3],
       })
     if (seg[2] === "fleet")
       return ctx({

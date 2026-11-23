@@ -5,7 +5,7 @@ description: Bring running services under a Cloud target, then move them to anot
 
 ## Adopt an existing service
 
-Keep your existing manifest until you choose to adopt a Cloud. Create a target with the service's current provider, connection and region in your project's default Cloud, then save a manifest revision that sets `cloud_target` while removing any effective direct `provider` and `target` settings. The project's Clouds tab does this for you: pick the target beside the service and it writes the change for every environment, clearing placement an environment set on its own. Check inherited defaults too, because a service can't resolve both forms of placement.
+Keep your existing manifest until you choose to adopt a Cloud. Create a target with the service's current provider, connection and region in your project's default Cloud, then save a manifest revision that sets `cloud_target` while removing any effective direct `provider` and `target` settings. The **Clouds** section of the project's **Settings** does this for you: pick the target beside the service and it writes the change for every environment, clearing placement an environment set on its own. Check inherited defaults too, because a service can't resolve both forms of placement.
 
 Review the ordinary deployment plan before you approve it. When the resolved placement and configuration match what already serves, the plan records Cloud metadata without a provider deployment. If it proposes a replacement, check the account, region and effective settings first.
 

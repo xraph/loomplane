@@ -120,7 +120,12 @@ export function ApprovalCallout({
       </div>
       <Button
         nativeButton={false}
-        render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+        render={
+          <Link
+            to="/projects/$id/deployments/$runId"
+            params={{ id: run.projectId, runId: run.id }}
+          />
+        }
       >
         Review plan
       </Button>

@@ -95,8 +95,8 @@ export function CatalogKind({ kind }: { kind: string }) {
     <>
       <SiteHeader
         crumbs={[
-          { label: "Services", to: "/services" },
-          { label: "Catalog", to: "/services/catalog" },
+          { label: "Catalog", to: "/services" },
+          { label: "Browse", to: "/services/catalog" },
           { label: title },
         ]}
       />

@@ -1,25 +1,9 @@
-import { BoxIcon, RocketIcon, SparklesIcon } from "lucide-react"
-import {
-  Fragment,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react"
+import { BoxIcon, RocketIcon } from "lucide-react"
+import { type ReactNode, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
-import {
-  useBindingsList,
-  useEnvironmentsList,
-  useProjectsDelete,
-  useProjectsDeletion,
-  useProjectsGet,
-  useProjectsGraph,
-  useProjectsUpdate,
-  useProjectVariablesList,
-} from "@/client/forge/loomplane/hooks"
+import { useBindingsList } from "@/client/forge/loomplane/hooks"
 import type {
   Analysis,
   Binding,
@@ -28,7 +12,6 @@ import type {
   Project,
   ProjectView,
 } from "@/client/forge/loomplane/types"
-import { useMutation, useQuery, useRefetchWhile } from "@/client/hooks"
 import { useQueries } from "@/client/queries"
 import {
   AnalysisBanner,
@@ -41,20 +24,16 @@ import {
   ServiceDetail,
   ServicesTable,
   Structure,
-  useAnalyses,
-  useAnalyze,
+  type useAnalyses,
 } from "@/components/architecture"
 import {
   ActionsCell,
   Cell,
   CloudCallout,
-  CloudConfirm,
-  CloudPageHeader,
   CloudTable,
   CloudTableRow,
   FactList,
   NameCell,
-  PageMenu,
 } from "@/components/cloud-targets/cloud-page"
 import {
   CloudEmpty,
@@ -66,25 +45,25 @@ import {
   ManifestSettings,
   WhereServicesRun,
 } from "@/components/deploy"
-import {
-  AddServiceButton,
-  AddServiceProvider,
-  FoundServices,
-} from "@/lib/add-service-context"
 import { AddEnvironment, Environments } from "@/components/environment-manager"
-import { ProjectsIcon } from "@/components/icons"
-import { Page } from "@/components/page"
 import { ProductIcon } from "@/components/product-icon"
+import { DangerZone } from "@/components/project-delete"
+import { projectCrumbs, useProjectFrame } from "@/components/project-frame"
 import { ProjectGeneral } from "@/components/project-general"
-import { ProjectServices } from "@/components/project-services"
-import { ProjectStylePopover } from "@/components/project-style-picker"
-import { PrepareRelease } from "@/components/prepare-release-dialog"
+import {
+  type AttentionItem,
+  NeedsAttention,
+  type SetupStep,
+  SetupSteps,
+  WhatRunsWhere,
+} from "@/components/project-overview"
+import { ProjectServices, useServiceRows } from "@/components/project-services"
 import { ProjectAutonomy } from "@/components/project-autonomy"
 import { ReleaseReportsCard } from "@/components/release-reports-card"
 import { ProjectTeam } from "@/components/project-team"
 import { ProjectVariables } from "@/components/project-variables"
 import { QueryError } from "@/components/query-error"
-import { StatusPill, type Tone } from "@/components/runs"
+import { StatusPill } from "@/components/runs"
 import {
   type GraphSelection,
   needsReview,
@@ -93,26 +72,10 @@ import {
 import { SiteHeader } from "@/components/site-header"
 import { Repositories } from "@/components/sources"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu"
 import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Tabs,
-  TabsContent,
-  TabsCount,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
-import {
-  analysisKey,
-  ecosystemLabel,
-  isActive,
-  resourceLabel,
-  shortSHA,
-} from "@/lib/architecture"
+import { AddServiceButton, useFoundServices } from "@/lib/add-service-context"
+import { isActive, resourceLabel, shortSHA } from "@/lib/architecture"
 import {
   catalogKind,
   catalogResources,
@@ -121,307 +84,49 @@ import {
 import { formatDate, relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { useProjectCan } from "@/lib/project-permissions"
-import { projectStyle } from "@/lib/project-style"
+import {
+  type ProjectTab,
+  type SettingsSection,
+  settingsSections,
+} from "@/lib/project-nav"
 import { isReady } from "@/lib/projects"
 import { Link, useNavigate } from "@/lib/router"
-import { useUrlTab } from "@/lib/use-url-tab"
-import { useNow, useRuns } from "@/lib/use-runs"
+import { useNow } from "@/lib/use-runs"
+import { cn } from "@/lib/utils"
 import { CloudsWorkspace } from "@/pages/clouds"
-import { ServiceRecovery } from "@/pages/service-catalog"
 
-/** The project page's tabs, in order. Overview is the default. */
-export type ProjectTab =
-  | "overview"
-  | "services"
-  | "deployments"
-  | "variables"
-  | "cloud"
-  | "analyses"
-  | "backups"
-  | "settings"
+export type { ProjectTab } from "@/lib/project-nav"
 
-export function ProjectDetail({
-  id,
-  tab,
-  environment,
-}: {
-  id: string
-  /** The tab the page opens on, from ?tab=. */
-  tab?: ProjectTab
-  /** The environment a tab opens on, from ?environment=. */
-  environment?: string
-}) {
-  const project = useQuery(useProjectsGet, { path: { id } })
-  const missing = project.status === "error" && statusOf(project.error) === 404
-
-  // The environments arrive from a background job; watch until it's done.
-  useRefetchWhile(
-    !!project.data && !isReady(project.data.status),
-    project.refetch
-  )
-
-  return (
-    <>
-      <SiteHeader
-        crumbs={[
-          { label: "Projects", to: "/projects" },
-          { label: project.data?.name ?? "Project" },
-        ]}
-      />
-      <Page>
-        {project.status === "error" &&
-          (missing ? (
-            <CloudEmpty
-              kind="notice"
-              icon={ProjectsIcon}
-              title="No such project here"
-              action={
-                <Button nativeButton={false} render={<Link to="/projects" />}>
-                  Back to projects
-                </Button>
-              }
-            >
-              It may have been deleted, or it belongs to another workspace. Pick
-              one from the sidebar.
-            </CloudEmpty>
-          ) : (
-            <QueryError
-              error={project.error}
-              fallback="The project couldn't be loaded."
-              retry={project.refetch}
-            />
-          ))}
-        {!project.data && project.status !== "error" && (
-          <div className="grid gap-6" aria-busy="true">
-            <Skeleton className="h-12 w-72" />
-            <Skeleton className="h-9 w-full max-w-xl" />
-            <Skeleton className="h-32 rounded-xl" />
-            <Skeleton className="h-72 rounded-xl" />
-          </div>
-        )}
-        {project.data && (
-          <Loaded project={project.data} tab={tab} environment={environment} />
-        )}
-      </Page>
-    </>
-  )
+const tabLabels: Record<ProjectTab, string> = {
+  overview: "Overview",
+  services: "Services",
+  deployments: "Deployments",
+  variables: "Variables",
+  settings: "Settings",
 }
 
-function Loaded({
-  project,
-  tab,
-  environment,
-}: {
-  project: Project
-  tab?: ProjectTab
-  environment?: string
-}) {
-  const environments = useQuery(useEnvironmentsList, {
-    path: { id: project.id },
-  })
-  const settingUp = !isReady(project.status)
-  useRefetchWhile(settingUp, environments.refetch)
-  const analyses = useAnalyses(project.id)
-
-  // One graph for the whole page: the header's languages, the review
-  // notices, every tab and the detail sheet all read it. It is joined
-  // from the newest successful analysis of every repository, so it is
-  // fetched again while any of them runs, and once more when the last
-  // one stops, to pick up what it found.
-  const view = useQuery(useProjectsGraph, { path: { id: project.id } })
-  useRefetchWhile(analyses.running, view.refetch)
-  useRefetchAfter(analyses.running, view.refetch)
-  // An analysis can start and finish between two fetches of the list, so
-  // nothing is ever seen running. Any change to a repository's newest
-  // analysis means the graph is stale.
-  useRefetchOnChange(
-    analyses.loaded ? analysisKey(analyses.list) : undefined,
-    view.refetch
-  )
-
-  return (
-    <Body
-      project={project}
-      wanted={tab}
-      wantedEnvironment={environment}
-      environments={{
-        list: environments.data?.environments,
-        error: environments.status === "error" ? environments.error : undefined,
-        refetch: environments.refetch,
-      }}
-      analyses={analyses}
-      view={view.data ?? null}
-      viewError={view.status === "error" ? view.error : undefined}
-    />
-  )
-}
-
-/** useRefetchAfter refetches once when active turns false, so the last tick isn't missed. */
-function useRefetchAfter(active: boolean, refetch: () => Promise<unknown>) {
-  const was = useRef(active)
-  useEffect(() => {
-    if (was.current && !active) refetch().catch(() => undefined)
-    was.current = active
-  }, [active, refetch])
-}
-
-/**
- * useRefetchOnChange refetches when key changes. The first key it sees,
- * once there is one, is the baseline and refetches nothing.
- */
-function useRefetchOnChange(
-  key: string | undefined,
-  refetch: () => Promise<unknown>
-) {
-  const last = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    if (key === undefined) return
-    const was = last.current
-    last.current = key
-    if (was !== undefined && was !== key) refetch().catch(() => undefined)
-  }, [key, refetch])
-}
-
-type EnvironmentsRead = {
-  /** Undefined until the list arrives. */
-  list?: Environment[]
-  error?: unknown
-  refetch: () => Promise<unknown>
-}
+// While the environments load: one array, so the queries keyed on it settle.
+const noEnvironments: Environment[] = []
 
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`
 
-/** headState is the project's one status: set up, analyzed or not. */
-function headState(
-  project: Project,
-  latest?: Analysis
-): { label: string; tone: Tone } {
-  if (!isReady(project.status)) return { label: "Setting up", tone: "flight" }
-  if (latest?.status === "failed")
-    return { label: "Analysis failed", tone: "failed" }
-  return { label: "Ready", tone: "live" }
-}
-
-function Body({
-  project,
-  wanted,
-  wantedEnvironment,
-  environments,
-  analyses,
-  view,
-  viewError,
+/**
+ * ProjectViews is the project's own page inside its frame: one of its
+ * views, chosen by ?tab=. The frame above it holds the project's header
+ * and the nav between the views.
+ */
+export function ProjectViews({
+  tab = "overview",
+  section,
 }: {
-  project: Project
-  wanted?: ProjectTab
-  wantedEnvironment?: string
-  environments: EnvironmentsRead
-  analyses: ReturnType<typeof useAnalyses>
-  view: ProjectView | null
-  viewError?: unknown
+  tab?: ProjectTab
+  /** The part of Settings to open on, from ?section=. */
+  section?: SettingsSection
 }) {
-  const can = useProjectCan(project.id)
-  const navigate = useNavigate()
-  const { runs } = useRuns()
-  const ownRuns = runs.filter((r) => r.projectId === project.id)
-  const update = useMutation(useProjectsUpdate)
-  const variables = useQuery(useProjectVariablesList, {
-    path: { id: project.id },
-  })
+  const { project, view } = useProjectFrame()
   const [selected, setSelected] = useState<GraphSelection | null>(null)
-  const [deleting, setDeleting] = useState(false)
-  const now = useNow(60_000)
-  const mayRun = can("analysis:run")
-  const mayEdit = can("project:update")
-  const mayBackups = can("service_backup:read")
-  const mayClouds = useOrganization().can("cloud_account:read")
-  const hasRepositories = project.repositories.length > 0
-  const analyze = useAnalyze(project, analyses.running)
   const graph = view?.graph ?? null
-  // The header names one branch and commit, which only means something
-  // when the graph was read from one analysis. The caption under the graph
-  // names every commit.
-  const shownAnalyses = (view?.sources ?? []).flatMap((s) =>
-    s.shown ? [s.shown] : []
-  )
-  const shown = shownAnalyses.length === 1 ? shownAnalyses[0] : undefined
-  const style = projectStyle(project)
-  const ecosystems = [...new Set(graph?.services.map((s) => s.ecosystem))]
-  const toReview = graph?.resources.filter(needsReview) ?? []
-  const state = headState(project, analyses.latest)
-
-  // A service project from the catalog has no repository to graph, so it
-  // opens on its backups.
-  const fallback: ProjectTab =
-    project.kind === "service" && !hasRepositories && mayBackups
-      ? "backups"
-      : "overview"
-  const [chosen, setTab] = useUrlTab(wanted, fallback)
-  const waiting = ownRuns.filter((r) => r.status === "waiting").length
-  const tabs: {
-    id: ProjectTab
-    label: string
-    count?: number
-    show: boolean
-  }[] = [
-    { id: "overview", label: "Overview", show: true },
-    {
-      id: "services",
-      label: "Services",
-      count: graph?.services.length,
-      show: true,
-    },
-    {
-      id: "deployments",
-      label: "Deployments",
-      // Deployments counts the plans waiting on someone, not every one.
-      count: waiting || undefined,
-      show: true,
-    },
-    {
-      id: "variables",
-      label: "Variables",
-      count: variables.data?.variables.length,
-      show: true,
-    },
-    { id: "cloud", label: "Clouds", show: mayClouds },
-    {
-      id: "analyses",
-      label: "Analyses",
-      count: analyses.list.length || undefined,
-      show: true,
-    },
-    { id: "backups", label: "Backups", show: mayBackups },
-    { id: "settings", label: "Settings", show: true },
-  ]
-  const tab = tabs.some((t) => t.id === chosen && t.show) ? chosen : fallback
-
-  // Opens a tab on one environment, such as Variables for staging.
-  const openOn = (next: ProjectTab, env: string) => {
-    void navigate({
-      to: ".",
-      search: (prev: Record<string, unknown>) => ({
-        ...prev,
-        tab: next === fallback ? undefined : next,
-        environment: env,
-      }),
-      replace: true,
-    } as never)
-  }
-
-  const restyle = (change: { icon?: string; color?: string }) => {
-    update
-      .mutateAsync({ path: { id: project.id }, body: change })
-      .catch((err: unknown) =>
-        toast.error(messageOf(err, "The icon and color weren't saved."))
-      )
-  }
-
-  const copyID = () => {
-    void navigator.clipboard?.writeText(project.id)
-    toast.success("Copied the project ID")
-  }
-
   const selectedService =
     selected?.kind === "service"
       ? graph?.services.find((s) => s.id === selected.id)
@@ -431,385 +136,27 @@ function Body({
       ? graph?.resources.find((r) => r.id === selected.id)
       : undefined
 
-  const meta: ReactNode[] = [
-    hasRepositories
-      ? plural(project.repositories.length, "repository", "repositories")
-      : "No repository yet",
-    shown && (
-      <>
-        {shown.source} on {shown.ref || "the default branch"}
-        {shown.commitSha && (
-          <>
-            {" @ "}
-            <span className="font-mono">{shortSHA(shown.commitSha)}</span>
-          </>
-        )}
-      </>
-    ),
-    ecosystems.length > 0 && ecosystems.map(ecosystemLabel).join(", "),
-  ].filter(Boolean)
-
-  const discovered = (children: (graph: Graph) => ReactNode) => (
-    <Discovered
-      project={project}
-      analyses={analyses}
-      view={view}
-      viewError={viewError}
-      mayRun={mayRun}
-      mayEdit={mayEdit}
-    >
-      {children}
-    </Discovered>
-  )
-
   return (
-    <AddServiceProvider
-      project={project}
-      environments={environments.list ?? []}
-      enabled={mayEdit && (environments.list?.length ?? 0) > 0}
-    >
-      <CloudPageHeader
-        glyph={
-          <ProjectStylePopover
-            name={project.name}
-            icon={style.icon}
-            color={style.color}
-            onChange={mayEdit ? restyle : undefined}
-          />
-        }
-        title={project.name}
-        status={<StatusPill tone={state.tone}>{state.label}</StatusPill>}
-        meta={meta.map((m, i) => (
-          <Fragment key={i}>
-            {i > 0 && " · "}
-            {m}
-          </Fragment>
-        ))}
-        actions={
-          <>
-            {project.deploymentMode !== "fleet" && <AddServiceButton />}
-            {project.deploymentMode === "fleet" && (
-              <Button
-                variant="outline"
-                nativeButton={false}
-                render={
-                  <Link to="/projects/$id/fleet" params={{ id: project.id }} />
-                }
-              >
-                Instance fleet
-              </Button>
-            )}
-            {project.deploymentMode !== "fleet" &&
-              can("deployment:create") &&
-              isReady(project.status) && (
-                <Button
-                  nativeButton={false}
-                  render={
-                    <Link
-                      to="/deployments/new"
-                      search={{ project: project.id, environment: undefined }}
-                    />
-                  }
-                >
-                  <RocketIcon />
-                  Deploy
-                </Button>
-              )}
-            <PrepareRelease
-              project={project}
-              environments={environments.list}
-              may={can("deployment:create")}
-            />
-            <PageMenu label="More project actions">
-              {hasRepositories && mayRun && (
-                <DropdownMenuItem
-                  disabled={analyze.busy}
-                  onClick={() =>
-                    analyze.single ? analyze.choose() : analyze.run()
-                  }
-                >
-                  {analyze.single
-                    ? "Analyze a branch"
-                    : "Analyze all repositories"}
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={copyID}>
-                Copy project ID
-              </DropdownMenuItem>
-              {can("project:delete") && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onClick={() => setDeleting(true)}
-                  >
-                    Delete project
-                  </DropdownMenuItem>
-                </>
-              )}
-            </PageMenu>
-          </>
+    <>
+      <SiteHeader
+        crumbs={
+          tab === "overview"
+            ? [{ label: "Projects", to: "/projects" }, { label: project.name }]
+            : projectCrumbs(project, { label: tabLabels[tab] })
         }
       />
-      {analyze.dialog}
-
-      <Tabs value={tab} onValueChange={(v) => setTab(v as ProjectTab)}>
-        <TabsList
-          variant="line"
-          aria-label="Project views"
-          className="mb-5 max-w-full overflow-x-auto"
-        >
-          {tabs
-            .filter((t) => t.show)
-            .map((t) => (
-              <TabsTrigger key={t.id} value={t.id}>
-                {t.label}
-                {t.count !== undefined && (
-                  <TabsCount
-                    className={
-                      t.id === "deployments"
-                        ? "bg-weld-tint text-weld-ink"
-                        : undefined
-                    }
-                  >
-                    {t.count}
-                  </TabsCount>
-                )}
-              </TabsTrigger>
-            ))}
-        </TabsList>
-
-        <TabsContent value="overview" className="grid gap-6">
-          {analyses.latest && isActive(analyses.latest.status) && (
-            <AnalysisBanner analysis={analyses.latest} />
-          )}
-          {analyses.latest?.status === "failed" && (
-            <CloudCallout
-              tone="error"
-              title={`The latest analysis${analyses.latest.commitSha ? ` of ${shortSHA(analyses.latest.commitSha)}` : ""} failed`}
-              action={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setTab("analyses")}
-                >
-                  Analyses
-                </Button>
-              }
-            >
-              {analyses.latest.error}
-            </CloudCallout>
-          )}
-          {toReview.map((r) => (
-            <CloudCallout
-              key={r.id}
-              icon={SparklesIcon}
-              title={`Loomplane thinks ${project.name} needs ${needName(r.kind)}, but isn't sure`}
-              action={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setSelected({ kind: "resource", id: r.id })}
-                >
-                  Review
-                </Button>
-              }
-            >
-              {r.evidence[0]
-                ? `Read from ${r.evidence[0].path}${r.evidence[0].line ? `:${r.evidence[0].line}` : ""}. `
-                : ""}
-              Nothing is provisioned for it until someone confirms it.
-            </CloudCallout>
-          ))}
-
-          <FoundServices projectId={project.id} />
-
-          <Environments
-            project={project}
-            environments={environments.list}
-            error={environments.error}
-            retry={environments.refetch}
-            mayManage={can("environment:manage")}
-            mayDeploy={can("deployment:create")}
-            mayClouds={mayClouds}
-            runs={ownRuns}
-            onOpen={(next, env) => openOn(next, env)}
-          />
-
-          <ReleaseReportsCard projectId={project.id} />
-
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-            <section aria-label="Service graph" className="grid gap-2.5">
-              <CloudSectionHead
-                title="How it fits together"
-                description={graphNote(shown, view?.excluded.length ?? 0, now)}
-              >
-                {graph && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setTab("services")}
-                  >
-                    All services
-                  </Button>
-                )}
-              </CloudSectionHead>
-              {discovered((g) =>
-                g.services.length + g.resources.length > 0 ? (
-                  <>
-                    <ServiceGraph
-                      graph={g}
-                      selected={selected}
-                      onSelect={setSelected}
-                    />
-                    <GraphCaption graph={g} />
-                  </>
-                ) : (
-                  <ServicesTable graph={g} onSelect={setSelected} />
-                )
-              )}
-            </section>
-            <About
-              project={project}
-              graph={graph}
-              shown={shown}
-              excluded={view?.excluded.length ?? 0}
-            />
+      <div className="grid gap-6">
+        {tab === "overview" && <Overview onSelect={setSelected} />}
+        {tab === "services" && <Services onSelect={setSelected} />}
+        {tab === "deployments" && (
+          <div className="grid gap-6">
+            <ReleaseReportsCard projectId={project.id} />
+            <DeployTab key={project.id} project={project} />
           </div>
-
-          {hasRepositories && <Repositories project={project} />}
-        </TabsContent>
-
-        <TabsContent value="services" className="grid gap-6">
-          {mayEdit && project.deploymentMode !== "fleet" && (
-            <div className="-mb-3 flex justify-end">
-              <AddServiceButton size="sm" />
-            </div>
-          )}
-          {project.kind === "service" && !hasRepositories ? (
-            <WhereServicesRun project={project} />
-          ) : (
-            discovered((g) =>
-              view ? (
-                <ProjectServices
-                  project={project}
-                  environments={environments.list ?? []}
-                  view={view}
-                />
-              ) : (
-                <ServicesTable graph={g} onSelect={setSelected} />
-              )
-            )
-          )}
-          <Resources project={project} environments={environments.list} />
-          {graph && view?.sources.some((s) => s.shown) && (
-            <Structure sources={graph.sources ?? []} graph={graph} />
-          )}
-          <DatabaseGateways project={project.id} />
-        </TabsContent>
-
-        <TabsContent value="deployments">
-          <DeployTab key={project.id} project={project} />
-        </TabsContent>
-
-        <TabsContent value="variables">
-          {environments.error !== undefined && !environments.list ? (
-            <QueryError
-              error={environments.error}
-              fallback="The environments couldn't be loaded."
-              retry={environments.refetch}
-            />
-          ) : !environments.list ? (
-            <Skeleton className="h-32 rounded-xl" />
-          ) : environments.list.length === 0 ? (
-            <CloudEmpty
-              title="No environments yet"
-              action={
-                can("environment:manage") && (
-                  <AddEnvironment project={project} />
-                )
-              }
-            >
-              Variables are set per environment. Add one, such as production, to
-              set them.
-            </CloudEmpty>
-          ) : (
-            <ProjectVariables
-              key={wantedEnvironment}
-              project={project}
-              environments={environments.list}
-              environment={wantedEnvironment}
-            />
-          )}
-        </TabsContent>
-
-        {mayClouds && (
-          <TabsContent value="cloud" className="grid gap-4">
-            <CloudsWorkspace projectId={project.id} />
-          </TabsContent>
         )}
-
-        <TabsContent value="analyses">
-          <section aria-label="Analyses" className="grid gap-2.5">
-            <CloudSectionHead
-              title="Analyses"
-              count={analyses.loaded ? analyses.list.length : undefined}
-              description="Each time Loomplane read a branch to find what runs. The newest one draws the graph."
-            >
-              {hasRepositories && mayRun && (
-                <AnalyzeActions
-                  project={project}
-                  running={analyses.running}
-                  size="sm"
-                />
-              )}
-            </CloudSectionHead>
-            {analyses.error ? (
-              <CloudCallout tone="error" title="Analyses couldn't be loaded">
-                {messageOf(analyses.error, "Try again in a moment.")}
-              </CloudCallout>
-            ) : !analyses.loaded ? (
-              <Skeleton className="h-32 rounded-xl" />
-            ) : (
-              <AnalysisHistory analyses={analyses.list} />
-            )}
-          </section>
-        </TabsContent>
-
-        {mayBackups && (
-          <TabsContent value="backups" className="grid gap-6">
-            <ServiceRecovery project={project.id} />
-          </TabsContent>
-        )}
-
-        <TabsContent value="settings" className="grid max-w-[760px] gap-6">
-          <ProjectTeam project={project} />
-          <ProjectAutonomy project={project} />
-          <ProjectGeneral
-            key={`${project.id}:${project.updatedAt}`}
-            project={project}
-            mayEdit={mayEdit}
-          />
-          <Details project={project} onCopy={copyID} />
-          <ManifestSettings project={project} />
-          {can("project:delete") && (
-            <DangerZone
-              project={project}
-              environments={environments.list}
-              onDelete={() => setDeleting(true)}
-            />
-          )}
-        </TabsContent>
-      </Tabs>
-
-      {can("project:delete") && (
-        <DeleteProject
-          project={project}
-          environments={environments.list}
-          open={deleting}
-          onOpenChange={setDeleting}
-        />
-      )}
+        {tab === "variables" && <Variables />}
+        {tab === "settings" && <Settings section={section} />}
+      </div>
 
       <Sheet
         open={!!selectedService || !!selectedResource}
@@ -836,7 +183,536 @@ function Body({
           )}
         </SheetContent>
       </Sheet>
-    </AddServiceProvider>
+    </>
+  )
+}
+
+/**
+ * Overview is the project in the order you'd set it up: the steps left
+ * before it runs, what waits on someone, what runs in each environment,
+ * the environments themselves, and how the code fits together.
+ */
+function Overview({ onSelect }: { onSelect: (s: GraphSelection) => void }) {
+  const { project, environments, analyses, view, viewError, runs } =
+    useProjectFrame()
+  const can = useProjectCan(project.id)
+  const navigate = useNavigate()
+  const mayClouds = useOrganization().can("cloud_account:read")
+  const now = useNow(60_000)
+  const list = environments.list
+  const graph = view?.graph ?? null
+  const hasRepositories = project.repositories.length > 0
+  // A service project from the catalog has no code: what runs is its
+  // resources, and there's no graph to draw.
+  const fromCatalog = project.kind === "service" && !hasRepositories
+  const fleet = project.deploymentMode === "fleet"
+  const toReview = graph?.resources.filter(needsReview) ?? []
+  const found = useFoundServices(project.id)
+  const shownAnalyses = (view?.sources ?? []).flatMap((s) =>
+    s.shown ? [s.shown] : []
+  )
+  const shown = shownAnalyses.length === 1 ? shownAnalyses[0] : undefined
+  const { bindings } = useServiceRows(project, list ?? noEnvironments, view)
+  const answered = !!list && list.every((e) => bindings[e.name] !== undefined)
+  const deployed = Object.values(bindings).some((b) =>
+    b?.some((x) => x.subject === "service")
+  )
+
+  // The steps show until something is deployed, once it's known whether
+  // anything is.
+  const settingUp =
+    !fromCatalog && !fleet && answered && !deployed && analyses.loaded
+  const steps = setupSteps({
+    project,
+    environments: list ?? [],
+    analyses,
+    graph,
+    toReview: toReview.length,
+    found,
+    may: {
+      run: can("analysis:run"),
+      environments: can("environment:manage"),
+      deploy: can("deployment:create") && isReady(project.status),
+    },
+    review: () =>
+      toReview[0] && onSelect({ kind: "resource", id: toReview[0].id }),
+  })
+
+  const attention: AttentionItem[] = []
+  const latest = analyses.latest
+  if (latest?.status === "failed")
+    attention.push({
+      id: "analysis",
+      tone: "failed",
+      title: `The latest analysis${latest.commitSha ? ` of ${shortSHA(latest.commitSha)}` : ""} failed`,
+      detail: latest.error,
+      action: (
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={
+            <Link
+              to="/projects/$id"
+              params={{ id: project.id }}
+              search={{ tab: "settings", section: "source" }}
+            />
+          }
+        >
+          Analyses
+        </Button>
+      ),
+    })
+  // While the steps show, they already ask for these.
+  if (!settingUp) {
+    for (const r of toReview)
+      attention.push({
+        id: `review:${r.id}`,
+        tone: "waiting",
+        title: `Loomplane thinks ${project.name} needs ${needName(r.kind)}, but isn't sure`,
+        detail: `${
+          r.evidence[0]
+            ? `Read from ${r.evidence[0].path}${r.evidence[0].line ? `:${r.evidence[0].line}` : ""}. `
+            : ""
+        }Nothing is provisioned for it until someone confirms it.`,
+        action: (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onSelect({ kind: "resource", id: r.id })}
+          >
+            Review
+          </Button>
+        ),
+      })
+    if (found)
+      attention.push({
+        id: "found",
+        tone: "waiting",
+        title: found.title,
+        detail: found.detail,
+        action: (
+          <Button size="sm" variant="outline" onClick={found.open}>
+            Review and add
+          </Button>
+        ),
+      })
+  }
+  const waiting = runs.filter((r) => r.status === "waiting")
+  if (waiting.length > 0)
+    attention.push({
+      id: "waiting",
+      tone: "waiting",
+      title: `${plural(waiting.length, "plan")} ${waiting.length === 1 ? "waits" : "wait"} for approval`,
+      detail: `In ${[...new Set(waiting.map((r) => r.environment))].join(", ")}. Nothing changes until someone approves.`,
+      action: (
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={
+            waiting.length === 1 ? (
+              <Link
+                to="/projects/$id/deployments/$runId"
+                params={{ id: project.id, runId: waiting[0].id }}
+              />
+            ) : (
+              <Link
+                to="/projects/$id"
+                params={{ id: project.id }}
+                search={{ tab: "deployments" }}
+              />
+            )
+          }
+        >
+          Review
+        </Button>
+      ),
+    })
+
+  return (
+    <>
+      {latest && isActive(latest.status) && (
+        <AnalysisBanner analysis={latest} />
+      )}
+      {settingUp && <SetupSteps steps={steps} />}
+      <NeedsAttention items={attention} />
+      {list && (
+        <WhatRunsWhere project={project} environments={list} view={view} />
+      )}
+      <Environments
+        project={project}
+        environments={list}
+        error={environments.error}
+        retry={environments.refetch}
+        mayManage={can("environment:manage")}
+        mayDeploy={can("deployment:create")}
+        mayClouds={mayClouds}
+        runs={runs}
+        onOpen={(next, env) =>
+          void navigate({
+            to: "/projects/$id",
+            params: { id: project.id },
+            search:
+              next === "cloud"
+                ? { tab: "settings", section: "clouds" }
+                : { tab: next, environment: env },
+          })
+        }
+      />
+      {!fromCatalog && (
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <section aria-label="Service graph" className="grid gap-2.5">
+            <CloudSectionHead
+              title="How it fits together"
+              description={graphNote(shown, view?.excluded.length ?? 0, now)}
+            />
+            <Discovered
+              project={project}
+              analyses={analyses}
+              view={view}
+              viewError={viewError}
+              mayRun={can("analysis:run")}
+              mayEdit={can("project:update")}
+            >
+              {(g) =>
+                g.services.length + g.resources.length > 0 ? (
+                  <>
+                    <ServiceGraph
+                      graph={g}
+                      selected={null}
+                      onSelect={onSelect}
+                    />
+                    <GraphCaption graph={g} />
+                  </>
+                ) : (
+                  <ServicesTable graph={g} onSelect={onSelect} />
+                )
+              }
+            </Discovered>
+          </section>
+          <About
+            project={project}
+            graph={graph}
+            shown={shown}
+            excluded={view?.excluded.length ?? 0}
+          />
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * setupSteps is the way from a new project to its first deploy: code,
+ * what runs in it, what it needs, somewhere to run, then running it.
+ */
+function setupSteps({
+  project,
+  environments,
+  analyses,
+  graph,
+  toReview,
+  found,
+  may,
+  review,
+}: {
+  project: Project
+  environments: Environment[]
+  analyses: ReturnType<typeof useAnalyses>
+  graph: Graph | null
+  toReview: number
+  found: ReturnType<typeof useFoundServices>
+  may: { run: boolean; environments: boolean; deploy: boolean }
+  review: () => void
+}): SetupStep[] {
+  const services = graph?.services.length ?? 0
+  const analyzed = !!analyses.shown
+  return [
+    {
+      id: "repository",
+      title: "Connect a repository",
+      done: project.repositories.length > 0,
+      detail:
+        "Loomplane reads the code to find what runs and what it needs. Add the repository below.",
+    },
+    {
+      id: "analysis",
+      title: "Find what runs",
+      done: services > 0,
+      busy: analyses.running,
+      detail: analyses.running
+        ? "Loomplane is reading the repository now. Each service it finds shows up here."
+        : analyzed
+          ? "The last analysis found nothing that runs. Try another branch, or check the repository."
+          : "An analysis reads a branch and finds each service and what it needs.",
+      action: may.run && !analyses.running && (
+        <AnalyzeActions
+          project={project}
+          running={analyses.running}
+          size="sm"
+        />
+      ),
+    },
+    {
+      id: "review",
+      title: "Confirm what it needs",
+      // Nothing can be confirmed before anything is found.
+      done: services > 0 && toReview === 0 && !found,
+      detail: found
+        ? found.title
+        : "Loomplane wasn't sure about some of what the services need. Nothing is provisioned until someone confirms it.",
+      action: found ? (
+        <Button size="sm" variant="outline" onClick={found.open}>
+          Review and add
+        </Button>
+      ) : (
+        <Button size="sm" variant="outline" onClick={review}>
+          Review
+        </Button>
+      ),
+    },
+    {
+      id: "environment",
+      title: "Add an environment",
+      done: environments.length > 0,
+      detail:
+        "Such as production or staging. Each has its own variables and the cloud it runs on.",
+      action: may.environments && <AddEnvironment project={project} />,
+    },
+    {
+      id: "deploy",
+      title: "Deploy it",
+      done: false,
+      detail:
+        "Loomplane plans what to create in the environment and waits for your approval before it changes anything.",
+      action: may.deploy && (
+        <Button
+          size="sm"
+          nativeButton={false}
+          render={
+            <Link
+              to="/deployments/new"
+              search={{ project: project.id, environment: undefined }}
+            />
+          }
+        >
+          <RocketIcon />
+          Deploy
+        </Button>
+      ),
+    },
+  ]
+}
+
+/**
+ * Services is what the project runs: its own services first, then the
+ * databases and caches they use, each opening on its own page.
+ */
+function Services({ onSelect }: { onSelect: (s: GraphSelection) => void }) {
+  const { project, environments, analyses, view, viewError } = useProjectFrame()
+  const can = useProjectCan(project.id)
+  const mayEdit = can("project:update")
+  const fromCatalog =
+    project.kind === "service" && project.repositories.length === 0
+  return (
+    <>
+      {mayEdit && project.deploymentMode !== "fleet" && (
+        <div className="-mb-3 flex justify-end">
+          <AddServiceButton size="sm" />
+        </div>
+      )}
+      {fromCatalog ? (
+        <WhereServicesRun project={project} />
+      ) : (
+        <Discovered
+          project={project}
+          analyses={analyses}
+          view={view}
+          viewError={viewError}
+          mayRun={can("analysis:run")}
+          mayEdit={mayEdit}
+        >
+          {(g) =>
+            view ? (
+              <ProjectServices
+                project={project}
+                environments={environments.list ?? []}
+                view={view}
+              />
+            ) : (
+              <ServicesTable graph={g} onSelect={onSelect} />
+            )
+          }
+        </Discovered>
+      )}
+      <Resources project={project} environments={environments.list} />
+      <DatabaseGateways project={project.id} />
+    </>
+  )
+}
+
+/** Variables is the project's variables in the environment the nav shows. */
+function Variables() {
+  const { project, environments, environment } = useProjectFrame()
+  const can = useProjectCan(project.id)
+  if (environments.error !== undefined && !environments.list)
+    return (
+      <QueryError
+        error={environments.error}
+        fallback="The environments couldn't be loaded."
+        retry={environments.refetch}
+      />
+    )
+  if (!environments.list) return <Skeleton className="h-32 rounded-xl" />
+  if (environments.list.length === 0 || !environment)
+    return (
+      <CloudEmpty
+        title="No environments yet"
+        action={
+          can("environment:manage") && <AddEnvironment project={project} />
+        }
+      >
+        Variables are set per environment. Add one, such as production, to set
+        them.
+      </CloudEmpty>
+    )
+  return (
+    <ProjectVariables
+      project={project}
+      environments={environments.list}
+      environment={environment.name}
+      chosen
+    />
+  )
+}
+
+const sectionLabels: Record<SettingsSection, string> = {
+  general: "General",
+  access: "Team and autonomy",
+  source: "Source",
+  clouds: "Clouds",
+  manifest: "loomplane.yaml",
+}
+
+/**
+ * Settings is how the project is set up rather than what it runs, one
+ * part at a time: its name and the danger zone, who owns it, the code it
+ * reads, the clouds it may use, and its manifest.
+ */
+function Settings({ section: wanted }: { section?: SettingsSection }) {
+  const { project, environments, analyses, view, requestDelete } =
+    useProjectFrame()
+  const can = useProjectCan(project.id)
+  const mayClouds = useOrganization().can("cloud_account:read")
+  const sections = settingsSections.filter((s) => s !== "clouds" || mayClouds)
+  const section = wanted && sections.includes(wanted) ? wanted : "general"
+  const hasRepositories = project.repositories.length > 0
+  const graph = view?.graph ?? null
+  const copyID = () => {
+    void navigator.clipboard?.writeText(project.id)
+    toast.success("Copied the project ID")
+  }
+
+  return (
+    <div className="grid gap-6 md:grid-cols-[180px_minmax(0,1fr)] md:gap-8">
+      <nav aria-label="Settings" className="md:sticky md:top-20 md:self-start">
+        <ul className="flex gap-1 overflow-x-auto md:grid md:gap-0.5">
+          {sections.map((s) => (
+            <li key={s}>
+              <Link
+                to="/projects/$id"
+                params={{ id: project.id }}
+                search={{
+                  tab: "settings",
+                  ...(s === "general" ? {} : { section: s }),
+                }}
+                aria-current={s === section ? "page" : undefined}
+                className={cn(
+                  "flex h-8 items-center rounded-md px-2.5 text-[13px] whitespace-nowrap transition-colors",
+                  s === section
+                    ? "bg-muted font-medium text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                )}
+              >
+                {sectionLabels[s]}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <div
+        className={cn(
+          "grid min-w-0 content-start gap-6",
+          section !== "clouds" && "max-w-[760px]"
+        )}
+      >
+        {section === "general" && (
+          <>
+            <ProjectGeneral
+              key={`${project.id}:${project.updatedAt}`}
+              project={project}
+              mayEdit={can("project:update")}
+            />
+            <Details project={project} onCopy={copyID} />
+            {can("project:delete") && (
+              <DangerZone
+                project={project}
+                environments={environments.list}
+                onDelete={requestDelete}
+              />
+            )}
+          </>
+        )}
+        {section === "access" && (
+          <>
+            <ProjectTeam project={project} />
+            <ProjectAutonomy project={project} />
+          </>
+        )}
+        {section === "source" && (
+          <>
+            {hasRepositories ? (
+              <Repositories project={project} />
+            ) : (
+              <ConnectRepository
+                project={project}
+                mayEdit={can("project:update")}
+              />
+            )}
+            <section aria-label="Analyses" className="grid gap-2.5">
+              <CloudSectionHead
+                title="Analyses"
+                count={analyses.loaded ? analyses.list.length : undefined}
+                description="Each time Loomplane read a branch to find what runs. The newest one draws the graph."
+              >
+                {hasRepositories && can("analysis:run") && (
+                  <AnalyzeActions
+                    project={project}
+                    running={analyses.running}
+                    size="sm"
+                  />
+                )}
+              </CloudSectionHead>
+              {analyses.error ? (
+                <CloudCallout tone="error" title="Analyses couldn't be loaded">
+                  {messageOf(analyses.error, "Try again in a moment.")}
+                </CloudCallout>
+              ) : !analyses.loaded ? (
+                <Skeleton className="h-32 rounded-xl" />
+              ) : (
+                <AnalysisHistory analyses={analyses.list} />
+              )}
+            </section>
+            {graph && view?.sources.some((s) => s.shown) && (
+              <Structure sources={graph.sources ?? []} graph={graph} />
+            )}
+          </>
+        )}
+        {section === "clouds" && <CloudsWorkspace projectId={project.id} />}
+        {section === "manifest" && <ManifestSettings project={project} />}
+      </div>
+    </div>
   )
 }
 
@@ -1209,205 +1085,5 @@ function Details({
         ]}
       />
     </section>
-  )
-}
-
-/**
- * useDeployed counts what runs from a project across its environments, so
- * deleting it says what is left running.
- */
-function useDeployed(project: Project, environments?: Environment[]) {
-  const list = useMemo(() => environments ?? [], [environments])
-  const args = useMemo(
-    () =>
-      list.map((e) => ({
-        path: { id: project.id },
-        query: { environment: e.name },
-      })),
-    [list, project.id]
-  )
-  const { states } = useQueries(useBindingsList, args)
-  let services = 0
-  let resources = 0
-  let places = 0
-  for (const s of states) {
-    const bindings = s?.data?.bindings ?? []
-    const svc = bindings.filter((b) => b.subject === "service").length
-    services += svc
-    resources += bindings.length - svc
-    if (bindings.length > 0) places++
-  }
-  return {
-    loaded: !!environments && states.every((s) => s?.status === "success"),
-    failed: states.some((s) => s?.status === "error"),
-    services,
-    resources,
-    places,
-  }
-}
-
-/**
- * deployedSummary says what runs from a project, for its delete copy.
- * removes is how many frontends the deletion removes from their provider
- * first, when that's known: until then, "nothing runs" can't promise that
- * no cloud resource is touched.
- */
-function deployedSummary(
-  d: ReturnType<typeof useDeployed>,
-  removes?: number
-): string {
-  if (d.failed)
-    return "What runs from it couldn't all be read. Anything deployed keeps running until you remove it in its account."
-  if (!d.loaded) return "Checking what runs from it."
-  if (d.services + d.resources === 0) {
-    if (removes === 0)
-      return "Nothing runs from it yet, so no cloud resources are touched."
-    return "Nothing runs from it yet."
-  }
-  const what = [
-    d.services > 0 && plural(d.services, "service"),
-    d.resources > 0 && plural(d.resources, "resource"),
-  ]
-    .filter(Boolean)
-    .join(" and ")
-  return `${what} ${d.services + d.resources === 1 ? "runs" : "run"} in ${plural(d.places, "environment")}. Deleting stops managing them; what runs keeps running until you remove it in each account.`
-}
-
-function DangerZone({
-  project,
-  environments,
-  onDelete,
-}: {
-  project: Project
-  environments?: Environment[]
-  onDelete: () => void
-}) {
-  const deployed = useDeployed(project, environments)
-  return (
-    <section aria-label="Danger zone" className="grid gap-2.5">
-      <CloudSectionHead
-        title="Danger zone"
-        description="Each asks you to confirm in a dialog before anything happens."
-      />
-      <div className="flex flex-wrap items-center gap-3 rounded-xl bg-card px-4 py-3.5 ring-1 ring-destructive/25">
-        <div className="grid min-w-0 flex-[1_1_360px] gap-1">
-          <p className="text-[13px] font-semibold">Delete this project</p>
-          <p className="text-[12.5px] leading-normal text-muted-foreground">
-            {deployedSummary(deployed)}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          className="border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
-          onClick={onDelete}
-        >
-          Delete project
-        </Button>
-      </div>
-    </section>
-  )
-}
-
-function DeleteProject({
-  project,
-  environments,
-  open,
-  onOpenChange,
-}: {
-  project: Project
-  environments?: Environment[]
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const navigate = useNavigate()
-  const remove = useMutation(useProjectsDelete)
-  const deployed = useDeployed(project, open ? environments : undefined)
-  const [error, setError] = useState("")
-
-  const confirm = async () => {
-    setError("")
-    try {
-      // The delete invalidates the project list for us.
-      await remove.mutateAsync({ path: { id: project.id } })
-      toast.success(`Deleted ${project.name}`)
-      onOpenChange(false)
-      void navigate({ to: "/projects", replace: true })
-    } catch (err) {
-      setError(messageOf(err, "The project wasn't deleted."))
-    }
-  }
-
-  return (
-    <CloudConfirm
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) setError("")
-        onOpenChange(next)
-      }}
-      title={`Delete ${project.name}?`}
-      confirmLabel="Delete project"
-      typeToConfirm={project.name}
-      pending={remove.isPending}
-      onConfirm={() => void confirm()}
-      details={<DeletionRemoves projectId={project.id} />}
-      error={error && <CloudCallout tone="error" title={error} />}
-    >
-      Its environments and their variables go with it, and this can&apos;t be
-      undone. <DeletedSummary projectId={project.id} deployed={deployed} />
-    </CloudConfirm>
-  )
-}
-
-/**
- * useDeletionPreview asks the server what deleting the project would
- * remove from provider accounts first, and whether it would be refused.
- * It reads those accounts, so only the open delete dialog asks, and asks
- * again each time it opens.
- */
-function useDeletionPreview(projectId: string) {
-  return useQuery(
-    useProjectsDeletion,
-    { path: { id: projectId } },
-    { staleTime: 0 }
-  )
-}
-
-function DeletedSummary({
-  projectId,
-  deployed,
-}: {
-  projectId: string
-  deployed: ReturnType<typeof useDeployed>
-}) {
-  const preview = useDeletionPreview(projectId)
-  return deployedSummary(deployed, preview.data?.removes.length)
-}
-
-/**
- * DeletionRemoves names the frontends Loomplane deletes from their
- * provider before the project goes, and says up front when the deletion
- * would be refused, so nobody types the name only to be told no.
- */
-function DeletionRemoves({ projectId }: { projectId: string }) {
-  const { data } = useDeletionPreview(projectId)
-  if (!data) return null
-  if (data.blocked)
-    return (
-      <CloudCallout title="Deleting it now would be refused">
-        {data.blocked}
-      </CloudCallout>
-    )
-  if (data.removes.length === 0) return null
-  return (
-    <CloudCallout
-      tone="info"
-      title={`Loomplane deletes ${data.removes.length === 1 ? "this frontend" : "these frontends"} from Vercel first`}
-    >
-      <ul className="list-disc pl-4">
-        {data.removes.map((r) => (
-          <li key={r}>{r}</li>
-        ))}
-      </ul>
-    </CloudCallout>
   )
 }

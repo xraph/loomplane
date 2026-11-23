@@ -261,7 +261,10 @@ function Choices({
       })
       invalidate(usePlansList)
       done()
-      void navigate({ to: "/deployments/$id", params: { id: p.id } })
+      void navigate({
+        to: "/projects/$id/deployments/$runId",
+        params: { id: project.id, runId: p.id },
+      })
       toast.success(`Planning ${project.name}: ${from} to ${to}`, {
         description: "Review the plan, then approve it to promote.",
       })

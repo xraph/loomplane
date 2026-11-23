@@ -153,7 +153,12 @@ function InFlight() {
               key={r.id}
               size="xs"
               className="flex-col items-stretch gap-1.5"
-              render={<Link to="/deployments/$id" params={{ id: r.id }} />}
+              render={
+                <Link
+                  to="/projects/$id/deployments/$runId"
+                  params={{ id: r.projectId, runId: r.id }}
+                />
+              }
             >
               <ItemTitle className="w-full">
                 <span className="truncate">

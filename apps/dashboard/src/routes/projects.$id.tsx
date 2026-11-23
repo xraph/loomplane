@@ -1,50 +1,44 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Outlet, useMatches } from "@tanstack/react-router"
 
-import { type ProjectTab, ProjectDetail } from "@/pages/project-detail"
+import { type FramePlace, ProjectFrame } from "@/components/project-frame"
+import { environmentSearchOf, projectSearchOf } from "@/lib/project-nav"
 
-type Search = {
-  tab?: ProjectTab
-  environment?: string
-}
+type Search = { environment?: string }
 
-const projectTabs: ProjectTab[] = [
-  "overview",
-  "services",
-  "deployments",
-  "variables",
-  "cloud",
-  "analyses",
-  "backups",
-  "settings",
-]
-
-// Older links name tabs the page has since renamed.
-const renamed: Record<string, ProjectTab> = {
-  graph: "overview",
-  deploy: "deployments",
-}
-
+// Every page of a project opens inside its frame: the project's header,
+// the nav between its views, and the environment a page shows. The
+// project's own views are the index route; a service, a deployment, a
+// database and the fleet are the routes under it.
 export const Route = createFileRoute("/projects/$id")({
-  component: ProjectRoute,
-  // The tab opens the page on one view, and the environment names the one
-  // a tab was opened on, such as Variables for staging. An unknown tab is
-  // dropped, so the page opens on its default.
-  validateSearch: (search: Record<string, unknown>): Search => {
-    const out: Search = {}
-    const raw = typeof search.tab === "string" ? search.tab : ""
-    const tab = renamed[raw] ?? raw
-    if ((projectTabs as string[]).includes(tab)) out.tab = tab as ProjectTab
-    if (
-      typeof search.environment === "string" &&
-      search.environment.length <= 64
-    )
-      out.environment = search.environment
-    return out
-  },
+  component: ProjectLayout,
+  // The environment's name, which every page under the project shares.
+  // An invalid one is replaced with undefined, not left out: the router
+  // keeps search keys a route leaves out.
+  validateSearch: (search: Record<string, unknown>): Search => ({
+    environment: environmentSearchOf(search.environment),
+  }),
 })
 
-function ProjectRoute() {
+function ProjectLayout() {
   const { id } = Route.useParams()
-  const { tab, environment } = Route.useSearch()
-  return <ProjectDetail id={id} tab={tab} environment={environment} />
+  const { environment } = Route.useSearch()
+  // The deepest page says where in the project it is; the project's own
+  // page says it with ?tab=.
+  const leaf = useMatches({ select: (matches) => matches[matches.length - 1] })
+  let place: FramePlace
+  if (leaf.routeId === "/projects/$id/") {
+    const tab =
+      projectSearchOf(leaf.search as Record<string, unknown>).tab ?? "overview"
+    place = { tab, index: true, environmentScoped: tab === "variables" }
+  } else {
+    place = {
+      tab: leaf.staticData.projectTab,
+      environmentScoped: leaf.staticData.environmentScoped,
+    }
+  }
+  return (
+    <ProjectFrame key={id} id={id} environment={environment} place={place}>
+      <Outlet />
+    </ProjectFrame>
+  )
 }

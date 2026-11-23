@@ -6,7 +6,8 @@ import { InstanceOverview } from "@/components/fleets/instance-overview"
 import { InstanceMonitoring } from "@/components/fleets/instance-monitoring"
 import { FleetReadState } from "@/components/fleets/read-state"
 import { useFleetRefresh } from "@/components/fleets/use-fleet-refresh"
-import { Page, PageHeading } from "@/components/page"
+import { PageHeading } from "@/components/page"
+import { FramedPage, useFramedCrumbs } from "@/components/project-frame"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { Link } from "@/lib/router"
@@ -29,19 +30,18 @@ export function InstanceDetail({
     instance.status === "error"
       ? "Instance"
       : (instance.data?.externalRef ?? "Instance")
+  const fleetCrumb = {
+    label: "Instance fleet",
+    link: <Link to="/projects/$id/fleet" params={{ id: projectID }} />,
+  }
+  const crumbs = useFramedCrumbs(
+    [fleetCrumb, { label: title }],
+    [{ label: "Projects", to: "/projects" }, fleetCrumb, { label: title }]
+  )
   return (
     <>
-      <SiteHeader
-        crumbs={[
-          { label: "Projects", to: "/projects" },
-          {
-            label: "Instance fleet",
-            link: <Link to="/projects/$id/fleet" params={{ id: projectID }} />,
-          },
-          { label: title },
-        ]}
-      />
-      <Page>
+      <SiteHeader crumbs={crumbs} />
+      <FramedPage>
         <PageHeading
           title={<span className="break-words">{title}</span>}
           actions={
@@ -96,7 +96,7 @@ export function InstanceDetail({
             />
           </>
         )}
-      </Page>
+      </FramedPage>
     </>
   )
 }

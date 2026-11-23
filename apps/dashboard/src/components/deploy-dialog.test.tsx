@@ -208,8 +208,8 @@ it("ticks what changed, holds a repository and plans every listed service", asyn
   finish()
   await vi.waitFor(() =>
     expect(navigate).toHaveBeenCalledWith({
-      to: "/deployments/$id",
-      params: { id: "plan_one" },
+      to: "/projects/$id/deployments/$runId",
+      params: { id: "p", runId: "plan_one" },
     })
   )
   // Every listed service is picked, so the plan names none of them.
@@ -545,7 +545,9 @@ it("renders the Resources table on DeployScreen and keeps dependent services sel
     name: "Resources in preview",
   })
   expect(within(resourcesTable).getByText("postgres")).toBeInTheDocument()
-  expect(within(resourcesTable).getByText("automatic region")).toBeInTheDocument()
+  expect(
+    within(resourcesTable).getByText("automatic region")
+  ).toBeInTheDocument()
   expect(
     within(resourcesTable).getAllByText("DigitalOcean").length
   ).toBeGreaterThan(0)

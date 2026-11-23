@@ -76,11 +76,17 @@ export function ProjectVariables({
   project,
   environments,
   environment,
+  chosen = false,
 }: {
   project: Project
   environments: Environment[]
   /** The environment to open on, such as one chosen from its row. */
   environment?: string
+  /**
+   * Whether the page around the variables chose the environment, as a
+   * project's nav does, so they show only that one and offer no picker.
+   */
+  chosen?: boolean
 }) {
   // The composed graph names services the way the API checks them, with
   // the alias of the repository each comes from.
@@ -102,6 +108,7 @@ export function ProjectVariables({
       services={services}
       graph={graph}
       initialEnvironment={environment}
+      chosen={chosen}
     />
   )
 }
@@ -112,6 +119,7 @@ function Panel({
   services,
   graph,
   initialEnvironment = "",
+  chosen,
 }: {
   project: Project
   environments: Environment[]
@@ -119,10 +127,12 @@ function Panel({
   /** The project's graph: the variables the analysis found each service reading. */
   graph?: Graph
   initialEnvironment?: string
+  chosen: boolean
 }) {
   const can = useProjectCan(project.id)
   const mayManage = can("variable:manage")
-  const [chosenEnv, setEnv] = useState(initialEnvironment)
+  const [pickedEnv, setEnv] = useState(initialEnvironment)
+  const chosenEnv = chosen ? initialEnvironment : pickedEnv
   const [chosenService, setService] = useState("")
   // Fall back when the chosen one is deleted, instead of syncing state in
   // an effect.
@@ -199,22 +209,24 @@ function Panel({
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Select
-          items={environments.map((e) => ({ label: e.name, value: e.name }))}
-          value={env}
-          onValueChange={(v) => setEnv(v as string)}
-        >
-          <SelectTrigger size="sm" aria-label="Environment" className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {environments.map((e) => (
-              <SelectItem key={e.id} value={e.name}>
-                {e.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {!chosen && (
+          <Select
+            items={environments.map((e) => ({ label: e.name, value: e.name }))}
+            value={env}
+            onValueChange={(v) => setEnv(v as string)}
+          >
+            <SelectTrigger size="sm" aria-label="Environment" className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {environments.map((e) => (
+                <SelectItem key={e.id} value={e.name}>
+                  {e.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <Select
           items={[
             { label: "Whole project", value: "" },

@@ -611,8 +611,8 @@ export function RunRow({ run: r, now }: { run: Run; now: number }) {
   const tone = toneClass[toneOf(r.status)]
   return (
     <Link
-      to="/deployments/$id"
-      params={{ id: r.id }}
+      to="/projects/$id/deployments/$runId"
+      params={{ id: r.projectId, runId: r.id }}
       className={cn(
         columns,
         "group px-4 py-2.5 text-foreground transition-colors hover:bg-subtle"

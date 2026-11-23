@@ -276,11 +276,11 @@ export function ServicesCatalog({
   return (
     <>
       <SiteHeader
-        crumbs={[{ label: "Services", to: "/services" }, { label: "Catalog" }]}
+        crumbs={[{ label: "Catalog", to: "/services" }, { label: "Browse" }]}
       />
       <Page>
         <PageHeading
-          title="Catalog"
+          title="Browse the catalog"
           description="Everything you can add. Loomplane runs some services on your own targets; your connected cloud providers create the rest in one click and run them in your account. Either way, you review the plan before anything changes."
         />
 

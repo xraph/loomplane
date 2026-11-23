@@ -4,9 +4,12 @@ import { CatalogService } from "@/pages/catalog-service"
 
 type Search = { environment?: string }
 
-// Not nested under /projects/$id, which renders a whole page of its own.
-export const Route = createFileRoute("/projects/$id_/catalog/$resource")({
+// One database, cache or other resource of a project, inside the
+// project's frame. Its ?environment= is an environment's ID, not a name,
+// so the frame offers no environment of its own.
+export const Route = createFileRoute("/projects/$id/catalog/$resource")({
   component: CatalogServiceRoute,
+  staticData: { projectTab: "services" },
   // The ID of the environment the resource runs in. An invalid one is
   // replaced with undefined, not left out: the router keeps search keys a
   // route leaves out.

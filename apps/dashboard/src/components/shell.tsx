@@ -354,7 +354,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
         [["G", "O"], "Overview"],
         [["G", "D"], "Deployments"],
         [["G", "P"], "Projects"],
-        [["G", "S"], "Services"],
+        [["G", "S"], "Catalog"],
         [["G", "C"], "Clouds"],
         [["G", "I"], "Infrastructure"],
         [["G", "A"], "Activity"],

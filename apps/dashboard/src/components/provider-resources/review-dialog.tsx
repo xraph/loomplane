@@ -400,7 +400,10 @@ function ResourceReviewForm({
           path: { id: savedScope.id },
           body: { environment, ...(savedScope.catalog && { catalog: true }) },
         })
-        void navigate({ to: "/deployments/$id", params: { id: plan.id } })
+        void navigate({
+          to: "/projects/$id/deployments/$runId",
+          params: { id: savedScope.id, runId: plan.id },
+        })
         return
       }
       if (!projectId) {
@@ -417,7 +420,10 @@ function ResourceReviewForm({
         setProgress,
         (catalog) => setSavedScope({ id: input.projectId, catalog })
       )
-      void navigate({ to: "/deployments/$id", params: { id: result.planId } })
+      void navigate({
+        to: "/projects/$id/deployments/$runId",
+        params: { id: input.projectId, runId: result.planId },
+      })
     } catch (cause) {
       setError(messageOf(cause, "The review could not be started."))
       setProgress("")

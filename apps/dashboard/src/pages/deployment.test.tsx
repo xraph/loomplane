@@ -10,23 +10,29 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
-import { DeploymentPage, type DeploymentTab } from "@/pages/deployment"
+import {
+  DeploymentPage,
+  DeploymentRedirect,
+  type DeploymentTab,
+} from "@/pages/deployment"
 import { Route } from "@/routes/deployments.$id"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => true }),
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+const nav = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
-  useNavigate: () => () => undefined,
+  useNavigate: () => nav.navigate,
 }))
 
 afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
+  nav.navigate.mockReset()
 })
 
 const plan = (release?: object, status = "ready") => ({
@@ -665,9 +671,9 @@ test("offers Manage menu for top-level resources on Changes, Services, and named
 
   const changesTable = await screen.findByRole("table", { name: "Changes" })
   // One in the problem callout, one in the Changes table row.
-  expect(screen.getAllByRole("button", { name: "Manage postgres" })).toHaveLength(
-    2
-  )
+  expect(
+    screen.getAllByRole("button", { name: "Manage postgres" })
+  ).toHaveLength(2)
   expect(
     within(changesTable).getByRole("button", { name: "Manage postgres" })
   ).toBeInTheDocument()
@@ -685,7 +691,9 @@ test("offers Manage menu for top-level resources on Changes, Services, and named
     within(servicesTable).getByRole("button", { name: "Manage postgres" })
   ).toBeInTheDocument()
   expect(
-    within(servicesTable).queryByRole("button", { name: "Manage n8n--postgres" })
+    within(servicesTable).queryByRole("button", {
+      name: "Manage n8n--postgres",
+    })
   ).not.toBeInTheDocument()
   expect(
     within(servicesTable).queryByRole("button", { name: "Manage old-db" })
@@ -780,7 +788,9 @@ test("removing a resource from a service-scoped plan replans with affected servi
   )
 
   const user = userEvent.setup()
-  await user.click(await screen.findByRole("button", { name: "Manage postgres" }))
+  await user.click(
+    await screen.findByRole("button", { name: "Manage postgres" })
+  )
   await user.click(
     await screen.findByRole("menuitem", { name: "Remove from manifest" })
   )
@@ -796,5 +806,39 @@ test("removing a resource from a service-scoped plan replans with affected servi
         services: ["web", "api"],
       },
     })
+  )
+})
+
+test("an address with only the deployment moves under its project", async () => {
+  serve(plan())
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeploymentRedirect id="plan_1" tab="logs" />
+    </ClientProvider>
+  )
+  await waitFor(() =>
+    expect(nav.navigate).toHaveBeenCalledWith({
+      to: "/projects/$id/deployments/$runId",
+      params: { id: "proj_1", runId: "plan_1" },
+      search: { tab: "logs" },
+      replace: true,
+    })
+  )
+})
+
+test("a deployment opened under another project moves to its own", async () => {
+  serve(plan())
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeploymentPage id="plan_1" projectId="someone_else" />
+    </ClientProvider>
+  )
+  await waitFor(() =>
+    expect(nav.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/projects/$id/deployments/$runId",
+        params: { id: "proj_1", runId: "plan_1" },
+      })
+    )
   )
 })

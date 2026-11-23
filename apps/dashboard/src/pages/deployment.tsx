@@ -2,7 +2,7 @@
 // step it took. A run is named by its plan's ID, because a plan exists from
 // the moment someone asks for one and a deployment only once it's approved.
 import { LoaderCircleIcon } from "lucide-react"
-import { type ReactNode, useMemo, useState } from "react"
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -64,7 +64,11 @@ import {
   toneOf,
 } from "@/components/runs"
 import { ServiceAddress } from "@/components/service-address"
-import { SiteHeader } from "@/components/site-header"
+import {
+  projectCrumbs,
+  useOptionalProjectFrame,
+} from "@/components/project-frame"
+import { type Crumb, SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { PlanVariableMapping } from "@/components/plan-variable-mapping"
 import { PlanRepairs, repairable } from "@/components/plan-repairs"
@@ -116,15 +120,77 @@ export const deploymentTabs: DeploymentTab[] = [
   "details",
 ]
 
-export function DeploymentPage({
+// Older links name tabs the page has since renamed.
+const renamedTabs: Record<string, DeploymentTab> = { plan: "changes" }
+
+/** deploymentTabOf reads ?tab=; an unknown one is undefined. */
+export function deploymentTabOf(value: unknown): DeploymentTab | undefined {
+  if (typeof value !== "string") return undefined
+  const tab = renamedTabs[value] ?? value
+  return deploymentTabs.includes(tab as DeploymentTab)
+    ? (tab as DeploymentTab)
+    : undefined
+}
+
+/**
+ * DeploymentRedirect moves an address that names only a deployment to
+ * its page under its project, which only the deployment can say.
+ */
+export function DeploymentRedirect({
   id,
   tab,
 }: {
   id: string
+  tab?: DeploymentTab
+}) {
+  const plan = useQuery(usePlansGet, { path: { id } })
+  const navigate = useNavigate()
+  const projectId = plan.data?.projectId
+  useEffect(() => {
+    if (!projectId) return
+    void navigate({
+      to: "/projects/$id/deployments/$runId",
+      params: { id: projectId, runId: id },
+      search: { tab },
+      replace: true,
+    })
+  }, [projectId, id, tab, navigate])
+  if (plan.status !== "error")
+    return (
+      <>
+        <SiteHeader
+          crumbs={[{ label: "Deployments", to: "/deployments" }, { label: id }]}
+        />
+        <Page>
+          <div className="grid gap-6" aria-busy="true">
+            <Skeleton className="h-12 w-96" />
+            <Skeleton className="h-16 rounded-xl" />
+            <Skeleton className="h-72 rounded-xl" />
+          </div>
+        </Page>
+      </>
+    )
+  return <DeploymentPage id={id} tab={tab} />
+}
+
+export function DeploymentPage({
+  id,
+  projectId,
+  tab,
+}: {
+  id: string
+  /**
+   * The project in the address, when the page opens inside the project's
+   * frame. A deployment of another project moves to that one.
+   */
+  projectId?: string
   /** The tab the page opens on; Changes while a plan waits, else Logs. */
   tab?: DeploymentTab
 }) {
   const plan = useQuery(usePlansGet, { path: { id } })
+  const Wrap = useOptionalProjectFrame() ? Fragment : Page
+  if (plan.data && projectId && plan.data.projectId !== projectId)
+    return <DeploymentRedirect id={id} tab={tab} />
   if (plan.data)
     return (
       <Loaded
@@ -139,7 +205,7 @@ export function DeploymentPage({
       <SiteHeader
         crumbs={[{ label: "Deployments", to: "/deployments" }, { label: id }]}
       />
-      <Page>
+      <Wrap>
         {plan.status === "error" ? (
           missing ? (
             <CloudEmpty
@@ -171,7 +237,7 @@ export function DeploymentPage({
             <Skeleton className="h-72 rounded-xl" />
           </div>
         )}
-      </Page>
+      </Wrap>
     </>
   )
 }
@@ -218,7 +284,10 @@ function Loaded({
       })
       invalidate(usePlansList)
       setRepairing(false)
-      void navigate({ to: "/deployments/$id", params: { id: next.id } })
+      void navigate({
+        to: "/projects/$id/deployments/$runId",
+        params: { id: next.projectId, runId: next.id },
+      })
       toast.success(`Planning ${run.environment} again`)
     } catch (err) {
       toast.error(messageOf(err, "The plan couldn't start."))
@@ -255,20 +324,38 @@ function Loaded({
     setTab("logs")
   }
   const projectName = run.project?.name ?? "Project"
+  // Inside its project's frame, the page sits under the project's nav and
+  // its trail starts at the project. Elsewhere it is a page of its own.
+  const frame = useOptionalProjectFrame()
+  const Wrap = frame ? Fragment : Page
+  const crumbs: Crumb[] = frame
+    ? projectCrumbs(
+        frame.project,
+        {
+          label: "Deployments",
+          link: (
+            <Link
+              to="/projects/$id"
+              params={{ id: frame.project.id }}
+              search={{ tab: "deployments" }}
+            />
+          ),
+        },
+        { label: run.environment }
+      )
+    : [
+        { label: "Deployments", to: "/deployments" },
+        {
+          label: projectName,
+          link: <Link to="/projects/$id" params={{ id: run.projectId }} />,
+        },
+        { label: run.environment },
+      ]
 
   return (
     <>
-      <SiteHeader
-        crumbs={[
-          { label: "Deployments", to: "/deployments" },
-          {
-            label: projectName,
-            link: <Link to="/projects/$id" params={{ id: run.projectId }} />,
-          },
-          { label: run.environment },
-        ]}
-      />
-      <Page>
+      <SiteHeader crumbs={crumbs} />
+      <Wrap>
         <Heading
           run={run}
           now={now}
@@ -409,13 +496,17 @@ function Loaded({
             />
           </TabsContent>
           <TabsContent value="services">
-            <ServicesTab resourceActions={resourceActions} run={run} onLogs={showLogs} />
+            <ServicesTab
+              resourceActions={resourceActions}
+              run={run}
+              onLogs={showLogs}
+            />
           </TabsContent>
           <TabsContent value="details">
             <DetailsTab run={run} now={now} />
           </TabsContent>
         </Tabs>
-      </Page>
+      </Wrap>
     </>
   )
 }
@@ -1224,7 +1315,10 @@ function ServicesTab({
                     "No address yet"
                   )}
                 </Cell>
-                <div role="cell" className="flex items-center justify-end gap-1">
+                <div
+                  role="cell"
+                  className="flex items-center justify-end gap-1"
+                >
                   {isManageableResourceAction(a) && resourceActions(a.name)}
                   {s && (
                     <Button

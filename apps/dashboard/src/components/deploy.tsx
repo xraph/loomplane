@@ -257,8 +257,8 @@ function DeploymentHistory({ project }: { project: Project }) {
                   <NameCell
                     name={
                       <Link
-                        to="/deployments/$id"
-                        params={{ id: p.id }}
+                        to="/projects/$id/deployments/$runId"
+                        params={{ id: p.projectId, runId: p.id }}
                         className="text-foreground underline-offset-2 hover:underline"
                       >
                         {planTitle(p)}
@@ -290,7 +290,10 @@ function DeploymentHistory({ project }: { project: Project }) {
                       variant="outline"
                       nativeButton={false}
                       render={
-                        <Link to="/deployments/$id" params={{ id: p.id }} />
+                        <Link
+                          to="/projects/$id/deployments/$runId"
+                          params={{ id: p.projectId, runId: p.id }}
+                        />
                       }
                     >
                       Open
@@ -1287,10 +1290,9 @@ function UseExistingForFinding({
       compatibleResourceKind(r.kind, kind) &&
       providerResourceReadiness(r, now).discovery === "Observed" &&
       !!r.endpointId &&
-      ![
-        "native_binding_required",
-        "identity_verification_needed",
-      ].includes(r.connectionState) &&
+      !["native_binding_required", "identity_verification_needed"].includes(
+        r.connectionState
+      ) &&
       !attachedIds.has(r.id)
   )
   const readyIds = new Set(ready.map((r) => r.id))

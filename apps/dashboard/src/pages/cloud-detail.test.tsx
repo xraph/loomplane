@@ -359,7 +359,7 @@ it("sends Cloud changes to the environment's own project", async () => {
   await waitFor(() => expect(envs).toHaveTextContent("production"))
   expect(
     within(envs).getByRole("link", { name: "Open in project" })
-  ).toHaveAttribute("href", "/projects/web?tab=cloud")
+  ).toHaveAttribute("href", "/projects/web?tab=settings&section=clouds")
   expect(
     screen.queryByRole("button", { name: "Use in an environment" })
   ).not.toBeInTheDocument()

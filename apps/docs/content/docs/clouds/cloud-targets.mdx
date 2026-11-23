@@ -74,7 +74,7 @@ services:
         cloud: GPU Lab EU         # same target name, another Cloud
 ```
 
-`cloud` alone uses that Cloud's default placement. An environment that names a target also says which Cloud it's in, so `preview` above goes back to the default Cloud. A name no Cloud granted to the project has fails the plan with `cloud-unknown` at `services.trainer.cloud`. In the dashboard, **Runs on** lists every granted Cloud's targets under the Cloud's name, and each Cloud on the project's Clouds tab can take services.
+`cloud` alone uses that Cloud's default placement. An environment that names a target also says which Cloud it's in, so `preview` above goes back to the default Cloud. A name no Cloud granted to the project has fails the plan with `cloud-unknown` at `services.trainer.cloud`. In the dashboard, **Runs on** lists every granted Cloud's targets under the Cloud's name, and each Cloud in the **Clouds** section of the project's **Settings** can take services.
 
 Changing the project's default Cloud leaves services that name their Cloud where they are. A change to a Cloud itself, such as switching one of its targets, reaches every service placed on it.
 

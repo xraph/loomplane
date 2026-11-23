@@ -6,10 +6,11 @@ import { AIModel, type ModelTab } from "@/pages/ai-model"
 type Search = { environment?: string; tab?: Exclude<ModelTab, "overview"> }
 
 // One deployed model, in the environment it runs in:
-// /projects/<id>/ai/models/<resource>?environment=<environment id>. Not
-// nested under /projects/$id, which renders a whole page of its own.
-export const Route = createFileRoute("/projects/$id_/ai/models/$resource")({
+// /projects/<id>/ai/models/<resource>?environment=<environment id>,
+// inside the project's frame.
+export const Route = createFileRoute("/projects/$id/ai/models/$resource")({
   beforeLoad: () => requireFeature("ai"),
+  staticData: { projectTab: "services" },
   // An invalid value is replaced with undefined, not left out: the router
   // keeps search keys a route leaves out.
   validateSearch: (search: Record<string, unknown>): Search => ({

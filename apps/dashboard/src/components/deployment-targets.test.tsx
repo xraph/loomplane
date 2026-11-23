@@ -550,7 +550,7 @@ it("lists the project's deployments with no way to approve them here", async () 
   expect(within(table).getByText("2 replace, 1 create, 1 kept")).toBeVisible()
   expect(within(table).getByRole("link", { name: "Open" })).toHaveAttribute(
     "href",
-    "/deployments/$id"
+    "/projects/$id/deployments/$runId"
   )
   expect(
     screen.queryByRole("button", { name: /Approve|Reject/ })
@@ -866,7 +866,11 @@ it("attaches an existing workspace resource from an unprovided-resource finding"
     <ClientProvider client={forgeClient}>
       <FindingActions
         finding={
-          { code: "unprovided-resource", name: "postgres", message: "" } as Finding
+          {
+            code: "unprovided-resource",
+            name: "postgres",
+            message: "",
+          } as Finding
         }
         project={{ id: "p", name: "Shop" } as Project}
         environment="production"
@@ -920,7 +924,12 @@ it("displays Existing resource for external attachments and exposes resource men
       if (url.endsWith("/manifest") && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as { manifest: Manifest }
         saves.push(body)
-        return json({ id: "r2", revision: 2, manifest: body.manifest, yaml: "" })
+        return json({
+          id: "r2",
+          revision: 2,
+          manifest: body.manifest,
+          yaml: "",
+        })
       }
       if (url.endsWith("/manifest")) {
         return json({ id: "r1", revision: 1, yaml: "version: 1\n", manifest })
@@ -982,7 +991,9 @@ it("displays Existing resource for external attachments and exposes resource men
     within(table).getByRole("button", { name: "Change where shared-db runs" })
   )
   await user.click(
-    await screen.findByRole("switch", { name: "Enable shared-db in production" })
+    await screen.findByRole("switch", {
+      name: "Enable shared-db in production",
+    })
   )
   await user.click(screen.getByRole("button", { name: "Save manifest" }))
 

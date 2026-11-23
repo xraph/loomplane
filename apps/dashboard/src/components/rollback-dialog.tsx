@@ -100,7 +100,10 @@ function RollbackForm({
       })
       invalidate(usePlansList)
       done()
-      void navigate({ to: "/deployments/$id", params: { id: p.id } })
+      void navigate({
+        to: "/projects/$id/deployments/$runId",
+        params: { id: projectId, runId: p.id },
+      })
       toast.success(`Planning a rollback of ${environment}`, {
         description: "Review the plan, then approve it to roll back.",
       })

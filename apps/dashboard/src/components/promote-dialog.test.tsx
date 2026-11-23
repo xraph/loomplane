@@ -121,8 +121,8 @@ it("posts from and navigates to the plan", async () => {
   )
   await vi.waitFor(() =>
     expect(navigate).toHaveBeenCalledWith({
-      to: "/deployments/$id",
-      params: { id: "plan_promo" },
+      to: "/projects/$id/deployments/$runId",
+      params: { id: "p", runId: "plan_promo" },
     })
   )
   expect(posts).toEqual([

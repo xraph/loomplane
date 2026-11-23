@@ -117,11 +117,11 @@ test("provider resources show under Services with the provider that manages them
   ).toHaveAttribute("href", "/integrations/resources")
 })
 
-test("Services lists what runs and sends adding to the catalog page", async () => {
+test("Catalog lists what runs and sends adding to Browse", async () => {
   fixture()
   show()
   expect(await screen.findByText("None yet")).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "Browse catalog" })).toHaveAttribute(
+  expect(screen.getByRole("link", { name: "Browse" })).toHaveAttribute(
     "href",
     "/services/catalog"
   )

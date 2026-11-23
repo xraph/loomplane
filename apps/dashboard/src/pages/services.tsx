@@ -30,17 +30,17 @@ export function Services() {
 
   return (
     <>
-      <SiteHeader crumbs={[{ label: "Services" }]} />
+      <SiteHeader crumbs={[{ label: "Catalog" }]} />
       <Page>
         <PageHeading
-          title="Services"
-          description="What runs for you: services Loomplane deployed, and resources your connected cloud providers run in your account."
+          title="Catalog"
+          description="Databases, caches and other services you added from the catalog, and the resources your connected cloud providers run in your account. Your own code's services are on each project."
           actions={
             <Button
               nativeButton={false}
               render={<Link to="/services/catalog" />}
             >
-              Browse catalog
+              Browse
             </Button>
           }
         />
@@ -49,7 +49,7 @@ export function Services() {
           <div className="grid gap-2">
             <div className="flex items-baseline justify-between">
               <h2 className="text-[13px] font-medium text-muted-foreground">
-                Run by Loomplane
+                Added from the catalog
               </h2>
               <span className="text-[12.5px] text-muted-foreground">
                 {yours.length ? `${yours.length} deployed` : "None yet"}
