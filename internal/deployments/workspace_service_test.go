@@ -64,8 +64,9 @@ func (anyTarget) TargetDial(context.Context, string, string) (catalogconnect.Dia
 
 func (anyTarget) TargetCloud(context.Context, string, string) (string, error) { return "server", nil }
 
-func workspaceAttachment(revision int) planning.Action {
-	pin := &planning.ExistingResourceConfig{EndpointID: workspaceServiceID, EndpointRevision: revision}
+// workspaceAttachment is the attachment a plan pinned at revision 2.
+func workspaceAttachment() planning.Action {
+	pin := &planning.ExistingResourceConfig{EndpointID: workspaceServiceID, EndpointRevision: 2}
 	return planning.Action{
 		ID: "resource:orders", Name: "orders", Subject: planning.ResourceSubject, Provider: planning.WorkspaceProvider,
 		Op: planning.Create, Engine: provider.ResourceEngine,
@@ -78,7 +79,7 @@ func registeredOrders() *catalogconnect.Endpoint {
 }
 
 func TestAWorkspaceServiceIsConnectedAndDisconnectedWithoutAProvider(t *testing.T) {
-	a := workspaceAttachment(2)
+	a := workspaceAttachment()
 	api := planning.Action{ID: "service:api", Name: "api", Subject: planning.ServiceSubject, Provider: "server", Op: planning.Create,
 		Service: &planning.ServiceConfig{Target: "conn_box", Env: []planning.EnvLink{{Key: "DATABASE_URL", From: "orders", Subject: planning.ResourceSubject}}}}
 	p := &planning.Plan{ID: "plan", OrgID: "org", ProjectID: "project", EnvironmentID: "env", CreatedBy: "dev", Actions: []planning.Action{a, api}}
@@ -134,7 +135,7 @@ func TestAWorkspaceServiceIsntConnectedWhenItChangedSinceThePlan(t *testing.T) {
 		if tc.endpoint != nil {
 			tc.endpoint(endpoint)
 		}
-		a := workspaceAttachment(2)
+		a := workspaceAttachment()
 		p := &planning.Plan{OrgID: "org", ProjectID: "project", CreatedBy: "dev", Actions: []planning.Action{a}}
 		plans := &fakePlans{bindings: map[string]*planning.Binding{}}
 		secrets := &memSecrets{m: map[string][]byte{}}
@@ -148,7 +149,7 @@ func TestAWorkspaceServiceIsntConnectedWhenItChangedSinceThePlan(t *testing.T) {
 }
 
 func TestAServiceReleaseRechecksTheWorkspaceServiceItUses(t *testing.T) {
-	a := workspaceAttachment(2)
+	a := workspaceAttachment()
 	a.Op = planning.Keep
 	raw, err := json.Marshal(a.Resource)
 	if err != nil {

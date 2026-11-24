@@ -43,7 +43,7 @@ func ownUserLinks() []planning.EnvLink {
 }
 
 func TestAServiceReleaseMakesItsOwnUserAndReadsIt(t *testing.T) {
-	a := workspaceAttachment(2)
+	a := workspaceAttachment()
 	a.Op = planning.Keep
 	raw, err := json.Marshal(a.Resource)
 	if err != nil {
