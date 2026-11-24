@@ -116,6 +116,8 @@ type EditInput struct {
 	Link           *ServiceLink         `json:"link,omitempty"`
 	Unlink         *ServiceLink         `json:"unlink,omitempty"`
 	SetUse         *ResourceUse         `json:"set_use,omitempty"`
+	// Wire sets which variables a service reads one of its needs in.
+	Wire *ServiceWiring `json:"wire,omitempty"`
 	// DryRun makes the edit without saving it, and returns the revision
 	// it would save, so a form can show the YAML before anyone commits to
 	// it. The revision has no ID; its Revision is the number it would get.
@@ -152,6 +154,15 @@ type ServiceLink struct {
 	Service string            `json:"service"`
 	Need    string            `json:"need"`
 	Options map[string]string `json:"options,omitempty"`
+}
+
+// ServiceWiring is which variables a service reads one of its needs in,
+// each with what it holds: url, host, port, user, password or database.
+// No variables go back to the one the need's kind names.
+type ServiceWiring struct {
+	Service string            `json:"service"`
+	Need    string            `json:"need"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // ResourceUse sets where one dependency of a catalog resource comes from.
@@ -197,6 +208,10 @@ type NewResource struct {
 	// its needs, and with it the resource's address in a variable, in the
 	// same revision.
 	NeededBy []string `json:"needed_by,omitempty"`
+	// Wiring is, by service in NeededBy, the variables it reads the new
+	// resource in, as ServiceWiring's Env. A service left out reads the one
+	// the kind names.
+	Wiring map[string]map[string]string `json:"wiring,omitempty"`
 }
 
 // NewServiceInput is a service to add to the manifest: where its code is and,
@@ -258,7 +273,7 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	}
 	var out []byte
 	edits := 0
-	for _, present := range []bool{in.AddService != nil, in.AddResource != nil, in.UpdateResource != nil, in.RemoveResource != "", in.Ignore != "", in.Placement != nil, in.Link != nil, in.Unlink != nil, in.SetUse != nil} {
+	for _, present := range []bool{in.AddService != nil, in.AddResource != nil, in.UpdateResource != nil, in.RemoveResource != "", in.Ignore != "", in.Placement != nil, in.Link != nil, in.Unlink != nil, in.SetUse != nil, in.Wire != nil} {
 		if present {
 			edits++
 		}
@@ -284,6 +299,9 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	case in.Unlink != nil:
 		l := in.Unlink
 		out, err = manifest.WithoutNeed([]byte(cur.YAML), strings.TrimSpace(l.Service), strings.TrimSpace(l.Need))
+	case in.Wire != nil:
+		w := in.Wire
+		out, err = manifest.WithWiring([]byte(cur.YAML), strings.TrimSpace(w.Service), strings.TrimSpace(w.Need), w.Env)
 	case in.SetUse != nil:
 		u := in.SetUse
 		out, err = manifest.WithUse([]byte(cur.YAML), strings.TrimSpace(u.Resource), strings.TrimSpace(u.Dependency), u.Use)
@@ -336,7 +354,21 @@ func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc 
 	if err != nil {
 		return nil, err
 	}
-	return s.placeNew(ctx, orgID, projectID, out, "resources", name, r.EnabledIn, r.Only, r.NeededBy, r.ConsumerOptions)
+	for svc := range r.Wiring {
+		if !slices.Contains(trimmed(r.NeededBy), svc) {
+			return nil, fmt.Errorf("%w: wiring names %s, which isn't in needed_by", ErrInvalid, svc)
+		}
+	}
+	out, err = s.placeNew(ctx, orgID, projectID, out, "resources", name, r.EnabledIn, r.Only, r.NeededBy, r.ConsumerOptions)
+	if err != nil {
+		return nil, err
+	}
+	for _, svc := range slices.Sorted(maps.Keys(r.Wiring)) {
+		if out, err = manifest.WithWiring(out, svc, name, r.Wiring[svc]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // addService writes a new service, with the same environment and

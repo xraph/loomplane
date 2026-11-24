@@ -58,6 +58,14 @@ resources:
 
 When you plan, Loomplane checks the service from each consuming service's own server or cluster, and the plan pins the credentials it saw. The deploy checks the same things again before any service gets the connection string, so a plan made before someone stopped sharing the service, or replaced its credentials, fails instead of deploying something nobody reviewed. Plan again to pick up new credentials.
 
+## Choose the variables a service reads
+
+When you tick a service in **Add service**, a card asks how it reads the connection. **One variable** holds the whole connection string, under its kind's name or one you type. **Separate variables** splits it into host, port, user, password and database, from a ready-made set such as `PGHOST`, `PGPORT`… for Postgres or `DB_HOST`, `DB_PORT`… under a prefix you choose, each name editable.
+
+Loomplane starts where your code already is. If analysis found the service reading two or more of `PGHOST`, `PGUSER`, `PGPASSWORD` and the rest, it starts on those; if it reads a connection string by a usual name, such as `PG_URL` or `CACHE_URL`, it starts on that. Under the card, a preview shows each variable with what it will hold, the password masked.
+
+What you choose is written as `wiring` on the service in `loomplane.yaml`, and the parts are read from the connection string when it deploys. The [loomplane.yaml reference](/docs/reference/loomplane-yaml#wiring) has the details.
+
 ## Who can use it
 
 Every project in the workspace can use a service shared with **Every project**. **Only some projects** limits it to the ones you pick. Change it on the service's **Access** tab.

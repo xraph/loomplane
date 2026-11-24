@@ -32,6 +32,7 @@ import {
   useConnectionsList,
   useManifestsCurrent,
   useManifestsSuggestions,
+  useProjectsGraph,
   useProvidersList,
   useProviderResourcesList,
   useSourcesList,
@@ -49,6 +50,7 @@ import { useInvalidate, useQuery } from "@/client/hooks"
 import { CatalogDependencyPicker } from "@/components/catalog-dependency-picker"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
+import { VariableWiring, type WiringSample } from "@/components/variable-wiring"
 import { engineLogos } from "@/components/workspace-services/register-dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -122,6 +124,13 @@ import {
   ZeroStateDescription,
 } from "@/components/zero-state"
 
+import {
+  envOf,
+  suggestWiring,
+  wirable,
+  type WiringChoice,
+  wiringProblem,
+} from "@/lib/wiring"
 import { cn } from "@/lib/utils"
 
 export type AddServiceStart = "code" | "catalog" | "source" | "workspace"
@@ -146,6 +155,8 @@ export type WorkspacePick = {
   registered: boolean
   /** The environment a registered service serves, such as production. */
   environmentLabel?: string
+  /** Where it is, for showing what a service's variables will hold. */
+  sample?: WiringSample
 }
 
 // The resource kind each engine a registered service runs is attached as.
@@ -557,6 +568,13 @@ function WorkspaceServices({
                 from: "this workspace",
                 registered: true,
                 environmentLabel: e.environmentLabel,
+                sample: {
+                  host: e.host,
+                  port: e.port,
+                  user: e.username,
+                  database: e.database,
+                  url: `${e.engine}://${e.username ? `${e.username}:••••••@` : ""}${e.host}:${e.port}/${e.database ?? ""}`,
+                },
               })
             }
             className="h-auto w-full justify-start gap-2 py-2 text-left whitespace-normal"
@@ -605,6 +623,11 @@ function WorkspaceServices({
                 kind: resource.kind,
                 from: resource.provider,
                 registered: false,
+                sample: {
+                  host: resource.host,
+                  port: resource.port,
+                  database: resource.database,
+                },
               })
             }
             className="h-auto w-full justify-start gap-2 py-2 text-left whitespace-normal"
@@ -791,6 +814,10 @@ function Configure({
   }, [])
   const [pending, setPending] = useState("")
   const [error, setError] = useState("")
+  // How each service that uses it reads it, once someone changes where
+  // the form started.
+  const [choices, setChoices] = useState<Record<string, WiringChoice>>({})
+  const graph = useQuery(useProjectsGraph, { path: { id: project.id } })
 
   // A name follows the source until someone types one.
   const onSource = (value: string) => {
@@ -883,6 +910,37 @@ function Configure({
       ? "A port is a whole number from 1 to 65535."
       : ""
 
+  const wiredKind = info?.name ?? existing?.kind
+  const wiringFallback = envVarFor(
+    { name: trimmed, kind: wiredKind },
+    "resources"
+  )
+  const readsOf = (svc: string) =>
+    (graph.data?.graph?.services.find((g) => g.name === svc)?.env ?? []).map(
+      (e) => e.name
+    )
+  const wiringFor = (svc: string) => {
+    const suggestion = suggestWiring(
+      wiredKind ?? "",
+      wiringFallback,
+      readsOf(svc)
+    )
+    return {
+      choice: choices[svc] ?? suggestion.choice,
+      detected: suggestion.detected,
+    }
+  }
+  const wires = (info || existing) && wirable(wiredKind) ? neededBy : []
+  const wiring = Object.fromEntries(
+    wires.flatMap((svc) => {
+      const env = envOf(wiringFor(svc).choice, wiringFallback)
+      return env ? [[svc, env]] : []
+    })
+  )
+  const wiringBlocked = wires.some(
+    (svc) => wiringProblem(wiringFor(svc).choice) !== ""
+  )
+
   const edit: AddEdit | undefined = (() => {
     if (!trimmed || problem) return undefined
     const scope = {
@@ -895,6 +953,7 @@ function Configure({
           : { enabledIn: environment, only: true }
         : {}),
       ...(neededBy.length ? { neededBy } : {}),
+      ...(Object.keys(wiring).length ? { wiring } : {}),
     }
     if (existing)
       return {
@@ -968,7 +1027,7 @@ function Configure({
           : ""
       })()
     : ""
-  const ready = !!edit && blocking.length === 0 && !pending
+  const ready = !!edit && blocking.length === 0 && !wiringBlocked && !pending
 
   // A kind that brings its own add dialog takes over from here.
   if (AddDialog)
@@ -1361,6 +1420,26 @@ function Configure({
             : envVarFor({ name: trimmed || "service" }, "services")
         }
       />
+      {wires.length > 0 && wiredKind && (
+        <div className="grid gap-2">
+          {wires.map((svc) => {
+            const { choice, detected } = wiringFor(svc)
+            return (
+              <VariableWiring
+                key={svc}
+                service={svc}
+                need={trimmed || "it"}
+                kind={wiredKind}
+                fallback={wiringFallback}
+                value={choice}
+                detected={detected}
+                sample={existing?.sample}
+                onChange={(next) => setChoices((c) => ({ ...c, [svc]: next }))}
+              />
+            )
+          })}
+        </div>
+      )}
 
       <Field label="Environments">
         <div

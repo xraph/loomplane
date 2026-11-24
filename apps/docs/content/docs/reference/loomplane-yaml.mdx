@@ -52,8 +52,9 @@ Names (of services, resources, gateways, links and environments in overrides) ma
 | `size` | `{cpu, memory}` | `cpu` is virtual CPUs above 0 and up to 8 (such as 0.5 or 2). `memory` is MiB, 128 to 32768 |
 | `needs` | array of names | Resources and services it talks to. Each gets it an address in a variable, and it deploys after them |
 | `need_options` | map | Options passed to a need, by need and then by option name |
+| `wiring` | map | Which variables it reads a need in, by need. See [wiring](#wiring) |
 | `enabled` | boolean | `false` leaves it out |
-| `environments` | map | Overrides by environment name. Takes every field above except `source`, `repo`, `kind`, `build`, `needs` and `need_options` |
+| `environments` | map | Overrides by environment name. Takes every field above except `source`, `repo`, `kind`, `build`, `needs`, `need_options` and `wiring` |
 
 `provider`, `cloud_target` and `cloud_tags` can't be mixed at the same level. An effective direct `provider` or `target` also conflicts with Cloud placement, including one inherited from `defaults`.
 
@@ -96,6 +97,38 @@ services:
 The need has to be in `needs`. Option names are lower case letters, digits and underscores, start with a letter and run to 32 characters. A value is up to 200 characters with no newline or other control character. Which options a kind accepts is checked when you plan.
 
 The dashboard and `POST /projects/:id/manifest/edits` can change these in place without touching your comments. `link` adds a need to a service (with options if you give them, replacing old ones as a whole; with none, they stay). `unlink` removes the need and its options, and fails if the service doesn't need it. `set_use` sets one dependency on a catalog resource and leaves the rest of its `uses` alone. Send one of the three per edit.
+
+### wiring
+
+Which variables a service reads a database or cache in, by need. Without it, a need's address goes in the variable its kind names, such as `DATABASE_URL` for Postgres or `REDIS_URL` for Redis:
+
+```yaml
+services:
+  api:
+    source: services/api
+    needs: [orders]
+    wiring:
+      orders:
+        env:
+          PGHOST: host
+          PGPORT: port
+          PGUSER: user
+          PGPASSWORD: password
+          PGDATABASE: database
+  worker:
+    source: services/worker
+    needs: [orders]
+    wiring:
+      orders:
+        env:
+          ORDERS_DSN: url
+```
+
+Each variable holds the whole connection string (`url`) or one part of it: `host`, `port`, `user`, `password` or `database`. Loomplane reads the parts from the address when it deploys, so they always agree with it. A wired need gets only the variables you name, not its kind's as well. The need has to be in `needs`, a variable name is letters, digits and underscores not starting with a digit, and a plan refuses a name two needs would both set.
+
+Parts are for databases and caches: Postgres, MySQL, MariaDB, Redis, Valkey and MongoDB. Another service, or anything else, can only be renamed with `url`. A catalog kind that gives its own variables can't be wired, and a database behind the database gateway is read as `url`, since the gateway stands in for the whole address. `environments` can't change `wiring`.
+
+The dashboard and `POST /projects/:id/manifest/edits` set it with `wire` (`service`, `need` and `env`; no `env` removes it), and `add_resource` takes `wiring` by service for the services in its `needed_by`.
 
 ## resources
 

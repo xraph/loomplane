@@ -154,9 +154,24 @@ type Service struct {
 	// that is listed in Needs can have options, and what a need accepts
 	// is the planner's question, not the manifest's.
 	NeedOptions map[string]map[string]string `json:"need_options,omitempty" yaml:"need_options,omitempty"`
+	// Wiring says, by need, which variables this service reads it in,
+	// instead of the one its kind names: wiring.orders.env.PGHOST: host.
+	// Only a need listed in Needs can be wired.
+	Wiring map[string]Wiring `json:"wiring,omitempty" yaml:"wiring,omitempty"`
 	// Environments override settings in one environment, by name.
 	Environments map[string]Settings `json:"environments,omitempty" yaml:"environments,omitempty"`
 }
+
+// Wiring is how a service reads one thing it needs.
+type Wiring struct {
+	// Env maps each variable the service reads to what it holds: url
+	// (the whole connection string), host, port, user, password or
+	// database. Set, it replaces the variable the need's kind names.
+	Env map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+}
+
+// WiringOutputs are what a wired variable can hold.
+var WiringOutputs = []string{"url", "host", "port", "user", "password", "database"}
 
 // Build is how a service's Dockerfile is built.
 type Build struct {
@@ -438,14 +453,16 @@ var (
 	// workspaceServiceRE is a workspace service's ID: a database or cache
 	// registered by its connection string and shared with projects.
 	workspaceServiceRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
-	cloudTargetRE      = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-	nameRE             = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	farpPathRE         = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
-	farpCapRE          = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	envRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	tokenRE            = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	gpuKindRE          = regexp.MustCompile(`^[a-z0-9-]+$`)
-	kindRE             = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	// envKeyRE is a variable name a wired service reads.
+	envKeyRE      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,254}$`)
+	cloudTargetRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	farpPathRE    = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
+	farpCapRE     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE     = regexp.MustCompile(`^[a-z0-9-]+$`)
+	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
@@ -701,6 +718,24 @@ func (m *Manifest) Validate() error {
 				add(path, "need_options.%s isn't in needs", need)
 			}
 			checkNeedOptions(add, path+".need_options."+need, s.NeedOptions[need])
+		}
+		for _, need := range sortedKeys(s.Wiring) {
+			wpath := path + ".wiring." + need
+			if !slices.Contains(s.Needs, need) {
+				add(path, "wiring.%s isn't in needs", need)
+			}
+			env := s.Wiring[need].Env
+			if len(env) == 0 {
+				add(wpath+".env", "names at least one variable, such as DATABASE_URL: url")
+			}
+			for _, key := range sortedKeys(env) {
+				if !envKeyRE.MatchString(key) {
+					add(wpath+".env."+key, "isn't a variable name: use letters, digits and underscores, not starting with a digit")
+				}
+				if !slices.Contains(WiringOutputs, env[key]) {
+					add(wpath+".env."+key, "%q isn't something a variable can hold; use %s", env[key], strings.Join(WiringOutputs, ", "))
+				}
+			}
 		}
 		for _, env := range sortedKeys(s.Environments) {
 			epath := path + ".environments." + env

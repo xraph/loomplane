@@ -9,6 +9,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation } from "@/client/hooks"
+import { partOutputs } from "@/lib/wiring"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import {
@@ -30,7 +31,13 @@ export function planOutputOptions(plan: Plan, scope: string): ResourceOption[] {
   const inventory = new Map(
     plan.actions
       .filter((a) => a.resource?.existingResource)
-      .map((a) => [a.name, a.resource!.existingResource!.resourceId])
+      // A workspace service has no inventory ID: its own endpoint ID
+      // names it across projects.
+      .map((a) => [
+        a.name,
+        a.resource!.existingResource!.resourceId ||
+          a.resource!.existingResource!.endpointId,
+      ])
   )
   const options = new Map<string, ResourceOption>()
   const add = (resource: string, field: string) => {
@@ -70,6 +77,9 @@ export function planOutputOptions(plan: Plan, scope: string): ResourceOption[] {
         ].includes(resource.kind)
       ) {
         add(action.name, "url")
+        // A database or cache's address has parts a variable can hold.
+        if (resource.kind !== "memcached")
+          for (const part of partOutputs) add(action.name, part)
       }
     }
     if (

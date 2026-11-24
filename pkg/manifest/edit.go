@@ -838,12 +838,67 @@ func WithoutNeed(doc []byte, service, need string) ([]byte, error) {
 	if len(needs.Content) == 0 {
 		removeChild(svc, "needs")
 	}
-	if all := child(svc, "need_options"); all != nil && all.Kind == yaml.MappingNode {
-		removeChild(all, need)
-		if len(all.Content) == 0 {
-			removeChild(svc, "need_options")
+	for _, section := range []string{"need_options", "wiring"} {
+		if all := child(svc, section); all != nil && all.Kind == yaml.MappingNode {
+			removeChild(all, need)
+			if len(all.Content) == 0 {
+				removeChild(svc, section)
+			}
 		}
 	}
+	return encode(file)
+}
+
+// WithWiring sets which variables a service reads one of its needs in,
+// replacing what it read before: services.<service>.wiring.<need>.env.
+// No variables removes the wiring, and the service reads the need in the
+// variable its kind names again. The service must already need it.
+func WithWiring(doc []byte, service, need string, env map[string]string) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := editTarget(root, "services", service)
+	if err != nil {
+		return nil, err
+	}
+	needs := child(svc, "needs")
+	if needs == nil || needs.Kind != yaml.SequenceNode || !slices.ContainsFunc(needs.Content, func(n *yaml.Node) bool { return n.Value == need }) {
+		return nil, fmt.Errorf("%w: %s doesn't need %s, so it can't be wired to it", ErrInvalid, service, need)
+	}
+	var problems Problems
+	for _, key := range sortedKeys(env) {
+		path := "services." + service + ".wiring." + need + ".env." + key
+		if !envKeyRE.MatchString(key) {
+			problems = append(problems, Problem{Path: path, Message: "isn't a variable name: use letters, digits and underscores, not starting with a digit"})
+		}
+		if !slices.Contains(WiringOutputs, env[key]) {
+			problems = append(problems, Problem{Path: path, Message: fmt.Sprintf("%q isn't something a variable can hold; use %s", env[key], strings.Join(WiringOutputs, ", "))})
+		}
+	}
+	if len(problems) > 0 {
+		return nil, problems
+	}
+	if len(env) == 0 {
+		all := child(svc, "wiring")
+		if all == nil || all.Kind != yaml.MappingNode || child(all, need) == nil {
+			return doc, nil
+		}
+		removeChild(all, need)
+		if len(all.Content) == 0 {
+			removeChild(svc, "wiring")
+		}
+		return encode(file)
+	}
+	all, err := editMapping(svc, "wiring")
+	if err != nil {
+		return nil, fmt.Errorf("%w: services.%s.%w", ErrInvalid, service, err)
+	}
+	vars := &yaml.Node{Kind: yaml.MappingNode}
+	for _, key := range sortedKeys(env) {
+		vars.Content = append(vars.Content, scalar(key), scalar(env[key]))
+	}
+	setChild(all, need, &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{scalar("env"), vars}})
 	return encode(file)
 }
 

@@ -135,6 +135,29 @@ beforeEach(() => {
           })
         case "/api/v1/projects/p/sources":
           return Response.json({ sources: [] })
+        case "/api/v1/projects/p/graph":
+          return Response.json({
+            project_id: "p",
+            sources: [],
+            excluded: [],
+            graph: {
+              version: 2,
+              services: [
+                {
+                  id: "svc:api",
+                  name: "api",
+                  path: "cmd/api",
+                  kind: "http-service",
+                  ecosystem: "go",
+                  env: ["PGHOST", "PGUSER", "PGPASSWORD", "PORT"].map(
+                    (name) => ({ name, confidence: "certain", evidence: [] })
+                  ),
+                },
+              ],
+              resources: [],
+              edges: [],
+            },
+          })
         case "/api/v1/catalog/endpoints":
           return Response.json({
             endpoints: [
@@ -462,9 +485,82 @@ it("connects a workspace service registered by its connection string", async () 
           existing_resource: "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
           needed_by: ["api"],
           enabled_in: "production",
+          // api's code reads these, so it's wired to them.
+          wiring: {
+            api: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+          },
         },
       },
       { environment: "production" },
     ])
   )
+})
+
+it("wires a service to the variables its code reads", async () => {
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("tab", { name: "Workspace services" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: /orders-db.*Connect/ })
+  )
+  await user.click(await screen.findByRole("checkbox", { name: /api/ }))
+  // It starts on what api's code reads, and shows what each will hold.
+  expect(
+    await screen.findByText("api's code reads PGHOST, PGUSER, PGPASSWORD.")
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("radio", { name: "Separate variables" })
+  ).toHaveAttribute("aria-checked", "true")
+  const gets = screen.getByRole("list", { name: "What api gets" })
+  expect(gets).toHaveTextContent("PGHOST=orders-db.example.com")
+  expect(gets).toHaveTextContent("PGPASSWORD=••••••")
+  // PORT is api's own, and the database isn't read: neither is wired.
+  expect(screen.getByRole("textbox", { name: "Port variable" })).toHaveValue("")
+  await user.click(
+    screen.getByRole("button", { name: "Add and plan production" })
+  )
+  await waitFor(() => expect(writes.length).toBeGreaterThan(0))
+  expect(writes[0].body).toMatchObject({
+    add_resource: {
+      existing_resource: "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
+      needed_by: ["api"],
+      wiring: {
+        api: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+      },
+    },
+  })
+})
+
+it("renames the one variable a service reads, and refuses a bad name", async () => {
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("tab", { name: "Workspace services" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: /orders-db.*Connect/ })
+  )
+  await user.click(await screen.findByRole("checkbox", { name: /api/ }))
+  await user.click(await screen.findByRole("radio", { name: "One variable" }))
+  const name = screen.getByRole("textbox", {
+    name: "Variable api reads orders-db in",
+  })
+  expect(name).toHaveValue("DATABASE_URL")
+  await user.clear(name)
+  await user.type(name, "9DB")
+  expect(screen.getByText(/9DB isn't a variable name/)).toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Add and plan production" })
+  ).toBeDisabled()
+  await user.clear(name)
+  await user.type(name, "ORDERS_DSN")
+  await user.click(
+    screen.getByRole("button", { name: "Add and plan production" })
+  )
+  await waitFor(() => expect(writes.length).toBeGreaterThan(0))
+  expect(writes[0].body).toMatchObject({
+    add_resource: { wiring: { api: { ORDERS_DSN: "url" } } },
+  })
 })

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -1879,8 +1880,90 @@ func orList(items []string) string {
 }
 
 // link gives a service the variables for what it needs, and orders it
-// after them.
+// after them, in the variables it's wired to read them in.
 func (p *planner) link(name string, a *Action) {
+	p.linkNeeds(name, a)
+	p.wire(name, a)
+}
+
+// wire puts each need a service wired in the variables it named, in place
+// of the one its kind names: a whole address under another name, or its
+// parts, such as PGHOST and PGPASSWORD. Parts are read from the address
+// at deploy. Only a database or cache's address has parts; a service is
+// read by its address, and a catalog or edge resource through its own
+// outputs, which wiring leaves alone.
+func (p *planner) wire(name string, a *Action) {
+	s := p.in.Manifest.Services[name]
+	if a.Service == nil || len(s.Wiring) == 0 {
+		return
+	}
+	wired := map[string]bool{}
+	for _, need := range slices.Sorted(maps.Keys(s.Wiring)) {
+		path := "services." + name + ".wiring." + need + ".env"
+		problem := func(code, format string, args ...any) {
+			p.problem(Finding{Code: code, Subject: ServiceSubject, Name: name, Path: path, Message: fmt.Sprintf(format, args...)})
+		}
+		env := s.Wiring[need].Env
+		var defaults, rest []EnvLink
+		for _, l := range a.Service.Env {
+			if l.From == need {
+				defaults = append(defaults, l)
+			} else {
+				rest = append(rest, l)
+			}
+		}
+		// Off in this environment: the service goes without it, as the
+		// need already warned.
+		if len(defaults) == 0 {
+			continue
+		}
+		parts := slices.ContainsFunc(slices.Collect(maps.Values(env)), func(o string) bool { return o != "url" })
+		base := defaults[0]
+		if r, ok := p.in.Manifest.Resources[need]; ok {
+			if _, composed := p.kinds().Kind(r.Kind); composed || base.Field != "" {
+				problem("wiring-unsupported", "%s gives %s its own variables, which can't be wired. Remove wiring.%s.", need, name, need)
+				continue
+			}
+			if parts && catalogconnect.EngineForKind(r.Kind) == "" {
+				problem("wiring-output", "%s is read as its url only: a %s's address has no host, port or user to read apart.", need, r.Kind)
+				continue
+			}
+		} else if parts {
+			problem("wiring-output", "%s is a service, read by its address: wire it as url.", need)
+			continue
+		}
+		if parts && base.Gateway != "" {
+			problem("wiring-gateway", "%s is behind the database gateway, which stands in for its whole address. Read it as url, or take it out of the gateway.", need)
+			continue
+		}
+		next := slices.Clone(rest)
+		for _, key := range slices.Sorted(maps.Keys(env)) {
+			l := base
+			l.Key, l.Part = key, ""
+			if env[key] != "url" {
+				l.Part = env[key]
+			}
+			next = append(next, l)
+		}
+		a.Service.Env = next
+		wired[need] = true
+	}
+	// A wired variable can't also be another need's.
+	from := map[string]string{}
+	for _, l := range a.Service.Env {
+		if prev, ok := from[l.Key]; ok && prev != l.From && (wired[prev] || wired[l.From]) {
+			p.problem(Finding{
+				Code: "wiring-conflict", Subject: ServiceSubject, Name: name, Path: "services." + name + ".wiring",
+				Message: fmt.Sprintf("%s would get %s from both %s and %s. Wire one of them to another variable.", name, l.Key, prev, l.From),
+			})
+			continue
+		}
+		from[l.Key] = l.From
+	}
+}
+
+// linkNeeds gives a service the variables its needs' kinds name.
+func (p *planner) linkNeeds(name string, a *Action) {
 	m := p.in.Manifest
 	needs := m.Services[name].Needs
 	base := "services." + name + ".needs"

@@ -139,7 +139,34 @@ test("a blocked plan can save a database mapping before the service is reachable
       { op: "delete", name: "old", resource: { kind: "postgres" } },
     ],
   } as Plan
+  // Its address, and each part of it a variable can hold.
   expect(planOutputOptions(blocked, "project")).toEqual([
     { label: "pg · connection string", value: "pg" },
+    { label: "pg · database", value: "pg.database" },
+    { label: "pg · host", value: "pg.host" },
+    { label: "pg · password", value: "pg.password" },
+    { label: "pg · port", value: "pg.port" },
+    { label: "pg · user", value: "pg.user" },
   ])
+})
+
+test("at workspace scope a workspace service is named by its own ID", () => {
+  const plan = {
+    actions: [
+      {
+        op: "create",
+        name: "orders",
+        resource: {
+          kind: "postgres",
+          existingResource: {
+            resourceId: "",
+            endpointId: "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
+          },
+        },
+      },
+    ],
+  } as unknown as Plan
+  const values = planOutputOptions(plan, "workspace").map((o) => o.value)
+  expect(values).toContain("endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w")
+  expect(values).toContain("endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w.host")
 })

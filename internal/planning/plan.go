@@ -397,6 +397,10 @@ type EnvLink struct {
 	// Options are what the service chose for a "consumer:" link, from
 	// services.<name>.need_options.<need>. No other link has them.
 	Options map[string]string `json:"options,omitempty"`
+	// Part is the piece of the address the variable holds, as the service
+	// wired it: host, port, user, password or database. Empty is the whole
+	// address.
+	Part string `json:"part,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.

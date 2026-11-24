@@ -117,7 +117,29 @@ func (c *DropletPostgresChecker) check(ctx context.Context, org, target string, 
 	return nil
 }
 
+// serviceResourceAddress is what app's variable for a resource holds: its
+// address, or the part of it the service is wired to read.
 func (r *Runner) serviceResourceAddress(ctx context.Context, d *Deployment, app string, services, resources map[string]*planning.Binding, link planning.EnvLink) (value string, extra map[string]linkExtra, err error) {
+	if link.Part == "" {
+		return r.wholeResourceAddress(ctx, d, app, services, resources, link)
+	}
+	// The gateway stands in for a whole address, so a part of one would
+	// reach past it.
+	if link.Gateway != "" {
+		return "", nil, fmt.Errorf("%s reads the %s of %s through the database gateway, which only stands in for a whole address; plan again", app, link.Part, link.From)
+	}
+	address, _, err := r.wholeResourceAddress(ctx, d, app, services, resources, link)
+	if err != nil {
+		return "", nil, err
+	}
+	part, err := connectionPart(address, link.Part)
+	if err != nil {
+		return "", nil, fmt.Errorf("%s reads the %s of %s: %w", app, link.Part, link.From, err)
+	}
+	return part, nil, nil
+}
+
+func (r *Runner) wholeResourceAddress(ctx context.Context, d *Deployment, app string, services, resources map[string]*planning.Binding, link planning.EnvLink) (value string, extra map[string]linkExtra, err error) {
 	if !link.DropletPostgres {
 		return r.resourceAddress(ctx, d, app, services, link)
 	}

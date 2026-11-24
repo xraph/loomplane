@@ -230,3 +230,38 @@ func TestAddAttachesAWorkspaceServiceInOneEnvironment(t *testing.T) {
 		t.Fatalf("api doesn't need it:\n%s", rev.YAML)
 	}
 }
+
+// Adding a resource can wire each service that needs it, in the same
+// revision, and a later edit rewires one.
+func TestAddResourceWiresItsConsumers(t *testing.T) {
+	rev, store, err := addEdit(t, appYAML, EditInput{AddResource: &NewResource{
+		Name: "orders", Kind: "postgres", NeededBy: []string{"api"},
+		Wiring: map[string]map[string]string{"api": {"PGHOST": "host", "PGPASSWORD": "password"}},
+	}})
+	if err != nil || store.writes != 1 {
+		t.Fatalf("err=%v writes=%d", err, store.writes)
+	}
+	if got := rev.Manifest.Services["api"].Wiring["orders"].Env; got["PGHOST"] != "host" || got["PGPASSWORD"] != "password" || len(got) != 2 {
+		t.Fatalf("wiring:\n%s", rev.YAML)
+	}
+	if _, _, err = addEdit(t, appYAML, EditInput{AddResource: &NewResource{
+		Name: "orders", Kind: "postgres", NeededBy: []string{"api"},
+		Wiring: map[string]map[string]string{"worker": {"DB": "url"}},
+	}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("wired a service that doesn't need it: %v", err)
+	}
+
+	store.current = rev
+	svc := NewService(store, editProjects{}, editAuth{}, nil)
+	next, _, err := svc.Edit(context.Background(), security.Principal{}, "p", EditInput{Wire: &ServiceWiring{Service: "api", Need: "orders", Env: map[string]string{"DATABASE_DSN": "url"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := next.Manifest.Services["api"].Wiring["orders"].Env; len(got) != 1 || got["DATABASE_DSN"] != "url" {
+		t.Fatalf("rewired:\n%s", next.YAML)
+	}
+	cleared, _, err := svc.Edit(context.Background(), security.Principal{}, "p", EditInput{Wire: &ServiceWiring{Service: "api", Need: "orders"}})
+	if err != nil || cleared.Manifest.Services["api"].Wiring != nil {
+		t.Fatalf("cleared: %v\n%s", err, cleared.YAML)
+	}
+}

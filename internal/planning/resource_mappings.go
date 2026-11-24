@@ -5,7 +5,12 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/xraph/loomplane/internal/catalogconnect"
 )
+
+// addressParts are the parts of an address a variable can hold.
+var addressParts = []string{"host", "port", "user", "password", "database"}
 
 // A mapping can only name an output the reviewed service already receives.
 // A workspace reference to an inventory ID also works across different manifest names.
@@ -54,11 +59,26 @@ func (p *planner) mapResourceOutputs(a *Action) {
 			p.problem(Finding{Code: "resource-variable-ambiguous", Subject: ServiceSubject, Name: a.Name, Path: "variables." + key, Message: fmt.Sprintf("More than one attachment supplies %s to %s. Choose its manifest name for %s.", ref, a.Name, key)})
 			continue
 		}
+		// A database or cache's address has parts a variable can hold, as
+		// a wired one does.
+		if selected == nil && slices.Contains(addressParts, field) {
+			for i := range links {
+				link := &links[i]
+				if link.Subject == ResourceSubject && link.Field == "" && link.Part == "" && link.Gateway == "" &&
+					(link.From == resource || p.in.Manifest.Resources[link.From].ExistingResource == resource) &&
+					catalogconnect.EngineForKind(p.in.Manifest.Resources[link.From].Kind) != "" {
+					part := *link
+					part.Part = field
+					selected = &part
+					break
+				}
+			}
+		}
 		if selected == nil {
 			p.problem(Finding{Code: "resource-variable-output", Subject: ServiceSubject, Name: a.Name, Path: "variables." + key, Message: fmt.Sprintf("Choose an available output from %s for %s on %s.", resource, key, a.Name)})
 			continue
 		}
-		if selected.Key == key {
+		if selected.Key == key && selected.Part == "" {
 			continue
 		}
 		if slices.ContainsFunc(links, func(link EnvLink) bool { return link.Key == key }) {

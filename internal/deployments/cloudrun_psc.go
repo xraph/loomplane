@@ -131,7 +131,9 @@ func prepareCloudRunPSC(job *Job) (*cloudRunPSC, error) {
 		if !ok || link.Subject != planning.ResourceSubject {
 			continue
 		}
-		if link.Key == "" || link.Address != "" || link.Field != "" && link.Field != ResourceURL || !job.Secrets[link.Key] {
+		// The private connection rewrites a whole address; a part of one
+		// can't be rewritten the same way.
+		if link.Key == "" || link.Address != "" || link.Part != "" || link.Field != "" && link.Field != ResourceURL || !job.Secrets[link.Key] {
 			return nil, errCloudRunPSCReview
 		}
 		if prior, exists := keys[link.Key]; exists && prior != link.From {

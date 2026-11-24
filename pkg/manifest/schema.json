@@ -893,6 +893,31 @@
             }
           }
         },
+        "wiring": {
+          "description": "Which variables this service reads a need in, by need, instead of the one the need's kind names. A need has to be listed in needs.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["env"],
+            "properties": {
+              "env": {
+                "description": "Each variable the service reads, and what it holds: the whole url, or its host, port, user, password or database.",
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": {
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,254}$"
+                },
+                "additionalProperties": {
+                  "enum": ["url", "host", "port", "user", "password", "database"]
+                }
+              }
+            }
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",
@@ -987,9 +1012,9 @@
           }
         },
         "existing_resource": {
-          "description": "Synced provider resource to attach without taking lifecycle ownership.",
+          "description": "Something to attach without taking lifecycle ownership: a synced provider resource (providerresource_...) or a workspace service registered by its connection string (endpoint_...).",
           "type": "string",
-          "pattern": "^providerresource_[a-f0-9]{64}$"
+          "pattern": "^(providerresource_[a-f0-9]{64}|endpoint_[0-9a-z]{26})$"
         },
         "kind": {
           "$ref": "#/$defs/kind"

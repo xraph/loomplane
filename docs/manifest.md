@@ -88,9 +88,10 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `size`               | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
 | `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs).                                                                                                                                                                                                                                                                                                         |
+| `wiring`             | Which variables this service reads a need in, by need: its whole address under another name, or its host, port, user, password and database apart. See [Choosing the variables a service reads](#choosing-the-variables-a-service-reads). |
 | `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `farp`               | Opts the service in to [FARP discovery](#farp-discovery) by an Octopus gateway.                                                                                                                                                                                                                                                                                                                                                                  |
-| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                |
+| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs`, `need_options` and `wiring`.                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
 
@@ -222,6 +223,38 @@ resources:
 The need has to be in `needs`, or the manifest is invalid. Option names are lower case letters, digits and underscores, start with a letter, and run to 32 characters at most. A value is up to 200 characters and can't hold a newline or any other control character. Which options a kind accepts, and whether a value fits, is checked when you plan.
 
 The dashboard and `POST /projects/:id/manifest/edits` can change these in place without touching your comments. `link` adds a need to a service, with options if you give them. Link again with new options and they replace the old ones as a whole; link again with none and they stay. `unlink` removes the need and its options, and fails if the service doesn't need it. `set_use` sets one dependency on a catalog resource and leaves the rest of its `uses` alone. Send one of the three per edit.
+
+#### Choosing the variables a service reads
+
+Which variables a service reads a database or cache in, by need. Without it, a need's address goes in the variable its kind names, such as `DATABASE_URL` for Postgres or `REDIS_URL` for Redis:
+
+```yaml
+services:
+  api:
+    source: services/api
+    needs: [orders]
+    wiring:
+      orders:
+        env:
+          PGHOST: host
+          PGPORT: port
+          PGUSER: user
+          PGPASSWORD: password
+          PGDATABASE: database
+  worker:
+    source: services/worker
+    needs: [orders]
+    wiring:
+      orders:
+        env:
+          ORDERS_DSN: url
+```
+
+Each variable holds the whole connection string (`url`) or one part of it: `host`, `port`, `user`, `password` or `database`. Loomplane reads the parts from the address when it deploys, so they always agree with it. A wired need gets only the variables you name, not its kind's as well. The need has to be in `needs`, a variable name is letters, digits and underscores not starting with a digit, and a plan refuses a name two needs would both set.
+
+Parts are for databases and caches: Postgres, MySQL, MariaDB, Redis, Valkey and MongoDB. Another service, or anything else, can only be renamed with `url`. A catalog kind that gives its own variables can't be wired, and a database behind the database gateway is read as `url`, since the gateway stands in for the whole address. `environments` can't change `wiring`.
+
+The dashboard and `POST /projects/:id/manifest/edits` set it with `wire` (`service`, `need` and `env`; no `env` removes it), and `add_resource` takes `wiring` by service for the services in its `needed_by`.
 
 ## gateways
 

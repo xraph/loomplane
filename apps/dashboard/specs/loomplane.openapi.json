@@ -28024,6 +28024,10 @@
               },
               "version": {
                 "type": "string"
+              },
+              "wiring": {
+                "type": "object",
+                "additionalProperties": true
               }
             }
           },
@@ -28248,6 +28252,25 @@
                 "additionalProperties": true
               },
               "target": {
+                "type": "string"
+              }
+            }
+          },
+          "wire": {
+            "type": "object",
+            "required": [
+              "service",
+              "need"
+            ],
+            "properties": {
+              "env": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "need": {
+                "type": "string"
+              },
+              "service": {
                 "type": "string"
               }
             }
@@ -28567,6 +28590,9 @@
           "options": {
             "type": "object",
             "additionalProperties": true
+          },
+          "part": {
+            "type": "string"
           },
           "subject": {
             "type": "string"

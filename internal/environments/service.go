@@ -169,7 +169,10 @@ func (s *Service) CreateProject(ctx context.Context, p security.Principal, proje
 	return s.create(ctx, p, v, in.Value)
 }
 
-var outputReference = regexp.MustCompile(`^([a-z][a-z0-9-]{0,39}|providerresource_[0-9a-f]{64})(\.[A-Za-z0-9_][A-Za-z0-9_-]{0,254})?$`)
+// outputReference names an output: a manifest resource's, or, at
+// workspace scope, an attached provider resource's or workspace service's
+// by its ID, then optionally .<output>.
+var outputReference = regexp.MustCompile(`^([a-z][a-z0-9-]{0,39}|providerresource_[0-9a-f]{64}|endpoint_[0-9a-z]{26})(\.[A-Za-z0-9_][A-Za-z0-9_-]{0,254})?$`)
 
 func validateOutput(ref, value string, secret bool) error {
 	if ref != "" && (!outputReference.MatchString(ref) || value != "" || secret) {

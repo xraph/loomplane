@@ -2311,6 +2311,7 @@ export interface EditInputBody {
   target?: string;
   uses?: Record<string, any>;
   version?: string;
+  wiring?: Record<string, any>;
 };
   addService?: {
   cloud?: string;
@@ -2376,6 +2377,11 @@ export interface EditInputBody {
   resource: string;
   settings?: Record<string, any>;
   target?: string;
+};
+  wire?: {
+  env?: Record<string, any>;
+  need: string;
+  service: string;
 };
 }
 
@@ -2461,6 +2467,7 @@ export interface EnvLink {
   gateway?: string;
   key: string;
   options?: Record<string, any>;
+  part?: string;
   subject: string;
 }
 

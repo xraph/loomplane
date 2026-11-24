@@ -77,7 +77,7 @@ For larger setups, give your targets names or tags in an organization Cloud and 
 
 ## Environments and overrides
 
-Services, resources and gateways accept an `environments` map that overrides `provider`, `region` or `enabled` for one environment. A service also takes the other settings (scale, size, port and so on) there. It can't override `source`, `kind`, `build`, `needs` or `need_options`.
+Services, resources and gateways accept an `environments` map that overrides `provider`, `region` or `enabled` for one environment. A service also takes the other settings (scale, size, port and so on) there. It can't override `source`, `kind`, `build`, `needs`, `need_options` or `wiring`.
 
 An `environments.<name>.release` block sets how that environment's releases go live: all at once, blue/green or as a canary with its steps, hold and health thresholds. See [Canary releases](/docs/concepts/canary-releases) and the [loomplane.yaml reference](/docs/reference/loomplane-yaml#environments).
 
