@@ -86,4 +86,19 @@ func TestPostgresProberAgainstAServer(t *testing.T) {
 	if err != nil || !slices.Equal(got.Problems, []string{"loomplane_missing_library isn't in shared_preload_libraries", want[1]}) {
 		t.Fatalf("with pg_read_all_settings: %+v %v", got, err)
 	}
+
+	// Asked, a check says what the credentials may do: the role can do
+	// neither, until it may create databases.
+	plain := recipes.Requirement{Engine: "postgres"}
+	got, err = PostgresProber{}.Probe(WithCapabilities(ctx), dial, u.String(), plain)
+	if err != nil || got.Capabilities == nil || *got.Capabilities != (Capabilities{}) {
+		t.Fatalf("unprivileged capabilities: %+v %v", got, err)
+	}
+	if _, err = admin.Exec(ctx, "ALTER ROLE "+pgx.Identifier{role}.Sanitize()+" CREATEDB"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = PostgresProber{}.Probe(WithCapabilities(ctx), dial, u.String(), plain)
+	if err != nil || got.Capabilities == nil || *got.Capabilities != (Capabilities{CreateDatabase: true}) {
+		t.Fatalf("CREATEDB capabilities: %+v %v", got, err)
+	}
 }

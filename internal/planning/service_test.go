@@ -91,13 +91,16 @@ type fakeEndpoints struct {
 	consumers []string
 	// down is a target the endpoint isn't reachable from.
 	down string
+	// sharedWith restricts the endpoint to these projects when set.
+	sharedWith []string
 }
 
 func (f *fakeEndpoints) Endpoint(_ context.Context, orgID, id string) (*catalogconnect.Endpoint, error) {
 	if orgID != "org" || id != prodPG {
 		return nil, catalogconnect.ErrNotFound
 	}
-	return &catalogconnect.Endpoint{ID: prodPG, OrgID: "org", Name: "prod-pg", Engine: "postgres", Host: "db.example", Port: 5432}, nil
+	return &catalogconnect.Endpoint{ID: prodPG, OrgID: "org", Name: "prod-pg", Engine: "postgres", Host: "db.example", Port: 5432,
+		Restricted: f.sharedWith != nil, Projects: f.sharedWith}, nil
 }
 
 func (f *fakeEndpoints) Check(ctx context.Context, orgID, id string, req recipes.Requirement, dial catalogconnect.DialFunc) (*catalogconnect.Report, error) {
@@ -153,7 +156,7 @@ func TestCreatePlanChecksEndpointsThroughTheTarget(t *testing.T) {
 	plan := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
 
 	req, consumer := *recipestest.Sample().Dependencies[0].External, catalogconnect.ConsumerOf(recipestest.Sample(), "postgres")
-	checks := service.checkEndpoints(t.Context(), plan.OrgID, plan.Environment, parse(t, doc))
+	checks := service.checkEndpoints(t.Context(), plan.OrgID, plan.ProjectID, plan.Environment, parse(t, doc))
 	// Targets are dialed in ID order.
 	if !slices.Equal(dialer.asked, []string{targetB, targetA}) || dialer.closed != 2 {
 		t.Fatalf("dialer asked for %v, closed %d", dialer.asked, dialer.closed)
@@ -203,6 +206,35 @@ func TestCreatePlanChecksEndpointsThroughTheTarget(t *testing.T) {
 	}
 	if len(dialer.asked) != 0 || result.Executable || len(result.Problems) != 4 {
 		t.Fatalf("unchecked: dialed %v, problems %+v", dialer.asked, result.Problems)
+	}
+}
+
+// A workspace service shared only with other projects isn't checked, so
+// its credentials never go out for this one, and the plan says why.
+func TestCreatePlanRefusesAnEndpointNotSharedWithTheProject(t *testing.T) {
+	doc := "version: 1\nresources:\n  app: {kind: sample, provider: server, target: " + targetA + ", uses: {postgres: {external: " + prodPG + "}}}\n"
+	endpoints, dialer := &fakeEndpoints{sharedWith: []string{"another-project"}}, &fakeDialer{}
+	service := NewService(Deps{
+		Store: catalogStore{}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}}, Providers: providers.Registry(),
+		Connections: serverClouds{}, Kinds: recipestest.Registry(t), Endpoints: endpoints, Dialer: dialer,
+	})
+	plan := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
+	result, _, err := service.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dialer.asked) != 0 || len(endpoints.checks) != 0 {
+		t.Fatalf("an unshared endpoint was dialed: %v %v", dialer.asked, endpoints.checks)
+	}
+	if result.Executable || len(result.Problems) != 1 || result.Problems[0].Code != "catalog-endpoint-unshared" ||
+		!strings.Contains(result.Problems[0].Message, "prod-pg isn't shared with this project") {
+		t.Fatalf("problems: %+v", result.Problems)
+	}
+
+	// Shared with this project, it's checked as before.
+	endpoints.sharedWith = []string{"project"}
+	if result, _, err = service.compute(t.Context(), plan); err != nil || !result.Executable || len(endpoints.checks) != 1 {
+		t.Fatalf("shared: %+v %v %v", result.Problems, err, endpoints.checks)
 	}
 }
 

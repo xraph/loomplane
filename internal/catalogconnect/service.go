@@ -50,6 +50,9 @@ type Service struct {
 	// deleted, by its Vault key and the error deleting it, so the orphan
 	// can be found and removed. It's never given the DSN. It may be nil.
 	OrphanedDSN func(ctx context.Context, vaultKey string, err error)
+	// ProjectsIn checks the projects a workspace service is shared with
+	// are the organization's. It may be nil.
+	ProjectsIn ProjectsIn
 }
 
 // NewService returns a Service.
@@ -64,6 +67,17 @@ const maxName = 100
 // returned Endpoint hold only the parts that aren't secret. It needs
 // SecretManage.
 func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInput) (e *Endpoint, err error) {
+	return s.createAs(ctx, p, in, OriginRegistered)
+}
+
+// CreateForResource registers an endpoint a provider resource's Connect
+// makes for itself. It's Create, except the endpoint stays the
+// resource's: the workspace doesn't edit, share or rotate it.
+func (s *Service) CreateForResource(ctx context.Context, p security.Principal, in CreateInput) (*Endpoint, error) {
+	return s.createAs(ctx, p, in, OriginProvider)
+}
+
+func (s *Service) createAs(ctx context.Context, p security.Principal, in CreateInput, origin string) (e *Endpoint, err error) {
 	defer func() {
 		event := AuditEvent{Action: AuditCreate, Principal: p, Engine: in.Engine, Address: dsnAddress(in.DSN), Outcome: outcomeOf(err)}
 		if err == nil {
@@ -71,10 +85,12 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 		}
 		s.record(ctx, event)
 	}()
-	return s.create(ctx, p, in)
+	return s.create(ctx, p, in, func(e *Endpoint) { e.Origin = origin })
 }
 
-func (s *Service) create(ctx context.Context, p security.Principal, in CreateInput) (*Endpoint, error) {
+// create stores an endpoint. Each fill writes more of the row before it's
+// stored, such as a workspace service's details.
+func (s *Service) create(ctx context.Context, p security.Principal, in CreateInput, fill ...func(*Endpoint)) (*Endpoint, error) {
 	if err := s.authz.Require(ctx, p, security.SecretManage, ""); err != nil {
 		return nil, err
 	}
@@ -82,12 +98,15 @@ func (s *Service) create(ctx context.Context, p security.Principal, in CreateInp
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return nil, fmt.Errorf("%w: an endpoint needs a name of at most %d characters", ErrInvalid, maxName)
 	}
-	if in.Engine != EnginePostgres && in.Engine != EngineRedis && in.Engine != EngineMySQL && in.Engine != EngineS3 && in.Engine != EngineGCS && in.Engine != EngineR2 && !IsAPIEngine(in.Engine) && !IsEngineAccessEngine(in.Engine) {
-		return nil, fmt.Errorf("%w: Loomplane connects postgres, mysql, redis, search and bucket endpoints, not %q", ErrInvalid, in.Engine)
+	if !knownEngine(in.Engine) {
+		return nil, fmt.Errorf("%w: Loomplane connects postgres, mysql, redis, mongodb, search and bucket endpoints, not %q", ErrInvalid, in.Engine)
 	}
-	e := &Endpoint{OrgID: p.OrgID, Name: name, Engine: in.Engine, CreatedBy: p.UserID, CreatedAt: s.now().UTC(), Revision: 1}
+	e := &Endpoint{OrgID: p.OrgID, Name: name, Engine: in.Engine, CreatedBy: p.UserID, CreatedAt: s.now().UTC(), Revision: 1, Origin: OriginRegistered}
 	if err := parseDSN(e, in.DSN); err != nil {
 		return nil, err
+	}
+	for _, f := range fill {
+		f(e)
 	}
 	id, err := typeid.Generate("endpoint")
 	if err != nil {
@@ -146,6 +165,14 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) (
 			s.OrphanedDSN(ctx, DSNKey(p.OrgID, id), err)
 		}
 		return fmt.Errorf("the endpoint is gone, but its DSN is still in Vault: %w", err)
+	}
+	// An admin credential goes with it. Deleting one that was never kept
+	// is no error.
+	if err := s.secrets.Delete(ctx, AdminDSNKey(p.OrgID, id)); err != nil {
+		if s.OrphanedDSN != nil {
+			s.OrphanedDSN(ctx, AdminDSNKey(p.OrgID, id), err)
+		}
+		return fmt.Errorf("the endpoint is gone, but its admin credential is still in Vault: %w", err)
 	}
 	return nil
 }

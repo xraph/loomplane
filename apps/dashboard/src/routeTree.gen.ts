@@ -78,6 +78,7 @@ import { Route as IntegrationsGitlabCallbackRouteImport } from "./routes/integra
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
 import { Route as ProjectsIdIndexRouteImport } from "./routes/projects.$id.index"
 import { Route as ProjectsIdFleetRouteImport } from "./routes/projects.$id.fleet"
+import { Route as ServicesRegisteredIdRouteImport } from "./routes/services.registered.$id"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id.catalog.$resource"
 import { Route as ProjectsIdDeploymentsRunIdRouteImport } from "./routes/projects.$id.deployments.$runId"
 import { Route as ProjectsIdServicesServiceRouteImport } from "./routes/projects.$id.services.$service"
@@ -433,6 +434,11 @@ const ProjectsIdFleetRoute = ProjectsIdFleetRouteImport.update({
   path: "/fleet",
   getParentRoute: () => ProjectsIdRoute,
 } as any)
+const ServicesRegisteredIdRoute = ServicesRegisteredIdRouteImport.update({
+  id: "/services/registered/$id",
+  path: "/services/registered/$id",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIdCatalogResourceRoute =
   ProjectsIdCatalogResourceRouteImport.update({
     id: "/catalog/$resource",
@@ -531,6 +537,7 @@ export interface FileRoutesByFullPath {
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/fleet": typeof ProjectsIdFleetRoute
+  "/services/registered/$id": typeof ServicesRegisteredIdRoute
   "/agent/reports/": typeof AgentReportsIndexRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id/": typeof ProjectsIdIndexRoute
@@ -606,6 +613,7 @@ export interface FileRoutesByTo {
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/fleet": typeof ProjectsIdFleetRoute
+  "/services/registered/$id": typeof ServicesRegisteredIdRoute
   "/agent/reports": typeof AgentReportsIndexRoute
   "/ai/models": typeof AiModelsIndexRoute
   "/projects/$id": typeof ProjectsIdIndexRoute
@@ -683,6 +691,7 @@ export interface FileRoutesById {
   "/integrations/gitlab/callback": typeof IntegrationsGitlabCallbackRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/fleet": typeof ProjectsIdFleetRoute
+  "/services/registered/$id": typeof ServicesRegisteredIdRoute
   "/agent/reports/": typeof AgentReportsIndexRoute
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id/": typeof ProjectsIdIndexRoute
@@ -761,6 +770,7 @@ export interface FileRouteTypes {
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
     | "/projects/$id/fleet"
+    | "/services/registered/$id"
     | "/agent/reports/"
     | "/ai/models/"
     | "/projects/$id/"
@@ -836,6 +846,7 @@ export interface FileRouteTypes {
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
     | "/projects/$id/fleet"
+    | "/services/registered/$id"
     | "/agent/reports"
     | "/ai/models"
     | "/projects/$id"
@@ -912,6 +923,7 @@ export interface FileRouteTypes {
     | "/integrations/gitlab/callback"
     | "/integrations/oauth/callback"
     | "/projects/$id/fleet"
+    | "/services/registered/$id"
     | "/agent/reports/"
     | "/ai/models/"
     | "/projects/$id/"
@@ -988,6 +1000,7 @@ export interface RootRouteChildren {
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsGitlabCallbackRoute: typeof IntegrationsGitlabCallbackRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
+  ServicesRegisteredIdRoute: typeof ServicesRegisteredIdRoute
   AgentReportsIndexRoute: typeof AgentReportsIndexRoute
   AiModelsIndexRoute: typeof AiModelsIndexRoute
 }
@@ -1477,6 +1490,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdFleetRouteImport
       parentRoute: typeof ProjectsIdRoute
     }
+    "/services/registered/$id": {
+      id: "/services/registered/$id"
+      path: "/services/registered/$id"
+      fullPath: "/services/registered/$id"
+      preLoaderRoute: typeof ServicesRegisteredIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/projects/$id/catalog/$resource": {
       id: "/projects/$id/catalog/$resource"
       path: "/catalog/$resource"
@@ -1606,6 +1626,7 @@ const rootRouteChildren: RootRouteChildren = {
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsGitlabCallbackRoute: IntegrationsGitlabCallbackRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
+  ServicesRegisteredIdRoute: ServicesRegisteredIdRoute,
   AgentReportsIndexRoute: AgentReportsIndexRoute,
   AiModelsIndexRoute: AiModelsIndexRoute,
 }

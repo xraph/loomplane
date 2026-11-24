@@ -6,6 +6,7 @@ func newEndpointChecker(endpoints *catalogconnect.Service) *catalogconnect.Check
 	checker := &catalogconnect.Checker{Endpoints: endpoints, Probers: map[string]catalogconnect.Prober{
 		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
 		catalogconnect.EngineMySQL:         catalogconnect.MySQLProber{},
+		catalogconnect.EngineMongoDB:       catalogconnect.MongoProber{},
 		catalogconnect.EngineElasticsearch: catalogconnect.SearchProber{}, catalogconnect.EngineOpenSearch: catalogconnect.SearchProber{},
 		catalogconnect.EngineFalkorDB: catalogconnect.FalkorDBProber{},
 		catalogconnect.EngineS3:       catalogconnect.BucketProber{}, catalogconnect.EngineGCS: catalogconnect.BucketProber{},

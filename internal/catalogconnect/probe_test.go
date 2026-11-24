@@ -38,10 +38,10 @@ type fakePg struct {
 	// preload is SHOW shared_preload_libraries; preloadErr refuses it.
 	preload    string
 	preloadErr error
-	// super and createRole are the connection role's rolsuper and
-	// rolcreaterole.
-	super, createRole bool
-	queried           []string
+	// super, createDB and createRole are the connection role's rolsuper,
+	// rolcreatedb and rolcreaterole.
+	super, createDB, createRole bool
+	queried                     []string
 }
 
 func (f *fakePg) ServerVersion(context.Context) (string, error) { return f.version, nil }
@@ -65,6 +65,11 @@ func (f *fakePg) PreloadLibraries(context.Context) (string, error) {
 func (f *fakePg) RoleRights(context.Context) (bool, bool, error) {
 	f.queried = append(f.queried, "role")
 	return f.super, f.createRole, nil
+}
+
+func (f *fakePg) CreateRights(context.Context) (bool, bool, bool, error) {
+	f.queried = append(f.queried, "create")
+	return f.super, f.createDB, f.createRole, nil
 }
 
 func (f *fakePg) Close(context.Context) error {

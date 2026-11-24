@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +22,52 @@ const (
 	EnginePostgres = "postgres"
 	EngineMySQL    = "mysql"
 	EngineRedis    = "redis"
+	EngineMongoDB  = "mongodb"
 )
+
+// knownEngine reports whether Loomplane can register and check an endpoint
+// of engine.
+func knownEngine(engine string) bool {
+	switch engine {
+	case EnginePostgres, EngineRedis, EngineMySQL, EngineMongoDB, EngineS3, EngineGCS, EngineR2:
+		return true
+	}
+	return IsAPIEngine(engine) || IsEngineAccessEngine(engine)
+}
+
+// Where an endpoint came from: a person registered it by its connection
+// string, or a provider resource's Connect made it for that resource.
+const (
+	OriginRegistered = "registered"
+	OriginProvider   = "provider"
+)
+
+// Capabilities are what an endpoint's credentials may do beyond using it,
+// which decide how a service can share it: in a database of its own, or
+// as a user of its own.
+type Capabilities struct {
+	// CreateDatabase is whether the credentials may create a database.
+	CreateDatabase bool `json:"create_database"`
+	// CreateUser is whether they may create users (roles) and grant them
+	// access.
+	CreateUser bool `json:"create_user"`
+}
+
+// LastCheck is the newest check of a stored endpoint, from the target it
+// was checked from.
+type LastCheck struct {
+	At       time.Time `json:"at"`
+	OK       bool      `json:"ok"`
+	Version  string    `json:"version,omitempty"`
+	Problems []string  `json:"problems,omitempty"`
+	Notes    []string  `json:"notes,omitempty"`
+	// Target is the connection the check dialed from.
+	Target string `json:"target,omitempty"`
+	// Capabilities are the stored credentials', and Admin the admin
+	// credential's when there is one.
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+	Admin        *Capabilities `json:"admin,omitempty"`
+}
 
 // TLS modes an endpoint is reached with.
 const (
@@ -52,7 +98,45 @@ type Endpoint struct {
 	TLS       string    `json:"tls"` // "disable", "require" or "verify-full"
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
-	Revision  int       `json:"revision"`
+	// Revision moves each time the credentials are replaced.
+	Revision int `json:"revision"`
+
+	// Origin is OriginRegistered or OriginProvider. Only registered
+	// endpoints are edited, shared and rotated through the workspace.
+	Origin string `json:"origin"`
+	// Description says what it is for, in a line.
+	Description string `json:"description"`
+	// EnvironmentLabel is the environment it serves, such as production.
+	EnvironmentLabel string `json:"environment_label"`
+	// Restricted limits it to Projects. Unrestricted, every project in the
+	// organization may use it.
+	Restricted bool     `json:"restricted"`
+	Projects   []string `json:"projects"`
+	// AdminSet is whether an admin credential is kept beside the
+	// endpoint's own, for creating databases and users for services.
+	AdminSet  bool       `json:"admin_set"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	LastCheck *LastCheck `json:"last_check,omitempty"`
+}
+
+// SharedWith reports whether projectID may use the endpoint.
+func (e *Endpoint) SharedWith(projectID string) bool {
+	return !e.Restricted || slices.Contains(e.Projects, projectID)
+}
+
+// sameConnection reports whether a and b are one endpoint reached the same
+// way at the same revision. Its name, description, sharing and last check may
+// differ: none of them change what a connection to it reaches.
+func sameConnection(a, b *Endpoint) bool {
+	return a.ID == b.ID && a.OrgID == b.OrgID && a.Engine == b.Engine &&
+		a.Host == b.Host && a.Port == b.Port && a.Database == b.Database && a.Username == b.Username &&
+		a.TLS == b.TLS && a.CreatedBy == b.CreatedBy && a.CreatedAt.Equal(b.CreatedAt) && a.Revision == b.Revision
+}
+
+// Registered reports whether a person registered the endpoint, rather than
+// a provider resource's Connect.
+func (e *Endpoint) Registered() bool {
+	return e.Origin == "" || e.Origin == OriginRegistered
 }
 
 // CreateInput registers an endpoint.
@@ -71,6 +155,11 @@ type CreateInput struct {
 // DSNKey is where an endpoint's DSN is kept in Vault.
 func DSNKey(orgID, id string) string {
 	return orgID + "/catalog-endpoints/" + id + "/dsn"
+}
+
+// AdminDSNKey is where an endpoint's admin credential is kept in Vault.
+func AdminDSNKey(orgID, id string) string {
+	return orgID + "/catalog-endpoints/" + id + "/admin-dsn"
 }
 
 // address is host:port, the only part of an endpoint its problems name.
@@ -99,6 +188,9 @@ func parseDSN(e *Endpoint, dsn string) error {
 	}
 	if e.Engine == EngineMySQL {
 		return parseMySQLDSN(e, dsn)
+	}
+	if e.Engine == EngineMongoDB {
+		return parseMongoDSN(e, dsn)
 	}
 	u, err := url.Parse(strings.TrimSpace(dsn))
 	if err != nil || u.Opaque != "" || u.Scheme == "" {

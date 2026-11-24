@@ -217,7 +217,7 @@ func TestEndpointsAreCheckedFromTheEnvironmentsTarget(t *testing.T) {
 			Store: catalogStore{}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}}, Providers: providers.Registry(),
 			Connections: serverClouds{}, Kinds: recipestest.Registry(t), Endpoints: endpoints, Dialer: dialer,
 		})
-		checks := service.checkEndpoints(t.Context(), "org", env, parse(t, doc))
+		checks := service.checkEndpoints(t.Context(), "org", "", env, parse(t, doc))
 		if !slices.Equal(dialer.asked, []string{want}) {
 			t.Fatalf("%s: dialed %v, want %s", env, dialer.asked, want)
 		}

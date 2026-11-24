@@ -25,6 +25,9 @@ type Report struct {
 	Version  string   `json:"version,omitempty"`
 	Missing  []string `json:"missing,omitempty"`
 	Problems []string `json:"problems,omitempty"`
+	// Capabilities are what the credentials may do, when the check was
+	// asked for them (WithCapabilities) and the engine can tell.
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
 }
 
 // Prober checks one engine's endpoint. Its errors never carry the DSN.
@@ -43,7 +46,7 @@ type Checker struct {
 	Probers map[string]Prober
 }
 
-var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineS3: "S3", EngineGCS: "Google Cloud Storage", EngineElasticsearch: "Elasticsearch", EngineOpenSearch: "OpenSearch", EngineFalkorDB: "FalkorDB"}
+var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL", EngineMongoDB: "MongoDB", EngineS3: "S3", EngineGCS: "Google Cloud Storage", EngineElasticsearch: "Elasticsearch", EngineOpenSearch: "OpenSearch", EngineFalkorDB: "FalkorDB"}
 
 // EngineTitle names an engine the way checks word it: "PostgreSQL",
 // "Redis".
@@ -87,8 +90,8 @@ func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirem
 	if dial == nil {
 		return nil, errors.New("check a DSN: no dialer")
 	}
-	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL && req.Engine != EngineS3 && req.Engine != EngineGCS && req.Engine != EngineR2 && !IsAPIEngine(req.Engine) && !IsEngineAccessEngine(req.Engine) {
-		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis, search, FalkorDB and bucket endpoints, not %q", ErrInvalid, req.Engine)
+	if !knownEngine(req.Engine) {
+		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql, redis, mongodb, search, FalkorDB and bucket endpoints, not %q", ErrInvalid, req.Engine)
 	}
 	dsn = strings.TrimSpace(dsn)
 	e := &Endpoint{Engine: req.Engine}
@@ -199,6 +202,21 @@ func WithConsumer(ctx context.Context, c Consumer) context.Context {
 	return context.WithValue(ctx, consumerKey{}, c)
 }
 
+type capabilitiesKey struct{}
+
+// WithCapabilities returns a context whose checks also find what the
+// credentials may do: create databases, create users. Only a workspace
+// service's checks ask, since it costs a query or two more.
+func WithCapabilities(ctx context.Context) context.Context {
+	return context.WithValue(ctx, capabilitiesKey{}, true)
+}
+
+// wantsCapabilities reports whether WithCapabilities asked.
+func wantsCapabilities(ctx context.Context) bool {
+	on, ok := ctx.Value(capabilitiesKey{}).(bool)
+	return ok && on
+}
+
 // ConsumerFrom is the consumer WithConsumer set, or the zero Consumer.
 func ConsumerFrom(ctx context.Context) Consumer {
 	if c, ok := ctx.Value(consumerKey{}).(Consumer); ok {
@@ -228,12 +246,14 @@ type CheckResult struct {
 	// Notes are caveats that don't fail the check, such as a cluster's
 	// check running from Loomplane.
 	Notes []string `json:"notes,omitempty"`
+	// Capabilities are what the credentials may do, when asked for.
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
 }
 
 // Result is the report as a CheckResult. A report that found no version
 // and nothing wrong never reached a usable endpoint, so it fails.
 func (r *Report) Result() CheckResult {
-	out := CheckResult{Version: r.Version, Missing: slices.Clone(r.Missing), Problems: slices.Clone(r.Problems)}
+	out := CheckResult{Version: r.Version, Missing: slices.Clone(r.Missing), Problems: slices.Clone(r.Problems), Capabilities: r.Capabilities}
 	if r.Version == "" && len(r.Problems) == 0 && len(r.Missing) == 0 {
 		out.Problems = []string{"the endpoint didn't say which version it runs"}
 	}

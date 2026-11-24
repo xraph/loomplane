@@ -15,6 +15,10 @@ import { QueryError } from "@/components/query-error"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  RegisterButton,
+  RegisteredServices,
+} from "@/components/workspace-services/registered-list"
 import { useOrganization } from "@/lib/organization"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
@@ -36,16 +40,20 @@ export function Services() {
           title="Catalog"
           description="Databases, caches and other services you added from the catalog, and the resources your connected cloud providers run in your account. Your own code's services are on each project."
           actions={
-            <Button
-              nativeButton={false}
-              render={<Link to="/services/catalog" />}
-            >
-              Browse
-            </Button>
+            <>
+              <RegisterButton />
+              <Button
+                nativeButton={false}
+                render={<Link to="/services/catalog" />}
+              >
+                Browse
+              </Button>
+            </>
           }
         />
 
         <section aria-label="Your services" className="grid gap-5">
+          {can("infrastructure:read") && <RegisteredServices />}
           <div className="grid gap-2">
             <div className="flex items-baseline justify-between">
               <h2 className="text-[13px] font-medium text-muted-foreground">

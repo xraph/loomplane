@@ -1281,6 +1281,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Forget a workspace service's admin credential
+     */
+    clearAdmin: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/admin`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
      * Register an external Postgres or Redis; its DSN is kept in Vault and never returned
      */
     create: async (body: types.CatalogconnectCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
@@ -1315,6 +1331,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * One external endpoint or workspace service, without its credentials
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
      * The external databases and caches a catalog service can connect to, without their DSNs
      */
     list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EndpointList> => {
@@ -1328,6 +1360,148 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.EndpointList>(config);
+    },
+
+    /**
+     * Check a connection string from a target, and what its credentials may do, before registering it; nothing is stored or returned
+     */
+    probe: async (body: types.ServiceCheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CheckResult> => {
+      let __path = `/api/v1/catalog/endpoints/probes`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ServiceCheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CheckResult"],
+      };
+
+      return this.request<types.CheckResult>(config);
+    },
+
+    /**
+     * Check a workspace service again from a target, its admin credential too, and keep what the check found
+     */
+    recheck: async (id: string, body: types.RecheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/checks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RecheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Register a workspace service by its connection string once it checks out, and share it with every project or only some; the connection string is kept in Vault and never returned
+     */
+    register: async (body: types.RegisterServiceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/registrations`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegisterServiceInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Replace a workspace service's credentials once the new ones check out; services get them the next time they deploy
+     */
+    replaceCredential: async (id: string, body: types.ReplaceCredentialInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/credential`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ReplaceCredentialInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Keep an admin credential for a workspace service, so Loomplane can create a database or a user for each service that connects
+     */
+    setAdmin: async (id: string, body: types.AdminCredentialInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/admin`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AdminCredentialInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Share a workspace service with every project, or only with the ones listed
+     */
+    share: async (id: string, body: types.SharingInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/sharing`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SharingInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Rename a workspace service, or change its description or environment label
+     */
+    update: async (id: string, body: types.DetailsBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DetailsBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Which projects and environments connect to an endpoint
+     */
+    uses: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ServiceUseList> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/uses`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ServiceUseList"],
+      };
+
+      return this.request<types.ServiceUseList>(config);
     },
 
   };

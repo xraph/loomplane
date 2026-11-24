@@ -36,6 +36,52 @@ function fixture(
     calls.push(path)
     if (path.endsWith("/projects")) return Response.json({ projects })
     if (path.endsWith("/catalog/kinds")) return Response.json({ kinds: [] })
+    if (path.endsWith("/catalog/endpoints"))
+      return Response.json({
+        endpoints: [
+          {
+            id: "endpoint_pg",
+            org_id: "org",
+            name: "billing-db",
+            engine: "postgres",
+            host: "pg.example.com",
+            port: 5432,
+            tls: "require",
+            created_by: "u",
+            created_at: "2026-11-01T00:00:00Z",
+            revision: 1,
+            origin: "registered",
+            description: "",
+            environment_label: "staging",
+            restricted: true,
+            projects: ["p"],
+            admin_set: false,
+            last_check: {
+              at: "2026-11-01T00:00:00Z",
+              ok: false,
+              problems: ["no answer"],
+            },
+          },
+          {
+            id: "endpoint_res",
+            org_id: "org",
+            name: "resource-abc-1",
+            engine: "postgres",
+            host: "rds.example.com",
+            port: 5432,
+            tls: "require",
+            created_by: "u",
+            created_at: "2026-11-01T00:00:00Z",
+            revision: 1,
+            origin: "provider",
+            description: "",
+            environment_label: "",
+            restricted: false,
+            projects: [],
+            admin_set: false,
+          },
+        ],
+      })
     if (path.endsWith("/providers"))
       return Response.json({
         providers: [
@@ -197,4 +243,18 @@ test("without inventory access the Services page never asks for provider resourc
   show()
   await screen.findByText("None yet")
   expect(calls).not.toContain("/api/v1/provider-resources")
+})
+
+test("Catalog lists the services registered by connection string", async () => {
+  fixture()
+  show()
+  const link = await screen.findByRole("link", { name: /billing-db/ })
+  expect(link).toHaveTextContent("staging")
+  expect(link).toHaveTextContent("PostgreSQL · pg.example.com:5432 · 1 project")
+  expect(link).toHaveTextContent("Check failed")
+  // A provider resource's own endpoint is listed with its resource.
+  expect(screen.queryByText("resource-abc-1")).toBeNull()
+  expect(
+    screen.getByRole("button", { name: "Register a service" })
+  ).toBeInTheDocument()
 })

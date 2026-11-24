@@ -16,6 +16,12 @@ const (
 	AuditCreate = "catalog_endpoint.create"
 	AuditDelete = "catalog_endpoint.delete"
 	AuditCheck  = "catalog_endpoint.check"
+	// A workspace service's changes: its details, its credentials, its
+	// admin credential and who may use it.
+	AuditUpdate  = "catalog_endpoint.update"
+	AuditReplace = "catalog_endpoint.replace"
+	AuditAdmin   = "catalog_endpoint.admin"
+	AuditShare   = "catalog_endpoint.share"
 )
 
 // Audited outcomes.
@@ -106,6 +112,8 @@ func dsnAddress(dsn string) string {
 			port = "5432"
 		case "redis", "rediss":
 			port = "6379"
+		case "mongodb":
+			port = "27017"
 		default:
 			return ""
 		}

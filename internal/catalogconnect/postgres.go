@@ -40,6 +40,8 @@ type pgConn interface {
 	PreloadLibraries(ctx context.Context) (string, error)
 	// RoleRights are the connection role's rolsuper and rolcreaterole.
 	RoleRights(ctx context.Context) (super, createRole bool, err error)
+	// CreateRights are its rolsuper, rolcreatedb and rolcreaterole.
+	CreateRights(ctx context.Context) (super, createDB, createRole bool, err error)
 	Close(ctx context.Context) error
 }
 
@@ -124,6 +126,13 @@ func (p PostgresProber) Probe(ctx context.Context, dial DialFunc, dsn string, re
 		if !super && !createRole {
 			report.Problems = append(report.Problems, roleProblem(ConsumerFrom(ctx)))
 		}
+	}
+	if wantsCapabilities(ctx) {
+		super, createDB, createRole, err := conn.CreateRights(ctx)
+		if err != nil {
+			return nil, pgFailure(ctx, err, nil)
+		}
+		report.Capabilities = &Capabilities{CreateDatabase: super || createDB, CreateUser: super || createRole}
 	}
 	return report, nil
 }
@@ -291,6 +300,14 @@ func (c pgxConn) RoleRights(ctx context.Context) (super, createRole bool, err er
 		return false, false, nil // a role pg_roles doesn't list has neither right
 	}
 	return super, createRole, err
+}
+
+func (c pgxConn) CreateRights(ctx context.Context) (super, createDB, createRole bool, err error) {
+	err = c.conn.QueryRow(ctx, "SELECT rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = current_user").Scan(&super, &createDB, &createRole)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, false, nil // a role pg_roles doesn't list has none of them
+	}
+	return super, createDB, createRole, err
 }
 
 func (c pgxConn) Close(ctx context.Context) error { return c.conn.Close(ctx) }

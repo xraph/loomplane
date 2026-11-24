@@ -946,7 +946,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		maps.Copy(placed, placements)
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		existing, existingChecks := s.checkExistingResources(ctx, plan, resolved, options, chosen, placed, g, bindings)
-		endpointChecks := s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved)
+		endpointChecks := s.checkEndpoints(ctx, plan.OrgID, plan.ProjectID, plan.Environment, resolved)
 		if endpointChecks == nil {
 			endpointChecks = map[string]EndpointCheck{}
 		}
@@ -1127,8 +1127,10 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 // resources connect, from each resource's target, for Compute to report
 // on. An endpoint resources share on one target, against one requirement,
 // is checked once. Without a checker and a dialer nothing is checked, so
-// no external endpoint can be used.
-func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string, m *manifest.Manifest) map[string]EndpointCheck {
+// no external endpoint can be used. An endpoint not shared with projectID
+// isn't dialed: its credentials never leave for a project that may not
+// use them.
+func (s *Service) checkEndpoints(ctx context.Context, orgID, projectID, environment string, m *manifest.Manifest) map[string]EndpointCheck {
 	if s.endpoints == nil || s.dialer == nil || m == nil {
 		return nil
 	}
@@ -1175,10 +1177,10 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 			case err != nil:
 				found[u.id] = EndpointCheck{ID: u.id, Err: err.Error()}
 			default:
-				found[u.id] = EndpointCheck{ID: u.id, Name: e.Name, Engine: e.Engine, Found: true}
+				found[u.id] = EndpointCheck{ID: u.id, Name: e.Name, Engine: e.Engine, Found: true, Unshared: !e.SharedWith(projectID)}
 			}
 		}
-		if found[u.id].Found {
+		if found[u.id].Found && !found[u.id].Unshared {
 			targets[u.connection] = append(targets[u.connection], key)
 		}
 	}

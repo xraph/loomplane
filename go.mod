@@ -98,6 +98,7 @@ require (
 	github.com/xraph/weave v1.9.7
 	github.com/xraph/weave/embedder/nexus v1.9.7
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3
+	go.mongodb.org/mongo-driver/v2 v2.10.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
@@ -313,7 +314,6 @@ require (
 	go.etcd.io/etcd/api/v3 v3.7.3 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.7.3 // indirect
 	go.etcd.io/etcd/client/v3 v3.7.3 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.10.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0 // indirect

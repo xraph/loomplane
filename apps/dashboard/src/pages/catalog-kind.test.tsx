@@ -164,6 +164,12 @@ function endpoint(
     createdBy: "u",
     createdAt: "2026-10-21T12:00:00Z",
     revision: 1,
+    origin: "registered",
+    description: "",
+    environmentLabel: "",
+    restricted: false,
+    projects: [],
+    adminSet: false,
   }
 }
 

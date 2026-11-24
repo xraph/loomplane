@@ -123,12 +123,14 @@ type ProviderList struct {
 	Providers []provider.Provider `json:"providers"`
 }
 
+// route is one API route the extension registers.
+type route struct {
+	method, path string
+	handler      forge.Handler
+	opts         []forge.RouteOption
+}
+
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
-	type route struct {
-		method, path string
-		handler      forge.Handler
-		opts         []forge.RouteOption
-	}
 	manifestRoutes := []route{
 		{http.MethodGet, "/projects/:id/manifest", e.currentManifest, []forge.RouteOption{
 			forge.WithName("manifests.current"),
@@ -306,12 +308,15 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithName("catalogEndpoints.delete"),
 			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),
 		}},
+	}
+	catalogRoutes = append(catalogRoutes, e.workspaceServiceRoutes()...)
+	catalogRoutes = append(catalogRoutes, []route{
 		{http.MethodPost, "/projects/:projectId/environments/:environmentId/catalog/:resource/admin-sessions", e.openCatalogAdmin, []forge.RouteOption{
 			forge.WithName("catalogAdmin.open"),
 			forge.WithSummary("Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure"),
 			forge.WithResponseSchema(http.StatusCreated, "The session: open its URL on this origin", catalogproxy.Session{}),
 		}},
-	}
+	}...)
 	groups := []struct {
 		tag    string
 		routes []route

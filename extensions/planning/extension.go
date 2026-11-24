@@ -372,13 +372,31 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
+	// A workspace service is shared only with the workspace's projects.
+	e.endpoints.ProjectsIn = func(ctx context.Context, orgID string, ids []string) ([]string, error) {
+		list, listErr := prj.ListProjects(ctx, orgID)
+		if listErr != nil {
+			return nil, listErr
+		}
+		have := make(map[string]bool, len(list))
+		for _, project := range list {
+			have[project.ID] = true
+		}
+		var missing []string
+		for _, id := range ids {
+			if !have[id] {
+				missing = append(missing, id)
+			}
+		}
+		return missing, nil
+	}
 	cloudflareExecutor.Endpoints = e.endpoints
 	cloudflareExecutor.Authorizer = authz
 	inventoryClients := &providerinventory.Clients{Cloudflare: cloudflareResourcesClient, Vercel: vercelResourcesClient, DigitalOcean: appPlatform, Azure: azureClient(), AWS: awsClient(), Google: google, Render: render.New(e.cfg.Clouds.RenderEndpoint)}
 	e.providerResources = providerresources.NewService(providerresources.Deps{
 		Store: providerresources.NewPgStore(pg), Connections: clouds,
 		Reader:    inventoryClients,
-		Endpoints: e.endpoints, Authorizer: authz, Organizations: providerResourceOrganizations(pg), Usage: providerResourceUsage(pg, clouds),
+		Endpoints: resourceEndpoints{e.endpoints}, Authorizer: authz, Organizations: providerResourceOrganizations(pg), Usage: providerResourceUsage(pg, clouds),
 	})
 	if provideErr := forge.ProvideValue(c, e.providerResources); provideErr != nil {
 		return provideErr
@@ -898,7 +916,7 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, planning.ErrManagedFailedCleanupConflict), errors.Is(err, deployments.ErrManagedCleanupReviewRequired), errors.Is(err, deployments.ErrManagedCleanupProtocol), errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed), errors.Is(err, deployments.ErrNotRunning), errors.Is(err, deployments.ErrNothingToCancel), errors.Is(err, deployments.ErrCapacityWaitConflict), errors.Is(err, deployments.ErrStaleRollback),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
-		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, planning.ErrNotRunning), errors.Is(err, planning.ErrNoPreviousRelease),
+		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, catalogconnect.ErrConflict), errors.Is(err, planning.ErrNotRunning), errors.Is(err, planning.ErrNoPreviousRelease),
 		errors.Is(err, planning.ErrReleaseRunning), errors.Is(err, planning.ErrCanaryReverted), errors.Is(err, releasewatch.ErrConflict), errors.Is(err, projects.ErrFleetManaged), errors.Is(err, planning.ErrAliasTaken):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),

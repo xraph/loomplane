@@ -1223,6 +1223,11 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	if err != nil {
 		return "", err
 	}
+	// Sharing can change between the plan and its deploy; a project the
+	// workspace stopped sharing the endpoint with doesn't get its DSN.
+	if !endpoint.SharedWith(job.Deployment.ProjectID) {
+		return "", fmt.Errorf("%s isn't shared with this project any more; ask a workspace admin to share it, or connect another endpoint and plan again", endpoint.Name)
+	}
 	type endpointDSNChecker interface {
 		CheckDSN(context.Context, string, recipes.Requirement, catalogconnect.DialFunc) (*catalogconnect.Report, error)
 	}

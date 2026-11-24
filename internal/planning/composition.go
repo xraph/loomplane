@@ -24,8 +24,11 @@ type EndpointCheck struct {
 	Name   string
 	Engine string
 	Found  bool
-	Report *catalogconnect.Report
-	Err    string
+	// Unshared is an endpoint the workspace hasn't shared with the
+	// project. It isn't checked.
+	Unshared bool
+	Report   *catalogconnect.Report
+	Err      string
 }
 
 // endpointKey is where Input.Endpoints holds the check of an endpoint from
@@ -627,6 +630,8 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 	}
 	const unavailable, incompatible = "catalog-endpoint-unavailable", "catalog-endpoint-incompatible"
 	switch {
+	case ok && check.Unshared:
+		p.problem(finding("catalog-endpoint-unshared", fmt.Sprintf("%s isn't shared with this project. Ask a workspace admin to share it, or connect another endpoint.", label)))
 	case !ok || (check.Found && check.Err == "" && check.Report == nil):
 		p.problem(finding(unavailable, fmt.Sprintf("Loomplane couldn't check %s from %s's target, so %s can't use it. Plan again.", label, name, name)))
 	case check.Err != "":

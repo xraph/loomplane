@@ -44,6 +44,8 @@ type binding struct {
 type memStore struct {
 	rows     map[string]Endpoint
 	bindings []binding
+	// failReplace is the error the next Replace returns, once.
+	failReplace error
 }
 
 func newMemStore() *memStore { return &memStore{rows: map[string]Endpoint{}} }
@@ -150,8 +152,9 @@ func TestCreateStoresDSNInVaultOnly(t *testing.T) {
 	want := Endpoint{
 		ID: got.ID, OrgID: "org", Name: "prod-pg", Engine: "postgres", Host: "db.example", Port: 5432,
 		Database: "app", Username: "u", TLS: "require", CreatedBy: security.RoleAdmin, CreatedAt: got.CreatedAt, Revision: 1,
+		Origin: OriginRegistered,
 	}
-	if *got != want || got.CreatedAt.IsZero() {
+	if !reflect.DeepEqual(*got, want) || got.CreatedAt.IsZero() {
 		t.Fatalf("endpoint:\n got %+v\nwant %+v", *got, want)
 	}
 	if string(secrets[DSNKey("org", got.ID)]) != testDSN || len(secrets) != 1 {
@@ -171,7 +174,7 @@ func TestCreateStoresDSNInVaultOnly(t *testing.T) {
 		}
 	}
 	ep, dsn, err := svc.Resolve(t.Context(), "org", got.ID)
-	if err != nil || dsn != testDSN || *ep != want {
+	if err != nil || dsn != testDSN || !reflect.DeepEqual(*ep, want) {
 		t.Fatalf("resolve: %+v %q %v", ep, dsn, err)
 	}
 	if _, _, err = svc.Resolve(t.Context(), "other", got.ID); !errors.Is(err, ErrNotFound) {
@@ -197,7 +200,7 @@ func TestCreateRejectsBadDSN(t *testing.T) {
 	for _, tc := range []struct{ name, engine, dsn string }{
 		{"scheme", "postgres", "mysql://u:p@db.example:3306/app"},
 		{"no host", "postgres", "postgres://u:p@:5432/app?sslmode=require"},
-		{"unknown engine", "mongodb", "mongodb://u:p@db.example/app"},
+		{"unknown engine", "cassandra", "cassandra://u:p@db.example/app"},
 		{"redis scheme for postgres", "postgres", "redis://db.example:6379"},
 		{"no sslmode", "postgres", "postgres://u:p@db.example/app"},
 		{"prefer", "postgres", "postgres://u:p@db.example/app?sslmode=prefer"},

@@ -1734,6 +1734,36 @@
       }
     },
     "/api/v1/catalog/endpoints/{id}": {
+      "get": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "One external endpoint or workspace service, without its credentials",
+        "operationId": "catalogEndpoints.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "Catalog"
@@ -1754,6 +1784,47 @@
         "responses": {
           "200": {
             "description": "Success"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Rename a workspace service, or change its description or environment label",
+        "operationId": "catalogEndpoints.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetailsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
           }
         }
       }
@@ -19911,6 +19982,304 @@
           }
         }
       }
+    },
+    "/api/v1/catalog/endpoints/probes": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Check a connection string from a target, and what its credentials may do, before registering it; nothing is stored or returned",
+        "operationId": "catalogEndpoints.probe",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceCheckInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the check found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/registrations": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Register a workspace service by its connection string once it checks out, and share it with every project or only some; the connection string is kept in Vault and never returned",
+        "operationId": "catalogEndpoints.register",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterServiceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/{id}/admin": {
+      "put": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Keep an admin credential for a workspace service, so Loomplane can create a database or a user for each service that connects",
+        "operationId": "catalogEndpoints.setAdmin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCredentialInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Forget a workspace service's admin credential",
+        "operationId": "catalogEndpoints.clearAdmin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/{id}/checks": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Check a workspace service again from a target, its admin credential too, and keep what the check found",
+        "operationId": "catalogEndpoints.recheck",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecheckInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/{id}/credential": {
+      "put": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Replace a workspace service's credentials once the new ones check out; services get them the next time they deploy",
+        "operationId": "catalogEndpoints.replaceCredential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceCredentialInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/{id}/sharing": {
+      "put": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Share a workspace service with every project, or only with the ones listed",
+        "operationId": "catalogEndpoints.share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharingInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The workspace service",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogconnectEndpoint"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/{id}/uses": {
+      "get": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Which projects and environments connect to an endpoint",
+        "operationId": "catalogEndpoints.uses",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Uses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUseList"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -22507,6 +22876,9 @@
       },
       "CatalogconnectEndpoint": {
         "properties": {
+          "admin_set": {
+            "type": "boolean"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -22517,7 +22889,13 @@
           "database": {
             "type": "string"
           },
+          "description": {
+            "type": "string"
+          },
           "engine": {
+            "type": "string"
+          },
+          "environment_label": {
             "type": "string"
           },
           "host": {
@@ -22526,19 +22904,37 @@
           "id": {
             "type": "string"
           },
+          "last_check": {
+            "$ref": "#/components/schemas/LastCheck"
+          },
           "name": {
             "type": "string"
           },
           "org_id": {
             "type": "string"
           },
+          "origin": {
+            "type": "string"
+          },
           "port": {
             "type": "integer"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "restricted": {
+            "type": "boolean"
           },
           "revision": {
             "type": "integer"
           },
           "tls": {
+            "type": "string"
+          },
+          "updated_at": {
             "type": "string"
           },
           "username": {
@@ -22555,7 +22951,13 @@
           "tls",
           "created_by",
           "created_at",
-          "revision"
+          "revision",
+          "origin",
+          "description",
+          "environment_label",
+          "restricted",
+          "projects",
+          "admin_set"
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/catalogconnect.Endpoint"
@@ -22774,6 +23176,9 @@
           "ok"
         ],
         "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
           "missing": {
             "type": "array",
             "items": {
@@ -45184,6 +45589,247 @@
             "type": "string"
           }
         }
+      },
+      "ServiceCheckInputBody": {
+        "type": "object",
+        "required": [
+          "engine",
+          "dsn",
+          "target"
+        ],
+        "properties": {
+          "dsn": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterServiceInputBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "environment_label",
+          "engine",
+          "dsn",
+          "restricted",
+          "projects",
+          "target"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "dsn": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "environment_label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "restricted": {
+            "type": "boolean"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "required": [
+          "create_database",
+          "create_user"
+        ],
+        "properties": {
+          "create_database": {
+            "type": "boolean"
+          },
+          "create_user": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LastCheck": {
+        "type": "object",
+        "required": [
+          "at",
+          "ok"
+        ],
+        "properties": {
+          "admin": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "RecheckInputBody": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "ReplaceCredentialInputBody": {
+        "type": "object",
+        "required": [
+          "dsn",
+          "target",
+          "revision"
+        ],
+        "properties": {
+          "dsn": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "CatalogconnectUse": {
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "project",
+          "environment_id",
+          "environment",
+          "resource"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/catalogconnect.Use"
+      },
+      "SharingInputBody": {
+        "type": "object",
+        "required": [
+          "restricted",
+          "projects"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "restricted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AdminCredentialInputBody": {
+        "type": "object",
+        "required": [
+          "dsn",
+          "target"
+        ],
+        "properties": {
+          "dsn": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "DetailsBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "environment_label"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "environment_label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ServiceUseList": {
+        "properties": {
+          "uses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogconnectUse"
+            }
+          }
+        },
+        "required": [
+          "uses"
+        ],
+        "type": "object",
+        "x-forge-envelope": "uses"
       }
     },
     "securitySchemes": {

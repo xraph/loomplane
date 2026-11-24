@@ -111,7 +111,7 @@ func (v *InstanceAccessVerifier) VerifyInstanceResourceAccess(ctx context.Contex
 	if cancelled := ctx.Err(); cancelled != nil {
 		return empty, cancelled
 	}
-	if err != nil || current == nil || *current != *endpoint {
+	if err != nil || current == nil || !sameConnection(current, endpoint) {
 		return empty, ErrInstanceAccess
 	}
 	err = v.Pins.VerifyInstanceResourcePins(ctx, b)

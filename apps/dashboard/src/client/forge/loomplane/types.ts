@@ -134,6 +134,11 @@ export interface AddSourceInputBody {
   root?: string;
 }
 
+export interface AdminCredentialInputBody {
+  dsn: string;
+  target: string;
+}
+
 export interface AgentBudgetInputBody {
   monthlyBudgetUsd: string;
   revision: number;
@@ -606,6 +611,11 @@ export interface CancelResult {
   message?: string;
 }
 
+export interface Capabilities {
+  createDatabase: boolean;
+  createUser: boolean;
+}
+
 export interface CapacityAccountSnapshot {
   accountId: string;
   checkedAt: string;
@@ -791,18 +801,34 @@ export interface CatalogconnectCreateInputBody {
 }
 
 export interface CatalogconnectEndpoint {
+  adminSet: boolean;
   createdAt: string;
   createdBy: string;
   database?: string;
+  description: string;
   engine: string;
+  environmentLabel: string;
   host: string;
   id: string;
+  lastCheck?: LastCheck;
   name: string;
   orgId: string;
+  origin: string;
   port: number;
+  projects: string[];
+  restricted: boolean;
   revision: number;
   tls: string;
+  updatedAt?: string;
   username?: string;
+}
+
+export interface CatalogconnectUse {
+  environment: string;
+  environmentId: string;
+  project: string;
+  projectId: string;
+  resource: string;
 }
 
 export interface CatalogproxySession {
@@ -872,6 +898,7 @@ export interface CheckInputBody {
 }
 
 export interface CheckResult {
+  capabilities?: Capabilities;
   missing?: string[];
   notes?: string[];
   ok: boolean;
@@ -2084,6 +2111,12 @@ export interface DeploymentsDeployment {
   startedBy: string;
   status: string;
   steps: Step[];
+}
+
+export interface DetailsBody {
+  description: string;
+  environmentLabel: string;
+  name: string;
 }
 
 export interface DiffCommit {
@@ -3348,6 +3381,17 @@ export interface KubernetesRule {
   apiGroups: string[];
   resources: string[];
   verbs: string[];
+}
+
+export interface LastCheck {
+  admin?: Capabilities;
+  at: string;
+  capabilities?: Capabilities;
+  notes?: string[];
+  ok: boolean;
+  problems?: string[];
+  target?: string;
+  version?: string;
 }
 
 export interface LatencyHistogram {
@@ -5224,6 +5268,10 @@ export interface RebuildList {
   rebuilds: Rebuild[];
 }
 
+export interface RecheckInputBody {
+  target: string;
+}
+
 export interface Recipe {
   architecture: string;
   backupFormat: string;
@@ -5287,6 +5335,17 @@ export interface RegisterDeviceInputBody {
   publicKey: string;
   settings: Record<string, any>;
   timeZone: string;
+}
+
+export interface RegisterServiceInputBody {
+  description: string;
+  dsn: string;
+  engine: string;
+  environmentLabel: string;
+  name: string;
+  projects: string[];
+  restricted: boolean;
+  target: string;
 }
 
 export interface Registration {
@@ -5478,6 +5537,12 @@ export interface ReleaseReportList {
 
 export interface RemoveRouteInputBody {
   revision: number;
+}
+
+export interface ReplaceCredentialInputBody {
+  dsn: string;
+  revision: number;
+  target: string;
 }
 
 export interface ReplaceInputBody {
@@ -6394,6 +6459,12 @@ export interface Service {
   unitName?: string;
 }
 
+export interface ServiceCheckInputBody {
+  dsn: string;
+  engine: string;
+  target: string;
+}
+
 export interface ServiceConfig {
   artifact?: ReusedArtifact;
   build?: string;
@@ -6479,6 +6550,10 @@ export interface ServiceTraffic {
   provider: string;
   requests: number;
   statistic?: string;
+}
+
+export interface ServiceUseList {
+  uses: CatalogconnectUse[];
 }
 
 export interface SetDefaultPlacementInputBody {
@@ -6573,6 +6648,11 @@ export interface SetupStep {
   body?: string;
   command?: string;
   title: string;
+}
+
+export interface SharingInputBody {
+  projects: string[];
+  restricted: boolean;
 }
 
 export interface SignIn {
