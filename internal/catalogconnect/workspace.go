@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -453,4 +454,28 @@ func (s *Service) ResolveAdmin(ctx context.Context, orgID, id string) (*Endpoint
 		return nil, "", fmt.Errorf("read the admin credential of %s: %w", e.Name, err)
 	}
 	return e, string(dsn), nil
+}
+
+// endpointIDRE is an endpoint's ID as typeid writes it.
+var endpointIDRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
+
+// IsEndpointID reports whether s is an endpoint's ID, such as a manifest's
+// existing_resource names when it attaches a workspace service.
+func IsEndpointID(s string) bool { return endpointIDRE.MatchString(s) }
+
+// EngineForKind is the engine a resource kind connects to, or "" for a
+// kind a workspace service can't stand in for: mariadb is reached as
+// mysql, valkey as redis.
+func EngineForKind(kind string) string {
+	switch kind {
+	case "postgres":
+		return EnginePostgres
+	case "mysql", "mariadb":
+		return EngineMySQL
+	case "redis", "valkey":
+		return EngineRedis
+	case "mongodb":
+		return EngineMongoDB
+	}
+	return ""
 }

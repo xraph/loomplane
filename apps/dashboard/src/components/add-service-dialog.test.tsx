@@ -136,7 +136,34 @@ beforeEach(() => {
         case "/api/v1/projects/p/sources":
           return Response.json({ sources: [] })
         case "/api/v1/catalog/endpoints":
-          return Response.json({ endpoints: [] })
+          return Response.json({
+            endpoints: [
+              registeredEndpoint(
+                "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
+                "orders-db",
+                "postgres",
+                false,
+                []
+              ),
+              registeredEndpoint(
+                "endpoint_01jd8x5k2m3n4p5q6r7s8t9v1x",
+                "billing-db",
+                "postgres",
+                true,
+                ["other"]
+              ),
+              {
+                ...registeredEndpoint(
+                  "endpoint_01jd8x5k2m3n4p5q6r7s8t9v2y",
+                  "resource-abc-1",
+                  "postgres",
+                  false,
+                  []
+                ),
+                origin: "provider",
+              },
+            ],
+          })
       }
       return Response.json({})
     }
@@ -149,6 +176,36 @@ afterEach(() => {
 })
 
 const project = { id: "p", name: "Shop", repositories: ["acme/shop"] } as never
+
+// registeredEndpoint is a workspace service registered by its connection
+// string, shared with every project or only the ones listed.
+function registeredEndpoint(
+  id: string,
+  name: string,
+  engine: string,
+  restricted: boolean,
+  projects: string[]
+) {
+  return {
+    id,
+    org_id: "org",
+    name,
+    engine,
+    host: `${name}.example.com`,
+    port: 5432,
+    tls: "require",
+    created_by: "u",
+    created_at: "2026-11-01T00:00:00Z",
+    revision: 1,
+    origin: "registered",
+    description: "",
+    environment_label: "production",
+    restricted,
+    projects,
+    admin_set: false,
+    last_check: { at: "2026-11-01T00:00:00Z", ok: true },
+  }
+}
 const environments = [
   { id: "e1", name: "production" },
   { id: "e2", name: "staging" },
@@ -361,6 +418,53 @@ it("attaches a workspace resource by identity and plans its consumers", async ()
         },
       },
       { environment: "staging" },
+    ])
+  )
+})
+
+it("connects a workspace service registered by its connection string", async () => {
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("tab", { name: "Workspace services" })
+  )
+  // One the workspace doesn't share with this project can't be picked, and a
+  // provider resource's own endpoint isn't listed apart from its resource.
+  expect(
+    await screen.findByRole("button", {
+      name: /billing-db.*Not shared with Shop/,
+    })
+  ).toBeDisabled()
+  expect(screen.queryByRole("button", { name: /resource-abc-1/ })).toBeNull()
+  await user.click(screen.getByRole("button", { name: /orders-db.*Connect/ }))
+  expect(
+    await screen.findByText(
+      /Connect Shop to orders-db, registered in this workspace/
+    )
+  ).toBeInTheDocument()
+  await user.click(await screen.findByRole("checkbox", { name: /api/ }))
+  // It serves production, so it's attached there only, and planned there.
+  expect(
+    screen.getByRole("radio", { name: "Only production" })
+  ).toHaveAttribute("aria-checked", "true")
+  await user.click(
+    await screen.findByRole("button", { name: "Add and plan production" })
+  )
+  expect(
+    screen.getByText(/api runs in staging too, and gets no DATABASE_URL there/)
+  ).toBeInTheDocument()
+  await waitFor(() =>
+    expect(writes.map((w) => w.body)).toEqual([
+      {
+        add_resource: {
+          name: "orders-db",
+          kind: "postgres",
+          existing_resource: "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
+          needed_by: ["api"],
+          enabled_in: "production",
+        },
+      },
+      { environment: "production" },
     ])
   )
 })

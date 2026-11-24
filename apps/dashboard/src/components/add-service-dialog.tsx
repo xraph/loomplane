@@ -11,6 +11,7 @@ import {
 import {
   ArrowLeftIcon,
   CodeIcon,
+  DatabaseIcon,
   FolderGit2Icon,
   SearchIcon,
   SparklesIcon,
@@ -40,7 +41,6 @@ import type {
   KindInfo,
   Manifest,
   Plan,
-  ProviderResource,
   Project,
   ServiceSuggestion,
   Target,
@@ -49,6 +49,7 @@ import { useInvalidate, useQuery } from "@/client/hooks"
 import { CatalogDependencyPicker } from "@/components/catalog-dependency-picker"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
+import { engineLogos } from "@/components/workspace-services/register-dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Wiring } from "@/components/service-wiring"
@@ -126,10 +127,34 @@ import { cn } from "@/lib/utils"
 export type AddServiceStart = "code" | "catalog" | "source" | "workspace"
 
 type Step =
-  | { at: "workspace"; resource: ProviderResource }
+  | { at: "workspace"; resource: WorkspacePick }
   | { at: "choose" }
   | { at: "service"; suggestion?: ServiceSuggestion }
   | { at: "catalog"; info: KindInfo }
+
+/**
+ * WorkspacePick is something the workspace shares that a project can
+ * attach: a resource synced from a cloud account, or a service registered
+ * by its connection string.
+ */
+export type WorkspacePick = {
+  id: string
+  name: string
+  kind: string
+  /** Where it is, as a sentence says it: "aws", or "this workspace". */
+  from: string
+  registered: boolean
+  /** The environment a registered service serves, such as production. */
+  environmentLabel?: string
+}
+
+// The resource kind each engine a registered service runs is attached as.
+const engineKinds: Record<string, string> = {
+  postgres: "postgres",
+  mysql: "mysql",
+  redis: "redis",
+  mongodb: "mongodb",
+}
 
 /**
  * AddServiceDialog adds a service to project. environment is the one it
@@ -300,7 +325,7 @@ function Choose({
 }: {
   project: Project
   manifest: Manifest
-  onWorkspace: (resource: ProviderResource) => void
+  onWorkspace: (resource: WorkspacePick) => void
   tab: AddServiceStart
   onTab: (tab: AddServiceStart) => void
   onSuggestion: (s: ServiceSuggestion) => void
@@ -393,7 +418,11 @@ function Choose({
       </TabsContent>
       <TabsContent value="workspace" className="pt-3">
         {tab === "workspace" && can("infrastructure:read") && (
-          <WorkspaceServices manifest={manifest} onPick={onWorkspace} />
+          <WorkspaceServices
+            project={project}
+            manifest={manifest}
+            onPick={onWorkspace}
+          />
         )}
       </TabsContent>
       <TabsContent value="catalog" className="pt-4">
@@ -454,14 +483,17 @@ function SuggestionButton({
 }
 
 function WorkspaceServices({
+  project,
   manifest,
   onPick,
 }: {
+  project: Project
   manifest: Manifest
-  onPick: (resource: ProviderResource) => void
+  onPick: (resource: WorkspacePick) => void
 }) {
   const now = useNow(60000)
   const inventory = useQuery(useProviderResourcesList)
+  const endpoints = useQuery(useCatalogEndpointsList)
   if (inventory.status === "error")
     return (
       <QueryError
@@ -470,34 +502,87 @@ function WorkspaceServices({
         retry={inventory.refetch}
       />
     )
-  if (!inventory.data)
+  if (!inventory.data || (!endpoints.data && endpoints.status !== "error"))
     return <Skeleton className="h-14" aria-label="Loading workspace services" />
   const resources = inventory.data.resources.filter(
     (resource) => resource && resource.status !== "missing"
   )
-  if (!resources.length)
+  // Registered by connection string, as a provider resource's own
+  // endpoints are listed with their resource.
+  const registered = (endpoints.data?.endpoints ?? []).flatMap((e) =>
+    e && (e.origin === "" || e.origin === "registered") && engineKinds[e.engine]
+      ? [e]
+      : []
+  )
+  const attachedIDs = new Set(
+    Object.values(manifest.resources ?? {}).map(
+      (entry) => entry?.existingResource ?? entry?.existing_resource
+    )
+  )
+  if (!resources.length && !registered.length)
     return (
       <ZeroState variant="compact" preview={false}>
         <ZeroStateHeader>
           <ZeroStateTitle>No workspace services yet</ZeroStateTitle>
           <ZeroStateDescription>
-            Create a provider-managed resource in Services or sync a connected
-            account in Integrations.
+            Register one you already run on the Catalog page, create a
+            provider-managed resource there, or sync a connected account in
+            Integrations.
           </ZeroStateDescription>
         </ZeroStateHeader>
       </ZeroState>
     )
   return (
     <div className="grid gap-1">
+      {registered.map((e) => {
+        const shared = !e.restricted || e.projects.includes(project.id)
+        const reason = attachedIDs.has(e.id)
+          ? "Already attached"
+          : !shared
+            ? `Not shared with ${project.name}`
+            : e.lastCheck && !e.lastCheck.ok
+              ? "Its last check failed"
+              : ""
+        return (
+          <Button
+            type="button"
+            key={e.id}
+            variant="outline"
+            disabled={!!reason}
+            onClick={() =>
+              onPick({
+                id: e.id,
+                name: e.name,
+                kind: engineKinds[e.engine],
+                from: "this workspace",
+                registered: true,
+                environmentLabel: e.environmentLabel,
+              })
+            }
+            className="h-auto w-full justify-start gap-2 py-2 text-left whitespace-normal"
+          >
+            <ProductIcon
+              product={engineLogos[e.engine]}
+              fallback={DatabaseIcon}
+              label={e.engine}
+              size="sm"
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block">{e.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {[e.engine, `${e.host}:${e.port}`, e.environmentLabel]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </span>
+            <span className="text-xs">{reason || "Connect"}</span>
+          </Button>
+        )
+      })}
       {resources.map((resource) => {
         if (!resource) return null
         const readiness = providerResourceReadiness(resource, now)
-        const attached = Object.values(manifest.resources ?? {}).some(
-          (entry) =>
-            (entry?.existingResource ?? entry?.existing_resource) ===
-            resource.id
-        )
-        const reason = attached
+        const reason = attachedIDs.has(resource.id)
           ? "Already attached"
           : readiness.discovery !== "Observed"
             ? "Sync provider inventory"
@@ -513,7 +598,15 @@ function WorkspaceServices({
             key={resource.id}
             variant="outline"
             disabled={!!reason}
-            onClick={() => onPick(resource)}
+            onClick={() =>
+              onPick({
+                id: resource.id,
+                name: resource.name,
+                kind: resource.kind,
+                from: resource.provider,
+                registered: false,
+              })
+            }
             className="h-auto w-full justify-start gap-2 py-2 text-left whitespace-normal"
           >
             <CloudGlyph cloud={resource.provider} />
@@ -684,7 +777,18 @@ function Configure({
   const [picks, setPicks] = useState<DependencyPicks>(() =>
     info ? initialDependencyPicks(info) : {}
   )
-  const [only, setOnly] = useState(false)
+  // A registered service serves one environment: if the project has one
+  // by that name, it's attached there only, unless someone says otherwise.
+  const servesOne =
+    existing?.registered && existing.environmentLabel
+      ? environments.find((e) => e.name === existing.environmentLabel)?.name
+      : undefined
+  const [only, setOnly] = useState(!!servesOne)
+  useEffect(() => {
+    if (servesOne && !parentPlan) onEnvironment(servesOne)
+    // Once, when the service is picked: the person may choose another.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [pending, setPending] = useState("")
   const [error, setError] = useState("")
 
@@ -782,7 +886,14 @@ function Configure({
   const edit: AddEdit | undefined = (() => {
     if (!trimmed || problem) return undefined
     const scope = {
-      ...(only ? { enabledIn: environment, only: true } : {}),
+      // An attachment listed in one environment is off in the rest
+      // already; turning them off too would refuse the services that run
+      // there and need it, which go without it instead.
+      ...(only
+        ? existing
+          ? { enabledIn: environment }
+          : { enabledIn: environment, only: true }
+        : {}),
       ...(neededBy.length ? { neededBy } : {}),
     }
     if (existing)
@@ -843,7 +954,21 @@ function Configure({
   const shown = usePreview(project.id, edit, yaml)
   const mayAdd = can("project:update")
   const mayPlan = mayAdd && can("deployment:create")
-  const ready = !!edit && conflicts.length === 0 && !pending
+  // An attachment that's off somewhere leaves the services that need it
+  // without its variable there, as the plan warns; anything else that's
+  // off where it's needed can't be added.
+  const blocking = existing ? [] : conflicts
+  const missingThere = existing
+    ? (() => {
+        const others = environments
+          .map((e) => e.name)
+          .filter((n) => n !== environment)
+        return neededBy.length > 0 && only && others.length > 0
+          ? `${neededBy.join(", ")} ${neededBy.length === 1 ? "runs" : "run"} in ${others.join(", ")} too, and ${neededBy.length === 1 ? "gets" : "get"} no ${envVarFor({ name: trimmed, kind: existing.kind }, "resources")} there until you connect a service for ${others.length === 1 ? "it" : "them"}.`
+          : ""
+      })()
+    : ""
+  const ready = !!edit && blocking.length === 0 && !pending
 
   // A kind that brings its own add dialog takes over from here.
   if (AddDialog)
@@ -904,8 +1029,9 @@ function Configure({
     <form onSubmit={onSubmit} className="grid gap-5">
       {existing ? (
         <p className="text-sm">
-          Share {existing.name} from {existing.provider} with {project.name}.
-          Its owner manages its capacity.
+          {existing.registered
+            ? `Connect ${project.name} to ${existing.name}, registered in this workspace. It keeps running outside Loomplane, which doesn't back it up or resize it.`
+            : `Share ${existing.name} from ${existing.from} with ${project.name}. Its owner manages its capacity.`}
         </p>
       ) : info ? (
         <Field label="Where it runs">
@@ -1285,17 +1411,27 @@ function Configure({
             </Select>
           )}
         </div>
-        {conflicts.length > 0 && (
+        {missingThere && (
+          <p className="text-[12.5px] text-muted-foreground">{missingThere}</p>
+        )}
+        {blocking.length > 0 && (
           <Alert variant="destructive" className="mt-2">
             <AlertDescription>
               <ul className="grid gap-1">
-                {conflicts.map((c) => (
+                {blocking.map((c) => (
                   <li key={c}>{c}</li>
                 ))}
               </ul>
               Add it to every environment, or leave those services out.
             </AlertDescription>
           </Alert>
+        )}
+        {existing?.registered && existing.environmentLabel && !only && (
+          <p className="text-[12.5px] text-weld-ink">
+            {existing.name} serves {existing.environmentLabel}. Every
+            environment of {project.name} would connect to it, the others
+            included.
+          </p>
         )}
       </Field>
 

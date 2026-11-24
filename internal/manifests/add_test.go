@@ -206,3 +206,27 @@ func TestAddResourceWithConsumerOptions(t *testing.T) {
 		t.Fatal(rev.YAML)
 	}
 }
+
+// A workspace service attached in production alone leaves a service that
+// runs everywhere without it in staging, which the plan warns of, rather
+// than refusing it: attachments listed in one environment are off in the
+// rest without saying so.
+func TestAddAttachesAWorkspaceServiceInOneEnvironment(t *testing.T) {
+	const service = "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w"
+	rev, store, err := addEdit(t, appYAML, EditInput{AddResource: &NewResource{
+		Name: "orders-db", Kind: "postgres", ExistingResource: service, EnabledIn: "production", NeededBy: []string{"api"},
+	}})
+	if err != nil || store.writes != 1 {
+		t.Fatalf("err=%v writes=%d", err, store.writes)
+	}
+	orders := rev.Manifest.Resources["orders-db"]
+	if orders.ExistingResource != service || len(orders.Environments) != 1 {
+		t.Fatalf("attachment:\n%s", rev.YAML)
+	}
+	if on := orders.Environments["production"].Enabled; on == nil || !*on {
+		t.Fatalf("not on in production:\n%s", rev.YAML)
+	}
+	if !slices.Contains(rev.Manifest.Services["api"].Needs, "orders-db") {
+		t.Fatalf("api doesn't need it:\n%s", rev.YAML)
+	}
+}

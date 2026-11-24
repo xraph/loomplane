@@ -236,10 +236,13 @@ type Runner struct {
 	managedCleanup    *ManagedCleanupExecution
 	existingResources planning.ExistingResourceResolver
 	existingEndpoints planning.EndpointChecker
-	dropletPostgres   *DropletPostgresChecker
-	existingDialer    planning.TargetDialer
-	capacity          CapacityResolver
-	routes            ReleaseRoutes
+	// workspaceEndpoints reads an attached workspace service's connection
+	// string at deploy.
+	workspaceEndpoints EndpointResolver
+	dropletPostgres    *DropletPostgresChecker
+	existingDialer     planning.TargetDialer
+	capacity           CapacityResolver
+	routes             ReleaseRoutes
 
 	cloudSyncAuth  CloudSyncAuthorizer
 	cloudProfiles  cloudprofiles.Resolver
@@ -280,7 +283,10 @@ type RunnerDeps struct {
 	ManagedCleanup    *ManagedCleanupExecution
 	ExistingResources planning.ExistingResourceResolver
 	ExistingEndpoints planning.EndpointChecker
-	ExistingDialer    planning.TargetDialer
+	// WorkspaceEndpoints reads the connection strings of workspace
+	// services a manifest attaches. Without it, none can be attached.
+	WorkspaceEndpoints EndpointResolver
+	ExistingDialer     planning.TargetDialer
 	// Authz and BackupPolicies recheck and install reviewed backup defaults.
 	Authz          Authorizer
 	BackupPolicies BackupPolicyInstaller
@@ -367,7 +373,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		gate = metering.AllowAll
 	}
 	return &Runner{gate: gate, instances: d.Instances, managedCleanup: d.ManagedCleanup,
-		dropletPostgres: d.DropletPostgres, existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
+		dropletPostgres: d.DropletPostgres, existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer, workspaceEndpoints: d.WorkspaceEndpoints,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,

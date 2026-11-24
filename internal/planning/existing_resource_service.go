@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
@@ -37,6 +38,10 @@ func (s *Service) checkExistingResources(ctx context.Context, plan *Plan, m *man
 			continue
 		}
 		if _, ok := checks[r.ExistingResource]; ok {
+			continue
+		}
+		if catalogconnect.IsEndpointID(r.ExistingResource) {
+			checks[r.ExistingResource] = s.checkWorkspaceService(ctx, plan, principal, r.ExistingResource)
 			continue
 		}
 		check := ExistingResourceCheck{}
@@ -104,8 +109,14 @@ func (s *Service) checkExistingResources(ctx context.Context, plan *Plan, m *man
 				continue
 			}
 			check := checks[resource.ExistingResource]
-			if check.Resource == nil || check.Endpoint == nil || check.Error != "" {
+			if check.Endpoint == nil || check.Error != "" || check.Unshared || (check.Resource == nil && !check.workspaceService()) {
 				continue
+			}
+			// A cloud resource is reached over TLS. A workspace service may
+			// run on a private network without it, which the plan warns of.
+			tls := []string{catalogconnect.TLSRequire, catalogconnect.TLSVerifyFull}
+			if check.workspaceService() {
+				tls = nil
 			}
 			network := EndpointCheck{ID: check.Endpoint.ID, Engine: check.Endpoint.Engine, Found: true}
 			connection := action.Service.Target
@@ -130,7 +141,7 @@ func (s *Service) checkExistingResources(ctx context.Context, plan *Plan, m *man
 				if err != nil {
 					network.Err = "This deployment target cannot verify the external connection. Use a target with an installed network verifier."
 				} else {
-					network.Report, err = s.endpoints.Check(ctx, plan.OrgID, check.Endpoint.ID, recipes.Requirement{Engine: check.Endpoint.Engine, TLS: []string{catalogconnect.TLSRequire, catalogconnect.TLSVerifyFull}}, dial)
+					network.Report, err = s.endpoints.Check(ctx, plan.OrgID, check.Endpoint.ID, recipes.Requirement{Engine: check.Endpoint.Engine, TLS: tls}, dial)
 					if err != nil {
 						network.Err = "The external connection could not be checked. Verify the credentials and deployment network."
 					}
@@ -193,4 +204,28 @@ func (s *Service) checkExistingCompositionEndpoints(ctx context.Context, org str
 		}
 		checks[key] = observed
 	}
+}
+
+// checkWorkspaceService reads a workspace service a manifest attaches:
+// that it's still in the organization, a person registered it, and the
+// workspace shares it with this project. Using one needs no secret
+// permission, only to deploy the project: sharing is the workspace
+// admin's decision to let projects use it.
+func (s *Service) checkWorkspaceService(ctx context.Context, plan *Plan, principal security.Principal, id string) ExistingResourceCheck {
+	if s.endpoints == nil || s.authz == nil {
+		return ExistingResourceCheck{Error: "Workspace services are unavailable on this Loomplane server."}
+	}
+	if err := s.authz.Require(ctx, principal, security.DeploymentCreate, plan.ProjectID); err != nil {
+		return ExistingResourceCheck{Error: "You no longer have permission to attach resources to this project's deployment."}
+	}
+	endpoint, err := s.endpoints.Endpoint(ctx, plan.OrgID, id)
+	switch {
+	case errors.Is(err, catalogconnect.ErrNotFound):
+		return ExistingResourceCheck{Error: "This workspace service isn't in the workspace any more. Register it again, or use another service."}
+	case err != nil:
+		return ExistingResourceCheck{Error: "The workspace service couldn't be read. Plan again."}
+	case !endpoint.Registered():
+		return ExistingResourceCheck{Error: "This endpoint belongs to a provider resource. Attach the resource itself."}
+	}
+	return ExistingResourceCheck{Endpoint: endpoint, Unshared: !endpoint.SharedWith(plan.ProjectID)}
 }

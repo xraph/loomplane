@@ -627,7 +627,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		DropletPostgres:   dropletPostgres,
 		Gate:              &e.metering,
 		ManagedCleanup:    cleanupExecution,
-		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer,
+		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer, WorkspaceEndpoints: e.endpoints,
 		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,

@@ -44,3 +44,25 @@ func TestExistingResourceRejectsCreationAndLifecycleSettings(t *testing.T) {
 		t.Fatal("invalid inventory ID accepted")
 	}
 }
+
+func TestExistingResourceNamesAWorkspaceService(t *testing.T) {
+	const service = "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w"
+	doc := "version: 1\nresources:\n  orders:\n    kind: postgres\n    existing_resource: " + service + "\n    environments:\n      staging:\n        enabled: false\nservices:\n  api:\n    source: services/api\n    needs: [orders]\n"
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Resources["orders"].ExistingResource != service {
+		t.Fatalf("existing_resource: %q", m.Resources["orders"].ExistingResource)
+	}
+	for _, bad := range []string{"endpoint_short", "endpoint_01JD8X5K2M3N4P5Q6R7S8T9V0W", "workspace_01jd8x5k2m3n4p5q6r7s8t9v0w"} {
+		_, err := Parse([]byte(strings.Replace(doc, service, bad, 1)))
+		if err == nil || !strings.Contains(err.Error(), "must name a synced provider resource or a workspace service") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	// A workspace service takes no creation or lifecycle settings either.
+	if _, err := Parse([]byte(strings.Replace(doc, "    existing_resource:", "    version: \"16\"\n    existing_resource:", 1))); err == nil {
+		t.Fatal("a version was accepted on a workspace service")
+	}
+}

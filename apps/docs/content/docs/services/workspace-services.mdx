@@ -26,15 +26,47 @@ The server checks the connection again before it keeps anything, so what's store
 
 Some options are refused because they'd reach past the URL: MongoDB's `tlsCAFile`, `tlsCertificateKeyFile` and `proxyHost`, and its AWS, X.509 and Kerberos mechanisms, which would sign in as Loomplane rather than as your user.
 
+## Use one in a project
+
+In the project, choose **Add service**, then **Workspace services**. Registered services shared with the project are listed first, then resources synced from your cloud accounts. Pick one, tick the services that use it, and add it, or add it and plan an environment right away. A service the workspace hasn't shared with this project is listed but can't be picked.
+
+That writes an ordinary resource into `loomplane.yaml`, named after the service:
+
+```yaml
+resources:
+  orders-db:
+    kind: postgres
+    existing_resource: endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w
+
+services:
+  api:
+    needs: [orders-db]
+```
+
+Each service that needs it gets the connection string in the variable its kind uses, such as `DATABASE_URL` for Postgres or `REDIS_URL` for Redis. `kind` must match the service's engine (`mariadb` attaches a MySQL service and `valkey` a Redis one), and an attached service takes no `version`, `provider` or other settings: it runs where it runs.
+
+With no `environments` it's attached in every environment. Mind that for a service labelled production: list the environments that should use it, and once any is listed it's attached only where `enabled: true`. **Add service** does this for you: when the service's environment label matches one of the project's environments, it starts on **Only** that one, and says so if you choose every environment instead. Services that run in the other environments too deploy there without the variable, and the plan warns that they do.
+
+```yaml
+resources:
+  orders-db:
+    kind: postgres
+    existing_resource: endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w
+    environments:
+      production: {enabled: true}
+```
+
+When you plan, Loomplane checks the service from each consuming service's own server or cluster, and the plan pins the credentials it saw. The deploy checks the same things again before any service gets the connection string, so a plan made before someone stopped sharing the service, or replaced its credentials, fails instead of deploying something nobody reviewed. Plan again to pick up new credentials.
+
 ## Who can use it
 
 Every project in the workspace can use a service shared with **Every project**. **Only some projects** limits it to the ones you pick. Change it on the service's **Access** tab.
 
-When a project loses access, what it already deployed keeps running. Its next plan refuses to use the service, with `catalog-endpoint-unshared`, and Loomplane doesn't send the credentials anywhere for that project from then on.
+When a project loses access, what it already deployed keeps running. Its next plan refuses to use the service, with `workspace-service-unshared` (or `catalog-endpoint-unshared` where a catalog service depends on it), and Loomplane doesn't send the credentials anywhere for that project from then on.
 
 ## Replace the credentials
 
-After a password rotation or a move to a new primary, open the service's **Settings** and use **Replace credentials**. The new string must be the same engine, and it's checked before it replaces the old one. Each service picks up the new credentials the next time it deploys. If someone else replaced them since you opened the page, you're asked to reload first.
+After a password rotation or a move to a new primary, open the service's **Settings** and use **Replace credentials**. The new string must be the same engine, and it's checked before it replaces the old one. Projects pick up the new credentials when they next plan and deploy; a deploy of a plan made before the change stops and asks for a new plan. If someone else replaced them since you opened the page, you're asked to reload first.
 
 ## The admin credential
 
@@ -46,6 +78,4 @@ Deleting forgets the service and its credentials. Nothing on the server changes.
 
 ## What Loomplane doesn't do
 
-A registered service runs outside Loomplane. It isn't backed up, restored, resized or upgraded here. Plans warn about that wherever one is used.
-
-Today a registered service can stand in for a dependency of a catalog service, such as Fabriq's Postgres. Connecting your own code's services to one directly is the next step.
+A registered service runs outside Loomplane. It isn't backed up, restored, resized or upgraded here. Plans warn about that wherever one is used, and warn again when one is reached without TLS.

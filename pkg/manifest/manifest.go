@@ -288,7 +288,9 @@ const MaxGPUs = 8
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
-	// ExistingResource attaches inventory without owning its cloud lifecycle.
+	// ExistingResource attaches something Loomplane doesn't own: a synced
+	// provider resource (providerresource_...) or a workspace service
+	// registered by its connection string (endpoint_...).
 	ExistingResource string `json:"existing_resource,omitempty" yaml:"existing_resource,omitempty"`
 	// CloudSQLPSC opts a PostgreSQL 17 source into a reviewed manual PSC endpoint.
 	CloudSQLPSC *providercontract.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty" yaml:"cloud_sql_psc,omitempty"`
@@ -433,14 +435,17 @@ var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
 
 var (
 	inventoryResourceRE = regexp.MustCompile(`^providerresource_[a-f0-9]{64}$`)
-	cloudTargetRE       = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-	nameRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	farpPathRE          = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
-	farpCapRE           = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	envRE               = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	tokenRE             = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	gpuKindRE           = regexp.MustCompile(`^[a-z0-9-]+$`)
-	kindRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	// workspaceServiceRE is a workspace service's ID: a database or cache
+	// registered by its connection string and shared with projects.
+	workspaceServiceRE = regexp.MustCompile(`^endpoint_[0-9a-z]{26}$`)
+	cloudTargetRE      = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	nameRE             = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	farpPathRE         = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
+	farpCapRE          = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	envRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	tokenRE            = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE          = regexp.MustCompile(`^[a-z0-9-]+$`)
+	kindRE             = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
@@ -620,8 +625,8 @@ func (m *Manifest) Validate() error {
 		}
 		checkToken(add, path+".provider", "provider", r.Provider)
 		if r.ExistingResource != "" {
-			if !inventoryResourceRE.MatchString(r.ExistingResource) {
-				add(path+".existing_resource", "must name a synced provider resource")
+			if !inventoryResourceRE.MatchString(r.ExistingResource) && !workspaceServiceRE.MatchString(r.ExistingResource) {
+				add(path+".existing_resource", "must name a synced provider resource or a workspace service")
 			}
 			if r.Provider != "" || r.Target != "" || r.Region != "" || r.Version != "" || r.Gateway != nil || r.CloudSQLPSC != nil || r.GPU != nil || len(r.Uses) > 0 || len(r.Settings) > 0 {
 				add(path, "an existing resource accepts kind and existing_resource, without creation or lifecycle settings")
