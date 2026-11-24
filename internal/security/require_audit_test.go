@@ -100,6 +100,12 @@ var workspaceChecks = map[string]int{
 	"internal/catalogconnect/service.go:AuthorizeCheck":                          1,
 	"internal/catalogconnect/service.go:List":                                    1,
 	"internal/catalogconnect/service.go:Delete":                                  1,
+	"internal/catalogconnect/workspace.go:Register":                              1,
+	"internal/catalogconnect/workspace.go:registered":                            1,
+	"internal/catalogconnect/workspace.go:Describe":                              1,
+	"internal/catalogconnect/workspace.go:Uses":                                  1,
+	"internal/catalogconnect/own_access.go:ListOwnUsers":                         1,
+	"internal/catalogconnect/own_access.go:DropOwnUser":                          1,
 	"extensions/identity/session.go:getSession":                                  1,
 	"extensions/identity/members.go:require":                                     1,
 	"extensions/infrastructure/extension.go:status":                              1,
@@ -236,8 +242,8 @@ func TestNoProjectActionChecksTheWholeWorkspace(t *testing.T) {
 	for _, n := range workspaceChecks {
 		total += n
 	}
-	if total != 110 {
-		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, the server builder, DigitalOcean registry and database capacity checks and listing runner pools, less the 3 sign-in app calls that no longer check an organization", total)
+	if total != 116 {
+		t.Errorf("workspaceChecks holds %d calls, want the brief's 63, the 9 teams calls, the 6 workspace checks main added, the agent's 8 and its GitHub issues status, the 2 that read its reports, the watcher's status, the 6 Bitbucket ones, the 8 GitLab ones, the node connection, billing's and a server's fence repair, a fleet dead letter's replay, the server builder, DigitalOcean registry and database capacity checks, listing runner pools and the 6 workspace service calls, less the 3 sign-in app calls that no longer check an organization", total)
 	}
 
 	var models []string
