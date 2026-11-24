@@ -55,6 +55,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -67,6 +70,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { AddServiceProvider } from "@/lib/add-service-context"
 import { analysisKey, ecosystemLabel, shortSHA } from "@/lib/architecture"
+import { deployButtonMarkdown } from "@/lib/deploy-button"
+import { repositoryKey } from "@/lib/format"
 import { useProjectCan } from "@/lib/project-permissions"
 import { chosenEnvironment, type ProjectTab } from "@/lib/project-nav"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
@@ -499,6 +504,9 @@ function FullHeader() {
               <DropdownMenuItem onClick={copyID}>
                 Copy project ID
               </DropdownMenuItem>
+              {hasRepositories && (
+                <CopyDeployButton repositories={project.repositories} />
+              )}
               {can("project:delete") && (
                 <>
                   <DropdownMenuSeparator />
@@ -516,6 +524,46 @@ function FullHeader() {
       />
       {analyze.dialog}
     </>
+  )
+}
+
+/**
+ * CopyDeployButton copies the Markdown for a "Deploy with Loomplane"
+ * button, for a repository's README. The button starts a project from one
+ * repository, so a project built from several offers one per repository.
+ */
+function CopyDeployButton({ repositories }: { repositories: string[] }) {
+  const copy = (repository: string) => {
+    const name = repositoryKey(repository) || repository
+    void navigator.clipboard?.writeText(
+      deployButtonMarkdown(window.location.origin, repository)
+    )
+    toast.success("Copied the deploy button", {
+      description: `Paste it into the README of ${name}. Anyone who clicks it can start a project from ${name} on this Loomplane.`,
+    })
+  }
+  if (repositories.length === 1)
+    return (
+      <DropdownMenuItem onClick={() => copy(repositories[0])}>
+        Copy deploy button
+      </DropdownMenuItem>
+    )
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>Copy deploy button</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>For the README of</DropdownMenuLabel>
+          {repositories.map((r) => (
+            <DropdownMenuItem key={r} onClick={() => copy(r)}>
+              <span className="font-mono text-[12.5px]">
+                {repositoryKey(r) || r}
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   )
 }
 

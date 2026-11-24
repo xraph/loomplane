@@ -1,0 +1,67 @@
+---
+title: Deploy button
+description: Put a "Deploy with Loomplane" button in your README, so anyone can start a project from your repository in one click.
+---
+
+Paste this into your README and change `acme/shop` to your repository:
+
+```markdown
+[![Deploy with Loomplane](https://www.loomplane.com/deploy-button-dark.svg)](https://app.loomplane.com/new?repo=https://github.com/acme/shop)
+```
+
+You don't have to write it by hand. On a project's page, open the **⋯** menu and choose **Copy deploy button**. You get this snippet for the project's repository, pointing at the Loomplane you're signed in to. A project built from several repositories lists each one, since a button starts a project from a single repository.
+
+It renders like this:
+
+[![Deploy with Loomplane](/deploy-button-dark.svg)](https://app.loomplane.com/new?repo=https://github.com/acme/shop)
+
+When someone clicks it, Loomplane asks them to sign in if they aren't already, then opens **New project** with your repository filled in. They can rename the project, pick its icon and color, and create it. From there it's the same as any other project: Loomplane analyzes the repository, maps its services, and the first deploy goes through review like every other one.
+
+## The light button
+
+On a light page the dark button can look heavy. There's a light one too:
+
+```markdown
+[![Deploy with Loomplane](https://www.loomplane.com/deploy-button-light.svg)](https://app.loomplane.com/new?repo=https://github.com/acme/shop)
+```
+
+GitHub can switch between them with the reader's theme. Use HTML for that, since Markdown images can't:
+
+```html
+<a href="https://app.loomplane.com/new?repo=https://github.com/acme/shop">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://www.loomplane.com/deploy-button-light.svg">
+    <img alt="Deploy with Loomplane" src="https://www.loomplane.com/deploy-button-dark.svg" height="40">
+  </picture>
+</a>
+```
+
+## What `repo` takes
+
+The link is `/new?repo=` followed by the repository. Any of these work:
+
+| You write | Loomplane fills in |
+|---|---|
+| `https://github.com/acme/shop` | `acme/shop` |
+| `acme/shop` | `acme/shop` (a bare owner and name is GitHub) |
+| `https://github.com/acme/shop/tree/main` | `acme/shop` |
+| `https://gitlab.com/acme/tools/shop.git` | `gitlab.com/acme/tools/shop` |
+| `https://bitbucket.org/acme/shop` | `bitbucket.org/acme/shop` |
+
+A branch in the URL is dropped. The project tracks the repository's default branch, and you can change that once it exists. If `repo` isn't a repository at all, **New project** still opens, just with the field empty.
+
+## Your own Loomplane
+
+The button above points at `app.loomplane.com`, our hosted service. If your team runs its own Loomplane, swap the host for yours:
+
+```markdown
+[![Deploy with Loomplane](https://www.loomplane.com/deploy-button-dark.svg)](https://loomplane.acme.dev/new?repo=https://github.com/acme/shop)
+```
+
+That's handy for internal repositories, where everyone reading the README signs in to the same server. Sign-in keeps the link, so someone who isn't signed in lands on **New project** afterwards, not on the overview.
+
+## Who can use it
+
+Creating a project needs `project:create`. Someone without it sees a page that says so and names the repository, so they can pass it to an admin.
+
+Public repositories work for everyone. For a private one, the person clicking needs your GitHub, GitLab or Bitbucket account connected to their workspace, the same as when they create a project by hand. [Private repositories](/docs/guides/private-repositories) covers GitHub.
