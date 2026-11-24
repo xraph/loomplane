@@ -504,3 +504,102 @@ func TestRegistryCancelCheckUploadAcceptsOCIStatuses(t *testing.T) {
 		}
 	}
 }
+
+// GHCR answers a new upload with /blobs/upload/<id>, not /blobs/uploads/<id>,
+// and refuses to cancel it with 405.
+func TestRegistry_acceptsGHCRUploadLocation(t *testing.T) {
+	canceled := false
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/", "GET /v2/team/loomplane-check/tags/list":
+			w.WriteHeader(200)
+		case "POST /v2/team/loomplane-check/blobs/uploads/":
+			w.Header().Set("Location", "/v2/team/loomplane-check/blobs/upload/15.cf97084d-d0b6-4d43-a15d-e39211280410")
+			w.WriteHeader(202)
+		case "DELETE /v2/team/loomplane-check/blobs/upload/15.cf97084d-d0b6-4d43-a15d-e39211280410":
+			canceled = true // GHCR can't cancel; the empty session expires.
+			w.WriteHeader(405)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(500)
+		}
+	}))
+	defer s.Close()
+	cfg, err := ParseConfig([]byte(`{"token":"test-token"}`), map[string]string{"endpoint": s.URL, "repository": "team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := New(cfg).Check(t.Context()); err != nil || len(result.Missing) != 0 || !canceled {
+		t.Fatalf("ghcr upload location: %+v %v canceled=%v", result, err, canceled)
+	}
+}
+
+func TestRegistry_uploadPathStaysInRepository(t *testing.T) {
+	c := &Client{Config: &Config{Endpoint: "https://registry.example.com"}}
+	base := "/v2/team/loomplane-check"
+	for _, location := range []string{
+		"/v2/team/loomplane-check/blobs/uploads/id?_state=x",
+		"/v2/team/loomplane-check/blobs/upload/id",
+		"https://registry.example.com/v2/team/loomplane-check/blobs/uploads/id",
+	} {
+		if _, err := c.uploadPath(location, base); err != nil {
+			t.Errorf("%s: %v", location, err)
+		}
+	}
+	for _, location := range []string{
+		"/v2/team/loomplane-check/blobs/../../other/blobs/uploads/id",
+		"/v2/team/loomplane-check/blobs/%2e%2e/%2e%2e/other/x",
+		"/v2/team/loomplane-checkx/blobs/uploads/id",
+		"/v2/team/loomplane-check/manifests/latest",
+		"https://evil.example.com/v2/team/loomplane-check/blobs/uploads/id",
+		"/v2/team/loomplane-check/blobs/uploads/id#frag",
+	} {
+		if _, err := c.uploadPath(location, base); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: accepted", location)
+		}
+	}
+}
+
+// DigitalOcean's token service is on another host and grants pull,push, but
+// cancelling an upload needs a delete grant, so DELETE stays 401.
+func TestRegistry_acceptsRefusedUploadCancel(t *testing.T) {
+	tokens := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, _, ok := r.BasicAuth(); !ok || user != "dop" {
+			w.WriteHeader(401)
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"tok"}`))
+	}))
+	defer tokens.Close()
+	deletes := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" || r.Method == http.MethodDelete {
+			if r.Method == http.MethodDelete {
+				deletes++
+			}
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+tokens.URL+`/auth",service="registry.digitalocean.com"`)
+			w.WriteHeader(401)
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/":
+			w.WriteHeader(200)
+		case "GET /v2/team/loomplane-check/tags/list":
+			w.WriteHeader(404)
+		case "POST /v2/team/loomplane-check/blobs/uploads/":
+			w.Header().Set("Location", "/v2/team/loomplane-check/blobs/uploads/probe?_state=signed")
+			w.WriteHeader(202)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			w.WriteHeader(500)
+		}
+	}))
+	defer s.Close()
+	cfg, err := ParseConfig([]byte(`{"username":"dop","password":"dop"}`), map[string]string{"endpoint": s.URL, "repository": "team", "auth_endpoint": tokens.URL + "/auth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := New(cfg).Check(t.Context()); err != nil || len(result.Missing) != 0 || deletes == 0 {
+		t.Fatalf("refused cancel: %+v %v deletes=%d", result, err, deletes)
+	}
+}

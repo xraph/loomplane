@@ -102,7 +102,7 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 				return nil, fmt.Errorf("registry did not acknowledge the empty upload")
 			}
 			if err := c.cancelCheckUpload(ctx, location, repository, response.Request); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%s check: %w", check.permission, err)
 			}
 		}
 	}
@@ -133,18 +133,36 @@ func (c *Client) cancelCheckUpload(ctx context.Context, location, repository str
 	}
 	defer response.Body.Close()
 	defer drainBody(response.Body)
-	switch response.StatusCode {
-	case http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
-		return nil
-	default:
+	if !uploadSettled(response.StatusCode) {
 		return fmt.Errorf("cancel empty registry upload returned HTTP %d", response.StatusCode)
 	}
+	return nil
 }
 
+// uploadSettled reports whether an empty upload is gone or will expire.
+// Cancelling is optional in the distribution spec and only tidies up: the
+// accepted POST already proved push, and an empty session holds no data and
+// expires on its own. GHCR answers DELETE with 405. DigitalOcean answers 401
+// to a pull,push token, because distribution-based registries want a
+// separate delete grant for any DELETE.
+func uploadSettled(status int) bool {
+	switch status {
+	case http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound,
+		http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return true
+	}
+	return false
+}
+
+// uploadPath accepts the Location a registry returns for a new blob upload.
+// The distribution spec makes that location opaque, and registries differ:
+// GHCR answers /v2/<repo>/blobs/upload/<id> rather than .../uploads/<id>. So
+// it only has to stay on this registry and inside the repository's blob
+// namespace. The location itself never reaches an error: it can be signed.
 func (c *Client) uploadPath(location, base string) (string, error) {
 	u, err := url.Parse(location)
 	if err != nil || u.User != nil || u.Fragment != "" {
-		return "", ErrInvalid
+		return "", fmt.Errorf("%w: the registry returned an unusable upload location", ErrInvalid)
 	}
 	endpoint, err := url.Parse(c.Config.Endpoint)
 	if err != nil {
@@ -153,8 +171,8 @@ func (c *Client) uploadPath(location, base string) (string, error) {
 	if u.IsAbs() && (u.Scheme != endpoint.Scheme || u.Host != endpoint.Host) {
 		return "", fmt.Errorf("%w: upload location points outside the registry", ErrInvalid)
 	}
-	if !strings.HasPrefix(u.Path, base+"/blobs/uploads/") {
-		return "", ErrInvalid
+	if !strings.HasPrefix(u.Path, base+"/blobs/") || slices.ContainsFunc(strings.Split(u.Path, "/"), func(s string) bool { return s == "." || s == ".." }) {
+		return "", fmt.Errorf("%w: upload location points outside %s", ErrInvalid, strings.TrimPrefix(base, "/v2/"))
 	}
 	return u.RequestURI(), nil
 }
