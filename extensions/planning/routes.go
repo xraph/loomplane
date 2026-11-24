@@ -3,6 +3,7 @@ package planning
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/xraph/forge"
@@ -281,7 +282,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithResponseSchema(http.StatusOK, "Activity", activity.ActivitySummary{}),
 		}},
 	}
-	catalogRoutes := []route{
+	endpointRoutes := []route{
 		{http.MethodGet, "/catalog/kinds", e.listCatalogKinds, []forge.RouteOption{
 			forge.WithName("catalogKinds.list"),
 			forge.WithSummary("The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run"),
@@ -309,14 +310,14 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes"),
 		}},
 	}
-	catalogRoutes = append(catalogRoutes, e.workspaceServiceRoutes()...)
-	catalogRoutes = append(catalogRoutes, []route{
+	adminRoutes := []route{
 		{http.MethodPost, "/projects/:projectId/environments/:environmentId/catalog/:resource/admin-sessions", e.openCatalogAdmin, []forge.RouteOption{
 			forge.WithName("catalogAdmin.open"),
 			forge.WithSummary("Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure"),
 			forge.WithResponseSchema(http.StatusCreated, "The session: open its URL on this origin", catalogproxy.Session{}),
 		}},
-	}...)
+	}
+	catalogRoutes := slices.Concat(endpointRoutes, e.workspaceServiceRoutes(), adminRoutes)
 	groups := []struct {
 		tag    string
 		routes []route
