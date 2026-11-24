@@ -18,6 +18,7 @@ import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as LearnRouteImport } from "./routes/learn"
 import { Route as MembersRouteImport } from "./routes/members"
+import { Route as NewRouteImport } from "./routes/new"
 import { Route as OnboardingRouteImport } from "./routes/onboarding"
 import { Route as ResetPasswordRouteImport } from "./routes/reset-password"
 import { Route as SetupRouteImport } from "./routes/setup"
@@ -126,6 +127,11 @@ const LearnRoute = LearnRouteImport.update({
 const MembersRoute = MembersRouteImport.update({
   id: "/members",
   path: "/members",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NewRoute = NewRouteImport.update({
+  id: "/new",
+  path: "/new",
   getParentRoute: () => rootRouteImport,
 } as any)
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -468,6 +474,7 @@ export interface FileRoutesByFullPath {
   "/infrastructure": typeof InfrastructureRoute
   "/learn": typeof LearnRoute
   "/members": typeof MembersRoute
+  "/new": typeof NewRoute
   "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
@@ -543,6 +550,7 @@ export interface FileRoutesByTo {
   "/infrastructure": typeof InfrastructureRoute
   "/learn": typeof LearnRoute
   "/members": typeof MembersRoute
+  "/new": typeof NewRoute
   "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
@@ -618,6 +626,7 @@ export interface FileRoutesById {
   "/infrastructure": typeof InfrastructureRoute
   "/learn": typeof LearnRoute
   "/members": typeof MembersRoute
+  "/new": typeof NewRoute
   "/onboarding": typeof OnboardingRoute
   "/reset-password": typeof ResetPasswordRoute
   "/setup": typeof SetupRoute
@@ -695,6 +704,7 @@ export interface FileRouteTypes {
     | "/infrastructure"
     | "/learn"
     | "/members"
+    | "/new"
     | "/onboarding"
     | "/reset-password"
     | "/setup"
@@ -770,6 +780,7 @@ export interface FileRouteTypes {
     | "/infrastructure"
     | "/learn"
     | "/members"
+    | "/new"
     | "/onboarding"
     | "/reset-password"
     | "/setup"
@@ -844,6 +855,7 @@ export interface FileRouteTypes {
     | "/infrastructure"
     | "/learn"
     | "/members"
+    | "/new"
     | "/onboarding"
     | "/reset-password"
     | "/setup"
@@ -920,6 +932,7 @@ export interface RootRouteChildren {
   InfrastructureRoute: typeof InfrastructureRoute
   LearnRoute: typeof LearnRoute
   MembersRoute: typeof MembersRoute
+  NewRoute: typeof NewRoute
   OnboardingRoute: typeof OnboardingRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SetupRoute: typeof SetupRoute
@@ -1042,6 +1055,13 @@ declare module "@tanstack/react-router" {
       path: "/members"
       fullPath: "/members"
       preLoaderRoute: typeof MembersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/new": {
+      id: "/new"
+      path: "/new"
+      fullPath: "/new"
+      preLoaderRoute: typeof NewRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/onboarding": {
@@ -1530,6 +1550,7 @@ const rootRouteChildren: RootRouteChildren = {
   InfrastructureRoute: InfrastructureRoute,
   LearnRoute: LearnRoute,
   MembersRoute: MembersRoute,
+  NewRoute: NewRoute,
   OnboardingRoute: OnboardingRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SetupRoute: SetupRoute,

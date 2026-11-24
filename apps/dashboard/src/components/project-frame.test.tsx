@@ -273,3 +273,43 @@ test("Deploy's menu deploys to one environment", async () => {
     "/deployments/new?project=p&environment=staging"
   )
 })
+
+test("the project menu copies a deploy button for the README", async () => {
+  serve({ repositories: ["https://github.com/acme/shop"] })
+  const writeText = vi.fn(async () => undefined)
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+  wrap(<ProjectPage id="p" />)
+  await userEvent.click(
+    await screen.findByRole("button", { name: "More project actions" })
+  )
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "Copy deploy button" })
+  )
+  expect(writeText).toHaveBeenCalledWith(
+    `[![Deploy with Loomplane](https://www.loomplane.com/deploy-button-dark.svg)](${window.location.origin}/new?repo=https://github.com/acme/shop)`
+  )
+})
+
+test("a project built from several repositories offers a button for each", async () => {
+  serve({
+    repositories: [
+      "https://github.com/acme/shop",
+      "https://github.com/acme/api",
+    ],
+  })
+  const writeText = vi.fn(async () => undefined)
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+  wrap(<ProjectPage id="p" />)
+  await userEvent.click(
+    await screen.findByRole("button", { name: "More project actions" })
+  )
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "Copy deploy button" })
+  )
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "acme/api" })
+  )
+  expect(writeText).toHaveBeenCalledWith(
+    expect.stringContaining("/new?repo=https://github.com/acme/api)")
+  )
+})
