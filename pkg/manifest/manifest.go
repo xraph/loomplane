@@ -164,14 +164,47 @@ type Service struct {
 
 // Wiring is how a service reads one thing it needs.
 type Wiring struct {
+	// Access is how the service gets into a workspace service: with its
+	// credentials as registered (AccessShared, the default), in a
+	// database of its own on the same server (AccessOwnDatabase), or as
+	// a user of its own with a database of its own (AccessOwnUser).
+	Access string `json:"access,omitempty" yaml:"access,omitempty"`
+	// Database is the service's own database under AccessOwnDatabase or
+	// AccessOwnUser. Empty, it's named after the service.
+	Database string `json:"database,omitempty" yaml:"database,omitempty"`
 	// Env maps each variable the service reads to what it holds: url
 	// (the whole connection string), host, port, user, password or
 	// database. Set, it replaces the variable the need's kind names.
 	Env map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 }
 
+// How a service gets into a workspace service it needs.
+const (
+	AccessShared      = "shared"
+	AccessOwnDatabase = "own_database"
+	AccessOwnUser     = "own_user"
+)
+
+// WiringAccess are the access modes a wiring can name.
+var WiringAccess = []string{AccessShared, AccessOwnDatabase, AccessOwnUser}
+
+// OwnAccess reports whether access gives a service a database of its own.
+func OwnAccess(access string) bool {
+	return access == AccessOwnDatabase || access == AccessOwnUser
+}
+
+// Empty reports whether the wiring changes nothing: no variables, the
+// shared credentials and no database.
+func (w Wiring) Empty() bool {
+	return len(w.Env) == 0 && (w.Access == "" || w.Access == AccessShared) && w.Database == ""
+}
+
 // WiringOutputs are what a wired variable can hold.
 var WiringOutputs = []string{"url", "host", "port", "user", "password", "database"}
+
+// wiringDatabaseRE is a database a service can be given: a name every
+// engine takes without quoting, or a Redis database's number.
+var wiringDatabaseRE = regexp.MustCompile(`^[A-Za-z0-9_]{1,63}$`)
 
 // Build is how a service's Dockerfile is built.
 type Build struct {
@@ -724,17 +757,8 @@ func (m *Manifest) Validate() error {
 			if !slices.Contains(s.Needs, need) {
 				add(path, "wiring.%s isn't in needs", need)
 			}
-			env := s.Wiring[need].Env
-			if len(env) == 0 {
-				add(wpath+".env", "names at least one variable, such as DATABASE_URL: url")
-			}
-			for _, key := range sortedKeys(env) {
-				if !envKeyRE.MatchString(key) {
-					add(wpath+".env."+key, "isn't a variable name: use letters, digits and underscores, not starting with a digit")
-				}
-				if !slices.Contains(WiringOutputs, env[key]) {
-					add(wpath+".env."+key, "%q isn't something a variable can hold; use %s", env[key], strings.Join(WiringOutputs, ", "))
-				}
+			for _, p := range s.Wiring[need].problems(wpath) {
+				add(p.Path, "%s", p.Message)
 			}
 		}
 		for _, env := range sortedKeys(s.Environments) {
@@ -1406,4 +1430,34 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// problems are what's wrong with a wiring at path.
+func (w Wiring) problems(path string) Problems {
+	var out Problems
+	add := func(at, format string, args ...any) {
+		out = append(out, Problem{Path: at, Message: fmt.Sprintf(format, args...)})
+	}
+	if w.Empty() && w.Access == "" {
+		add(path, "names at least one variable, such as env: {DATABASE_URL: url}, or an access mode")
+	}
+	if w.Access != "" && !slices.Contains(WiringAccess, w.Access) {
+		add(path+".access", "%q isn't an access mode; use %s", w.Access, strings.Join(WiringAccess, ", "))
+	}
+	if w.Database != "" {
+		if !OwnAccess(w.Access) {
+			add(path+".database", "is only for access own_database or own_user")
+		} else if !wiringDatabaseRE.MatchString(w.Database) {
+			add(path+".database", "isn't a database name: use up to 63 letters, digits and underscores")
+		}
+	}
+	for _, key := range sortedKeys(w.Env) {
+		if !envKeyRE.MatchString(key) {
+			add(path+".env."+key, "isn't a variable name: use letters, digits and underscores, not starting with a digit")
+		}
+		if !slices.Contains(WiringOutputs, w.Env[key]) {
+			add(path+".env."+key, "%q isn't something a variable can hold; use %s", w.Env[key], strings.Join(WiringOutputs, ", "))
+		}
+	}
+	return out
 }

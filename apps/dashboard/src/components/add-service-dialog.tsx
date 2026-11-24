@@ -33,6 +33,7 @@ import {
   useManifestsCurrent,
   useManifestsSuggestions,
   useProjectsGraph,
+  useProjectVariablesList,
   useProvidersList,
   useProviderResourcesList,
   useSourcesList,
@@ -50,6 +51,7 @@ import { useInvalidate, useQuery } from "@/client/hooks"
 import { CatalogDependencyPicker } from "@/components/catalog-dependency-picker"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
+import { ServiceAccess } from "@/components/service-access"
 import { VariableWiring, type WiringSample } from "@/components/variable-wiring"
 import { engineLogos } from "@/components/workspace-services/register-dialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -125,9 +127,17 @@ import {
 } from "@/components/zero-state"
 
 import {
-  envOf,
+  type AccessChoice,
+  accessProblem,
+  accessRights,
+  type AccessRights,
+  handSetFor,
+  keysOf,
+  ownDatabaseName,
+  ownUserName,
   suggestWiring,
   wirable,
+  wiringBody,
   type WiringChoice,
   wiringProblem,
 } from "@/lib/wiring"
@@ -157,6 +167,8 @@ export type WorkspacePick = {
   environmentLabel?: string
   /** Where it is, for showing what a service's variables will hold. */
   sample?: WiringSample
+  /** What a registered service's credentials may do, which decides how a service can get in. */
+  rights?: AccessRights
 }
 
 // The resource kind each engine a registered service runs is attached as.
@@ -568,6 +580,7 @@ function WorkspaceServices({
                 from: "this workspace",
                 registered: true,
                 environmentLabel: e.environmentLabel,
+                rights: accessRights(e),
                 sample: {
                   host: e.host,
                   port: e.port,
@@ -817,7 +830,12 @@ function Configure({
   // How each service that uses it reads it, once someone changes where
   // the form started.
   const [choices, setChoices] = useState<Record<string, WiringChoice>>({})
+  // How each service gets into a workspace service, once someone chooses.
+  const [accesses, setAccesses] = useState<Record<string, AccessChoice>>({})
   const graph = useQuery(useProjectsGraph, { path: { id: project.id } })
+  const variables = useQuery(useProjectVariablesList, {
+    path: { id: project.id },
+  })
 
   // A name follows the source until someone types one.
   const onSource = (value: string) => {
@@ -931,15 +949,44 @@ function Configure({
     }
   }
   const wires = (info || existing) && wirable(wiredKind) ? neededBy : []
+  const rights = existing?.rights
+  const accessFor = (svc: string): AccessChoice =>
+    accesses[svc] ?? {
+      access: "shared",
+      database: rights?.engine === "redis" ? "" : ownDatabaseName(svc),
+    }
   const wiring = Object.fromEntries(
     wires.flatMap((svc) => {
-      const env = envOf(wiringFor(svc).choice, wiringFallback)
-      return env ? [[svc, env]] : []
+      const body = wiringBody(
+        wiringFor(svc).choice,
+        wiringFallback,
+        rights ? accessFor(svc) : undefined
+      )
+      return body ? [[svc, body]] : []
     })
   )
   const wiringBlocked = wires.some(
-    (svc) => wiringProblem(wiringFor(svc).choice) !== ""
+    (svc) =>
+      wiringProblem(wiringFor(svc).choice) !== "" ||
+      (!!rights && accessProblem(accessFor(svc), rights.engine) !== "")
   )
+  // What a service's variables will hold, with its own database or user.
+  const sampleFor = (svc: string): WiringSample | undefined => {
+    const base = existing?.sample
+    const a = accessFor(svc)
+    if (!base || !rights || a.access === "shared") return base
+    const database = a.database.trim() || base.database
+    const user =
+      a.access === "own_user"
+        ? (project.slug && ownUserName(project.slug, svc)) || "its own user"
+        : base.user
+    return {
+      ...base,
+      database,
+      user,
+      url: `${rights.engine}://${user ? `${user}:••••••@` : ""}${base.host}:${base.port}/${database ?? ""}`,
+    }
+  }
 
   const edit: AddEdit | undefined = (() => {
     if (!trimmed || problem) return undefined
@@ -1424,7 +1471,7 @@ function Configure({
         <div className="grid gap-2">
           {wires.map((svc) => {
             const { choice, detected } = wiringFor(svc)
-            return (
+            const wired = (
               <VariableWiring
                 key={svc}
                 service={svc}
@@ -1433,9 +1480,35 @@ function Configure({
                 fallback={wiringFallback}
                 value={choice}
                 detected={detected}
-                sample={existing?.sample}
+                sample={sampleFor(svc)}
+                handSet={handSetFor(
+                  svc,
+                  keysOf(choice),
+                  variables.data?.variables ?? []
+                )}
                 onChange={(next) => setChoices((c) => ({ ...c, [svc]: next }))}
               />
+            )
+            if (!rights) return wired
+            return (
+              <div
+                key={svc}
+                className="grid gap-2.5 rounded-xl p-3 ring-1 ring-border"
+              >
+                <ServiceAccess
+                  service={svc}
+                  need={trimmed || "it"}
+                  rights={rights}
+                  value={accessFor(svc)}
+                  ownUser={
+                    project.slug ? ownUserName(project.slug, svc) : undefined
+                  }
+                  onChange={(next) =>
+                    setAccesses((a) => ({ ...a, [svc]: next }))
+                  }
+                />
+                {wired}
+              </div>
             )
           })}
         </div>

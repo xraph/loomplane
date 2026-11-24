@@ -66,6 +66,11 @@ func scratchStore(t *testing.T) (*PgStore, *pgdriver.PgDB) {
 			endpoint_id TEXT NOT NULL REFERENCES loomplane_catalog_endpoints(id) ON DELETE CASCADE,
 			org_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
 			PRIMARY KEY (endpoint_id, project_id))`,
+		`CREATE TABLE loomplane_catalog_endpoint_users (
+			endpoint_id TEXT NOT NULL REFERENCES loomplane_catalog_endpoints(id) ON DELETE CASCADE,
+			org_id TEXT NOT NULL, name TEXT NOT NULL, database_name TEXT NOT NULL, created_database BOOLEAN NOT NULL DEFAULT false,
+			project_id TEXT NOT NULL, service TEXT NOT NULL, environments TEXT[] NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ,
+			PRIMARY KEY (endpoint_id, name))`,
 		`CREATE TABLE loomplane_bindings (id TEXT PRIMARY KEY, org_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '',
 			environment_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', config JSONB NOT NULL DEFAULT '{}')`,
 		`CREATE TABLE loomplane_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL)`,

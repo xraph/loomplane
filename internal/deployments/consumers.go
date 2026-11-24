@@ -77,9 +77,10 @@ func (r *Runner) bindConsumer(ctx context.Context, d *Deployment, service string
 	return value, nil
 }
 
-// releaseConsumers releases the per-consumer outputs a service had
-// through old and no longer has through now, which is all of them for a
-// service that's gone (now is nil). It returns what failed to release as
+// releaseConsumers releases the per-consumer outputs, and the own
+// databases and users of workspace services, a service had through old and
+// no longer has through now, which is all of them for a service that's
+// gone (now is nil). It returns what failed to release as
 // warnings: the service's binding has changed already, so a retry of the
 // step wouldn't see anything to release again. A resource that's gone
 // took what it issued with it.
@@ -114,7 +115,7 @@ func (r *Runner) releaseConsumers(ctx context.Context, d *Deployment, service st
 			warnings = append(warnings, fmt.Sprintf("release %s's %s from %s: %v", service, output, link.From, err))
 		}
 	}
-	return warnings
+	return append(warnings, r.releaseOwnAccess(ctx, d, service, old, before, now)...)
 }
 
 // consumerChannel reaches the control ports of a composed resource's

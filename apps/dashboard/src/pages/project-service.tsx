@@ -49,6 +49,7 @@ import { QueryError } from "@/components/query-error"
 import { StatusPill, toneOf, type Tone } from "@/components/runs"
 import { ServiceAddress } from "@/components/service-address"
 import { ServiceBuildSettings } from "@/components/service-build-settings"
+import { ServiceConnections } from "@/components/service-connections"
 import { ServiceScaling } from "@/components/service-scaling"
 import { projectCrumbs, useProjectFrame } from "@/components/project-frame"
 import { SiteHeader } from "@/components/site-header"
@@ -500,6 +501,7 @@ function Loaded({
         </TabsContent>
 
         <TabsContent value="variables" className="grid gap-6">
+          <ServiceConnections project={project} service={name} />
           <Variables row={row} env={env} />
         </TabsContent>
 

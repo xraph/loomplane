@@ -53,6 +53,10 @@ type Service struct {
 	// ProjectsIn checks the projects a workspace service is shared with
 	// are the organization's. It may be nil.
 	ProjectsIn ProjectsIn
+	// OpenAdmin connects to a SQL workspace service to make a service's
+	// database or user. Nil connects with the real drivers; tests stand
+	// in for a server here.
+	OpenAdmin func(ctx context.Context, engine, dsn string, dial DialFunc) (sqlAdmin, error)
 }
 
 // NewService returns a Service.
@@ -144,7 +148,8 @@ func (s *Service) List(ctx context.Context, p security.Principal) ([]*Endpoint, 
 
 // Delete removes an endpoint and its DSN. It needs SecretManage, and
 // returns ErrInUse while a binding connects to the endpoint; the DSN stays
-// in Vault then. Nothing on the endpoint itself changes.
+// in Vault then. Nothing on the endpoint itself changes: the users and
+// databases Loomplane made there stay, without their passwords.
 func (s *Service) Delete(ctx context.Context, p security.Principal, id string) (err error) {
 	event := AuditEvent{Action: AuditDelete, Principal: p, EndpointID: id}
 	defer func() {
@@ -157,8 +162,19 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) (
 	if e, gerr := s.store.Get(ctx, p.OrgID, id); gerr == nil {
 		event.Engine, event.Address = e.Engine, e.address()
 	}
+	// The users Loomplane made on it stay on the server, but their
+	// passwords go with it: nothing could use them any more.
+	var users []OwnUser
+	if store, ok := s.store.(OwnUserStore); ok {
+		users, _ = store.OwnUsers(ctx, p.OrgID, id) //nolint:errcheck // an unread list only leaves passwords behind, reported below as orphans can't be
+	}
 	if err := s.store.Delete(ctx, p.OrgID, id); err != nil {
 		return err
+	}
+	for _, u := range users {
+		if err := s.secrets.Delete(ctx, OwnUserKey(p.OrgID, id, u.User)); err != nil && s.OrphanedDSN != nil {
+			s.OrphanedDSN(ctx, OwnUserKey(p.OrgID, id, u.User), err)
+		}
 	}
 	if err := s.secrets.Delete(ctx, DSNKey(p.OrgID, id)); err != nil {
 		if s.OrphanedDSN != nil {

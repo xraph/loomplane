@@ -2,7 +2,6 @@ package catalogconnect
 
 import (
 	"context"
-	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -69,33 +68,12 @@ func (MySQLProber) Probe(ctx context.Context, dial DialFunc, dsn string, req rec
 	if dial == nil {
 		return nil, errors.New("the MySQL check requires a target dialer")
 	}
-	e := &Endpoint{Engine: EngineMySQL}
-	if err := parseMySQLDSN(e, dsn); err != nil {
-		return nil, err
-	}
-	u, err := url.Parse(strings.TrimSpace(dsn))
+	cfg, err := mysqlConfig(dsn, dial)
 	if err != nil {
-		return nil, errors.New("the stored MySQL URL cannot be read")
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	cfg := mysql.NewConfig()
-	cfg.Net, cfg.Addr, cfg.User, cfg.DBName = "tcp", e.address(), e.Username, e.Database
-	cfg.Passwd, _ = u.User.Password()
-	cfg.DialFunc = dial
-	cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout = probeTimeout, probeTimeout, probeTimeout
-	cfg.Logger = &mysql.NopLogger{}
-	cfg.TLS = &tls.Config{ServerName: e.Host, MinVersion: tls.VersionTLS12}
-	if e.TLS == TLSRequire {
-		cfg.TLS.InsecureSkipVerify = true
-	} // Explicit sslmode=require encrypts without certificate verification, with no plaintext fallback.
-	if timeout := u.Query().Get("connect_timeout"); timeout != "" {
-		seconds, parseErr := strconv.Atoi(timeout)
-		if parseErr != nil {
-			return nil, errors.New("the MySQL timeout cannot be read")
-		}
-		cfg.Timeout = time.Duration(seconds) * time.Second
-	}
 	connector, err := mysql.NewConnector(cfg)
 	if err != nil {
 		return nil, errors.New("the MySQL connection settings cannot be used")
@@ -121,6 +99,14 @@ func (MySQLProber) Probe(ctx context.Context, dial DialFunc, dsn string, req rec
 	checkVersion(report, EngineMySQL, req)
 	if len(req.Extensions) > 0 || len(req.Preload) > 0 || req.CreateRole {
 		report.Problems = append(report.Problems, "the MySQL check does not verify PostgreSQL extensions, preload libraries or role creation")
+	}
+	if wantsCapabilities(ctx) {
+		grants, gerr := showGrants(ctx, db)
+		if gerr != nil {
+			return nil, refused("MySQL refused to list the user's grants")
+		}
+		caps := mysqlCapabilities(grants)
+		report.Capabilities = &caps
 	}
 	return report, nil
 }

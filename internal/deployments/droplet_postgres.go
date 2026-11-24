@@ -120,6 +120,17 @@ func (c *DropletPostgresChecker) check(ctx context.Context, org, target string, 
 // serviceResourceAddress is what app's variable for a resource holds: its
 // address, or the part of it the service is wired to read.
 func (r *Runner) serviceResourceAddress(ctx context.Context, d *Deployment, app string, services, resources map[string]*planning.Binding, link planning.EnvLink) (value string, extra map[string]linkExtra, err error) {
+	if link.Access != "" {
+		address, aerr := r.ownAccessAddress(ctx, d, app, link)
+		if aerr != nil || link.Part == "" {
+			return address, nil, aerr
+		}
+		part, perr := connectionPart(address, link.Part)
+		if perr != nil {
+			return "", nil, fmt.Errorf("%s reads the %s of %s: %w", app, link.Part, link.From, perr)
+		}
+		return part, nil, nil
+	}
 	if link.Part == "" {
 		return r.wholeResourceAddress(ctx, d, app, services, resources, link)
 	}

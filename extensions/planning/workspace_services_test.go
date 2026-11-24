@@ -251,3 +251,23 @@ func TestAProviderResourcesEndpointsStayItsOwn(t *testing.T) {
 		t.Fatalf("origin: %q", e.Origin)
 	}
 }
+
+func TestWorkspaceServiceUserRoutesAskBeforeDropping(t *testing.T) {
+	r, _, _, _, _ := workspaceRoutes(t)
+	out := call(t, r, "admin", http.MethodPost, "/api/v1/catalog/endpoints/registrations",
+		`{"name":"orders","engine":"postgres","dsn":"`+workspaceDSN+`","target":"conn_server"}`)
+	var e catalogconnect.Endpoint
+	if err := json.Unmarshal(out.Body.Bytes(), &e); err != nil {
+		t.Fatal(err)
+	}
+	if out = call(t, r, "viewer", http.MethodGet, "/api/v1/catalog/endpoints/"+e.ID+"/users", ""); out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"users":[]`) {
+		t.Fatalf("users: %d %s", out.Code, out.Body.String())
+	}
+	drop := "/api/v1/catalog/endpoints/" + e.ID + "/users/lp_shop_api/drops"
+	if out = call(t, r, "developer", http.MethodPost, drop, `{"confirm":"lp_shop_api"}`); out.Code != http.StatusForbidden {
+		t.Fatalf("a developer's drop: %d %s", out.Code, out.Body.String())
+	}
+	if out = call(t, r, "admin", http.MethodPost, drop, `{"confirm":"lp_shop"}`); out.Code != http.StatusUnprocessableEntity || !strings.Contains(out.Body.String(), "type the user's name") {
+		t.Fatalf("a drop without the name: %d %s", out.Code, out.Body.String())
+	}
+}

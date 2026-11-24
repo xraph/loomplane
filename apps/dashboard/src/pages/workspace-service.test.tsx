@@ -66,6 +66,11 @@ const endpoint = (over: Record<string, unknown> = {}) => ({
 
 type Write = { method: string; path: string; body: unknown }
 
+let ownUsers: unknown[] = []
+afterEach(() => {
+  ownUsers = []
+})
+
 function serve(
   over: Record<string, unknown> = {},
   uses: unknown[] = [],
@@ -90,6 +95,8 @@ function serve(
         return Response.json(endpoint(over))
       if (path === "/api/v1/catalog/endpoints/endpoint_orders/uses")
         return Response.json({ uses })
+      if (path === "/api/v1/catalog/endpoints/endpoint_orders/users")
+        return Response.json({ users: ownUsers })
       if (path.endsWith("/connections"))
         return Response.json({
           connections: [
@@ -259,4 +266,59 @@ test("a provider resource's endpoint is read-only here", async () => {
     "Every project in the workspace."
   )
   expect(screen.queryByRole("button", { name: "Save sharing" })).toBeNull()
+})
+
+test("a user Loomplane made is dropped once nothing uses it, by its name", async () => {
+  ownUsers = [
+    {
+      endpoint_id: "endpoint_orders",
+      user: "lp_shop_api",
+      database: "api",
+      created_database: true,
+      project_id: "project_shop",
+      service: "api",
+      environments: [],
+      created_at: "2026-11-01T00:00:00Z",
+      revoked_at: "2026-11-20T00:00:00Z",
+    },
+    {
+      endpoint_id: "endpoint_orders",
+      user: "lp_billing_worker",
+      database: "worker",
+      created_database: true,
+      project_id: "project_billing",
+      service: "worker",
+      environments: ["env_p"],
+      created_at: "2026-11-01T00:00:00Z",
+    },
+  ]
+  const writes = serve({}, [], () => Response.json({ users: [] }))
+  const user = userEvent.setup()
+  await user.click(await screen.findByRole("tab", { name: /Used by|Uses/ }))
+  const made = await screen.findByRole("region", {
+    name: "Users Loomplane made",
+  })
+  await waitFor(() =>
+    expect(made).toHaveTextContent("api in shop, database api")
+  )
+  expect(made).toHaveTextContent("In use in 1 environment")
+  // One still in use can't be dropped.
+  expect(
+    within(made).queryByRole("button", { name: "Drop lp_billing_worker" })
+  ).toBeNull()
+  await user.click(
+    within(made).getByRole("button", { name: "Drop lp_shop_api" })
+  )
+  const dialog = await screen.findByRole("alertdialog")
+  expect(dialog).toHaveTextContent("with all its data")
+  const drop = within(dialog).getByRole("button", { name: "Drop" })
+  expect(drop).toBeDisabled()
+  await user.type(within(dialog).getByRole("textbox"), "lp_shop_api")
+  await user.click(drop)
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]).toEqual({
+    method: "POST",
+    path: "/api/v1/catalog/endpoints/endpoint_orders/users/lp_shop_api/drops",
+    body: { confirm: "lp_shop_api", target: "" },
+  })
 })

@@ -58,13 +58,31 @@ resources:
 
 When you plan, Loomplane checks the service from each consuming service's own server or cluster, and the plan pins the credentials it saw. The deploy checks the same things again before any service gets the connection string, so a plan made before someone stopped sharing the service, or replaced its credentials, fails instead of deploying something nobody reviewed. Plan again to pick up new credentials.
 
+## Choose how a service gets in
+
+A registered service can be shared three ways, and the card in **Add service** asks which for each service you tick:
+
+- **Same credentials**: the service signs in as the registered user, like everything else that uses it.
+- **Its own database**: the same credentials, in a database for that service alone on the same server. Loomplane creates it when the service deploys, if the credentials can. If they can't, the card says so and the database has to be there already. On Redis you pick a database number.
+- **Its own user**: a user and database for that service alone, on Postgres or MySQL. This needs an [admin credential](#the-admin-credential) that can create users, and the card tells you when there isn't one.
+
+The database is named after the service unless you type another name. The user is `lp_<project>_<service>`, and its password is made once and kept in Vault, so every deploy gets the same one. Loomplane makes both from the server or cluster the service runs on, the same place it checks the connection from.
+
 ## Choose the variables a service reads
 
 When you tick a service in **Add service**, a card asks how it reads the connection. **One variable** holds the whole connection string, under its kind's name or one you type. **Separate variables** splits it into host, port, user, password and database, from a ready-made set such as `PGHOST`, `PGPORT`… for Postgres or `DB_HOST`, `DB_PORT`… under a prefix you choose, each name editable.
 
 Loomplane starts where your code already is. If analysis found the service reading two or more of `PGHOST`, `PGUSER`, `PGPASSWORD` and the rest, it starts on those; if it reads a connection string by a usual name, such as `PG_URL` or `CACHE_URL`, it starts on that. Under the card, a preview shows each variable with what it will hold, the password masked.
 
-What you choose is written as `wiring` on the service in `loomplane.yaml`, and the parts are read from the connection string when it deploys. The [loomplane.yaml reference](/docs/reference/loomplane-yaml#wiring) has the details.
+If the project already sets one of those variables by hand, for that service or for every service, the card warns you: a value you set yourself wins over the linked one, so remove it on the **Variables** tab or choose another name.
+
+What you choose is written as `wiring` on the service in `loomplane.yaml`, and the parts are read from the connection string when it deploys. To change it later, open the service and its **Variables** tab: **How it connects** lists each database or cache it needs, and **Change** opens the same choices. The [loomplane.yaml reference](/docs/reference/loomplane-yaml#wiring) has the details.
+
+## Users Loomplane made
+
+The service's **Used by** tab lists the users Loomplane made on it, which project and service each is for, and whether it's in use. When a service stops using its own user, because you removed it, changed how it gets in or deleted the service, the user loses its login once no environment of the project uses it. Its database and data stay.
+
+To get rid of one for good, use **Drop** and type the user's name. Loomplane drops the user, and the database it made for it with all its data. A database that was there before the user stays. Only a user nothing uses can be dropped.
 
 ## Who can use it
 
@@ -78,11 +96,11 @@ After a password rotation or a move to a new primary, open the service's **Setti
 
 ## The admin credential
 
-Optional. On **Access**, an admin connection string for the same host and port lets Loomplane give a service its own database or user on that server, instead of sharing one. It's checked and kept in Vault like the service's own, and the page says what it may do.
+Optional. On **Access**, an admin connection string for the same host and port lets Loomplane give a service its own user on that server, instead of sharing one. It's checked and kept in Vault like the service's own, and the page says what it may do. On MySQL, Loomplane reads that from the user's grants: it needs `CREATE USER` and `GRANT OPTION` across the server.
 
 ## Delete one
 
-Deleting forgets the service and its credentials. Nothing on the server changes. Loomplane refuses while any project environment uses it, and the **Used by** tab lists which.
+Deleting forgets the service and its credentials. Nothing on the server changes, so the users and databases Loomplane made there stay; drop them first if you want them gone. Loomplane refuses while any project environment uses it, and the **Used by** tab lists which.
 
 ## What Loomplane doesn't do
 

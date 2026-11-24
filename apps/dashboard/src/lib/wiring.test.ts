@@ -1,11 +1,17 @@
 import { expect, test } from "vitest"
 
 import {
+  accessOptions,
+  accessProblem,
+  choiceOf,
   envOf,
+  handSetFor,
+  ownUserName,
   prefixTemplate,
   suggestWiring,
   templatesFor,
   wirable,
+  wiringBody,
   wiringProblem,
 } from "@/lib/wiring"
 
@@ -103,4 +109,91 @@ test("templates and names", () => {
     })
   ).toBe("DB is used twice.")
   expect(wiringProblem({ mode: "one", key: "DATABASE_URL" })).toBe("")
+})
+
+test("each access mode says what it needs of a workspace service", () => {
+  const rights = {
+    engine: "postgres",
+    registered: true,
+    createDatabase: false,
+    adminSet: false,
+    adminCreateDatabase: false,
+    adminCreateUser: false,
+  }
+  const [shared, ownDatabase, ownUser] = accessOptions(rights, "api")
+  expect(shared.unavailable).toBe("")
+  expect(ownDatabase.note).toMatch(/api must already exist/)
+  expect(ownUser.unavailable).toMatch(/admin credential/)
+  expect(
+    accessOptions({ ...rights, engine: "redis" }, "1")[2].unavailable
+  ).toMatch(/Postgres and MySQL only/)
+  expect(
+    accessProblem({ access: "own_database", database: "x" }, "redis")
+  ).toMatch(/numbered/)
+  expect(
+    accessProblem({ access: "own_user", database: "api-db" }, "postgres")
+  ).toMatch(/letters, digits and underscores/)
+})
+
+test("a wiring is written only when it changes something", () => {
+  const one = { mode: "one" as const, key: "DATABASE_URL" }
+  expect(wiringBody(one, "DATABASE_URL")).toBeUndefined()
+  expect(
+    wiringBody(one, "DATABASE_URL", { access: "shared", database: "api" })
+  ).toBeUndefined()
+  expect(
+    wiringBody(one, "DATABASE_URL", { access: "own_database", database: "api" })
+  ).toEqual({ access: "own_database", database: "api" })
+  expect(wiringBody({ mode: "one", key: "DB" }, "DATABASE_URL")).toEqual({
+    env: { DB: "url" },
+  })
+})
+
+test("a wiring reads back into the form", () => {
+  expect(choiceOf("postgres", "DATABASE_URL")).toEqual({
+    mode: "one",
+    key: "DATABASE_URL",
+  })
+  expect(choiceOf("postgres", "DATABASE_URL", { DSN: "url" })).toEqual({
+    mode: "one",
+    key: "DSN",
+  })
+  expect(
+    choiceOf("postgres", "DATABASE_URL", {
+      PGHOST: "host",
+      PGPORT: "port",
+      PGUSER: "user",
+      PGPASSWORD: "password",
+      PGDATABASE: "database",
+    })
+  ).toMatchObject({ mode: "parts", template: "libpq" })
+  expect(
+    choiceOf("postgres", "DATABASE_URL", { DBHOST: "host" })
+  ).toMatchObject({
+    mode: "parts",
+    template: "custom",
+    vars: { host: "DBHOST" },
+  })
+})
+
+test("the user Loomplane makes is named, and variables set by hand found", () => {
+  expect(ownUserName("shop", "api-v2")).toBe("lp_shop_api_v2")
+  expect(
+    ownUserName("a-very-long-project-name", "billing-worker")
+  ).toBeUndefined()
+  expect(
+    handSetFor(
+      "api",
+      ["PGHOST", "PGUSER"],
+      [
+        { key: "PGHOST", service: "api", environment: "production" },
+        { key: "PGUSER", service: "worker", environment: "" },
+        { key: "PGUSER", environment: "", resourceOutput: "orders.url" },
+        { key: "PGHOST", environment: "" },
+      ]
+    )
+  ).toEqual([
+    { key: "PGHOST", environment: "production" },
+    { key: "PGHOST", environment: "" },
+  ])
 })

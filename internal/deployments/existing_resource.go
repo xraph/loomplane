@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
@@ -145,16 +146,7 @@ func (r *Runner) checkReach(ctx context.Context, org string, plan *planning.Plan
 	if r.existingEndpoints == nil || r.existingDialer == nil {
 		return errors.New("the external resource network verifier is unavailable")
 	}
-	connection := consumer.Service.Target
-	if connection == "" {
-		connection = consumer.ConnectionID
-	}
-	if connection == "" {
-		if target, e := r.providers.Get(consumer.Provider); e == nil {
-			connection = plan.Connections[target.Cloud]
-		}
-	}
-	dial, closer, err := r.existingDialer.TargetDial(ctx, org, connection)
+	dial, closer, err := r.consumerDial(ctx, org, plan, consumer)
 	if err != nil {
 		return errors.New("the deployment network could not verify the external connection")
 	}
@@ -168,6 +160,28 @@ func (r *Runner) checkReach(ctx context.Context, org string, plan *planning.Plan
 		return errors.New("the external connection failed its deployment network check")
 	}
 	return nil
+}
+
+// consumerDial dials from the target one service deploys to: its own, its
+// connection's, or the plan's connection for its provider's cloud. The
+// plan may be nil, for a service that's gone.
+func (r *Runner) consumerDial(ctx context.Context, org string, plan *planning.Plan, consumer planning.Action) (catalogconnect.DialFunc, io.Closer, error) {
+	if r.existingDialer == nil {
+		return nil, nil, errors.New("the deployment network is unavailable")
+	}
+	connection := ""
+	if consumer.Service != nil {
+		connection = consumer.Service.Target
+	}
+	if connection == "" {
+		connection = consumer.ConnectionID
+	}
+	if connection == "" && plan != nil {
+		if target, e := r.providers.Get(consumer.Provider); e == nil {
+			connection = plan.Connections[target.Cloud]
+		}
+	}
+	return r.existingDialer.TargetDial(ctx, org, connection)
 }
 
 // workspacePin reports whether an attachment is of a workspace service: an

@@ -241,3 +241,220 @@ export function wiringProblem(choice: WiringChoice): string {
   if (twice) return `${twice} is used twice.`
   return ""
 }
+
+/** How a service gets into a workspace service, as loomplane.yaml's wiring.<need>.access. */
+export type Access = "shared" | "own_database" | "own_user"
+
+/** An access mode and the service's own database under it. */
+export type AccessChoice = { access: Access; database: string }
+
+/** What a workspace service's credentials may do, as its last check found. */
+export type AccessRights = {
+  engine: string
+  /** Whether it's a service registered by its connection string. */
+  registered: boolean
+  createDatabase: boolean
+  adminSet: boolean
+  adminCreateDatabase: boolean
+  adminCreateUser: boolean
+}
+
+/** A registered workspace service's rights, from what the API says of it. */
+export function accessRights(e: {
+  engine: string
+  origin?: string
+  adminSet?: boolean
+  lastCheck?: {
+    capabilities?: { createDatabase: boolean; createUser: boolean }
+    admin?: { createDatabase: boolean; createUser: boolean }
+  }
+}): AccessRights {
+  return {
+    engine: e.engine,
+    registered: !e.origin || e.origin === "registered",
+    createDatabase: !!e.lastCheck?.capabilities?.createDatabase,
+    adminSet: !!e.adminSet,
+    adminCreateDatabase: !!e.lastCheck?.admin?.createDatabase,
+    adminCreateUser: !!e.lastCheck?.admin?.createUser,
+  }
+}
+
+/** One access mode as the form offers it. */
+export type AccessOption = {
+  access: Access
+  label: string
+  /** Why it can't be chosen, or "". */
+  unavailable: string
+  /** What choosing it means that someone should know first, or "". */
+  note: string
+}
+
+const ownDatabaseEngines = ["postgres", "mysql", "redis", "mongodb"]
+
+/** accessOptions are the access modes a workspace service can give. */
+export function accessOptions(
+  rights: AccessRights,
+  database: string
+): AccessOption[] {
+  const sql = rights.engine === "postgres" || rights.engine === "mysql"
+  return [
+    { access: "shared", label: "Same credentials", unavailable: "", note: "" },
+    {
+      access: "own_database",
+      label: "Its own database",
+      unavailable: !ownDatabaseEngines.includes(rights.engine)
+        ? `A ${rights.engine} service has no databases to give.`
+        : "",
+      note:
+        sql && !rights.createDatabase
+          ? `These credentials can't create databases, so ${database || "the database"} must already exist.`
+          : "",
+    },
+    {
+      access: "own_user",
+      label: "Its own user",
+      unavailable: !sql
+        ? "Loomplane makes users on Postgres and MySQL only."
+        : !rights.adminSet
+          ? "Add an admin credential on the workspace service's page first."
+          : !rights.adminCreateUser
+            ? "Its admin credential can't create users."
+            : "",
+      note:
+        sql && rights.adminSet && !rights.adminCreateDatabase
+          ? `The admin credential can't create databases, so ${database || "the database"} must already exist.`
+          : "",
+    },
+  ]
+}
+
+/** ownDatabaseName is the database a service gets when it names none. */
+export function ownDatabaseName(service: string): string {
+  return service
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .slice(0, 63)
+}
+
+/**
+ * ownUserName is the user Loomplane makes for a project's service:
+ * lp_<project>_<service>. A longer one than 32 characters is shortened
+ * with a hash the server adds, so it's undefined here.
+ */
+export function ownUserName(
+  projectSlug: string,
+  service: string
+): string | undefined {
+  const full = `lp_${projectSlug}_${service}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+  return full.length <= 32 ? full : undefined
+}
+
+/** accessProblem is what's wrong with an access choice, or "". */
+export function accessProblem(choice: AccessChoice, engine: string): string {
+  if (choice.access === "shared") return ""
+  const db = choice.database.trim()
+  if (engine === "redis") {
+    if (!/^\d{1,4}$/.test(db))
+      return "Redis databases are numbered: choose one, such as 1."
+    return ""
+  }
+  if (db && !/^[A-Za-z0-9_]{1,63}$/.test(db))
+    return "A database name is up to 63 letters, digits and underscores."
+  return ""
+}
+
+/** The body of one service's wiring, as the manifest edits take it. */
+export type WiringBody = {
+  access?: Access
+  database?: string
+  env?: Record<string, WiringOutput>
+}
+
+/**
+ * wiringBody is what a service's choices write, or undefined when it reads
+ * the shared credentials in the kind's own variable, which needs none.
+ */
+export function wiringBody(
+  choice: WiringChoice,
+  fallback: string,
+  access?: AccessChoice
+): WiringBody | undefined {
+  const env = envOf(choice, fallback)
+  const own = access && access.access !== "shared"
+  if (!env && !own) return undefined
+  return {
+    ...(own ? { access: access.access } : {}),
+    ...(own && access.database.trim()
+      ? { database: access.database.trim() }
+      : {}),
+    ...(env ? { env } : {}),
+  }
+}
+
+/**
+ * choiceOf is the form's starting point for a wiring loomplane.yaml has:
+ * one variable when it names one url, else the separate variables, under
+ * the engine's names when they match.
+ */
+export function choiceOf(
+  kind: string,
+  fallback: string,
+  env?: Record<string, string>
+): WiringChoice {
+  const entries = Object.entries(env ?? {})
+  if (entries.length === 0) return { mode: "one", key: fallback }
+  if (entries.length === 1 && entries[0][1] === "url")
+    return { mode: "one", key: entries[0][0] }
+  const vars: Partial<Record<Exclude<WiringOutput, "url">, string>> = {}
+  for (const [name, output] of entries)
+    if (output !== "url") vars[output as Exclude<WiringOutput, "url">] = name
+  const same = (t: PartTemplate) =>
+    partOutputs.every((o) => (t.vars[o] ?? "") === (vars[o] ?? ""))
+  const known = templatesFor(kind).find((t) => t.id !== "prefix" && same(t))
+  return {
+    mode: "parts",
+    template: known?.id ?? "custom",
+    prefix: "DB_",
+    vars,
+  }
+}
+
+/** A variable someone set themselves that a wired one would lose to. */
+export type HandSet = { key: string; environment: string }
+
+/**
+ * handSetFor are the variables set by hand for service, or for every
+ * service in the project, that share a name with one it's wired to read.
+ * A value set by hand wins over a linked one when it deploys.
+ */
+export function handSetFor(
+  service: string,
+  keys: string[],
+  variables: {
+    key: string
+    service?: string
+    environment: string
+    resourceOutput?: string
+  }[]
+): HandSet[] {
+  const wanted = new Set(keys)
+  return variables
+    .filter(
+      (v) =>
+        wanted.has(v.key) &&
+        !v.resourceOutput &&
+        (!v.service || v.service === service)
+    )
+    .map((v) => ({ key: v.key, environment: v.environment }))
+}
+
+/** keysOf are the variables a choice writes. */
+export function keysOf(choice: WiringChoice): string[] {
+  return choice.mode === "one"
+    ? [choice.key.trim()].filter(Boolean)
+    : Object.values(choice.vars)
+        .map((v) => (v ?? "").trim())
+        .filter(Boolean)
+}

@@ -2234,6 +2234,11 @@ export interface DriftCounts {
   missing: number;
 }
 
+export interface DropUserInputBody {
+  confirm: string;
+  target: string;
+}
+
 export interface DurableObjectClass {
   className: string;
   name: string;
@@ -2379,6 +2384,8 @@ export interface EditInputBody {
   target?: string;
 };
   wire?: {
+  access?: string;
+  database?: string;
   env?: Record<string, any>;
   need: string;
   service: string;
@@ -2460,7 +2467,9 @@ export interface EntrySummary {
 }
 
 export interface EnvLink {
+  access?: string;
   address?: string;
+  database?: string;
   dropletPostgres?: boolean;
   field?: string;
   from: string;
@@ -2469,6 +2478,7 @@ export interface EnvLink {
   options?: Record<string, any>;
   part?: string;
   subject: string;
+  user?: string;
 }
 
 export interface EnvUse {
@@ -4403,6 +4413,22 @@ export interface OutputInfo {
   envKey: string;
   name: string;
   perConsumer: boolean;
+}
+
+export interface OwnUser {
+  createdAt: string;
+  createdDatabase: boolean;
+  database: string;
+  endpointId: string;
+  environments: string[];
+  projectId: string;
+  revokedAt?: string;
+  service: string;
+  user: string;
+}
+
+export interface OwnUserList {
+  users: OwnUser[];
 }
 
 export interface Package {

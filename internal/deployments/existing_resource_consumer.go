@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/planning"
@@ -72,6 +73,13 @@ func (r *Runner) verifyExistingServiceAccess(ctx context.Context, job *Job, bind
 		}
 		if err := r.checkReach(ctx, job.Deployment.OrgID, job.Plan, job.Action, endpoint, tls); err != nil {
 			return err
+		}
+		if workspacePin(pin) {
+			if err := r.grantOwnAccess(ctx, job, link.From, pin); err != nil {
+				return err
+			}
+		} else if _, own := ownAccessLink(job.Action.Service, link.From); own {
+			return fmt.Errorf("%s has a database or user of its own only on a workspace service, and %s isn't one; plan again", job.Action.Name, link.From)
 		}
 	}
 	return nil

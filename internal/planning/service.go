@@ -983,7 +983,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 				return nil, "", err
 			}
 		}
+		slug := ""
+		if project, perr := s.project(ctx, plan); perr == nil && project != nil {
+			slug = project.Slug
+		}
 		result = Compute(Input{
+			ProjectSlug:      slug,
 			Runners:          runners,
 			BuildDefault:     buildDefault,
 			ResourceMappings: mappings,
@@ -1524,4 +1529,12 @@ func (s *Service) ChooseConnection(ctx context.Context, p security.Principal, pr
 		})
 	}
 	return s.store.EnvironmentConnections(ctx, p.OrgID, env.ID)
+}
+
+// project is the plan's project, or nil on a service without projects.
+func (s *Service) project(ctx context.Context, plan *Plan) (*projects.Project, error) {
+	if s.projects == nil {
+		return nil, nil
+	}
+	return s.projects.GetProject(ctx, plan.OrgID, plan.ProjectID)
 }

@@ -46,6 +46,8 @@ type memStore struct {
 	bindings []binding
 	// failReplace is the error the next Replace returns, once.
 	failReplace error
+	// users are the users Loomplane made, by endpoint ID and name.
+	users map[string]OwnUser
 }
 
 func newMemStore() *memStore { return &memStore{rows: map[string]Endpoint{}} }

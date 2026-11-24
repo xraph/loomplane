@@ -401,6 +401,14 @@ type EnvLink struct {
 	// wired it: host, port, user, password or database. Empty is the whole
 	// address.
 	Part string `json:"part,omitempty"`
+	// Access is how the service gets into the workspace service the link
+	// reads: empty for its credentials as registered, own_database for a
+	// database of its own with them, or own_user for a user and database
+	// of its own that Loomplane makes. Database names that database, and
+	// User the user Loomplane makes under own_user.
+	Access   string `json:"access,omitempty"`
+	Database string `json:"database,omitempty"`
+	User     string `json:"user,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.

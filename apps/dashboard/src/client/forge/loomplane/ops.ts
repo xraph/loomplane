@@ -597,6 +597,21 @@ export const ops = {
     bodyCodec: CODECS['SharingInputBody'],
     responseCodec: CODECS['CatalogconnectEndpoint'],
   },
+  'catalogEndpoints.users': {
+    method: 'GET',
+    path: '/api/v1/catalog/endpoints/{id}/users',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['OwnUserList'],
+  },
+  'catalogEndpoints.dropUser': {
+    method: 'POST',
+    path: '/api/v1/catalog/endpoints/{id}/users/{user}/drops',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['DropUserInputBody'],
+    responseCodec: CODECS['OwnUserList'],
+  },
   'catalogEndpoints.uses': {
     method: 'GET',
     path: '/api/v1/catalog/endpoints/{id}/uses',

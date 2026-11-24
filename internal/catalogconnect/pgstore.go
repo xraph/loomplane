@@ -270,3 +270,80 @@ func notFoundOr(err error) error {
 }
 
 func rollback(tx driver.Tx) { _ = tx.Rollback() } //nolint:errcheck // a committed transaction cannot roll back
+
+var _ OwnUserStore = (*PgStore)(nil)
+
+// SaveOwnUser implements OwnUserStore. A user saved again is in use again,
+// by one more environment, and keeps the time it was first made and
+// whether its database was made for it.
+func (s *PgStore) SaveOwnUser(ctx context.Context, orgID string, u *OwnUser) error {
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_catalog_endpoint_users
+			(endpoint_id, org_id, name, database_name, created_database, project_id, service, environments, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (endpoint_id, name) DO UPDATE SET database_name = excluded.database_name,
+			created_database = loomplane_catalog_endpoint_users.created_database OR excluded.created_database,
+			project_id = excluded.project_id, service = excluded.service, revoked_at = NULL,
+			environments = ARRAY(SELECT DISTINCT unnest(loomplane_catalog_endpoint_users.environments || excluded.environments) ORDER BY 1)`,
+		u.EndpointID, orgID, u.User, u.Database, u.CreatedDatabase, u.ProjectID, u.Service, u.Environments, u.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("record the user %s: %w", u.User, err)
+	}
+	return nil
+}
+
+// ReleaseOwnUser implements OwnUserStore. A user it doesn't know has no
+// environment left.
+func (s *PgStore) ReleaseOwnUser(ctx context.Context, orgID, endpointID, user, environmentID string) (int, error) {
+	var remaining int
+	err := s.db.QueryRow(ctx, `UPDATE loomplane_catalog_endpoint_users SET environments = array_remove(environments, $4)
+		WHERE org_id = $1 AND endpoint_id = $2 AND name = $3
+		RETURNING cardinality(environments)`, orgID, endpointID, user, environmentID).Scan(&remaining)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("record that the environment let go of %s: %w", user, err)
+	}
+	return remaining, nil
+}
+
+// RevokeOwnUser implements OwnUserStore. A user an environment took up
+// again meanwhile stays in use.
+func (s *PgStore) RevokeOwnUser(ctx context.Context, orgID, endpointID, user string, at time.Time) error {
+	if _, err := s.db.Exec(ctx, `UPDATE loomplane_catalog_endpoint_users SET revoked_at = $4
+		WHERE org_id = $1 AND endpoint_id = $2 AND name = $3 AND cardinality(environments) = 0`, orgID, endpointID, user, at); err != nil {
+		return fmt.Errorf("record that %s lost its login: %w", user, err)
+	}
+	return nil
+}
+
+// OwnUsers implements OwnUserStore.
+func (s *PgStore) OwnUsers(ctx context.Context, orgID, endpointID string) ([]OwnUser, error) {
+	rows, err := s.db.Query(ctx, `SELECT endpoint_id, name, database_name, created_database, project_id, service, environments, created_at, revoked_at
+		FROM loomplane_catalog_endpoint_users WHERE org_id = $1 AND endpoint_id = $2 ORDER BY name`, orgID, endpointID)
+	if err != nil {
+		return nil, fmt.Errorf("list the endpoint's users: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []OwnUser{}
+	for rows.Next() {
+		var u OwnUser
+		if err := rows.Scan(&u.EndpointID, &u.User, &u.Database, &u.CreatedDatabase, &u.ProjectID, &u.Service, &u.Environments, &u.CreatedAt, &u.RevokedAt); err != nil {
+			return nil, fmt.Errorf("scan the endpoint's users: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list the endpoint's users: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteOwnUser implements OwnUserStore.
+func (s *PgStore) DeleteOwnUser(ctx context.Context, orgID, endpointID, user string) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM loomplane_catalog_endpoint_users
+		WHERE org_id = $1 AND endpoint_id = $2 AND name = $3`, orgID, endpointID, user); err != nil {
+		return fmt.Errorf("forget the user %s: %w", user, err)
+	}
+	return nil
+}

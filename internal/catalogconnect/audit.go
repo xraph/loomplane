@@ -22,6 +22,9 @@ const (
 	AuditReplace = "catalog_endpoint.replace"
 	AuditAdmin   = "catalog_endpoint.admin"
 	AuditShare   = "catalog_endpoint.share"
+	// AuditDropUser is a person dropping a user Loomplane made for a
+	// service, and the database Loomplane made for it.
+	AuditDropUser = "catalog_endpoint.drop_user"
 )
 
 // Audited outcomes.
@@ -59,6 +62,8 @@ type AuditEvent struct {
 	Engine  string
 	Address string // host:port
 	Outcome string
+	// User is the user Loomplane made that a change is about, if any.
+	User string
 }
 
 // RecordCheck audits a check of a DSN that isn't stored, as

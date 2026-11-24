@@ -8,6 +8,7 @@ import { messageOf, statusOf } from "@/client/errors"
 import {
   useCatalogEndpointsClearAdmin,
   useCatalogEndpointsDelete,
+  useCatalogEndpointsDropUser,
   useCatalogEndpointsGet,
   useCatalogEndpointsList,
   useCatalogEndpointsRecheck,
@@ -15,11 +16,15 @@ import {
   useCatalogEndpointsSetAdmin,
   useCatalogEndpointsShare,
   useCatalogEndpointsUpdate,
+  useCatalogEndpointsUsers,
   useCatalogEndpointsUses,
   useConnectionsList,
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
-import type { CatalogconnectEndpoint } from "@/client/forge/loomplane/types"
+import type {
+  CatalogconnectEndpoint,
+  OwnUser,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import {
   CloudCallout,
@@ -208,6 +213,7 @@ function Loaded({ endpoint: e }: { endpoint: CatalogconnectEndpoint }) {
         </TabsContent>
         <TabsContent value="uses" className="grid gap-6">
           <Uses endpoint={e} />
+          <OwnUsers endpoint={e} mayManage={mayManage} />
         </TabsContent>
         <TabsContent value="access" className="grid max-w-[760px] gap-6">
           <Sharing endpoint={e} mayManage={mayManage} />
@@ -428,6 +434,137 @@ function Uses({ endpoint: e }: { endpoint: CatalogconnectEndpoint }) {
         ))}
       </ul>
     </section>
+  )
+}
+
+/**
+ * OwnUsers are the users Loomplane made on the service, one for each
+ * project's service that got a user of its own. One no service uses any
+ * more has lost its login but kept its data, until someone drops it here.
+ */
+function OwnUsers({
+  endpoint: e,
+  mayManage,
+}: {
+  endpoint: CatalogconnectEndpoint
+  mayManage: boolean
+}) {
+  const users = useQuery(useCatalogEndpointsUsers, { path: { id: e.id } })
+  const projects = useQuery(useProjectsList)
+  const [dropping, setDropping] = useState<OwnUser>()
+  if (users.status === "error")
+    return (
+      <QueryError
+        error={users.error}
+        fallback="The users Loomplane made couldn't be loaded."
+        retry={users.refetch}
+      />
+    )
+  const list = (users.data?.users ?? []).filter((u): u is OwnUser => !!u)
+  if (list.length === 0) return null
+  const projectName = (id: string) =>
+    projects.data?.projects.find((p) => p?.id === id)?.name ?? id
+  return (
+    <section aria-label="Users Loomplane made" className="grid gap-2.5">
+      <CloudSectionHead
+        title="Users Loomplane made"
+        count={list.length}
+        description="One for each service that gets a user of its own. A user no service uses has no login, and keeps its data until you drop it."
+      />
+      <ul className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        {list.map((u) => (
+          <li
+            key={u.user}
+            className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+          >
+            <span className="grid min-w-0 gap-0.5">
+              <span className="font-mono text-[13px] font-medium">
+                {u.user}
+              </span>
+              <span className="text-[12.5px] text-muted-foreground">
+                {u.service} in {projectName(u.projectId)}, database{" "}
+                <span className="font-mono">{u.database}</span>
+                {u.createdDatabase ? "" : " (it was already there)"}
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
+              {u.revokedAt ? (
+                <StatusPill tone="quiet">
+                  No login since {formatDate(u.revokedAt)}
+                </StatusPill>
+              ) : (
+                <StatusPill tone="live">
+                  In use in {u.environments.length}{" "}
+                  {u.environments.length === 1 ? "environment" : "environments"}
+                </StatusPill>
+              )}
+              {mayManage && u.revokedAt && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={`Drop ${u.user}`}
+                  onClick={() => setDropping(u)}
+                >
+                  Drop
+                </Button>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {dropping && (
+        <DropUser
+          endpoint={e}
+          user={dropping}
+          onClose={() => setDropping(undefined)}
+        />
+      )}
+    </section>
+  )
+}
+
+function DropUser({
+  endpoint: e,
+  user: u,
+  onClose,
+}: {
+  endpoint: CatalogconnectEndpoint
+  user: OwnUser
+  onClose: () => void
+}) {
+  const drop = useMutation(useCatalogEndpointsDropUser)
+  const invalidate = useInvalidate()
+  const [error, setError] = useState("")
+  const confirm = async () => {
+    setError("")
+    try {
+      await drop.mutateAsync({
+        path: { id: e.id, user: u.user },
+        body: { confirm: u.user, target: "" },
+      })
+      invalidate(useCatalogEndpointsUsers)
+      toast.success(`Dropped ${u.user}`)
+      onClose()
+    } catch (cause) {
+      setError(messageOf(cause, "It wasn't dropped."))
+    }
+  }
+  return (
+    <CloudConfirm
+      open
+      onOpenChange={(next) => !next && onClose()}
+      title={`Drop ${u.user}?`}
+      confirmLabel="Drop"
+      typeToConfirm={u.user}
+      pending={drop.isPending}
+      onConfirm={() => void confirm()}
+      error={error && <CloudCallout tone="error" title={error} />}
+    >
+      {u.createdDatabase
+        ? `Loomplane drops ${u.user} on ${e.name}, and the database ${u.database} it made for ${u.service}, with all its data. This can't be undone.`
+        : `Loomplane drops ${u.user} on ${e.name}. The database ${u.database} was there before, so it stays.`}
+    </CloudConfirm>
   )
 }
 

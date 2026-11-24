@@ -157,6 +157,9 @@ func (a endpointAuditor) Record(ctx context.Context, e catalogconnect.AuditEvent
 	if e.EndpointID != "" {
 		b = b.Meta("endpoint_id", e.EndpointID)
 	}
+	if e.User != "" {
+		b = b.Meta("user", e.User)
+	}
 	if err := b.Record(); err != nil {
 		a.log.Error("record audit event", forge.F("action", e.Action), forge.F("error", err.Error()))
 	}

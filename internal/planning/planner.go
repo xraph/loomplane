@@ -41,7 +41,10 @@ type Input struct {
 	ExistingResources      map[string]ExistingResourceCheck
 	ExistingResourceChecks map[string]EndpointCheck
 	ProjectID              string
-	Routes                 []cloudinfra.Route
+	// ProjectSlug names the users Loomplane makes for the project's
+	// services on a workspace service (own_user).
+	ProjectSlug string
+	Routes      []cloudinfra.Route
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone
@@ -1903,7 +1906,8 @@ func (p *planner) wire(name string, a *Action) {
 		problem := func(code, format string, args ...any) {
 			p.problem(Finding{Code: code, Subject: ServiceSubject, Name: name, Path: path, Message: fmt.Sprintf(format, args...)})
 		}
-		env := s.Wiring[need].Env
+		w := s.Wiring[need]
+		env := w.Env
 		var defaults, rest []EnvLink
 		for _, l := range a.Service.Env {
 			if l.From == need {
@@ -1934,6 +1938,18 @@ func (p *planner) wire(name string, a *Action) {
 		}
 		if parts && base.Gateway != "" {
 			problem("wiring-gateway", "%s is behind the database gateway, which stands in for its whole address. Read it as url, or take it out of the gateway.", need)
+			continue
+		}
+		access, ok := p.wiringAccess(name, need, w)
+		if !ok {
+			continue
+		}
+		base.Access, base.Database, base.User = access.mode, access.database, access.user
+		if len(env) == 0 {
+			for i := range defaults {
+				defaults[i].Access, defaults[i].Database, defaults[i].User = base.Access, base.Database, base.User
+			}
+			a.Service.Env = append(slices.Clone(rest), defaults...)
 			continue
 		}
 		next := slices.Clone(rest)

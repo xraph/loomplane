@@ -902,8 +902,17 @@
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["env"],
+            "minProperties": 1,
             "properties": {
+              "access": {
+                "description": "How the service gets in: with the credentials as registered (shared, the default), in a database of its own on the same server (own_database), or as a user of its own with a database of its own (own_user).",
+                "enum": ["shared", "own_database", "own_user"]
+              },
+              "database": {
+                "description": "The service's own database under own_database or own_user. Named after the service when left out. A Redis database is its number.",
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]{1,63}$"
+              },
               "env": {
                 "description": "Each variable the service reads, and what it holds: the whole url, or its host, port, user, password or database.",
                 "type": "object",

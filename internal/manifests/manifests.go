@@ -156,13 +156,28 @@ type ServiceLink struct {
 	Options map[string]string `json:"options,omitempty"`
 }
 
-// ServiceWiring is which variables a service reads one of its needs in,
-// each with what it holds: url, host, port, user, password or database.
-// No variables go back to the one the need's kind names.
+// ServiceWiring is how a service reads one of its needs: its access mode
+// and own database, and the variables it reads it in, each with what it
+// holds (url, host, port, user, password or database). Nothing set goes
+// back to the shared credentials in the variable the need's kind names.
 type ServiceWiring struct {
-	Service string            `json:"service"`
-	Need    string            `json:"need"`
-	Env     map[string]string `json:"env,omitempty"`
+	Service string `json:"service"`
+	Need    string `json:"need"`
+	Wiring
+}
+
+// Wiring is how one service reads one need.
+type Wiring struct {
+	// Access is shared (the default), own_database or own_user.
+	Access string `json:"access,omitempty"`
+	// Database is the service's own database under own_database or
+	// own_user; empty names it after the service.
+	Database string            `json:"database,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+}
+
+func (w Wiring) manifest() manifest.Wiring {
+	return manifest.Wiring{Access: strings.TrimSpace(w.Access), Database: strings.TrimSpace(w.Database), Env: w.Env}
 }
 
 // ResourceUse sets where one dependency of a catalog resource comes from.
@@ -208,10 +223,10 @@ type NewResource struct {
 	// its needs, and with it the resource's address in a variable, in the
 	// same revision.
 	NeededBy []string `json:"needed_by,omitempty"`
-	// Wiring is, by service in NeededBy, the variables it reads the new
-	// resource in, as ServiceWiring's Env. A service left out reads the one
-	// the kind names.
-	Wiring map[string]map[string]string `json:"wiring,omitempty"`
+	// Wiring is, by service in NeededBy, how it reads the new resource. A
+	// service left out uses the shared credentials in the variable the
+	// kind names.
+	Wiring map[string]Wiring `json:"wiring,omitempty"`
 }
 
 // NewServiceInput is a service to add to the manifest: where its code is and,
@@ -301,7 +316,7 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 		out, err = manifest.WithoutNeed([]byte(cur.YAML), strings.TrimSpace(l.Service), strings.TrimSpace(l.Need))
 	case in.Wire != nil:
 		w := in.Wire
-		out, err = manifest.WithWiring([]byte(cur.YAML), strings.TrimSpace(w.Service), strings.TrimSpace(w.Need), w.Env)
+		out, err = manifest.WithWiring([]byte(cur.YAML), strings.TrimSpace(w.Service), strings.TrimSpace(w.Need), w.manifest())
 	case in.SetUse != nil:
 		u := in.SetUse
 		out, err = manifest.WithUse([]byte(cur.YAML), strings.TrimSpace(u.Resource), strings.TrimSpace(u.Dependency), u.Use)
@@ -364,7 +379,7 @@ func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc 
 		return nil, err
 	}
 	for _, svc := range slices.Sorted(maps.Keys(r.Wiring)) {
-		if out, err = manifest.WithWiring(out, svc, name, r.Wiring[svc]); err != nil {
+		if out, err = manifest.WithWiring(out, svc, name, r.Wiring[svc].manifest()); err != nil {
 			return nil, err
 		}
 	}

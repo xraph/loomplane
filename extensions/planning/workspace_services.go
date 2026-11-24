@@ -80,6 +80,26 @@ func (ServiceUseList) ForgeEnvelope() forge.EnvelopeDef {
 	return forge.EnvelopeDef{ItemsField: "uses"}
 }
 
+// OwnUserList is the body of GET /catalog/endpoints/:id/users.
+type OwnUserList struct {
+	Users []catalogconnect.OwnUser `json:"users"`
+}
+
+// ForgeEnvelope tells the generated client the list wraps Users.
+func (OwnUserList) ForgeEnvelope() forge.EnvelopeDef {
+	return forge.EnvelopeDef{ItemsField: "users"}
+}
+
+// DropUserInput drops a user Loomplane made, and the database it made for
+// it.
+type DropUserInput struct {
+	// Confirm repeats the user's name.
+	Confirm string `json:"confirm"`
+	// Target is the connection the drop dials from; empty uses the one the
+	// workspace service was last checked from.
+	Target string `json:"target"`
+}
+
 // errCheckFailed is a change refused because its check found problems.
 var errCheckFailed = fmt.Errorf("%w: the check found problems", catalogconnect.ErrInvalid)
 
@@ -136,6 +156,17 @@ func (e *Extension) workspaceServiceRoutes() []route {
 			forge.WithSummary("Check a workspace service again from a target, its admin credential too, and keep what the check found"),
 			forge.WithRequestSchema(RecheckInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The workspace service", catalogconnect.Endpoint{}),
+		}},
+		{http.MethodGet, "/catalog/endpoints/:id/users", e.listWorkspaceServiceUsers, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.users"),
+			forge.WithSummary("The users Loomplane made on a workspace service for services that get one of their own, with the database each was given; passwords are never returned"),
+			forge.WithResponseSchema(http.StatusOK, "Users", OwnUserList{}),
+		}},
+		{http.MethodPost, "/catalog/endpoints/:id/users/:user/drops", e.dropWorkspaceServiceUser, []forge.RouteOption{
+			forge.WithName("catalogEndpoints.dropUser"),
+			forge.WithSummary("Drop a user Loomplane made that no service uses any more, and the database Loomplane made for it, with all its data"),
+			forge.WithRequestSchema(DropUserInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The users left", OwnUserList{}),
 		}},
 		{http.MethodGet, "/catalog/endpoints/:id/uses", e.listWorkspaceServiceUses, []forge.RouteOption{
 			forge.WithName("catalogEndpoints.uses"),
@@ -474,4 +505,59 @@ type resourceEndpoints struct{ *catalogconnect.Service }
 
 func (r resourceEndpoints) Create(ctx context.Context, p security.Principal, in catalogconnect.CreateInput) (*catalogconnect.Endpoint, error) {
 	return r.CreateForResource(ctx, p, in)
+}
+
+func (e *Extension) listWorkspaceServiceUsers(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	users, err := e.endpoints.ListOwnUsers(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, OwnUserList{Users: users})
+}
+
+// dropWorkspaceServiceUser drops a user Loomplane made, from the target the
+// person names or the one the workspace service was last checked from.
+func (e *Extension) dropWorkspaceServiceUser(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in DropUserInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"confirm": "<user>"}`)
+	}
+	ctx := c.Request().Context()
+	current, err := e.endpoints.Describe(ctx, p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	target := strings.TrimSpace(in.Target)
+	if target == "" && current.LastCheck != nil {
+		target = current.LastCheck.Target
+	}
+	if target == "" {
+		return fail(fmt.Errorf("%w: choose the server or cluster to reach %s from", catalogconnect.ErrInvalid, current.Name))
+	}
+	if e.endpointDialer == nil {
+		return fail(errors.New("this Loomplane server can't reach workspace services"))
+	}
+	dial, closer, err := e.endpointDialer.TargetDial(ctx, p.OrgID, target)
+	if err != nil {
+		return fail(err)
+	}
+	if closer != nil {
+		defer func() { _ = closer.Close() }() // the drop has finished with it
+	}
+	if err = e.endpoints.DropOwnUser(ctx, p, current.ID, c.Param("user"), strings.TrimSpace(in.Confirm), dial); err != nil {
+		return fail(err)
+	}
+	users, err := e.endpoints.ListOwnUsers(ctx, p, current.ID)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, OwnUserList{Users: users})
 }

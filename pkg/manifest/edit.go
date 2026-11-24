@@ -849,11 +849,10 @@ func WithoutNeed(doc []byte, service, need string) ([]byte, error) {
 	return encode(file)
 }
 
-// WithWiring sets which variables a service reads one of its needs in,
-// replacing what it read before: services.<service>.wiring.<need>.env.
-// No variables removes the wiring, and the service reads the need in the
-// variable its kind names again. The service must already need it.
-func WithWiring(doc []byte, service, need string, env map[string]string) ([]byte, error) {
+// WithWiring sets how a service reads one thing it needs: its access mode,
+// its own database and the variables it reads it in. A wiring that changes
+// nothing removes the need's wiring.
+func WithWiring(doc []byte, service, need string, w Wiring) ([]byte, error) {
 	root, file, err := mapping(doc)
 	if err != nil {
 		return nil, err
@@ -866,20 +865,10 @@ func WithWiring(doc []byte, service, need string, env map[string]string) ([]byte
 	if needs == nil || needs.Kind != yaml.SequenceNode || !slices.ContainsFunc(needs.Content, func(n *yaml.Node) bool { return n.Value == need }) {
 		return nil, fmt.Errorf("%w: %s doesn't need %s, so it can't be wired to it", ErrInvalid, service, need)
 	}
-	var problems Problems
-	for _, key := range sortedKeys(env) {
-		path := "services." + service + ".wiring." + need + ".env." + key
-		if !envKeyRE.MatchString(key) {
-			problems = append(problems, Problem{Path: path, Message: "isn't a variable name: use letters, digits and underscores, not starting with a digit"})
-		}
-		if !slices.Contains(WiringOutputs, env[key]) {
-			problems = append(problems, Problem{Path: path, Message: fmt.Sprintf("%q isn't something a variable can hold; use %s", env[key], strings.Join(WiringOutputs, ", "))})
-		}
+	if w.Access == AccessShared {
+		w.Access = ""
 	}
-	if len(problems) > 0 {
-		return nil, problems
-	}
-	if len(env) == 0 {
+	if w.Empty() {
 		all := child(svc, "wiring")
 		if all == nil || all.Kind != yaml.MappingNode || child(all, need) == nil {
 			return doc, nil
@@ -890,15 +879,28 @@ func WithWiring(doc []byte, service, need string, env map[string]string) ([]byte
 		}
 		return encode(file)
 	}
+	if problems := w.problems("services." + service + ".wiring." + need); len(problems) > 0 {
+		return nil, problems
+	}
 	all, err := editMapping(svc, "wiring")
 	if err != nil {
 		return nil, fmt.Errorf("%w: services.%s.%w", ErrInvalid, service, err)
 	}
-	vars := &yaml.Node{Kind: yaml.MappingNode}
-	for _, key := range sortedKeys(env) {
-		vars.Content = append(vars.Content, scalar(key), scalar(env[key]))
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	if w.Access != "" {
+		node.Content = append(node.Content, scalar("access"), scalar(w.Access))
 	}
-	setChild(all, need, &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{scalar("env"), vars}})
+	if w.Database != "" {
+		node.Content = append(node.Content, scalar("database"), scalar(w.Database))
+	}
+	if len(w.Env) > 0 {
+		vars := &yaml.Node{Kind: yaml.MappingNode}
+		for _, key := range sortedKeys(w.Env) {
+			vars.Content = append(vars.Content, scalar(key), scalar(w.Env[key]))
+		}
+		node.Content = append(node.Content, scalar("env"), vars)
+	}
+	setChild(all, need, node)
 	return encode(file)
 }
 

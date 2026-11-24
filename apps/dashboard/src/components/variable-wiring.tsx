@@ -1,7 +1,7 @@
 // Where one service reads a database or cache it needs: in one variable,
 // named for what its code reads, or in separate variables for each part,
 // with what each will hold shown before anything is saved.
-import { SparklesIcon } from "lucide-react"
+import { SparklesIcon, TriangleAlertIcon } from "lucide-react"
 
 import { Input } from "@/components/ui/input"
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import {
+  type HandSet,
   outputLabels,
   partOutputs,
   prefixTemplate,
@@ -39,6 +40,7 @@ export function VariableWiring({
   value,
   detected,
   sample,
+  handSet = [],
   onChange,
 }: {
   /** The service that reads it. */
@@ -52,12 +54,19 @@ export function VariableWiring({
   /** What the service's code reads that the choice came from. */
   detected: string[]
   sample?: WiringSample
+  /** Variables set by hand with a name it reads, which win over these. */
+  handSet?: HandSet[]
   onChange: (choice: WiringChoice) => void
 }) {
-  const templates = templatesFor(
+  const ready = templatesFor(
     kind,
     value.mode === "parts" ? value.prefix : "DB_"
   )
+  // Names someone chose themselves, kept as they are.
+  const templates =
+    value.mode === "parts" && value.template === "custom"
+      ? [...ready, { id: "custom", label: "Your own names", vars: value.vars }]
+      : ready
   const problem = wiringProblem(value)
   const shown = (output: string) => {
     switch (output) {
@@ -228,6 +237,27 @@ export function VariableWiring({
         </div>
       )}
 
+      {!problem && handSet.length > 0 && (
+        <div
+          role="status"
+          className="flex items-start gap-1.5 text-[12px] text-muted-foreground"
+        >
+          <TriangleAlertIcon
+            className="mt-0.5 size-3.5 shrink-0"
+            aria-hidden="true"
+          />
+          <p>
+            {handSet
+              .map(
+                (h) =>
+                  `${h.key} is set by hand ${h.environment ? `in ${h.environment}` : "in every environment"}`
+              )
+              .join("; ")}
+            . A value set by hand wins over this one, so remove it on the
+            Variables tab, or choose another name.
+          </p>
+        </div>
+      )}
       {problem ? (
         <p className="text-[12.5px] text-destructive">{problem}</p>
       ) : (

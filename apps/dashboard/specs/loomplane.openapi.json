@@ -20280,6 +20280,90 @@
           }
         }
       }
+    },
+    "/api/v1/catalog/endpoints/{id}/users": {
+      "get": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "The users Loomplane made on a workspace service for services that get one of their own, with the database each was given; passwords are never returned",
+        "operationId": "catalogEndpoints.users",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnUserList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/endpoints/{id}/users/{user}/drops": {
+      "post": {
+        "tags": [
+          "Catalog"
+        ],
+        "summary": "Drop a user Loomplane made that no service uses any more, and the database Loomplane made for it, with all its data",
+        "operationId": "catalogEndpoints.dropUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user",
+            "in": "path",
+            "description": "Path parameter: user",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DropUserInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The users left",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnUserList"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -28263,6 +28347,12 @@
               "need"
             ],
             "properties": {
+              "access": {
+                "type": "string"
+              },
+              "database": {
+                "type": "string"
+              },
               "env": {
                 "type": "object",
                 "additionalProperties": true
@@ -28569,7 +28659,13 @@
           "subject"
         ],
         "properties": {
+          "access": {
+            "type": "string"
+          },
           "address": {
+            "type": "string"
+          },
+          "database": {
             "type": "string"
           },
           "droplet_postgres": {
@@ -28595,6 +28691,9 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          },
+          "user": {
             "type": "string"
           }
         }
@@ -45856,6 +45955,82 @@
         ],
         "type": "object",
         "x-forge-envelope": "uses"
+      },
+      "OwnUserList": {
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OwnUser"
+            }
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "type": "object",
+        "x-forge-envelope": "users"
+      },
+      "OwnUser": {
+        "type": "object",
+        "required": [
+          "endpoint_id",
+          "user",
+          "database",
+          "created_database",
+          "project_id",
+          "service",
+          "environments",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_database": {
+            "type": "boolean"
+          },
+          "database": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        }
+      },
+      "DropUserInputBody": {
+        "type": "object",
+        "required": [
+          "confirm",
+          "target"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
       }
     },
     "securitySchemes": {

@@ -158,16 +158,55 @@ beforeEach(() => {
               edges: [],
             },
           })
+        case "/api/v1/projects/p/variables":
+          return Response.json({
+            variables: [
+              {
+                id: "var_1",
+                org_id: "org",
+                project_id: "p",
+                scope: "service",
+                service: "api",
+                environment: "production",
+                key: "PGPASSWORD",
+                value: "",
+                secret: true,
+                created_at: "2026-11-01T00:00:00Z",
+                created_by: "u",
+                updated_at: "2026-11-01T00:00:00Z",
+                updated_by: "u",
+              },
+            ],
+          })
         case "/api/v1/catalog/endpoints":
           return Response.json({
             endpoints: [
-              registeredEndpoint(
-                "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
-                "orders-db",
-                "postgres",
-                false,
-                []
-              ),
+              {
+                ...registeredEndpoint(
+                  "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
+                  "orders-db",
+                  "postgres",
+                  false,
+                  []
+                ),
+                admin_set: true,
+                last_check: {
+                  at: "2026-11-01T00:00:00Z",
+                  ok: true,
+                  capabilities: { create_database: false, create_user: false },
+                  admin: { create_database: true, create_user: true },
+                },
+              },
+              {
+                ...registeredEndpoint(
+                  "endpoint_01jd8x5k2m3n4p5q6r7s8t9v3z",
+                  "sessions",
+                  "redis",
+                  false,
+                  []
+                ),
+                port: 6379,
+              },
               registeredEndpoint(
                 "endpoint_01jd8x5k2m3n4p5q6r7s8t9v1x",
                 "billing-db",
@@ -198,7 +237,12 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-const project = { id: "p", name: "Shop", repositories: ["acme/shop"] } as never
+const project = {
+  id: "p",
+  name: "Shop",
+  slug: "shop",
+  repositories: ["acme/shop"],
+} as never
 
 // registeredEndpoint is a workspace service registered by its connection
 // string, shared with every project or only the ones listed.
@@ -487,7 +531,9 @@ it("connects a workspace service registered by its connection string", async () 
           enabled_in: "production",
           // api's code reads these, so it's wired to them.
           wiring: {
-            api: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+            api: {
+              env: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+            },
           },
         },
       },
@@ -527,7 +573,9 @@ it("wires a service to the variables its code reads", async () => {
       existing_resource: "endpoint_01jd8x5k2m3n4p5q6r7s8t9v0w",
       needed_by: ["api"],
       wiring: {
-        api: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+        api: {
+          env: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+        },
       },
     },
   })
@@ -561,6 +609,99 @@ it("renames the one variable a service reads, and refuses a bad name", async () 
   )
   await waitFor(() => expect(writes.length).toBeGreaterThan(0))
   expect(writes[0].body).toMatchObject({
-    add_resource: { wiring: { api: { ORDERS_DSN: "url" } } },
+    add_resource: { wiring: { api: { env: { ORDERS_DSN: "url" } } } },
+  })
+})
+
+it("gives a service a user of its own, and says what a value set by hand hides", async () => {
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("tab", { name: "Workspace services" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: /orders-db.*Connect/ })
+  )
+  await user.click(await screen.findByRole("checkbox", { name: /api/ }))
+  // api sets PGPASSWORD itself in production, which would win.
+  expect(
+    await screen.findByText(/PGPASSWORD is set by hand in production/)
+  ).toBeInTheDocument()
+  // Its credentials can't create databases; the admin credential can.
+  const access = screen.getByRole("radiogroup", {
+    name: "How api gets into orders-db",
+  })
+  await user.click(
+    within(access).getByRole("radio", { name: /Its own database/ })
+  )
+  expect(
+    screen.getByText(
+      /These credentials can't create databases, so api must already exist/
+    )
+  ).toBeInTheDocument()
+  await user.click(within(access).getByRole("radio", { name: /Its own user/ }))
+  expect(screen.getByText(/Signs in as/)).toHaveTextContent("lp_shop_api")
+  const gets = screen.getByRole("list", { name: "What api gets" })
+  expect(gets).toHaveTextContent("PGUSER=lp_shop_api")
+  const database = screen.getByRole("textbox", {
+    name: "api's database on orders-db",
+  })
+  await user.clear(database)
+  await user.type(database, "shop_api")
+  await user.click(
+    screen.getByRole("button", { name: "Add and plan production" })
+  )
+  await waitFor(() => expect(writes.length).toBeGreaterThan(0))
+  expect(writes[0].body).toMatchObject({
+    add_resource: {
+      wiring: {
+        api: {
+          access: "own_user",
+          database: "shop_api",
+          env: { PGHOST: "host", PGUSER: "user", PGPASSWORD: "password" },
+        },
+      },
+    },
+  })
+})
+
+it("asks for a Redis database by its number, and offers no user of its own", async () => {
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("tab", { name: "Workspace services" })
+  )
+  await user.click(
+    await screen.findByRole("button", { name: /sessions.*Connect/ })
+  )
+  await user.click(await screen.findByRole("checkbox", { name: /api/ }))
+  const access = await screen.findByRole("radiogroup", {
+    name: "How api gets into sessions",
+  })
+  expect(
+    within(access).getByRole("radio", { name: /Its own user/ })
+  ).toBeDisabled()
+  await user.click(
+    within(access).getByRole("radio", { name: /Its own database/ })
+  )
+  expect(
+    screen.getByText(/Redis databases are numbered: choose one/)
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("button", { name: "Add and plan production" })
+  ).toBeDisabled()
+  await user.type(
+    screen.getByRole("textbox", { name: "api's database on sessions" }),
+    "2"
+  )
+  await user.click(
+    screen.getByRole("button", { name: "Add and plan production" })
+  )
+  await waitFor(() => expect(writes.length).toBeGreaterThan(0))
+  expect(writes[0].body).toMatchObject({
+    add_resource: {
+      kind: "redis",
+      wiring: { api: { access: "own_database", database: "2" } },
+    },
   })
 })

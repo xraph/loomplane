@@ -1331,6 +1331,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Drop a user Loomplane made that no service uses any more, and the database Loomplane made for it, with all its data
+     */
+    dropUser: async (id: string, user: string, body: types.DropUserInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OwnUserList> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/users/${encodeURIComponent(String(user))}/drops`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DropUserInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OwnUserList"],
+      };
+
+      return this.request<types.OwnUserList>(config);
+    },
+
+    /**
      * One external endpoint or workspace service, without its credentials
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
@@ -1486,6 +1504,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * The users Loomplane made on a workspace service for services that get one of their own, with the database each was given; passwords are never returned
+     */
+    users: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OwnUserList> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}/users`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OwnUserList"],
+      };
+
+      return this.request<types.OwnUserList>(config);
     },
 
     /**
