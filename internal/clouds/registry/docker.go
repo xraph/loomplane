@@ -68,7 +68,7 @@ func (c *Client) DockerAuth(ctx context.Context, repository, actions string) ([]
 			}
 			drainBody(cancel.Body)
 			_ = cancel.Body.Close()
-			if cancel.StatusCode != http.StatusNoContent && cancel.StatusCode != http.StatusNotFound {
+			if !uploadSettled(cancel.StatusCode) {
 				return nil, fmt.Errorf("cancel registry authentication probe returned HTTP %d", cancel.StatusCode)
 			}
 			token = "" // Publish anonymously only after cleaning the empty probe.
