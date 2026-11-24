@@ -81,6 +81,9 @@ type Service struct {
 	Log        *slog.Logger
 	// clock is what time it is. Nil means time.Now. Tests set it.
 	clock func() time.Time
+	// starting tracks runners started in the background for a waiting
+	// build, so tests can wait for them.
+	starting sync.WaitGroup
 }
 
 // errUnbound is a call before the extension registered.
@@ -537,11 +540,12 @@ func (s *Service) BuildRunners(ctx context.Context, orgID, connection string) ([
 	}
 	if len(free) == 0 {
 		// No runner is free: start one. The build waits and looks again.
-		go func(pool Pool) {
-			if derr := s.demand(context.WithoutCancel(ctx), &pool); derr != nil {
-				s.log().Warn("buildrunner: starting a runner for a waiting build", "pool", pool.ID, "error", derr)
+		waiting := *pool
+		s.starting.Go(func() {
+			if derr := s.demand(context.WithoutCancel(ctx), &waiting); derr != nil {
+				s.log().Warn("buildrunner: starting a runner for a waiting build", "pool", waiting.ID, "error", derr)
 			}
-		}(*pool)
+		})
 	}
 	return free, nil
 }

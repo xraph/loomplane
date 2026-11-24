@@ -226,12 +226,16 @@ func TestDemandStartsOneColdRunnerThatTakesOneBuild(t *testing.T) {
 	if runners, _ = o.svc.BuildRunners(t.Context(), "org_1", o.pool.ConnectionID); len(runners) != 0 {
 		t.Fatalf("a cold runner took a second build: %v", runners)
 	}
+	// That second build found no runner free, so one starts for it.
+	o.svc.starting.Wait()
+	first := ms[0].ID
 	_ = o.svc.BuildEnded(t.Context(), "org_1", node)
 	if err = o.svc.Reconcile(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if ms = o.machines(t); len(ms) != 0 {
-		t.Fatalf("the cold runner stayed after its build: %+v", ms)
+	ms = o.machines(t)
+	if len(ms) != 1 || ms[0].ID == first || ms[0].Warm || ms[0].State != MachineBooting {
+		t.Fatalf("the cold runner stayed after its build, or the waiting build got no runner of its own: %+v", ms)
 	}
 	if len(o.cloud.deleted) != 1 || len(o.rev.revoked) != 1 || o.rev.revoked[0] != node {
 		t.Fatalf("deleted %v, revoked %v", o.cloud.deleted, o.rev.revoked)
