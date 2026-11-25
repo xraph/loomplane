@@ -45,6 +45,7 @@ import { DeleteProject } from "@/components/project-delete"
 import { ProjectStylePopover } from "@/components/project-style-picker"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone } from "@/components/runs"
+import { HeaderSlotAbove } from "@/components/header-slot"
 import { type Crumb, SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
@@ -245,12 +246,15 @@ export function ProjectFrame({
       </>
     )
 
+  // The pages render their own top bar; it goes above the padded page.
   return (
-    <Page>
-      <Loaded project={project.data} environment={environment} place={place}>
-        {children}
-      </Loaded>
-    </Page>
+    <HeaderSlotAbove>
+      <Page>
+        <Loaded project={project.data} environment={environment} place={place}>
+          {children}
+        </Loaded>
+      </Page>
+    </HeaderSlotAbove>
   )
 }
 
