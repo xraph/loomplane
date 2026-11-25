@@ -309,9 +309,13 @@ func (e *Extension) Register(fapp forge.App) error {
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
-		"vercel":               &deployments.Vercel{Client: vercelResourcesClient, Environments: nativeEnvironments},
-		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint), Environments: nativeEnvironments},
-		"digitalocean":         &deployments.DigitalOcean{Client: appPlatform},
+		"vercel": &deployments.Vercel{Client: vercelResourcesClient, Environments: nativeEnvironments},
+		"render": &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint), Environments: nativeEnvironments},
+		// App Platform runs the images Loomplane's builders build, so
+		// DigitalOcean needs no access to the repository.
+		"digitalocean": &deployments.DigitalOcean{Client: appPlatform, Builder: &deployments.ImageBuilder{
+			FirecrackerAuthority: deployStore, NodeStreams: e.streams, Gate: &e.metering, Runners: e.runners, AWS: awsClient(),
+		}},
 		"azure-container-apps": &deployments.Azure{Client: azureClient()},
 		"azure-database":       &deployments.AzureDatabase{Client: azureClient()},
 		"azure-managed-redis":  &deployments.AzureRedis{Client: azureClient()},

@@ -107,6 +107,7 @@ func doSpecMAC(key []byte, spec digitalocean.AppSpec) []byte {
 	// Domains are managed independently. The provider preflight below checks
 	// them against the current app before restoring a historical spec.
 	spec.Domains = nil
+	spec = doWithoutRegistryNames(spec)
 	data, _ := json.Marshal(spec) //nolint:errcheck // this struct contains only JSON values
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(data)
@@ -136,7 +137,40 @@ func doActualSpec(raw json.RawMessage) (digitalocean.AppSpec, string, error) {
 	return spec, hex.EncodeToString(digest[:]), nil
 }
 
+// doWithoutRegistryNames is spec with its images' registry names left
+// out. App Platform wants the name only while the account has more than
+// one registry, so it can come and go without the image changing; the
+// image's repository and digest still have to match.
+func doWithoutRegistryNames(spec digitalocean.AppSpec) digitalocean.AppSpec {
+	strip := func(components []digitalocean.Component) []digitalocean.Component {
+		components = slices.Clone(components)
+		for i := range components {
+			if image := components[i].Image; image != nil {
+				copied := *image
+				copied.Registry = ""
+				components[i].Image = &copied
+			}
+		}
+		return components
+	}
+	spec.Services, spec.Workers = strip(spec.Services), strip(spec.Workers)
+	return spec
+}
+
+// doBuiltAsReviewed reports whether dep ran what desired says: the
+// approved commit when App Platform built it from a repository. An image's
+// digest is in the spec, which the caller matches against desired.
+func doBuiltAsReviewed(dep *digitalocean.Deployment, desired digitalocean.AppSpec, commit string) bool {
+	for _, comp := range append(slices.Clone(desired.Services), desired.Workers...) {
+		if comp.Image != nil {
+			return true
+		}
+	}
+	return dep.Built(commit)
+}
+
 func doReviewedSpecMatches(actual, desired digitalocean.AppSpec) bool {
+	actual, desired = doWithoutRegistryNames(actual), doWithoutRegistryNames(desired)
 	// The provider encrypts SECRET values. Match their names, scope and
 	// classification here; the MAC separately binds their submitted values.
 	clearSecrets := func(spec *digitalocean.AppSpec) {
@@ -168,7 +202,7 @@ func (d *DigitalOcean) keepRollbackProof(ctx context.Context, token string, job 
 		return nil
 	}
 	dep, err := d.Client.GetDeployment(ctx, token, app, revision)
-	if err != nil || dep.ID != revision || dep.Phase != digitalocean.PhaseActive || !dep.Built(job.CommitSHA) || len(dep.Services)+len(dep.Workers)+len(dep.StaticSites) != 1 {
+	if err != nil || dep.ID != revision || dep.Phase != digitalocean.PhaseActive || !doBuiltAsReviewed(dep, desired, job.CommitSHA) || len(dep.Services)+len(dep.Workers)+len(dep.StaticSites) != 1 {
 		return doRollbackProofError()
 	}
 	actual, digest, err := doActualSpec(dep.Spec)
@@ -228,16 +262,20 @@ func (d *DigitalOcean) checkRollbackProof(ctx context.Context, token string, job
 	if json.Unmarshal(data, &proof) != nil || proof.Version != 1 || len(proof.Key) != 32 || !reflect.DeepEqual(proof.Scope, doProofScope(job, app, revision)) {
 		return doRollbackProofError()
 	}
-	repo, err := repositoryFor(job)
+	image := ""
+	if artifact := job.Action.Service.Artifact; artifact != nil {
+		image = artifact.Reference
+	}
+	src, err := doSourceFor(job, job.Action.Service, image)
 	if err != nil {
 		return doRollbackProofError()
 	}
-	desired := doAppSpec(job, job.Action.Service, repo, doBranchFor(job))
+	desired := doAppSpec(job, job.Action.Service, src)
 	if !hmac.Equal(proof.Desired, doSpecMAC(proof.Key, desired)) {
 		return doRollbackProofError()
 	}
 	dep, err := d.Client.GetDeployment(ctx, token, app, revision)
-	if err != nil || dep.ID != revision || !dep.Built(job.CommitSHA) || len(dep.Services)+len(dep.Workers)+len(dep.StaticSites) != 1 {
+	if err != nil || dep.ID != revision || !doBuiltAsReviewed(dep, desired, job.CommitSHA) || len(dep.Services)+len(dep.Workers)+len(dep.StaticSites) != 1 {
 		return doRollbackProofError()
 	}
 	actual, digest, err := doActualSpec(dep.Spec)

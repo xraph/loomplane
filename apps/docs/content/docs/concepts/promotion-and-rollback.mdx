@@ -35,9 +35,10 @@ Where it can, a promotion deploys the image staging already built, named by its 
 | Azure Container Apps | Yes | The conditions below don't hold, or the image is in another Azure container registry (the region doesn't matter) |
 | Your own servers, Kubernetes | Yes | The conditions below don't hold, or the target pushes to a different registry, or staging built on its server without one |
 | Render, Vercel | No | Always. They build each deployment from the commit themselves |
-| DigitalOcean App Platform | No | Always. App Platform builds the newest commit of its branch, and the reason says a promotion only works while that's still the commit you're promoting |
+| DigitalOcean App Platform, image Loomplane built | Yes | The conditions below don't hold, or the target pushes to a different registry |
+| DigitalOcean App Platform, built from the repository | No | Always. App Platform builds the newest commit of its branch, and the reason says a promotion only works while that's still the commit you're promoting |
 
-The conditions, for the first three rows: staging ran the same commit of the service on the same kind of target, built for the same architecture, from the same build inputs (source, Dockerfile, build context, ecosystem, build command and start command), and recorded the image by digest. A release that predates digest-pinned images, or one whose connection can't read digests, has only a tag, so it builds again.
+The conditions, for every row that reuses: staging ran the same commit of the service on the same kind of target, built for the same architecture, from the same build inputs (source, Dockerfile, build context, ecosystem, build command and start command), and recorded the image by digest. A release that predates digest-pinned images, or one whose connection can't read digests, has only a tag, so it builds again.
 
 A gateway, a catalog service and a service pinned to an existing image have nothing built from a repository, so there's nothing to reuse. If the target environment's release strategy is `canary`, a reused image is what the canary ramps.
 

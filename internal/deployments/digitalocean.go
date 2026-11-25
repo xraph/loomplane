@@ -30,18 +30,28 @@ import (
 // PostgreSQL, MySQL and Valkey, which speaks the Redis protocol.
 //
 // Each service and environment is an App Platform app of its own, named
-// the way a Render service is, built by App Platform from the repository
-// through DigitalOcean's GitHub connection, with deploy on push off.
+// the way a Render service is.
 //
-// App Platform builds the newest commit of a branch and can't be told
-// which one to build. So Loomplane points it at the branch the project
-// reads, starts the deployment itself, and checks the commit App Platform
-// reports for every component against the one the plan approved. A
-// different commit is cancelled before it goes live. If it somehow went
-// live, the app is rolled back to what ran before, or deleted when
-// nothing approved ever ran there.
+// A service the plan gives a build target is built by Loomplane's builder
+// from the approved commit and pushed to the account's container registry,
+// and the app runs that image by digest. DigitalOcean never reads the
+// repository, so it needs no GitHub or GitLab connection.
+//
+// The rest, static sites and services App Platform builds with its own
+// buildpacks, App Platform builds from the repository through
+// DigitalOcean's GitHub or GitLab connection, with deploy on push off. It
+// builds the newest commit of a branch and can't be told which one to
+// build. So Loomplane points it at the branch the project reads, starts
+// the deployment itself, and checks the commit App Platform reports for
+// every component against the one the plan approved. A different commit
+// is cancelled before it goes live. If it somehow went live, the app is
+// rolled back to what ran before, or deleted when nothing approved ever
+// ran there.
 type DigitalOcean struct {
 	Client *digitalocean.Client
+	// Builder builds the image of a service with a build target. Nil
+	// refuses those services.
+	Builder *ImageBuilder
 	// Resolve looks a host up in public DNS, past this machine's own
 	// cache. Nil asks Cloudflare's and Google's resolvers.
 	Resolve func(ctx context.Context, host string) error
@@ -83,8 +93,11 @@ const (
 )
 
 type doState struct {
-	AppID        string `json:"app_id,omitempty"`
-	DeploymentID string `json:"deployment_id,omitempty"`
+	// Image is the build of a service that runs an image, kept so a retry
+	// picks the build up where it stopped.
+	Image        ImageArtifact `json:"image,omitzero"`
+	AppID        string        `json:"app_id,omitempty"`
+	DeploymentID string        `json:"deployment_id,omitempty"`
 	// Previous is the deployment that was live before this one, to roll
 	// back to.
 	Previous string `json:"previous,omitempty"`
@@ -164,6 +177,15 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 		save()
 	})
 
+	if job.CommitSHA == "" {
+		return nil, errors.New("app platform deploys a commit, and the deployment has none for this service")
+	}
+	if cfg.Artifact != nil && cfg.Artifact.Revision != "" && job.Binding != nil && job.Binding.ExternalID != "" {
+		return d.rollBack(ctx, token, job, cfg, &state, save)
+	}
+	if cfg.BuildTarget != nil {
+		return d.applyImage(ctx, token, job, cfg, &state, save)
+	}
 	repo, err := repositoryFor(job)
 	if err != nil {
 		return nil, err
@@ -171,14 +193,8 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 	if hostErr := planning.GitBuildable("digitalocean", repo); hostErr != nil {
 		return nil, hostErr
 	}
-	if job.CommitSHA == "" {
-		return nil, errors.New("app platform deploys a commit, and the deployment has none for this service")
-	}
-	if cfg.Artifact != nil && cfg.Artifact.Revision != "" && job.Binding != nil && job.Binding.ExternalID != "" {
-		return d.rollBack(ctx, token, job, cfg, &state, save)
-	}
 	branch := doBranchFor(job)
-	spec := doAppSpec(job, cfg, repo, branch)
+	spec := doAppSpec(job, cfg, doSource{repo: repo, branch: branch})
 
 	if state.DeploymentID == "" {
 		job.Progress(StepDeploying, "Setting up the App Platform app")
@@ -234,6 +250,144 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (_ *Outcome, err err
 	return &Outcome{ExternalID: app.ID, URL: url, Revision: dep.ID}, nil
 }
 
+// applyImage builds the service's image from the approved commit with
+// Loomplane's builder, pushes it to the account's container registry, and
+// deploys the app on it by digest. A retry resumes the build, or waits on
+// the deployment it already started.
+func (d *DigitalOcean) applyImage(ctx context.Context, token string, job *Job, cfg *planning.ServiceConfig, state *doState, save func()) (*Outcome, error) {
+	if d.Builder == nil {
+		return nil, errors.New("this server can't build images for App Platform")
+	}
+	// App Platform pulls only from its own account's registries. The
+	// reviewed registry is checked before anything builds, and the image's
+	// own registry once it has one.
+	names, err := d.Client.RegistryNames(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("list the DigitalOcean account's container registries: %w", err)
+	}
+	inAccount := func(name string) error {
+		if !slices.Contains(names, name) {
+			return fmt.Errorf("app platform pulls images only from its own account's container registry, and %s isn't in the account %s runs in. Choose the registry connection made from that account", name, job.Action.Name)
+		}
+		return nil
+	}
+	if reviewed := cfg.BuildTarget.RegistrySettings["repository"]; reviewed != "" {
+		if accountErr := inAccount(reviewed); accountErr != nil {
+			return nil, accountErr
+		}
+	}
+	if state.DeploymentID == "" || state.Image.Digest == "" {
+		state.DeploymentID = ""
+		checkpoint := func() error {
+			data, marshalErr := json.Marshal(state)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			return job.Checkpoint(data)
+		}
+		if _, err = d.Builder.Build(ctx, job, &state.Image, checkpoint); err != nil {
+			return nil, err
+		}
+	}
+	src, registryName, err := doImageSource(state.Image.Reference, state.Image.Digest)
+	if err != nil {
+		return nil, err
+	}
+	if accountErr := inAccount(registryName); accountErr != nil {
+		return nil, accountErr
+	}
+	if len(names) > 1 {
+		src.Registry = registryName
+	}
+	spec := doAppSpec(job, cfg, doSource{image: src})
+
+	if state.DeploymentID == "" {
+		job.Progress(StepDeploying, "Setting up the App Platform app")
+		aerr := d.ensureApp(ctx, token, spec, func(ctx context.Context, app *digitalocean.App) error {
+			state.AppID = app.ID
+			if checkpointErr := checkpointCloudIdentity(job, *state); checkpointErr != nil {
+				return checkpointErr
+			}
+			if app.ActiveDeployment != nil {
+				state.Previous = app.ActiveDeployment.ID
+			}
+			if proofErr := prepareDORollbackProof(ctx, job, spec, app); proofErr != nil {
+				return proofErr
+			}
+			dep, derr := d.Client.CreateDeployment(ctx, token, app.ID)
+			if derr != nil {
+				return fmt.Errorf("deploy %s on app platform: %w", spec.Name, derr)
+			}
+			state.DeploymentID = dep.ID
+			save()
+			return nil
+		})
+		if aerr != nil {
+			return nil, aerr
+		}
+	}
+	job.Progress(StepDeploying, "Deploying "+state.Image.Reference+" on App Platform")
+	job.Collector(state.DeploymentID, job.LogAttempt()).RecordState(ctx, "", "unavailable", "App Platform's deploy logs are on the app's Activity tab in DigitalOcean. Progress remains available.")
+	dep, err := d.Client.WaitImageDeployment(ctx, token, state.AppID, state.DeploymentID, src.Digest)
+	if err != nil {
+		return nil, err
+	}
+	app, err := d.Client.GetApp(ctx, token, state.AppID)
+	if err != nil {
+		return nil, err
+	}
+	url := doAddress(cfg, app)
+	if dnsErr := d.waitForDNS(ctx, job, url); dnsErr != nil {
+		return nil, dnsErr
+	}
+	if err := d.keepRollbackProof(ctx, token, job, spec, app.ID, dep.ID); err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: app.ID, URL: url, Image: state.Image.Reference, Revision: dep.ID}, nil
+}
+
+// doSource is where App Platform gets a component's code: a branch of a
+// repository it builds, or an image Loomplane built.
+type doSource struct {
+	repo, branch string
+	image        *digitalocean.ImageSource
+}
+
+// doSourceFor is the source of a service already deployed: the image its
+// release ran, image, when the plan builds it, else its branch.
+func doSourceFor(job *Job, cfg *planning.ServiceConfig, image string) (doSource, error) {
+	if cfg.BuildTarget != nil {
+		_, digest, _ := strings.Cut(image, "@")
+		src, _, err := doImageSource(image, digest)
+		return doSource{image: src}, err
+	}
+	repo, err := repositoryFor(job)
+	return doSource{repo: repo, branch: doBranchFor(job)}, err
+}
+
+// doImageSource is the App Platform image source of reference, an image
+// in DigitalOcean's container registry as the builder names it, by tag or
+// digest, and the name of the registry it's in. Registry stays empty: App
+// Platform wants it only when the account has more than one.
+func doImageSource(reference, digest string) (*digitalocean.ImageSource, string, error) {
+	if !imageDigest.MatchString(digest) {
+		return nil, "", errNoDigest
+	}
+	rest, ok := strings.CutPrefix(reference, digitalocean.RegistryHost+"/")
+	if !ok {
+		return nil, "", fmt.Errorf("app platform pulls images only from DigitalOcean's container registry, not %s", reference)
+	}
+	rest, _, _ = strings.Cut(rest, "@")
+	if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
+		rest = rest[:i]
+	}
+	registryName, repository, ok := strings.Cut(rest, "/")
+	if !ok || registryName == "" || repository == "" {
+		return nil, "", fmt.Errorf("%s doesn't name a registry and a repository", reference)
+	}
+	return &digitalocean.ImageSource{RegistryType: digitalocean.RegistryDOCR, Repository: repository, Digest: digest}, registryName, nil
+}
+
 // rollBack puts the app back on the deployment a rollback plan restores,
 // which App Platform still holds, so nothing builds. The rollback is a
 // deployment of its own, waited on and checked against the restored
@@ -262,7 +416,16 @@ func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg
 			return nil, fmt.Errorf("roll %s back on app platform: %w", job.Action.Name, err)
 		}
 	}
-	dep, err := d.Client.WaitDeployment(ctx, token, app, state.DeploymentID, job.CommitSHA)
+	src, err := doSourceFor(job, cfg, cfg.Artifact.Reference)
+	if err != nil {
+		return nil, fmt.Errorf("roll %s back on app platform: %w", job.Action.Name, err)
+	}
+	var dep *digitalocean.Deployment
+	if src.image != nil {
+		dep, err = d.Client.WaitImageDeployment(ctx, token, app, state.DeploymentID, src.image.Digest)
+	} else {
+		dep, err = d.Client.WaitDeployment(ctx, token, app, state.DeploymentID, job.CommitSHA)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("roll %s back on app platform: %w", job.Action.Name, err)
 	}
@@ -274,14 +437,14 @@ func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg
 	if dnsErr := d.waitForDNS(ctx, job, url); dnsErr != nil {
 		return nil, dnsErr
 	}
-	repo, err := repositoryFor(job)
-	if err != nil {
+	if err := d.keepRollbackProof(ctx, token, job, doAppSpec(job, cfg, src), app, dep.ID); err != nil {
 		return nil, err
 	}
-	if err := d.keepRollbackProof(ctx, token, job, doAppSpec(job, cfg, repo, doBranchFor(job)), app, dep.ID); err != nil {
-		return nil, err
+	out := &Outcome{ExternalID: live.ID, URL: url, Revision: dep.ID}
+	if src.image != nil {
+		out.Image = cfg.Artifact.Reference
 	}
-	return &Outcome{ExternalID: live.ID, URL: url, Revision: dep.ID}, nil
+	return out, nil
 }
 
 // doPublicResolvers are asked directly, so a name looked up too early
@@ -452,17 +615,21 @@ func doAddress(cfg *planning.ServiceConfig, app *digitalocean.App) string {
 }
 
 // doAppSpec is the App Platform app a planned service runs as.
-func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digitalocean.AppSpec {
+func doAppSpec(job *Job, cfg *planning.ServiceConfig, src doSource) digitalocean.AppSpec {
 	region := job.Action.Region
 	if region == "" {
 		region = doRegion
 	}
 	spec := digitalocean.AppSpec{Name: DigitalOceanName(job), Region: region}
 	comp := digitalocean.Component{Name: doName(job.Action.Name)}
-	if r, err := repositories.ParseKey(repo); err == nil && r.Host == "gitlab.com" {
-		comp.GitLab = &digitalocean.GitLabSource{Repo: r.FullName(), Branch: branch}
-	} else {
-		comp.GitHub = &digitalocean.GitHubSource{Repo: repo, Branch: branch}
+	switch r, err := repositories.ParseKey(src.repo); {
+	case src.image != nil:
+		image := *src.image
+		comp.Image = &image
+	case err == nil && r.Host == "gitlab.com":
+		comp.GitLab = &digitalocean.GitLabSource{Repo: r.FullName(), Branch: src.branch}
+	default:
+		comp.GitHub = &digitalocean.GitHubSource{Repo: src.repo, Branch: src.branch}
 	}
 	root := strings.Trim(cfg.Source, "/")
 	if root == "." {
@@ -487,9 +654,12 @@ func doAppSpec(job *Job, cfg *planning.ServiceConfig, repo, branch string) digit
 	if cfg.Scale != nil {
 		comp.InstanceCount = max(1, cfg.Scale.Min)
 	}
-	if cfg.Image != "" {
+	switch {
+	case comp.Image != nil:
+		// The image was built with its own start command.
+	case cfg.Image != "":
 		comp.DockerfilePath, comp.SourceDir = cfg.Image, path.Clean("/"+cfg.ContextDir())
-	} else {
+	default:
 		// App Platform's buildpacks build Node, Go, Python, Ruby, PHP and
 		// more from the source directory; a start command overrides theirs.
 		comp.SourceDir, comp.RunCommand = "/"+root, cfg.Start

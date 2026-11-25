@@ -283,6 +283,10 @@ type Component struct {
 	// GitLab is the source of a gitlab.com project. At most one of GitHub
 	// and GitLab is set.
 	GitLab *GitLabSource `json:"gitlab,omitempty"`
+	// Image is a built image App Platform runs instead of building, for a
+	// service or worker; never with GitHub or GitLab, and never for a
+	// static site, which App Platform only builds from a repository.
+	Image *ImageSource `json:"image,omitempty"`
 	// SourceDir and DockerfilePath are paths from the repository's root.
 	SourceDir      string `json:"source_dir,omitempty"`
 	DockerfilePath string `json:"dockerfile_path,omitempty"`
@@ -297,6 +301,23 @@ type Component struct {
 	HTTPPort      int   `json:"http_port,omitempty"`
 	InternalPorts []int `json:"internal_ports,omitempty"`
 	Envs          []Env `json:"envs,omitempty"`
+}
+
+// RegistryDOCR is the image source registry type of DigitalOcean's own
+// container registry.
+const RegistryDOCR = "DOCR"
+
+// ImageSource is an image in the app's own account's container registry,
+// pinned by digest, so App Platform runs exactly the image that was built.
+// Per the app spec reference
+// (docs.digitalocean.com/products/app-platform/reference/app-spec/, read
+// 2026-11-24): Registry is left empty for DOCR but names the registry when
+// the account has several, and a digest excludes a tag.
+type ImageSource struct {
+	RegistryType string `json:"registry_type"`
+	Registry     string `json:"registry,omitempty"`
+	Repository   string `json:"repository"`
+	Digest       string `json:"digest"`
 }
 
 // GitHubSource is a branch of a GitHub repository, as owner/name.
@@ -438,7 +459,7 @@ func (c *Client) CreateApp(ctx context.Context, token string, spec AppSpec) (*Ap
 	if err := c.do(ctx, token, http.MethodPost, "/v2/apps", nil, map[string]any{"spec": spec}, &out); err != nil {
 		var ae *APIError
 		if errors.As(err, &ae) && strings.Contains(strings.ToLower(ae.Message), "github") {
-			return nil, fmt.Errorf("%w. App Platform builds from your repository through DigitalOcean's own GitHub connection: give DigitalOcean access to it in the control panel, under Settings, GitHub", err)
+			return nil, fmt.Errorf("%w. App Platform builds from your repository through DigitalOcean's own GitHub connection: give DigitalOcean access to it in the control panel, under Settings, GitHub. DigitalOcean's API can't set that up. For a service with a Dockerfile or a Go module, Loomplane can build the image instead and App Platform needs no access: add a runner pool and the account's container registry, as a registry under Integrations, then plan again", err)
 		}
 		return nil, err
 	}
@@ -570,6 +591,45 @@ func sameCommit(a, b string) bool {
 // deployment before it goes live. A live deployment must have reported a
 // matching commit for every component.
 func (c *Client) WaitDeployment(ctx context.Context, token, appID, id, commit string) (*Deployment, error) {
+	return c.waitDeployment(ctx, token, appID, id, func(d *Deployment, live bool) error {
+		for _, comp := range d.components() {
+			if (live || comp.SourceCommitHash != "") && !sameCommit(comp.SourceCommitHash, commit) {
+				return &CommitMismatchError{Deployment: d, Component: comp.Name, Built: comp.SourceCommitHash, Want: commit}
+			}
+		}
+		return nil
+	})
+}
+
+// WaitImageDeployment polls a deployment of an app that runs an image
+// until it's live, and fails if it doesn't get there. Nothing is built
+// from a commit, so instead the live deployment's spec must run digest in
+// every service and worker.
+func (c *Client) WaitImageDeployment(ctx context.Context, token, appID, id, digest string) (*Deployment, error) {
+	return c.waitDeployment(ctx, token, appID, id, func(d *Deployment, live bool) error {
+		if !live {
+			return nil
+		}
+		var spec AppSpec
+		if err := json.Unmarshal(d.Spec, &spec); err != nil {
+			return fmt.Errorf("read app platform deployment %s's spec: %w", id, err)
+		}
+		comps := append(append([]Component{}, spec.Services...), spec.Workers...)
+		if len(comps) == 0 || len(spec.StaticSites) > 0 {
+			return fmt.Errorf("app platform deployment %s isn't the image Loomplane built", id)
+		}
+		for _, comp := range comps {
+			if comp.Image == nil || comp.Image.Digest != digest {
+				return fmt.Errorf("app platform deployment %s runs %s from something other than the image Loomplane built, %s", id, comp.Name, digest)
+			}
+		}
+		return nil
+	})
+}
+
+// waitDeployment polls a deployment until it's live, calling check on each
+// reading, with live set once it is. An error from check stops the wait.
+func (c *Client) waitDeployment(ctx context.Context, token, appID, id string, check func(d *Deployment, live bool) error) (*Deployment, error) {
 	if appID == "" || id == "" {
 		return nil, errors.New("app platform deployment polling requires app and deployment IDs")
 	}
@@ -578,18 +638,11 @@ func (c *Client) WaitDeployment(ctx context.Context, token, appID, id, commit st
 		if err != nil {
 			return nil, err
 		}
-		for _, comp := range d.components() {
-			if comp.SourceCommitHash != "" && !sameCommit(comp.SourceCommitHash, commit) {
-				return d, &CommitMismatchError{Deployment: d, Component: comp.Name, Built: comp.SourceCommitHash, Want: commit}
-			}
+		if err := check(d, d.Phase == PhaseActive); err != nil {
+			return d, err
 		}
 		switch d.Phase {
 		case PhaseActive:
-			for _, comp := range d.components() {
-				if !sameCommit(comp.SourceCommitHash, commit) {
-					return d, &CommitMismatchError{Deployment: d, Component: comp.Name, Built: comp.SourceCommitHash, Want: commit}
-				}
-			}
 			return d, nil
 		case PhaseError, PhaseCanceled, PhaseSuperseded:
 			return d, fmt.Errorf("app platform deployment %s: %s. Its build and deploy logs are on the app's Activity tab in DigitalOcean", id, strings.ToLower(d.Phase))

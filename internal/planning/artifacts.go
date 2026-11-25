@@ -69,7 +69,7 @@ func checkGitBuilds(plan *Plan, result *Result) {
 		if !deploysBuiltCode(a) {
 			continue
 		}
-		if _, builds := gitBuildHosts[a.Provider]; !builds {
+		if _, builds := gitBuildHosts[a.Provider]; !builds || appPlatformImage(a) {
 			continue
 		}
 		for _, src := range plan.Sources {
@@ -238,7 +238,7 @@ func (s *Service) reusable(to string, connections map[string]string, a Action, i
 		choice.Reason = reason
 		return choice, nil
 	}
-	if a.Provider == "digitalocean" {
+	if a.Provider == "digitalocean" && !appPlatformImage(a) {
 		choice.Reason = "App Platform builds the newest commit of its branch; this promotion works only while that is still " + short
 		return choice, nil
 	}
@@ -261,7 +261,9 @@ func (s *Service) reusable(to string, connections map[string]string, a Action, i
 		return choice, nil
 	}
 	pull, pulls := pullAccounts[a.Provider]
-	ownsRegistry := a.Provider == "server" || a.Provider == "kubernetes"
+	// App Platform pulls an image Loomplane built from the registry it was
+	// pushed to, as a server does.
+	ownsRegistry := a.Provider == "server" || a.Provider == "kubernetes" || appPlatformImage(a)
 	if !pulls && !ownsRegistry {
 		choice.Reason = s.providerTitle(a.Provider) + " builds each deployment itself" + again
 		return choice, nil

@@ -5,24 +5,29 @@ description: Connect a DigitalOcean team and run services on App Platform with M
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-Loomplane runs your services on DigitalOcean App Platform and gives them Managed PostgreSQL, MySQL and Valkey databases. App Platform builds each service from your repository, so you don't need a registry or a builder of your own.
+Loomplane runs your services on DigitalOcean App Platform and gives them Managed PostgreSQL, MySQL and Valkey databases. Loomplane builds each service's image itself and pushes it to your DigitalOcean container registry, and App Platform runs that image. DigitalOcean never needs access to your repository.
 
 ## Connect DigitalOcean
 
 <Steps>
 <Step>
 
-In DigitalOcean, open **API**, then **Tokens**, and create a personal access token with read and write access. A custom-scoped token needs `app`, `database` and `account:read`.
-
-</Step>
-<Step>
-
-Under **Settings**, then **GitHub**, give DigitalOcean access to the repositories you'll deploy. App Platform clones them through that connection. Loomplane never hands it your code.
+In DigitalOcean, open **API**, then **Tokens**, and create a personal access token with read and write access. A custom-scoped token needs `app`, `database`, `registry` and `account:read`.
 
 </Step>
 <Step>
 
 In Loomplane, open **Integrations**, choose **DigitalOcean** and paste the token.
+
+</Step>
+<Step>
+
+Still in **Integrations**, add a registry, choose the **DigitalOcean account** and its **Registry**, then **Check and connect**. If DigitalOcean has no container registry yet, create one under **Container Registry** first. Loomplane pushes the images it builds there, and App Platform pulls them without a password of its own, because the registry is in the same team.
+
+</Step>
+<Step>
+
+Make sure a [runner pool](/docs/clouds/runners) can build for the project. Loomplane builds on the project's default pool, or the organization's.
 
 </Step>
 </Steps>
@@ -55,11 +60,22 @@ resources:
 
 The regions are App Platform's: `nyc`, `sfo`, `tor`, `atl`, `ams`, `fra`, `lon`, `blr`, `sgp` and `syd`. Leave `region` out and you get `nyc`.
 
-Each service in each environment becomes an App Platform app of its own, named after the service, the environment and the project, with deploy on push turned off. A service with a Dockerfile builds from it. Anything else goes through App Platform's buildpacks. Workers run as App Platform workers and static sites as static sites. `size` picks the smallest instance that fits, from `apps-s-1vcpu-0.5gb` up to `apps-d-8vcpu-32gb`, and `scale.min` sets how many instances run. Secret variables go in as App Platform secrets.
+Each service in each environment becomes an App Platform app of its own, named after the service, the environment and the project. Workers run as App Platform workers and static sites as static sites. `size` picks the smallest instance that fits, from `apps-s-1vcpu-0.5gb` up to `apps-d-8vcpu-32gb`, and `scale.min` sets how many instances run. Secret variables go in as App Platform secrets.
 
-## Which commit runs
+## How a service gets built
 
-Every other target here deploys the exact commit a plan approved. App Platform can't, because it always builds the newest commit of a branch and gives you no way to ask for a particular one. So Loomplane checks instead.
+A service with a Dockerfile, or a Go module, is built by Loomplane from the commit you approved. The image goes to the DigitalOcean container registry, and the app runs it by digest, so what runs is exactly what you reviewed. The repository can live anywhere Loomplane reads from, a self-managed GitLab included. `build.builder` and `build.registry` pick another runner pool or registry. The registry has to be in the DigitalOcean team the app runs in, because that's the only place App Platform pulls from without a password, and the builder has to build amd64 images. A promotion deploys the image the earlier environment ran when both push to the same registry.
+
+Two kinds of service still build on App Platform from the repository:
+
+- Static sites, which App Platform can't run from an image.
+- Services with neither a Dockerfile nor a Go module, which App Platform builds with its own buildpacks.
+
+The same goes for every service until there's a runner pool and a DigitalOcean registry to build with, and the plan warns which one is missing. Those builds need DigitalOcean's own connection to your GitHub or GitLab account, which only someone signed in to DigitalOcean can set up: in DigitalOcean, under **Settings**, then **GitHub**, give it access to the repositories you'll deploy. DigitalOcean's API has no way to do it, so Loomplane can't do it for you. The plan warns about every service that needs it, and a deployment without it fails with DigitalOcean's "GitHub user not authenticated".
+
+## Which commit runs from the repository
+
+An image Loomplane built is the approved commit by construction. A build from the repository isn't, because App Platform always builds the newest commit of a branch and gives you no way to ask for a particular one. So Loomplane checks instead.
 
 It points the app at the branch your project reads, starts the deployment itself, and watches the commit App Platform reports for every component. If that's the approved commit, the deployment goes ahead. If someone pushed to the branch after you approved the plan, Loomplane cancels the deployment before it goes live and the step fails with both commits in the message. In the rare case a wrong build gets live before the check sees it, Loomplane rolls the app back to what ran before, or deletes the app if nothing approved ever ran there.
 
@@ -95,7 +111,7 @@ Wildcard hostnames and blocked paths aren't supported yet. Neither is moving a h
 
 ## Limits
 
-A private service is only reachable from inside its own App Platform app, and each service here gets its own app, so nothing can call one. The planner says so and asks you to make it public. Build logs stay on the app's **Activity** tab, and Loomplane shows the deployment's progress.
+A private service is only reachable from inside its own App Platform app, and each service here gets its own app, so nothing can call one. The planner says so and asks you to make it public. An image Loomplane builds has its build log in Loomplane. A build on App Platform keeps its log on the app's **Activity** tab, and Loomplane shows the deployment's progress.
 
 ## Droplets and DNS
 

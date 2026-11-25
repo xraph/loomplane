@@ -28,7 +28,7 @@ func TestDigitalOceanExternalCredentialsAreRuntimeOnly(t *testing.T) {
 	job := doJob(cfg, "main")
 	job.Env = map[string]string{"DATABASE_URL": "postgres://app:secret@db/app", "CACHE_URL": "rediss://:secret@cache:6380", "AWS_SECRET_ACCESS_KEY": "application-key", "NPM_TOKEN": "build-token"}
 	job.Secrets = map[string]bool{"DATABASE_URL": true, "CACHE_URL": true, "AWS_SECRET_ACCESS_KEY": true, "NPM_TOKEN": true}
-	envs := doAppSpec(job, cfg, "acme/mono", "main").Services[0].Envs
+	envs := doAppSpec(job, cfg, doSource{repo: "acme/mono", branch: "main"}).Services[0].Envs
 	for _, env := range envs {
 		if env.Key == "PORT" {
 			continue
@@ -51,7 +51,7 @@ func TestNativeBucketLongTermKeysOmitEmptyOptionalToken(t *testing.T) {
 	job := doJob(cfg, "main")
 	job.Env = map[string]string{"FILES_AWS_SESSION_TOKEN": "", "FILES_AWS_SECRET_ACCESS_KEY": "application-secret"}
 	job.Secrets = map[string]bool{"FILES_AWS_SESSION_TOKEN": true, "FILES_AWS_SECRET_ACCESS_KEY": true}
-	for _, env := range doAppSpec(job, cfg, "acme/mono", "main").Services[0].Envs {
+	for _, env := range doAppSpec(job, cfg, doSource{repo: "acme/mono", branch: "main"}).Services[0].Envs {
 		if env.Key == "FILES_AWS_SESSION_TOKEN" {
 			t.Fatal("App Platform emitted an empty optional token secret")
 		}

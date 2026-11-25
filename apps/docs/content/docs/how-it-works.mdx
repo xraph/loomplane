@@ -27,7 +27,7 @@ A developer can plan anything. Only an admin's approval changes a cloud, and the
 
 ## 6. Deploy
 
-Approval starts a durable workflow. It stores one source tarball per repository, provisions resources, builds each service on its cloud's own builder (Cloud Build, CodeBuild, Vercel, Render, App Platform or ACR Tasks), deploys it, and checks that public services answer. If a step fails, you retry from that step. See [Deployments and recovery](/docs/concepts/deployments-and-recovery).
+Approval starts a durable workflow. It stores one source tarball per repository, provisions resources, builds each service on its cloud's own builder (Cloud Build, CodeBuild, Vercel, Render, App Platform or ACR Tasks) or on a runner pool, deploys it, and checks that public services answer. If a step fails, you retry from that step. See [Deployments and recovery](/docs/concepts/deployments-and-recovery).
 
 ## 7. Watch for drift
 
