@@ -53,9 +53,14 @@ ARG TARGETOS
 ARG TARGETARCH
 # Bound compiler memory on small builders that also build the dashboard.
 ARG GO_BUILD_PARALLELISM=2
+# On a fresh builder the go mod download layer above can come from the
+# layer cache while the module cache mount starts empty, so the modules
+# are fetched again here. The proxy sometimes drops a download midway,
+# so retry it before building.
 RUN --mount=type=cache,id=loomplane-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=loomplane-gobuild,target=/root/.cache/go-build \
-    GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -p ${GO_BUILD_PARALLELISM} -trimpath -tags "${GO_TAGS}" \
+    for i in 1 2 3; do go mod download && break; echo "module download failed, retrying ($i)"; sleep 5; done \
+ && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -p ${GO_BUILD_PARALLELISM} -trimpath -tags "${GO_TAGS}" \
       -ldflags "-s -w -X github.com/xraph/loomplane/internal/buildinfo.Version=${VERSION}" \
       -o /out/ ./cmd/loomplane ./cmd/loomplane-worker
 
