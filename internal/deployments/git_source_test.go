@@ -31,7 +31,7 @@ func TestRenderSpec_gitLabRepoURL(t *testing.T) {
 func TestDOAppSpec_gitLabSource(t *testing.T) {
 	cfg := &planning.ServiceConfig{Source: "api", Ecosystem: "go", Port: 8080, Public: true, Workload: provider.HTTPService, Execution: provider.Container}
 	job := doJob(cfg, "")
-	comp := doAppSpec(job, cfg, "gitlab.com/grp/sub/api", "main").Services[0]
+	comp := doAppSpec(job, cfg, doSource{repo: "gitlab.com/grp/sub/api", branch: "main"}).Services[0]
 	if comp.GitHub != nil {
 		t.Fatalf("a GitLab key got a GitHub source: %+v", comp.GitHub)
 	}
@@ -50,7 +50,7 @@ func TestDOAppSpec_gitLabSource(t *testing.T) {
 
 func TestDOAppSpec_gitHubSourceUnchanged(t *testing.T) {
 	cfg := &planning.ServiceConfig{Source: "api", Ecosystem: "go", Port: 8080, Public: true, Workload: provider.HTTPService, Execution: provider.Container}
-	comp := doAppSpec(doJob(cfg, ""), cfg, "acme/mono", "main").Services[0]
+	comp := doAppSpec(doJob(cfg, ""), cfg, doSource{repo: "acme/mono", branch: "main"}).Services[0]
 	if comp.GitLab != nil || comp.GitHub == nil || *comp.GitHub != (digitalocean.GitHubSource{Repo: "acme/mono", Branch: "main"}) {
 		t.Fatalf("github %+v, gitlab %+v", comp.GitHub, comp.GitLab)
 	}

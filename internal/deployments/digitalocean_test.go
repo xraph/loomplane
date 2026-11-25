@@ -43,6 +43,8 @@ type fakeAppPlatform struct {
 	deployments    map[string]map[string]any // immutable specs keyed by deployment ID
 	alterBuild     func(map[string]any)      // provider-side edits before the first readback
 	encryptSecrets bool
+	// registries are the account's container registries' names.
+	registries []string
 	// held reports whether the client's lock is held, and locked records
 	// it for the first call of each method and path.
 	held   func() bool
@@ -150,6 +152,12 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 			f.apps[parts[2]], f.deployments["rb"] = spec, spec
 		}
 		reply(200, map[string]any{"deployment": map[string]any{"id": "rb"}})
+	case r.Method == http.MethodGet && r.URL.Path == "/v2/registries":
+		out := []any{}
+		for _, name := range f.registries {
+			out = append(out, map[string]any{"name": name})
+		}
+		reply(200, map[string]any{"registries": out})
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/databases":
 		out := make([]any, 0, len(f.databases))
 		for _, d := range f.databases {
@@ -444,12 +452,12 @@ func TestDigitalOcean_rollbackHoldsTheAppUntilItStarts(t *testing.T) {
 
 func TestDigitalOcean_workersPrivateServicesAndStaticSites(t *testing.T) {
 	job := doJob(&planning.ServiceConfig{Source: "worker", Ecosystem: "node", Start: "node worker.js", Workload: provider.Worker, Execution: provider.Container}, "")
-	spec := doAppSpec(job, job.Action.Service, "acme/mono", "main")
+	spec := doAppSpec(job, job.Action.Service, doSource{repo: "acme/mono", branch: "main"})
 	if len(spec.Workers) != 1 || spec.Workers[0].RunCommand != "node worker.js" || spec.Workers[0].SourceDir != "/worker" || len(spec.Services) != 0 {
 		t.Fatalf("worker %+v", spec)
 	}
 	job.Action.Service = &planning.ServiceConfig{Source: "api", Ecosystem: "go", Port: 9000, Workload: provider.HTTPService, Execution: provider.Container}
-	spec = doAppSpec(job, job.Action.Service, "acme/mono", "main")
+	spec = doAppSpec(job, job.Action.Service, doSource{repo: "acme/mono", branch: "main"})
 	if svc := spec.Services[0]; svc.HTTPPort != 0 || len(svc.InternalPorts) != 1 || svc.InternalPorts[0] != 9000 {
 		t.Fatalf("private service %+v", svc)
 	}
@@ -457,7 +465,7 @@ func TestDigitalOcean_workersPrivateServicesAndStaticSites(t *testing.T) {
 		t.Fatal("a private service got a public address")
 	}
 	job.Action.Service = &planning.ServiceConfig{Source: "web", Framework: "next", Workload: provider.StaticSite, Execution: provider.Static}
-	spec = doAppSpec(job, job.Action.Service, "acme/mono", "main")
+	spec = doAppSpec(job, job.Action.Service, doSource{repo: "acme/mono", branch: "main"})
 	if len(spec.StaticSites) != 1 || spec.StaticSites[0].OutputDir != "out" || spec.StaticSites[0].InstanceSizeSlug != "" {
 		t.Fatalf("static site %+v", spec)
 	}
@@ -467,7 +475,7 @@ func TestDigitalOcean_aDockerfileThatBuildsFromTheRoot(t *testing.T) {
 	// Loomplane's own: deployments/docker/Dockerfile, built from the root.
 	cfg := &planning.ServiceConfig{Source: ".", Image: "deployments/docker/Dockerfile", Context: ".", Port: 8780, Public: true,
 		Workload: provider.HTTPService, Execution: provider.Container}
-	svc := doAppSpec(doJob(cfg, ""), cfg, "xraph/loomplane", "main").Services[0]
+	svc := doAppSpec(doJob(cfg, ""), cfg, doSource{repo: "xraph/loomplane", branch: "main"}).Services[0]
 	if svc.SourceDir != "/" || svc.DockerfilePath != "deployments/docker/Dockerfile" || svc.HTTPPort != 8780 {
 		t.Fatalf("service %+v", svc)
 	}

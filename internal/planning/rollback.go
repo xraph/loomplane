@@ -556,10 +556,23 @@ func appPlatformRollback(a Action, img ReleasedImage, from string) (ArtifactChoi
 		return refuse(recorded + "this release predates that")
 	case img.CommitSHA != a.Service.CommitSHA:
 		return refuse(recorded + "the deployment it recorded ran " + shortCommit(img.CommitSHA) + ", not " + shortCommit(a.Service.CommitSHA))
+	// The rollback is checked against the app spec this plan would deploy,
+	// which runs an image or builds from the repository; the recorded
+	// deployment has to have done the same.
+	case a.Service.BuildTarget != nil && !digestReference.MatchString(img.Image):
+		return refuse("App Platform built that release of " + a.Name + " from the repository, and this plan has Loomplane build its image. Deploy the commit instead of rolling back")
+	case a.Service.BuildTarget == nil && img.Image != "":
+		return refuse("That release of " + a.Name + " ran an image Loomplane built, and this plan has App Platform build from the repository. Deploy the commit instead of rolling back")
 	}
 	choice.Reused, choice.Revision, choice.From = true, img.Revision, from
 	if a.Service.TargetAccountIdentity != "" || img.ExternalResources {
 		choice.Reason = "The recorded App Platform configuration and resource credentials are verified against this review before rollback. Changed credentials require a source deployment."
 	}
-	return choice, &ReusedArtifact{Revision: img.Revision, CommitSHA: img.CommitSHA, FromEnvironment: from, FromDeploymentID: img.DeploymentID}, nil
+	artifact := &ReusedArtifact{Revision: img.Revision, CommitSHA: img.CommitSHA, FromEnvironment: from, FromDeploymentID: img.DeploymentID}
+	if a.Service.BuildTarget != nil {
+		_, artifact.Digest, _ = strings.Cut(img.Image, "@")
+		artifact.Reference, artifact.Architecture = img.Image, img.Architecture
+		choice.Reference = img.Image
+	}
+	return choice, artifact, nil
 }

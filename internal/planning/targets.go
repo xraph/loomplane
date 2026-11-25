@@ -183,6 +183,10 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		}
 		return
 	}
+	if prov.Cloud == "digitalocean" {
+		p.configureAppPlatform(name, base, prov, set, cfg)
+		return
+	}
 	if !OwnedCloud(prov.Cloud) {
 		if set.Target != "" || set.Endpoint != nil || (set.Build != nil && (set.Build.Builder != "" || set.Build.Registry != "" || set.Build.Image != "")) {
 			p.problem(Finding{Code: "target-unsupported", Subject: ServiceSubject, Name: name, Path: base,

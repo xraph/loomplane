@@ -99,4 +99,4 @@ Only pushes to a project's default branch re-analyze, and only in the organizati
 
 ## Deploying
 
-Every deployment target but two builds from the archive Loomplane fetched. Render and DigitalOcean App Platform build from the repository themselves, through their own GitLab connection, so connect GitLab in Render's or DigitalOcean's dashboard first. They build gitlab.com sources only. A source on a self-managed GitLab can't deploy to either, and the plan reports it.
+Every deployment target builds from the archive Loomplane fetched, with two exceptions. Render builds from the repository itself, through its own GitLab connection. So does DigitalOcean App Platform for a static site, for a service with no Dockerfile, and for any service while there's no runner pool and DigitalOcean registry for Loomplane to build with (see [DigitalOcean](/docs/clouds/digitalocean)). Connect GitLab in Render's or DigitalOcean's dashboard first for those. They build gitlab.com sources only. A source on a self-managed GitLab can't deploy that way, and the plan reports it.

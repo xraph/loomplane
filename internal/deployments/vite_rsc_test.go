@@ -94,7 +94,7 @@ func TestViteRSCNativeTargetsRunServer(t *testing.T) {
 	if err != nil || spec.Runtime != "node" || spec.Start != "npm start" || !strings.Contains(spec.Build, "npm run build") || spec.PublishPath != "" {
 		t.Fatalf("native server lost: %+v, %v", spec, err)
 	}
-	app := doAppSpec(job, cfg, "example/rsc", "main")
+	app := doAppSpec(job, cfg, doSource{repo: "example/rsc", branch: "main"})
 	if len(app.Services) != 1 || len(app.StaticSites) != 0 || app.Services[0].RunCommand != "node server.mjs" {
 		t.Fatalf("RSC static deployment: %+v", app)
 	}
