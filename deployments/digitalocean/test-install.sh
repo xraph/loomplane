@@ -27,6 +27,16 @@ if [ -z "${LOOMPLANE_TEST_IN_CONTAINER:-}" ]; then
       .services.caddy.depends_on["push-gateway"].condition == "service_healthy"
     ' >/dev/null
   )
+  echo "test-install: docker compose config on the install push-gateway turned on"
+  (
+    cd "$out/gw"
+    env -u COMPOSE_FILE -u COMPOSE_PROFILES -u PUSH_GATEWAY_DOMAIN docker compose config --format json | jq -e '
+      .services["push-gateway"].environment.PUSH_GATEWAY_APNS_KEY_ID == "ABCDE12345" and
+      .services["push-gateway"].environment.PUSH_GATEWAY_APNS_KEY_FILE == "/run/secrets/apns_key" and
+      .services.caddy.environment.PUSH_GATEWAY_DOMAIN == "push.loomplane.test.invalid" and
+      .services.loomplane.environment.LOOMPLANE_PUSH_GATEWAY_URL == "https://push.loomplane.test.invalid"
+    ' >/dev/null
+  )
   echo "test-install: PASS (host compose config ok)"
   if [ "$#" -eq 2 ]; then
     echo "test-install: smoke test of the installed gateway bundle"
@@ -213,6 +223,169 @@ if setpriv --reuid="${LOOMPLANE_TEST_HOST_UID:-0}" --regid="${LOOMPLANE_TEST_HOS
 else
   bad "exported bundle is readable by the Linux host user"
 fi
+
+# 4e. push-gateway, on an install of its own.
+gw=$work/gw
+gwlog=$work/gw.log
+LOOMPLANE_DIR=$gw LOOMPLANE_VERSION=v9.9.9 bash "$installer" prepare >/dev/null 2>&1 || bad "gateway install prepare"
+LOOMPLANE_DIR=$gw bash "$installer" secrets >/dev/null 2>&1 || bad "gateway install secrets"
+LOOMPLANE_DIR=$gw LOOMPLANE_DOMAIN=x.loomplane.test.invalid ACME_EMAIL=ops@loomplane.test.invalid \
+  bash "$installer" configure >/dev/null 2>&1 || bad "gateway install configure"
+fcm=$work/fcm.json
+printf '{"type":"service_account","project_id":"p","private_key":"k","client_email":"e@p.iam"}\n' >"$fcm"
+apns=$work/apns.p8
+printf -- '-----BEGIN PRIVATE KEY-----\nk\n-----END PRIVATE KEY-----\n' >"$apns"
+notkey=$work/notkey.json
+printf '{}\n' >"$notkey"
+gateway() { env LOOMPLANE_DIR="$gw" "$@" bash "$installer" push-gateway; }
+
+for case in "|PUSH_GATEWAY_DOMAIN" \
+  "PUSH_GATEWAY_DOMAIN=push.example.com|placeholder" \
+  "PUSH_GATEWAY_DOMAIN=https://push.loomplane.test.invalid|bare hostname" \
+  "PUSH_GATEWAY_DOMAIN=x.loomplane.test.invalid|of its own" \
+  "PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid PUSH_GATEWAY_FCM_FILE=$notkey|service-account" \
+  "PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid PUSH_GATEWAY_APNS_FILE=$apns|PUSH_GATEWAY_APNS_KEY_ID" \
+  "PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid PUSH_GATEWAY_APNS_KEY_ID=ABCDE12345|PUSH_GATEWAY_APNS_FILE"; do
+  vars=${case%%|*} want=${case#*|}
+  # shellcheck disable=SC2086 # vars is a list of assignments on purpose
+  if msg=$(gateway $vars 2>&1); then
+    bad "push-gateway refuses '$vars'"
+  elif [[ "$msg" == *"$want"* ]] && ! grep -q '^PUSH_GATEWAY_DOMAIN=push.loomplane' "$gw/.env"; then
+    pass "push-gateway refuses '$vars'"
+  else
+    bad "push-gateway refuses '$vars' (message: $msg)"
+  fi
+done
+
+# Without a Firebase key the gateway is prepared, with its sealing key, but off.
+if gateway PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid >"$gwlog" 2>&1 \
+  && grep -q 'prepared but off' "$gwlog" \
+  && grep -q '^PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid$' "$gw/.env" \
+  && ! grep -q '^COMPOSE_FILE=' "$gw/.env" \
+  && [ -s "$gw/secrets/sealing-key" ] \
+  && [ "$(stat -c '%u:%g:%a' "$gw/secrets/sealing-key")" = 10001:10001:400 ] \
+  && [ "$(stat -c %a "$gw/secrets")" = 700 ]; then
+  pass "push-gateway without a Firebase key prepares the gateway and leaves it off"
+else
+  bad "push-gateway without a Firebase key prepares the gateway and leaves it off"; cat "$gwlog" >&2
+fi
+seal=$(cat "$gw/secrets/sealing-key")
+
+# With one it turns the overlay on, and keeps the sealing key.
+if gateway PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid PUSH_GATEWAY_FCM_FILE="$fcm" >"$gwlog" 2>&1 \
+  && grep -q '^COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml$' "$gw/.env" \
+  && [ "$(grep -c '^COMPOSE_FILE=' "$gw/.env")" = 1 ] \
+  && cmp -s "$fcm" "$gw/secrets/fcm-service-account.json" \
+  && [ "$(stat -c '%u:%g:%a' "$gw/secrets/fcm-service-account.json")" = 10001:10001:400 ] \
+  && [ "$(cat "$gw/secrets/sealing-key")" = "$seal" ] \
+  && [ -f "$gw/secrets/previous-sealing-key" ] && [ ! -s "$gw/secrets/previous-sealing-key" ] \
+  && [ -f "$gw/secrets/apns-key.p8" ] && [ ! -s "$gw/secrets/apns-key.p8" ] \
+  && [ "$(stat -c %a "$gw/.env")" = 600 ]; then
+  pass "push-gateway with a Firebase key turns the gateway on and keeps its sealing key"
+else
+  bad "push-gateway with a Firebase key turns the gateway on and keeps its sealing key"; cat "$gwlog" >&2
+fi
+
+# An Apple key adds iOS; a rerun without keys changes nothing.
+if gateway PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid PUSH_GATEWAY_APNS_FILE="$apns" \
+  PUSH_GATEWAY_APNS_KEY_ID=ABCDE12345 PUSH_GATEWAY_APNS_TEAM_ID=TEAM123456 >"$gwlog" 2>&1 \
+  && gateway PUSH_GATEWAY_DOMAIN=push.loomplane.test.invalid >>"$gwlog" 2>&1 \
+  && grep -q '^PUSH_GATEWAY_APNS_KEY_ID=ABCDE12345$' "$gw/.env" \
+  && grep -q '^PUSH_GATEWAY_APNS_TEAM_ID=TEAM123456$' "$gw/.env" \
+  && cmp -s "$apns" "$gw/secrets/apns-key.p8" \
+  && cmp -s "$fcm" "$gw/secrets/fcm-service-account.json" \
+  && [ "$(cat "$gw/secrets/sealing-key")" = "$seal" ]; then
+  pass "push-gateway adds an Apple key, and a rerun keeps every key"
+else
+  bad "push-gateway adds an Apple key, and a rerun keeps every key"; cat "$gwlog" >&2
+fi
+
+# all checks the gateway's hostname before it touches the system.
+gwfresh=$work/gw-fresh
+if msg=$(LOOMPLANE_DIR=$gwfresh LOOMPLANE_VERSION=v9.9.9 LOOMPLANE_DOMAIN=y.loomplane.test.invalid \
+  ACME_EMAIL=ops@loomplane.test.invalid PUSH_GATEWAY_DOMAIN=push.example.com bash "$installer" all 2>&1); then
+  bad "all refuses a placeholder gateway hostname"
+elif [[ "$msg" == *"PUSH_GATEWAY_DOMAIN is still the example.com placeholder"* ]] && [ ! -e "$gwfresh" ]; then
+  pass "all refuses a placeholder gateway hostname before creating the install dir"
+else
+  bad "all refuses a placeholder gateway hostname before creating the install dir (message: $msg)"
+fi
+
+# Hand the gateway install to the host, which checks Compose reads it.
+rm -rf /out/gw
+cp -R --no-preserve=ownership "$gw" /out/gw
+chown -R "${LOOMPLANE_TEST_HOST_UID:-0}:${LOOMPLANE_TEST_HOST_GID:-0}" /out/gw
+
+# 4f. runner checks everything before it changes the system, then hands
+# node.sh the role, the token and its flags. A local https server stands in
+# for Loomplane.
+sha=$(printf '%064d' 0 | tr 0 a)
+token=lpj_live_$(printf '%064d' 0 | tr 0 b)
+kvm=$work/kvm
+touch "$kvm"
+runner_env=(LOOMPLANE_DIR="$work/runner-only" LOOMPLANE_KVM_DEVICE="$kvm" LOOMPLANE_RUNNER_CONFIG="$work/no-fc.json"
+  LOOMPLANE_URL=https://localhost:8443 LOOMPLANE_JOIN_TOKEN="$token"
+  LOOMPLANE_RUNNER_TOOLCHAIN_URL=https://releases.loomplane.test.invalid/tc.tar.gz LOOMPLANE_RUNNER_TOOLCHAIN_SHA256="$sha")
+runner() { env "${runner_env[@]}" "$@" bash "$installer" runner; }
+for case in "LOOMPLANE_URL=http://localhost:8443|LOOMPLANE_URL" \
+  "LOOMPLANE_URL=https://loomplane.example.com|placeholder" \
+  "LOOMPLANE_JOIN_TOKEN=lpj_...|LOOMPLANE_JOIN_TOKEN" \
+  "LOOMPLANE_RUNNER_TOOLCHAIN_URL=|LOOMPLANE_RUNNER_TOOLCHAIN_URL" \
+  "LOOMPLANE_RUNNER_TOOLCHAIN_URL=https://releases.example.com/tc.tar.gz|placeholder" \
+  "LOOMPLANE_RUNNER_TOOLCHAIN_SHA256=abc|LOOMPLANE_RUNNER_TOOLCHAIN_SHA256" \
+  "LOOMPLANE_RUNNER_RELAY_ALLOW=10.0.0.0/8,nope|RELAY_ALLOW" \
+  "LOOMPLANE_RUNNER_NAME=Runner_1|LOOMPLANE_RUNNER_NAME" \
+  "LOOMPLANE_DIR=$install_dir|Loomplane itself runs on this Droplet" \
+  "LOOMPLANE_KVM_DEVICE=$work/no-kvm|can't run build microVMs"; do
+  vars=${case%%|*} want=${case#*|}
+  if msg=$(runner "$vars" 2>&1); then
+    bad "runner refuses '$vars'"
+  elif [[ "$msg" == *"$want"* ]] && [[ "$msg" != *"fetching the runner installer"* ]]; then
+    pass "runner refuses '$vars'"
+  else
+    bad "runner refuses '$vars' (message: $msg)"
+  fi
+done
+
+loom=$work/loom
+mkdir -p "$loom/install"
+cat >"$loom/install/node.sh" <<'NODE'
+#!/bin/sh
+{ echo "role=$LOOMPLANE_ROLE"; echo "token=$LOOMPLANE_JOIN_TOKEN"; for a in "$@"; do echo "arg=$a"; done; } >"$RUNNER_OUT"
+NODE
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=localhost -addext subjectAltName=DNS:localhost -days 1 \
+  -keyout "$work/tls.key" -out "$work/tls.crt" >/dev/null 2>&1
+python3 - "$loom" "$work/tls.crt" "$work/tls.key" >/dev/null 2>&1 <<'PY' &
+import functools, http.server, ssl, sys
+root, crt, key = sys.argv[1:]
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8443), functools.partial(http.server.SimpleHTTPRequestHandler, directory=root))
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(crt, key)
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+srv.serve_forever()
+PY
+tls=$!
+for _ in $(seq 1 50); do curl -fs --cacert "$work/tls.crt" -o /dev/null https://localhost:8443/install/node.sh && break; sleep 0.1; done
+out=$work/runner.out
+if CURL_CA_BUNDLE=$work/tls.crt RUNNER_OUT=$out runner LOOMPLANE_RUNNER_NAME=runner-1 \
+  LOOMPLANE_RUNNER_RELAY_ALLOW="10.116.0.0/20, 192.168.1.0/24" >"$work/runner.log" 2>&1 \
+  && [ "$(cat "$out")" = "role=runner
+token=$token
+arg=--toolchain
+arg=https://releases.loomplane.test.invalid/tc.tar.gz
+arg=--toolchain-sha256
+arg=$sha
+arg=--name
+arg=runner-1
+arg=--relay-allow
+arg=10.116.0.0/20
+arg=--relay-allow
+arg=192.168.1.0/24" ]; then
+  pass "runner hands node.sh the role, the token and its flags"
+else
+  bad "runner hands node.sh the role, the token and its flags"; cat "$work/runner.log" "$out" >&2
+fi
+kill "$tls" 2>/dev/null || true
 
 # 5. An unreachable release API fails clearly and creates nothing.
 fresh=$work/never-created

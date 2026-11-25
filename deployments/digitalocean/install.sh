@@ -6,8 +6,12 @@
 #   install.sh prepare    Docker, ufw, download and verify the release bundle
 #   install.sh secrets    create .env, fill the secret key and DB password
 #   install.sh configure  write LOOMPLANE_DOMAIN and ACME_EMAIL into .env
-#   install.sh start      bring the stack up and print the setup link
-#   install.sh all        prepare, secrets, configure, start
+#   install.sh start         bring the stack up and print the setup link
+#   install.sh push-gateway  run the push gateway beside Loomplane
+#   install.sh all           prepare, secrets, configure, push-gateway when
+#                            PUSH_GATEWAY_DOMAIN is set, start
+#   install.sh runner        make this Droplet a runner: it builds in
+#                            Firecracker microVMs. Run it on a Droplet of its own.
 #
 # Every step is safe to rerun and never overwrites an existing secret.
 #
@@ -16,6 +20,22 @@
 #   LOOMPLANE_DOMAIN, ACME_EMAIL      written by `configure`
 #   LOOMPLANE_DIR                     install root, default /srv/loomplane
 #   LOOMPLANE_ANALYSIS_CONCURRENCY    written to .env by `configure` when set
+#
+# push-gateway:
+#   PUSH_GATEWAY_DOMAIN               the gateway's own hostname
+#   PUSH_GATEWAY_FCM_FILE             a Firebase service-account JSON key to install.
+#                                     Without one the gateway is prepared, not started.
+#   PUSH_GATEWAY_APNS_FILE            optional Apple .p8 key, with
+#   PUSH_GATEWAY_APNS_KEY_ID, PUSH_GATEWAY_APNS_TEAM_ID and optionally
+#   PUSH_GATEWAY_APNS_BUNDLE_ID
+#
+# runner:
+#   LOOMPLANE_URL                     where Loomplane is, such as https://loomplane.example.com
+#   LOOMPLANE_JOIN_TOKEN              a runner join token (Runners, Add runner); it lasts an hour
+#   LOOMPLANE_RUNNER_TOOLCHAIN_URL, LOOMPLANE_RUNNER_TOOLCHAIN_SHA256
+#                                     the Firecracker toolchain bundle and its sha256
+#   LOOMPLANE_RUNNER_NAME             optional; the hostname otherwise
+#   LOOMPLANE_RUNNER_RELAY_ALLOW      optional comma-separated CIDRs deploys may be relayed to
 set -euo pipefail
 
 REPO="xraph/loomplane"
@@ -25,10 +45,20 @@ LIB_DIR="/usr/local/lib/loomplane"
 # Test hooks. Production runs never set these.
 #   LOOMPLANE_RELEASE_BASE_URL  where release assets are downloaded from
 #   LOOMPLANE_API_URL           GitHub API base used to find the latest release
-#   LOOMPLANE_SKIP_DOCKER       skip Docker, ufw and image pulls (no Docker in the test container)
+#   LOOMPLANE_SKIP_DOCKER       skip Docker, ufw, image pulls and the runner's host
+#                               setup (no Docker or KVM in the test container)
+#   LOOMPLANE_KVM_DEVICE        the device a runner checks for
+#   LOOMPLANE_RUNNER_CONFIG     the runner's Firecracker host config
 RELEASE_BASE_URL="${LOOMPLANE_RELEASE_BASE_URL:-https://github.com/${REPO}/releases/download}"
 API_URL="${LOOMPLANE_API_URL:-https://api.github.com}"
 SKIP_DOCKER="${LOOMPLANE_SKIP_DOCKER:-}"
+KVM_DEVICE="${LOOMPLANE_KVM_DEVICE:-/dev/kvm}"
+RUNNER_CONFIG="${LOOMPLANE_RUNNER_CONFIG:-/etc/loomplane-runner/firecracker.json}"
+
+# The gateway image runs as this user, and reads its keys as it.
+GATEWAY_UID=10001
+# The subnet a runner's build microVMs use, unless its host config says.
+RUNNER_SUBNET=10.231.0.0/20
 
 # Fresh Ubuntu Droplets often have unattended-upgrades holding the dpkg lock.
 APT_LOCK_WAIT=600
@@ -265,6 +295,232 @@ step_start() {
   log ".env holds your secret key. Copy $LOOMPLANE_DIR/.env somewhere safe: without it stored credentials can't be recovered."
 }
 
+# gateway_dir is where the gateway's keys live: PUSH_GATEWAY_SECRETS_DIR,
+# relative to the install, or secrets/.
+gateway_dir() {
+  local d
+  d=$(get_env PUSH_GATEWAY_SECRETS_DIR)
+  d=${d:-./secrets}
+  case "$d" in
+    /*) printf '%s\n' "$d" ;;
+    *) printf '%s\n' "$LOOMPLANE_DIR/${d#./}" ;;
+  esac
+}
+
+# put_key SRC NAME installs SRC as the gateway key NAME, readable only by
+# the gateway's user.
+put_key() {
+  local dest
+  dest="$(gateway_dir)/$2"
+  if [ "$(readlink -f "$1")" != "$(readlink -f "$dest" 2>/dev/null || true)" ]; then
+    install -m 0400 -o "$GATEWAY_UID" -g "$GATEWAY_UID" "$1" "$dest"
+  fi
+  chown "$GATEWAY_UID:$GATEWAY_UID" "$dest"
+  chmod 0400 "$dest"
+}
+
+# apple_id checks a 10-character Apple key or team ID.
+apple_id() { [[ "$1" =~ ^[A-Z0-9]{10}$ ]]; }
+
+# check_gateway_config validates the gateway's settings and key files
+# without touching anything. Loomplane's own domain comes from the
+# environment, or .env once there is one.
+check_gateway_config() {
+  local domain="${PUSH_GATEWAY_DOMAIN:-}" own="${LOOMPLANE_DOMAIN:-}"
+  if [ -z "$own" ] && [ -f "$LOOMPLANE_DIR/.env" ]; then own=$(get_env LOOMPLANE_DOMAIN); fi
+  [ -n "$domain" ] || die "set PUSH_GATEWAY_DOMAIN to the gateway's own hostname, such as push.loomplane.example.com"
+  valid_hostname "$domain" \
+    || die "PUSH_GATEWAY_DOMAIN must be a bare hostname such as push.loomplane.example.com, not a URL or path (got: $domain)"
+  case "$domain" in
+    example.com|*.example.com)
+      die "PUSH_GATEWAY_DOMAIN is still the example.com placeholder; set the gateway's hostname (got: $domain)" ;;
+  esac
+  [ "$domain" != "$own" ] || die "PUSH_GATEWAY_DOMAIN must be a hostname of its own, not LOOMPLANE_DOMAIN"
+  local fcm="${PUSH_GATEWAY_FCM_FILE:-}" apns="${PUSH_GATEWAY_APNS_FILE:-}"
+  if [ -n "$fcm" ]; then
+    [ -r "$fcm" ] || die "can't read PUSH_GATEWAY_FCM_FILE $fcm"
+    if ! grep -q '"private_key"' "$fcm" || ! grep -q '"client_email"' "$fcm"; then
+      die "PUSH_GATEWAY_FCM_FILE $fcm isn't a Firebase service-account JSON key"
+    fi
+  fi
+  if [ -n "$apns" ]; then
+    [ -r "$apns" ] || die "can't read PUSH_GATEWAY_APNS_FILE $apns"
+    grep -q 'BEGIN PRIVATE KEY' "$apns" || die "PUSH_GATEWAY_APNS_FILE $apns isn't an Apple .p8 key"
+    if ! apple_id "${PUSH_GATEWAY_APNS_KEY_ID:-}" || ! apple_id "${PUSH_GATEWAY_APNS_TEAM_ID:-}"; then
+      die "an Apple key needs PUSH_GATEWAY_APNS_KEY_ID and PUSH_GATEWAY_APNS_TEAM_ID, 10 letters and digits each"
+    fi
+  elif [ -n "${PUSH_GATEWAY_APNS_KEY_ID:-}${PUSH_GATEWAY_APNS_TEAM_ID:-}" ]; then
+    die "set PUSH_GATEWAY_APNS_FILE to the Apple .p8 key along with its key and team IDs"
+  fi
+}
+
+step_push_gateway() {
+  [ -f "$LOOMPLANE_DIR/.env" ] || die "no .env in $LOOMPLANE_DIR; run 'install.sh secrets' first"
+  check_gateway_config
+  local domain="$PUSH_GATEWAY_DOMAIN" dir
+  dir=$(gateway_dir)
+  umask 077
+  mkdir -p "$dir"
+  chmod 0700 "$dir"
+  if [ ! -s "$dir/sealing-key" ]; then
+    local tmp
+    tmp=$(mktemp "$dir/.sealing-key.XXXXXX")
+    openssl rand -base64 32 >"$tmp"
+    chown "$GATEWAY_UID:$GATEWAY_UID" "$tmp"
+    chmod 0400 "$tmp"
+    mv "$tmp" "$dir/sealing-key"
+    log "generated the gateway's sealing key in $dir/sealing-key. Back it up with .env: replacing it breaks every registered phone"
+  fi
+  # Compose mounts every key file, so the unused ones exist, empty.
+  local f
+  for f in previous-sealing-key apns-key.p8 fcm-service-account.json; do
+    if [ ! -e "$dir/$f" ]; then
+      : >"$dir/$f"
+      chown "$GATEWAY_UID:$GATEWAY_UID" "$dir/$f"
+      chmod 0400 "$dir/$f"
+    fi
+  done
+  if [ -n "${PUSH_GATEWAY_FCM_FILE:-}" ]; then
+    put_key "$PUSH_GATEWAY_FCM_FILE" fcm-service-account.json
+    log "installed the Firebase key"
+  fi
+  if [ -n "${PUSH_GATEWAY_APNS_FILE:-}" ]; then
+    put_key "$PUSH_GATEWAY_APNS_FILE" apns-key.p8
+    set_env PUSH_GATEWAY_APNS_KEY_ID "$PUSH_GATEWAY_APNS_KEY_ID"
+    set_env PUSH_GATEWAY_APNS_TEAM_ID "$PUSH_GATEWAY_APNS_TEAM_ID"
+    if [ -n "${PUSH_GATEWAY_APNS_BUNDLE_ID:-}" ]; then
+      set_env PUSH_GATEWAY_APNS_BUNDLE_ID "$PUSH_GATEWAY_APNS_BUNDLE_ID"
+    fi
+    log "installed the Apple key"
+  fi
+  set_env PUSH_GATEWAY_DOMAIN "$domain"
+  if [ -n "$(get_env PUSH_GATEWAY_APNS_KEY_ID)" ] && [ ! -s "$dir/apns-key.p8" ]; then
+    die "PUSH_GATEWAY_APNS_KEY_ID is set in .env but $dir/apns-key.p8 is empty; set PUSH_GATEWAY_APNS_FILE"
+  fi
+  if [ ! -s "$dir/fcm-service-account.json" ]; then
+    log "the gateway is prepared but off: it needs your Firebase service-account key. Copy the key to this Droplet, then run:"
+    log "  PUSH_GATEWAY_DOMAIN=$domain PUSH_GATEWAY_FCM_FILE=/path/to/key.json $LIB_DIR/install.sh push-gateway"
+    return 0
+  fi
+  set_env COMPOSE_FILE compose.yaml:compose.push-gateway.yaml
+  log "the push gateway answers on https://$domain. Point an A record for it at this Droplet"
+  if [ -z "$SKIP_DOCKER" ] && [ -f "$LOOMPLANE_DIR/.configured" ]; then
+    log "starting the push gateway"
+    (cd "$LOOMPLANE_DIR" && docker compose up -d --wait --wait-timeout 240)
+  fi
+}
+
+# runner_url is where the runner reaches Loomplane, without a trailing slash.
+runner_url() { printf '%s\n' "${LOOMPLANE_URL%/}"; }
+
+# check_runner_config validates what a runner needs without touching the
+# system, so a bad value fails before anything is installed.
+check_runner_config() {
+  local url token sha
+  url=$(runner_url)
+  token="${LOOMPLANE_JOIN_TOKEN:-}"
+  [[ "$url" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+    || die "set LOOMPLANE_URL to Loomplane's address, such as https://loomplane.example.com (got: ${LOOMPLANE_URL:-})"
+  case "$url" in
+    https://example.com|https://*.example.com|https://example.com:*|https://*.example.com:*)
+      die "LOOMPLANE_URL is still the example.com placeholder; set your Loomplane's address (got: $url)" ;;
+  esac
+  [[ "$token" =~ ^lpj_[a-z]+_[0-9a-f]{64}$ ]] \
+    || die "set LOOMPLANE_JOIN_TOKEN to a runner join token from Runners, Add runner; it starts lpj_ and lasts an hour"
+  if [ -n "${LOOMPLANE_RUNNER_TOOLCHAIN_URL:-}" ] || [ ! -f "$RUNNER_CONFIG" ]; then
+    [[ "${LOOMPLANE_RUNNER_TOOLCHAIN_URL:-}" =~ ^https://[^[:space:]]+$ ]] \
+      || die "set LOOMPLANE_RUNNER_TOOLCHAIN_URL to the https URL of your Firecracker toolchain bundle (deployments/firecracker/build-runner-toolchain.sh builds one)"
+    case "$LOOMPLANE_RUNNER_TOOLCHAIN_URL" in
+      https://example.com/*|https://*.example.com/*)
+        die "LOOMPLANE_RUNNER_TOOLCHAIN_URL is still the example.com placeholder; set where your toolchain bundle is (got: $LOOMPLANE_RUNNER_TOOLCHAIN_URL)" ;;
+    esac
+    sha=$(printf '%s' "${LOOMPLANE_RUNNER_TOOLCHAIN_SHA256:-}" | tr 'A-F' 'a-f')
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] \
+      || die "set LOOMPLANE_RUNNER_TOOLCHAIN_SHA256 to the bundle's sha256, 64 hex characters"
+  fi
+  local cidr
+  local -a cidrs=()
+  IFS=',' read -r -a cidrs <<<"${LOOMPLANE_RUNNER_RELAY_ALLOW:-}"
+  for cidr in "${cidrs[@]}"; do
+    cidr=$(printf '%s' "$cidr" | tr -d '[:space:]')
+    [ -z "$cidr" ] || [[ "$cidr" =~ ^[0-9A-Fa-f.:]+/[0-9]{1,3}$ ]] \
+      || die "LOOMPLANE_RUNNER_RELAY_ALLOW takes CIDRs such as 10.0.0.0/16, comma-separated (got: $cidr)"
+  done
+  [[ "${LOOMPLANE_RUNNER_NAME:-}" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$ ]] \
+    || die "LOOMPLANE_RUNNER_NAME must be a lowercase DNS label, such as runner-1"
+  # Loomplane itself is the one thing a runner never shares a Droplet with.
+  [ ! -f "$LOOMPLANE_DIR/.env" ] \
+    || die "Loomplane itself runs on this Droplet. Give runners Droplets of their own: a runner sizes its build microVMs to the whole machine, and builds run code from your repositories. Create one from cloud-init.runner.yaml"
+  [ -e "$KVM_DEVICE" ] \
+    || die "this Droplet has no $KVM_DEVICE, so it can't run build microVMs. Use a regular Ubuntu 24.04 Droplet: they have nested virtualization on"
+}
+
+# prepare_runner_host installs what the toolchain doesn't bring, turns SMT
+# off so build VMs never share a core, and lets only SSH in. ufw drops
+# forwarded traffic, so the build subnet is let out explicitly.
+prepare_runner_host() {
+  export DEBIAN_FRONTEND=noninteractive
+  log "installing the runner's host tools"
+  apt_update
+  apt_get install -y -qq ca-certificates curl nftables iproute2 e2fsprogs ufw
+  cat >/etc/systemd/system/loomplane-nosmt.service <<'UNIT'
+[Unit]
+Description=Turn SMT off so Loomplane build microVMs never share a CPU core
+Before=loomplane-runner.service
+DefaultDependencies=no
+After=sysinit.target
+
+[Service]
+Type=oneshot
+# systemd expands $ itself, so the shell's are doubled.
+ExecStart=/bin/sh -c 'c=/sys/devices/system/cpu/smt/control; [ ! -w "$$c" ] || [ "$$(cat "$$c")" = notsupported ] || echo off >"$$c"'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now loomplane-nosmt.service
+  printf 'net.ipv4.ip_forward = 1\n' >/etc/sysctl.d/90-loomplane-runner.conf
+  sysctl -q -p /etc/sysctl.d/90-loomplane-runner.conf
+  local subnet
+  subnet=$(sed -n 's/.*"Subnet"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$RUNNER_CONFIG" 2>/dev/null | head -n 1)
+  subnet=${subnet:-$RUNNER_SUBNET}
+  log "allowing SSH in, and build microVMs in $subnet out, through ufw"
+  ufw allow 22/tcp >/dev/null
+  ufw route allow from "$subnet" >/dev/null
+  ufw --force enable >/dev/null
+}
+
+step_runner() {
+  check_runner_config
+  if [ -z "$SKIP_DOCKER" ]; then
+    prepare_runner_host
+  fi
+  local url tmp cidr
+  local -a args=() cidrs=()
+  url=$(runner_url)
+  if [ -n "${LOOMPLANE_RUNNER_TOOLCHAIN_URL:-}" ]; then
+    args+=(--toolchain "$LOOMPLANE_RUNNER_TOOLCHAIN_URL" --toolchain-sha256 "$(printf '%s' "$LOOMPLANE_RUNNER_TOOLCHAIN_SHA256" | tr 'A-F' 'a-f')")
+  fi
+  if [ -n "${LOOMPLANE_RUNNER_NAME:-}" ]; then args+=(--name "$LOOMPLANE_RUNNER_NAME"); fi
+  IFS=',' read -r -a cidrs <<<"${LOOMPLANE_RUNNER_RELAY_ALLOW:-}"
+  for cidr in "${cidrs[@]}"; do
+    cidr=$(printf '%s' "$cidr" | tr -d '[:space:]')
+    if [ -n "$cidr" ]; then args+=(--relay-allow "$cidr"); fi
+  done
+  tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+  log "fetching the runner installer from $url"
+  curl --proto '=https' -fsSL --max-time 60 --retry 3 -o "$tmp/node.sh" "$url/install/node.sh" \
+    || die "couldn't fetch $url/install/node.sh; check LOOMPLANE_URL and that Loomplane answers there"
+  # node.sh installs the signed loomctl and runs `runner start`, which
+  # installs the toolchain, joins and starts the loomplane-runner service.
+  LOOMPLANE_ROLE=runner LOOMPLANE_JOIN_TOKEN="$LOOMPLANE_JOIN_TOKEN" sh "$tmp/node.sh" "${args[@]}"
+  log "this Droplet is a runner. Check it with: loomctl runner status"
+}
+
 # Hold one lock for the whole run so cloud-init and loomplane-setup can't
 # install at the same time. The test hook LOOMPLANE_LOCK_FILE moves the lock.
 take_lock() {
@@ -275,15 +531,25 @@ take_lock() {
 
 main() {
   case "${1:-}" in
-    prepare|secrets|configure|start|all) take_lock ;;
+    prepare|secrets|configure|start|push-gateway|all|runner) take_lock ;;
   esac
   case "${1:-}" in
     prepare) step_prepare ;;
     secrets) step_secrets ;;
     configure) step_configure ;;
     start) step_start ;;
-    all) check_config; step_prepare; step_secrets; step_configure; step_start ;;
-    *) echo "usage: install.sh prepare|secrets|configure|start|all" >&2; exit 2 ;;
+    push-gateway) step_push_gateway ;;
+    runner) step_runner ;;
+    all)
+      check_config
+      if [ -n "${PUSH_GATEWAY_DOMAIN:-}" ]; then check_gateway_config; fi
+      step_prepare
+      step_secrets
+      step_configure
+      if [ -n "${PUSH_GATEWAY_DOMAIN:-}" ]; then step_push_gateway; fi
+      step_start
+      ;;
+    *) echo "usage: install.sh prepare|secrets|configure|start|push-gateway|all|runner" >&2; exit 2 ;;
   esac
 }
 

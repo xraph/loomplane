@@ -33,10 +33,8 @@ Report problems and ask questions at https://github.com/xraph/loomplane/issues.
 
 ## Optional push gateway
 
-You can enable the gateway in `/srv/loomplane/.env` using
-`COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`. Supply a separate
-hostname and the gateway key files, then start the stack again. Caddy serves
-both hostnames on ports 80 and 443. The
-[Docker gateway guide](https://loomplane.dev/docs/operations/production-on-docker#optional-push-gateway)
-covers credentials, DNS and upgrades. You need push credentials for the app
-you ship; the store app uses XRaph's hosted gateway.
+To send notifications to your own build of the mobile app, point a second hostname at the Droplet, copy your Firebase service-account key onto it, and run `loomplane-setup push-gateway`. It asks for the hostname and the key, and optionally an Apple key for iOS, then makes the gateway's sealing key and starts the gateway beside Loomplane. Caddy serves both hostnames on ports 80 and 443. Back up `/srv/loomplane/secrets` with `.env`. The store app uses XRaph's hosted gateway and needs nothing here.
+
+## Runners
+
+Runners build services in Firecracker microVMs and deploy them where nothing builds for itself. They run on Droplets of their own, never this one: create a regular Ubuntu 24.04 Droplet with `deployments/digitalocean/cloud-init.runner.yaml` as its user data. The [DigitalOcean guide](https://loomplane.dev/docs/operations/digitalocean#runners) covers the values it needs.

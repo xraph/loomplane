@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/pkg/client"
 	"github.com/xraph/loomplane/pkg/nodeproto"
 )
@@ -62,8 +63,16 @@ func (f *fakeRunnerService) did(c string) bool {
 }
 
 // runnerJoinServer is a Loomplane that makes whoever joins a runner of
-// rpool_1.
+// rpool_1, an organization's pool.
 func runnerJoinServer(t *testing.T) (*httptest.Server, *atomic.Pointer[client.JoinRequest]) {
+	t.Helper()
+	return poolJoinServer(t, "conn_pool")
+}
+
+// poolJoinServer makes whoever joins a runner of rpool_1, named by
+// connection: an organization's pool's connection, or the pool's own ID for
+// a global pool.
+func poolJoinServer(t *testing.T, connection string) (*httptest.Server, *atomic.Pointer[client.JoinRequest]) {
 	t.Helper()
 	var got atomic.Pointer[client.JoinRequest]
 	mux := http.NewServeMux()
@@ -76,7 +85,7 @@ func runnerJoinServer(t *testing.T) (*httptest.Server, *atomic.Pointer[client.Jo
 		_ = json.NewDecoder(req.Body).Decode(&j)
 		got.Store(&j)
 		_ = json.NewEncoder(w).Encode(client.JoinResult{NodeID: "node_r1", OrgID: "org_1", IdentityGeneration: 1, Endpoints: j.Endpoints,
-			Role: "runner", PoolID: "rpool_1", PoolConnection: "conn_pool"})
+			Role: "runner", PoolID: "rpool_1", PoolConnection: connection})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -243,5 +252,40 @@ func TestNodeStopAndStart(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.dir, stoppedFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("node start kept the stop mark")
+	}
+}
+
+// TestRunnerStartCapsEachWorkspaceOnAGlobalPool checks a runner that sized
+// its host from the toolchain caps each workspace's share when it joins a
+// global pool, which the platform policy requires, and leaves an
+// organization's runner whole.
+func TestRunnerStartCapsEachWorkspaceOnAGlobalPool(t *testing.T) {
+	for _, tc := range []struct {
+		connection string
+		capped     bool
+	}{{"rpool_1", true}, {"conn_pool", false}} {
+		t.Run(tc.connection, func(t *testing.T) {
+			srv, _ := poolJoinServer(t, tc.connection)
+			bundleSrv, sum := serveBundle(t, bundle(t, ""))
+			r, _, _, _ := runnerRig(t)
+			r.opts.toolchainRoot = filepath.Join(t.TempDir(), "opt")
+			r.opts.toolchainHTTP = bundleSrv.Client()
+			fcConfig := filepath.Join(t.TempDir(), "firecracker.json")
+			if err := r.run("runner", "start", "--state-dir", r.dir, "--url", srv.URL, "--token", "lpj_live_runner",
+				"--firecracker-config", fcConfig, "--toolchain", bundleSrv.URL+"/toolchain.tar.gz", "--toolchain-sha256", sum); err != nil {
+				t.Fatalf("runner start: %v\n%s", err, r.out)
+			}
+			raw, err := os.ReadFile(fcConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg fc.HostConfig
+			if err = json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if capped := cfg.Limits.PerOrg != (fc.OrgLimits{}); capped != tc.capped {
+				t.Fatalf("per-workspace cap %+v of %+v, want capped %v", cfg.Limits.PerOrg, cfg.Limits, tc.capped)
+			}
+		})
 	}
 }

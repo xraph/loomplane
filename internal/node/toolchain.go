@@ -307,9 +307,43 @@ func writeRunnerHostConfig(o ToolchainOptions, dir string, m *toolchainManifest)
 	if err := os.MkdirAll(filepath.Dir(o.Config), 0o700); err != nil {
 		return err
 	}
-	tmp := o.Config + ".tmp"
+	return replaceConfig(o.Config, raw)
+}
+
+// replaceConfig writes a host config through a temporary file, so a crash
+// never leaves half of one.
+func replaceConfig(path string, raw []byte) error {
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, o.Config)
+	return os.Rename(tmp, path)
+}
+
+// shareAcrossWorkspaces caps each workspace at half of the runner the
+// toolchain sized, and never under one build VM, so no one workspace takes a
+// global runner whole. The platform policy refuses a global runner without
+// a per-workspace cap. A config that already sets one is left as it is.
+func shareAcrossWorkspaces(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var cfg fc.HostConfig
+	if uerr := json.Unmarshal(raw, &cfg); uerr != nil {
+		return uerr
+	}
+	l := cfg.Limits
+	if l.PerOrg != (fc.OrgLimits{}) {
+		return nil
+	}
+	if l.VMs < 1 || l.VCPUs < 1 || l.MemoryMiB < 1 {
+		return fmt.Errorf("%s sets no VM limits to share", path)
+	}
+	vms := max(l.VMs/2, 1)
+	cfg.Limits.PerOrg = fc.OrgLimits{VMs: vms, VCPUs: max(l.VCPUs*vms/l.VMs, 1), MemoryMiB: max(l.MemoryMiB*vms/l.VMs, 1)}
+	if raw, err = json.MarshalIndent(cfg, "", "  "); err != nil {
+		return err
+	}
+	return replaceConfig(path, raw)
 }

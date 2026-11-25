@@ -103,17 +103,45 @@ Upgrades and the `.env` file work as they do for a plain Droplet.
 
 ## Optional push gateway
 
-Droplets and Marketplace installs use the production Docker bundle, so you
-can run the gateway beside Loomplane and its workers on the same host.
-After the initial setup, follow [the Docker gateway setup](/docs/operations/production-on-docker#optional-push-gateway)
-from `/srv/loomplane`. Set `COMPOSE_FILE=compose.yaml:compose.push-gateway.yaml`
-in `.env`, provide the gateway image, hostname and key files, then run
-`docker compose up -d --wait --wait-timeout 240`.
+Droplets and Marketplace installs can run the push gateway beside Loomplane,
+behind the same Caddy. Run it when you ship your own build of the mobile app.
+The store app needs XRaph's push credentials, so it keeps using XRaph's
+gateway.
 
-Point the gateway's separate hostname at the Droplet too. Caddy serves both
-hostnames through ports 80 and 443, so you don't open another port in the
-Droplet firewall. Keep gateway credentials in the mounted key files, outside
-cloud-init user data. Back up those files alongside `.env`.
+Point a second hostname, such as `push.loomplane.example.com`, at the
+Droplet. Copy your Firebase service-account key onto the Droplet, then run
+the wizard as root:
+
+```bash
+loomplane-setup push-gateway
+```
+
+It asks for the gateway's hostname, the path to the Firebase key and,
+for iOS, an Apple `.p8` key with its key and team IDs. It makes the
+gateway's sealing key, installs every key in `/srv/loomplane/secrets`
+readable only by the gateway, turns the gateway on in `.env` and starts it.
+Running it again keeps the sealing key, so phones stay registered. You can
+delete the copies you brought over once it's done.
+
+The installer step does the same without the questions:
+
+```bash
+PUSH_GATEWAY_DOMAIN=push.loomplane.example.com PUSH_GATEWAY_FCM_FILE=/root/firebase.json \
+  /usr/local/lib/loomplane/install.sh push-gateway
+```
+
+For iOS add `PUSH_GATEWAY_APNS_FILE`, `PUSH_GATEWAY_APNS_KEY_ID` and
+`PUSH_GATEWAY_APNS_TEAM_ID`, and `PUSH_GATEWAY_APNS_BUNDLE_ID` when your
+app's bundle ID isn't `com.loomplane.app`.
+
+With cloud-init, uncomment `PUSH_GATEWAY_DOMAIN` in `install.env`. The
+install makes the gateway's sealing key but leaves the gateway off, because
+keys never go in user data. Once the Droplet is up, copy the Firebase key
+over and run `loomplane-setup push-gateway`.
+
+Caddy serves both hostnames on ports 80 and 443, so the firewall stays as it
+is. Back up `secrets/` with `.env`: a new sealing key cuts off every
+registered phone.
 
 An installer upgrade keeps the gateway opt-in, hostname and existing keys.
 It updates the Loomplane image from the new bundle. Pin the gateway image
@@ -133,8 +161,8 @@ standard resources.
 
 | Where you host Loomplane | Gateway option |
 |---|---|
-| DigitalOcean Droplet with cloud-init | Production Compose overlay in `/srv/loomplane` |
-| DigitalOcean Marketplace Droplet | The same overlay after the first-login setup |
+| DigitalOcean Droplet with cloud-init | `loomplane-setup push-gateway`, after `PUSH_GATEWAY_DOMAIN` in `install.env` or on its own |
+| DigitalOcean Marketplace Droplet | `loomplane-setup push-gateway` after the first-login setup |
 | DOKS or another Kubernetes cluster | Helm Deployment and Service, with an Ingress or HTTPRoute |
 | Other Linux Docker hosts | The production Compose overlay |
 | App Platform and Miget templates | Continue to use the hosted gateway |
@@ -143,11 +171,72 @@ You need push credentials for the mobile app you ship. The store app uses
 XRaph's gateway.
 
 To exercise these paths locally, run `make test-digitalocean` for the Ubuntu
-installer, upgrade and installed Compose bundle, or `make test-push-kubernetes`
+installer, upgrade, gateway and runner steps and installed Compose bundle, or `make test-push-kubernetes`
 for the Helm chart. Both build images and use disposable local resources.
 The Kubernetes test sends an encrypted notification to a local provider
 fixture and checks HTTPS routing, restarts and key rotation. It does not
 create DigitalOcean resources or send a notification to a real phone.
+
+## Runners
+
+A runner builds your services in Firecracker microVMs and deploys them where
+nothing builds for itself, such as a Droplet or a server on a private
+network. [Runners](/docs/clouds/runners) covers pools and how builds pick one.
+
+Give each runner a Droplet of its own, never the one Loomplane runs on. A
+runner sizes its build VMs to the whole machine, and builds run code from
+your repositories. The installer refuses to make Loomplane's own Droplet a
+runner.
+
+You need two things first:
+
+- A join token for the runner's pool, from Runners, Add runner. Global
+  runners take theirs from Runners, Global runners. A token works once and
+  lasts an hour, so create the Droplet soon after you make it.
+- A Firecracker toolchain bundle at an https URL, and its sha256.
+  `deployments/firecracker/build-runner-toolchain.sh` builds one.
+
+Copy the raw contents of [`cloud-init.runner.yaml`](https://github.com/xraph/loomplane/blob/main/deployments/digitalocean/cloud-init.runner.yaml)
+and fill in its `runner.env` block:
+
+- `LOOMPLANE_URL`: your Loomplane's address.
+- `LOOMPLANE_JOIN_TOKEN`: the join token.
+- `LOOMPLANE_RUNNER_TOOLCHAIN_URL` and `LOOMPLANE_RUNNER_TOOLCHAIN_SHA256`:
+  the toolchain bundle.
+- `LOOMPLANE_RUNNER_NAME`: optional. The Droplet's hostname otherwise.
+- `LOOMPLANE_RUNNER_RELAY_ALLOW`: optional. The private networks deploys may
+  be relayed to, comma-separated, such as your VPC's range.
+
+Create a regular Ubuntu 24.04 Droplet with the file as its user data.
+Regular Droplets have the nested virtualization microVMs need. A 4 GB
+Droplet (`s-2vcpu-4gb`) runs one build at a time, and 8 GB (`s-4vcpu-8gb`)
+runs two.
+
+The install turns SMT off so build VMs never share a CPU core, lets only
+SSH in through ufw while build VMs reach the internet, installs the signed
+`loomctl` and the toolchain after checking its sha256, joins the pool and
+starts the `loomplane-runner` service. The service comes back after a crash
+or a reboot until you run `loomctl runner stop`. Follow the install in
+`/var/log/cloud-init-output.log`, then check it with `loomctl runner status`.
+The runner shows under Runners once it's online.
+
+To turn a Droplet you already have into a runner, run this as root, with
+the release you run and your own values:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/xraph/loomplane/vX.Y.Z/deployments/digitalocean/install.sh
+export LOOMPLANE_URL=https://loomplane.example.com LOOMPLANE_JOIN_TOKEN=lpj_... \
+  LOOMPLANE_RUNNER_TOOLCHAIN_URL=https://releases.example.com/loomplane-runner-toolchain-amd64.tar.gz \
+  LOOMPLANE_RUNNER_TOOLCHAIN_SHA256=...
+bash install.sh runner
+```
+
+A runner in a global pool serves every workspace you enabled, and caps each
+at half of itself, never under one build VM, so no workspace takes it whole.
+
+When builds come in bursts, an [on-demand pool](/docs/clouds/runners#on-demand-pools) starts
+runner Droplets in your own account as builds need them and removes them
+after.
 
 ## Backups
 

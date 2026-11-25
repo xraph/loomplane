@@ -14,6 +14,10 @@ write_files:
       LOOMPLANE_VERSION=""
       # Optional. On a 4 GB Droplet set this to 1 to keep analysis memory low.
       # LOOMPLANE_ANALYSIS_CONCURRENCY=1
+      # Optional. A hostname of its own for the push gateway. The install
+      # makes its sealing key; it starts once you add your Firebase key with
+      # loomplane-setup push-gateway. Keys never go in user data.
+      # PUSH_GATEWAY_DOMAIN="push.loomplane.example.com"
 
 runcmd:
   - - bash

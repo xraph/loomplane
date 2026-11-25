@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # First-login wizard: asks for the domain and email, then starts Loomplane.
-# Usage: loomplane-setup [--force]
+# `loomplane-setup push-gateway` asks for the push gateway's hostname and
+# keys, then runs the gateway beside Loomplane.
+# Usage: loomplane-setup [--force] | loomplane-setup push-gateway
 set -euo pipefail
 
 dir="${LOOMPLANE_DIR:-/srv/loomplane}"
@@ -11,15 +13,40 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+push_gateway() {
+  if [ ! -f "$dir/.configured" ]; then
+    echo "loomplane-setup: set Loomplane up first: run loomplane-setup" >&2
+    exit 1
+  fi
+  echo "The push gateway sends notifications to the phones of your own build of the mobile app."
+  echo "It needs a hostname of its own, and your Firebase service-account key. An Apple key is optional."
+  read -r -p "Gateway hostname (for example push.loomplane.example.com): " domain
+  read -r -p "Path to the Firebase service-account JSON key on this Droplet: " fcm
+  read -r -p "Path to an Apple .p8 key for iOS (leave empty for Android only): " apns
+  local key_id="" team_id="" bundle_id=""
+  if [ -n "$apns" ]; then
+    read -r -p "Apple key ID: " key_id
+    read -r -p "Apple team ID: " team_id
+    read -r -p "App bundle ID (leave empty for com.loomplane.app): " bundle_id
+  fi
+  LOOMPLANE_DIR="$dir" PUSH_GATEWAY_DOMAIN="$domain" PUSH_GATEWAY_FCM_FILE="$fcm" PUSH_GATEWAY_APNS_FILE="$apns" \
+    PUSH_GATEWAY_APNS_KEY_ID="$key_id" PUSH_GATEWAY_APNS_TEAM_ID="$team_id" PUSH_GATEWAY_APNS_BUNDLE_ID="$bundle_id" \
+    bash "$installer" push-gateway
+  echo
+  echo "Point an A record for $domain at this Droplet if you haven't yet."
+  echo "Copy the gateway's keys in $dir/secrets somewhere safe with .env. A new sealing key would cut off every registered phone."
+}
+
 force=""
 case "${1:-}" in
   "") ;;
   --force) force=1 ;;
-  *) echo "usage: loomplane-setup [--force]" >&2; exit 2 ;;
+  push-gateway) push_gateway; exit 0 ;;
+  *) echo "usage: loomplane-setup [--force] | loomplane-setup push-gateway" >&2; exit 2 ;;
 esac
 
 if [ -f "$dir/.configured" ] && [ -z "$force" ]; then
-  echo "loomplane-setup: Loomplane is already set up. Run loomplane-setup --force to run it again." >&2
+  echo "loomplane-setup: Loomplane is already set up. Run loomplane-setup --force to run it again, or loomplane-setup push-gateway to add the push gateway." >&2
   exit 1
 fi
 
@@ -38,3 +65,4 @@ bash "$installer" start
 echo
 echo "Point an A record for $domain at this Droplet if you haven't yet."
 echo "Copy $dir/.env somewhere safe. It holds the secret key, and losing it makes stored credentials unrecoverable."
+echo "To run the push gateway here too, run: loomplane-setup push-gateway"

@@ -34,6 +34,8 @@ Make a join token for the pool (Runners, Add runner), then run the command it gi
 sudo LOOMPLANE_JOIN_TOKEN=lpj_... loomplane runner start --url https://loomplane.example.com
 ```
 
+On DigitalOcean, a cloud-init file sets up a runner Droplet end to end: see [Runners in the DigitalOcean guide](/docs/operations/digitalocean#runners).
+
 `runner start` joins the machine if it hasn't joined, installs the `loomplane-runner` service and starts it. The service comes back after a crash and after a reboot. Only `runner stop` or `runner leave` stops it for good.
 
 | Flag | What it does |
@@ -114,7 +116,7 @@ Build a toolchain bundle from the same reviewed Firecracker set a host runs with
 
 ## Global runners
 
-The platform owner can run pools for every workspace: create one under Runners, Global runners, or with `POST /api/v1/platform/runner-pools`, as a signed-in platform admin, mark it the default, and join runners to it with a token from `POST /api/v1/platform/runner-pools/{id}/join-tokens`. Global runners must run the Firecracker host in platform mode: SMT off, outbound mail denied, and per-workspace VM, vCPU and memory limits. Each runner shows that before every build.
+The platform owner can run pools for every workspace: create one under Runners, Global runners, or with `POST /api/v1/platform/runner-pools`, as a signed-in platform admin, mark it the default, and join runners to it with a token from `POST /api/v1/platform/runner-pools/{id}/join-tokens`. Global runners must run the Firecracker host in platform mode: SMT off, outbound mail denied, and per-workspace VM, vCPU and memory limits. Each runner shows that before every build. A global runner that installed its toolchain with `--toolchain` sets the per-workspace limits itself when it joins: each workspace may use half of the runner, and never less than one build VM. SMT is the machine's: turn it off before the runner starts, as the DigitalOcean runner install does.
 
 A workspace builds on global runners only when the platform owner enabled Loomplane Cloud for it and hasn't suspended it, and only when its project and organization have no default pool of their own. Each build runs in its own microVM under the workspace's own limits, is gated like Loomplane Cloud usage, and is billed as build minutes on the workspace's plan. Global builds push to the workspace's own registry, so a service that builds on them names `build.registry`.
 

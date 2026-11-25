@@ -139,7 +139,12 @@ func (c *cmds) runnerStart(ctx cli.CommandContext) error {
 	if !filepath.IsAbs(fcConfig) {
 		return fmt.Errorf("--firecracker-config %q must be an absolute path", fcConfig)
 	}
+	// sized says this run wrote the host config from the toolchain, so it
+	// may cap each workspace's share once the pool turns out to be global.
+	sized := false
 	if bundle := ctx.String("toolchain"); bundle != "" {
+		_, serr := os.Stat(fcConfig)
+		sized = errors.Is(serr, fs.ErrNotExist)
 		c.printf("Installing the Firecracker toolchain from %s\n", bundle)
 		if _, terr := InstallToolchain(ctx.Context(), ToolchainOptions{URL: bundle, SHA256: ctx.String("toolchain-sha256"),
 			Root: c.opts.toolchainRoot, Config: fcConfig, StateDir: filepath.Join(dir, "firecracker"), RuntimeDir: "/srv/loomplane-runner",
@@ -183,6 +188,13 @@ func (c *cmds) runnerStart(ctx cli.CommandContext) error {
 		return err
 	}
 	c.printf("Joined pool %s as runner %s.\n", joined.PoolID, joined.NodeID)
+	// A global runner's pool connection is the pool's own ID.
+	if sized && strings.HasPrefix(joined.PoolConnection, "rpool_") {
+		if serr := shareAcrossWorkspaces(fcConfig); serr != nil {
+			return fmt.Errorf("runner %s joined a global pool, but capping each workspace's share of it failed: %w", joined.NodeID, serr)
+		}
+		c.printf("This runner serves every enabled workspace; each may use up to half of it.\n")
+	}
 	if once {
 		c.printf("Running in this terminal. Press Ctrl+C to stop.\n")
 		return c.opts.runRunner(ctx.Context(), st)

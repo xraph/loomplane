@@ -120,6 +120,68 @@ func TestInstallToolchainWritesAHostConfig(t *testing.T) {
 	}
 }
 
+// TestShareAcrossWorkspaces checks a global runner caps each workspace at
+// half of itself, passes the platform's check for a per-workspace cap, keeps
+// a cap its owner set, and never caps under one build VM.
+func TestShareAcrossWorkspaces(t *testing.T) {
+	srv, sum := serveBundle(t, bundle(t, ""))
+	o := toolchainOpts(t, srv, sum)
+	path, err := InstallToolchain(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() fc.HostConfig {
+		t.Helper()
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		var cfg fc.HostConfig
+		if rerr = json.Unmarshal(raw, &cfg); rerr != nil {
+			t.Fatal(rerr)
+		}
+		return cfg
+	}
+	before := read()
+	if err = shareAcrossWorkspaces(path); err != nil {
+		t.Fatal(err)
+	}
+	cfg := read()
+	if cfg.Limits.PerOrg != (fc.OrgLimits{VMs: 2, VCPUs: 4, MemoryMiB: 7680}) {
+		t.Fatalf("per-workspace %+v of %+v, want half", cfg.Limits.PerOrg, cfg.Limits)
+	}
+	if cfg.HostKey != before.HostKey || cfg.Limits.VMs != before.Limits.VMs {
+		t.Fatalf("sharing changed more than the cap: %+v", cfg)
+	}
+	if err = fc.ValidatePlatform(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.Limits.PerOrg = fc.OrgLimits{VMs: 1, VCPUs: 2, MemoryMiB: 2048}
+	raw, _ := json.Marshal(cfg)
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = shareAcrossWorkspaces(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := read().Limits.PerOrg; got != cfg.Limits.PerOrg {
+		t.Fatalf("an owner's cap became %+v", got)
+	}
+
+	cfg.Limits = fc.Limits{VMs: 1, VCPUs: 2, MemoryMiB: 2304, DiskMiB: 16384}
+	raw, _ = json.Marshal(cfg)
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = shareAcrossWorkspaces(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := read().Limits.PerOrg; got != (fc.OrgLimits{VMs: 1, VCPUs: 2, MemoryMiB: 2304}) {
+		t.Fatalf("a one-VM runner capped each workspace at %+v, want the whole VM", got)
+	}
+}
+
 func TestInstallToolchainRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

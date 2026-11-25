@@ -1,0 +1,53 @@
+#cloud-config
+# A Loomplane runner: a Droplet that builds your services in Firecracker
+# microVMs and deploys them where Loomplane can't reach on its own. Paste
+# this into the Droplet "User data" box of a regular Ubuntu 24.04 Droplet,
+# never the one Loomplane runs on. Edit the values in
+# /etc/loomplane/runner.env first.
+#
+# The join token works once and lasts an hour, so create the Droplet soon
+# after you make it. Anything on the Droplet can read its user data, which
+# is why the token is spent the moment the runner joins.
+write_files:
+  - path: /etc/loomplane/runner.env
+    permissions: "0600"
+    content: |
+      # Where Loomplane is.
+      LOOMPLANE_URL="https://loomplane.example.com"
+      # From Runners, Add runner, in the dashboard. Global runners take a
+      # token from Runners, Global runners.
+      LOOMPLANE_JOIN_TOKEN="lpj_..."
+      # Your Firecracker toolchain bundle and its sha256. Build it with
+      # deployments/firecracker/build-runner-toolchain.sh.
+      LOOMPLANE_RUNNER_TOOLCHAIN_URL="https://releases.example.com/loomplane-runner-toolchain-amd64.tar.gz"
+      LOOMPLANE_RUNNER_TOOLCHAIN_SHA256=""
+      # Leave empty for the newest stable release, or pin one such as v0.1.0.
+      LOOMPLANE_VERSION=""
+      # Optional. The runner's name; the Droplet's hostname otherwise.
+      # LOOMPLANE_RUNNER_NAME="runner-1"
+      # Optional. Private networks deploys may be relayed to, comma-separated.
+      # LOOMPLANE_RUNNER_RELAY_ALLOW="10.116.0.0/20"
+
+runcmd:
+  - - bash
+    - -ec
+    - |
+      set -a
+      . /etc/loomplane/runner.env
+      set +a
+      v="$LOOMPLANE_VERSION"
+      if [ -z "$v" ]; then
+        v=$(curl -fsSL --max-time 20 --retry 3 https://api.github.com/repos/xraph/loomplane/releases/latest \
+          | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+      fi
+      if [ -z "$v" ]; then
+        echo "loomplane-install: couldn't find a Loomplane release; set LOOMPLANE_VERSION" >&2
+        exit 1
+      fi
+      mkdir -p /usr/local/lib/loomplane
+      curl -fsSL --retry 3 -o /usr/local/lib/loomplane/install.sh \
+        "https://raw.githubusercontent.com/xraph/loomplane/$v/deployments/digitalocean/install.sh"
+      chmod 0755 /usr/local/lib/loomplane/install.sh
+      bash /usr/local/lib/loomplane/install.sh runner
+      # The token is spent; don't keep it on disk.
+      sed -i 's/^LOOMPLANE_JOIN_TOKEN=.*/LOOMPLANE_JOIN_TOKEN="(spent)"/' /etc/loomplane/runner.env
